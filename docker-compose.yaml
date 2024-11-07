@@ -9,17 +9,17 @@ services:
       - react
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./my-react-app/build:/usr/share/nginx/html
+      - ./frontend/build:/usr/share/nginx/html
     networks:
       - app-network
 
   react:
     build:
-      context: ./my-react-app
+      context: ./frontend
       dockerfile: Dockerfile
     working_dir: /app
     volumes:
-      - ./my-react-app:/app
+      - ./frontend:/app
     command: npm run build
     networks:
       - app-network
