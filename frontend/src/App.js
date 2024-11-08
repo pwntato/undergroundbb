@@ -8,7 +8,7 @@ function App() {
   const apiUrl = process.env.REACT_APP_API_URL;
 
   useEffect(() => {
-    axios.get(`${apiUrl}time`)
+    axios.get(`${apiUrl}/time`)
       .then(response => {
         setTime(response.data.now);
       })
