@@ -13,7 +13,7 @@ const pool = new Pool({
   port: 5432,
 });
 
-app.get('/', async (req, res) => {
+app.get('/time', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
     res.send(result.rows[0]);
