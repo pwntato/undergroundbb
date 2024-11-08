@@ -1,26 +1,13 @@
 import React, { useEffect, useState } from 'react';
-// import logo from './logo.svg';
-import { fetchTime } from './api';
+// import logo from './logo.svg';\
 import './App.css';
+import Time from './Time';
 
 function App() {
-  const [time, setTime] = useState('');
-
-  useEffect(() => {
-    const getTime = async () => {
-      const fetchedTime = await fetchTime();
-      setTime(fetchedTime);
-    };
-
-    getTime();
-  }, []);
-
   return (
     <div className="App">
       <header className="App-header">
-        <p>
-          What time is it? {time}
-        </p>
+        <Time />
       </header>
     </div>
   );
