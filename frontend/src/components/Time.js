@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { fetchTime } from './api';
+import { fetchTime } from '../api';
 
 function Time() {
   const [time, setTime] = useState('');
