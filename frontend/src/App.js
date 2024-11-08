@@ -1,20 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import logo from './logo.svg';
+// import logo from './logo.svg';
+import { fetchTime } from './api';
 import './App.css';
 
 function App() {
   const [time, setTime] = useState('');
-  const apiUrl = process.env.REACT_APP_API_URL;
 
   useEffect(() => {
-    axios.get(`${apiUrl}/time`)
-      .then(response => {
-        setTime(response.data.now);
-      })
-      .catch(error => {
-        console.error('There was an error fetching the time!', error);
-      });
+    const getTime = async () => {
+      const fetchedTime = await fetchTime();
+      setTime(fetchedTime);
+    };
+
+    getTime();
   }, []);
 
   return (
