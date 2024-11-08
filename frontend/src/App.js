@@ -5,11 +5,11 @@ import './App.css';
 
 function App() {
   const [time, setTime] = useState('');
+  const apiUrl = process.env.REACT_APP_API_URL;
 
   useEffect(() => {
-    axios.get('http://localhost:3000/')
+    axios.get(`${apiUrl}`)
       .then(response => {
-        console.log(response.data);
         setTime(response.data.now);
       })
       .catch(error => {
