@@ -12,6 +12,11 @@ export const fetchFromApi = async (endpoint) => {
   }
 };
 
+export const fetchUsers = async () => {
+  const data = await fetchFromApi('/users');
+  return data.users;
+};
+
 export const fetchTime = async () => {
   const data = await fetchFromApi('/time');
   return data.now;

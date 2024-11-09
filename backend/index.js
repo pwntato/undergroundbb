@@ -13,6 +13,16 @@ const pool = new Pool({
   port: 5432,
 });
 
+app.get('/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT username FROM users');
+    res.send(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server Error');
+  }
+});
+
 app.get('/time', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');

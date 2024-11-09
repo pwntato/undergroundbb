@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 // import logo from './logo.svg';\
 import './App.css';
 import Time from './components/Time';
+import Users from './components/Users';
 
 function App() {
   return (
     <div className="App">
       <header className="App-header">
         <Time />
+        <Users />
       </header>
     </div>
   );
