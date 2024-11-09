@@ -8,4 +8,4 @@ RUN npm audit fix --force
 
 COPY . .
 
-CMD ["npm", "start"]
+CMD ["./entrypoint.sh"]
