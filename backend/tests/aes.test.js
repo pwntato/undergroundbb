@@ -2,7 +2,7 @@
 const { encrypt, decrypt } = require('../cryptography/aes');
 
 describe('AES Encryption and Decryption', () => {
-  const validSecretKey = 'my-secret-key-1234567890123456'; // Must be 32 bytes for AES-256
+  const validSecretKey = 'my-secret-key-123456789012345678'; // Must be 32 bytes for AES-256
   const invalidSecretKey = 'short-key';
   const message = 'Hello, World!';
 
@@ -31,7 +31,7 @@ describe('AES Encryption and Decryption', () => {
   });
 
   test('should return different ciphertext for different keys', () => {
-    const validSecretKey2 = 'another-secret-key-1234567890123456';
+    const validSecretKey2 = 'another-secret-key-1234567890123';
     const encryptedMessage1 = encrypt(message, validSecretKey);
     const encryptedMessage2 = encrypt(message, validSecretKey2);
 
