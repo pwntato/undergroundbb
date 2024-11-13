@@ -1,0 +1,95 @@
+const { login } = require('../users/login');
+const pool = require('../db');
+const { createHash } = require('../cryptography/hash');
+const { generateKeyPair } = require('../cryptography/rsa');
+const { encrypt } = require('../cryptography/aes');
+
+jest.mock('../db', () => ({
+  query: jest.fn(),
+}));
+
+describe('User Login', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('should log in a user with valid credentials', async () => {
+    const username = 'testuser';
+    const password = 'password123';
+    const { salt, hash } = createHash(password);
+    const { publicKey, privateKey } = generateKeyPair();
+    const encryptedPrivateKey = encrypt(privateKey, hash);
+
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          username,
+          salt,
+          hash,
+          public_key: publicKey,
+          private_key: encryptedPrivateKey,
+        },
+      ],
+    });
+
+    const session = {};
+    const result = await login(username, password, session);
+
+    expect(result).toBe(true);
+    expect(session.privateKey).toBe(privateKey);
+  });
+
+  test('should fail login with invalid username', async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const session = {};
+    await expect(login('invaliduser', 'password123', session)).rejects.toThrow('Invalid username or password');
+  });
+
+  test('should fail login with invalid password', async () => {
+    const username = 'testuser';
+    const password = 'password123';
+    const { salt, hash } = createHash(password);
+    const { publicKey, privateKey } = generateKeyPair();
+    const encryptedPrivateKey = encrypt(privateKey, hash);
+
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          username,
+          salt,
+          hash,
+          public_key: publicKey,
+          private_key: encryptedPrivateKey,
+        },
+      ],
+    });
+
+    const session = {};
+    await expect(login(username, 'wrongpassword', session)).rejects.toThrow('Invalid username or password');
+  });
+
+  test('should fail login with invalid key pair', async () => {
+    const username = 'testuser';
+    const password = 'password123';
+    const { salt, hash } = createHash(password);
+    const { publicKey } = generateKeyPair();
+    const { privateKey: differentPrivateKey } = generateKeyPair();
+    const encryptedPrivateKey = encrypt(differentPrivateKey, hash);
+
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          username,
+          salt,
+          hash,
+          public_key: publicKey,
+          private_key: encryptedPrivateKey,
+        },
+      ],
+    });
+
+    const session = {};
+    await expect(login(username, password, session)).rejects.toThrow('Invalid username or password');
+  });
+});
