@@ -1,20 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import { fetchUsers } from '../api';
 
 function Users() {
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
-    const fetchUsers = async () => {
+    const getUsers = async () => {
       try {
-        const response = await axios.get(`${process.env.REACT_APP_API_URL}/users`);
-        setUsers(response.data);
+        const fetchedUsers = await fetchUsers();
+        setUsers(fetchedUsers);
       } catch (error) {
         console.error('There was an error fetching the users!', error);
       }
     };
 
-    fetchUsers();
+    getUsers();
   }, []);
 
   return (

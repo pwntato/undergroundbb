@@ -4,6 +4,7 @@ const RedisStore = require('connect-redis').default;
 const redis = require('redis');
 const cors = require('cors');
 const pool = require('./db');
+const testRoutes = require('./routes/test_routes');
 
 const app = express();
 app.use(cors());
@@ -29,25 +30,7 @@ app.use(session({
   }
 }));
 
-app.get('/users', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT username FROM users');
-    res.send(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Server Error');
-  }
-});
-
-app.get('/time', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.send(result.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Server Error');
-  }
-});
+app.use('/test', testRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

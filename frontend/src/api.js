@@ -13,11 +13,11 @@ export const fetchFromApi = async (endpoint) => {
 };
 
 export const fetchUsers = async () => {
-  const data = await fetchFromApi('/users');
-  return data.users;
+  const data = await fetchFromApi('/test/users');
+  return data;
 };
 
 export const fetchTime = async () => {
-  const data = await fetchFromApi('/time');
+  const data = await fetchFromApi('/test/time');
   return data.now;
 };
