@@ -1,4 +1,4 @@
-const { login } = require('../users/login');
+const { login, isLoggedIn } = require('../users/login');
 const pool = require('../db');
 const { createHash } = require('../cryptography/hash');
 const { generateKeyPair } = require('../cryptography/rsa');
@@ -91,5 +91,27 @@ describe('User Login', () => {
 
     const session = {};
     await expect(login(username, password, session)).rejects.toThrow('Invalid username or password');
+  });
+
+  test('should return true if user is logged in and key pair is valid', () => {
+    const { publicKey, privateKey } = generateKeyPair();
+    const session = { privateKey: privateKey };
+    const result = isLoggedIn(session, publicKey);
+    expect(result).toBe(true);
+  });
+
+  test('should return false if user is not logged in', () => {
+    const session = {};
+    const { publicKey } = generateKeyPair();
+    const result = isLoggedIn(session, publicKey);
+    expect(result).toBe(false);
+  });
+
+  test('should return false if key pair is invalid', () => {
+    const { publicKey } = generateKeyPair();
+    const { privateKey: differentPrivateKey } = generateKeyPair();
+    const session = { privateKey: differentPrivateKey };
+    const result = isLoggedIn(session, publicKey);
+    expect(result).toBe(false);
   });
 });
