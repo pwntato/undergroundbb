@@ -16,9 +16,12 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "connect-redis": "^7.1.1",
     "cors": "^2.8.5",
     "express": "^4.21.1",
-    "pg": "^8.13.1"
+    "express-session": "^1.18.1",
+    "pg": "^8.13.1",
+    "redis": "^4.7.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
