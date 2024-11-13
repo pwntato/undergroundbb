@@ -25,4 +25,15 @@ function decrypt(encryptedMessage, privateKey) {
   return decrypted.toString('utf8');
 }
 
-module.exports = { generateKeyPair, encrypt, decrypt };
+function verifyKeyPair(publicKey, privateKey) {
+  const testMessage = 'I am the very model of a modern Major-General';
+  try {
+    const encryptedMessage = encrypt(testMessage, publicKey);
+    const decryptedMessage = decrypt(encryptedMessage, privateKey);
+    return decryptedMessage === testMessage;
+  } catch (error) {
+    return false;
+  }
+}
+
+module.exports = { generateKeyPair, encrypt, decrypt, verifyKeyPair };
