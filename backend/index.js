@@ -3,20 +3,12 @@ const session = require('express-session');
 const RedisStore = require('connect-redis').default;
 const redis = require('redis');
 const cors = require('cors');
-const { Pool } = require('pg');
+const pool = require('./db');
 
 const app = express();
 app.use(cors());
 
 const isDevelopment = process.env.NODE_ENV === 'development';
-
-const pool = new Pool({
-  user: process.env.POSTGRES_USER,
-  host: process.env.POSTGRES_HOST,
-  database: process.env.POSTGRES_DB,
-  password: process.env.POSTGRES_PASSWORD,
-  port: 5432,
-});
 
 const redisClient = redis.createClient({
   url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:6379`
