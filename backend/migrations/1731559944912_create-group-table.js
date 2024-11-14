@@ -1,5 +1,5 @@
 exports.up = (pgm) => {
-  pgm.createTable('group', {
+  pgm.createTable('groups', {
     id: { type: 'serial', primaryKey: true },
     name: { type: 'varchar(255)', notNull: true },
     description: { type: 'text', notNull: false },
@@ -9,5 +9,5 @@ exports.up = (pgm) => {
 };
   
 exports.down = (pgm) => {
-  pgm.dropTable('group');
+  pgm.dropTable('groups');
 };
