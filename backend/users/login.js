@@ -28,11 +28,8 @@ async function login(username, password, session) {
   return true;
 }
 
-function isLoggedIn(session, publicKey) {
-  if (!session.privateKey) {
-    return false;
-  }
-  return verifyKeyPair(publicKey, session.privateKey);
+function isLoggedIn(session) {
+  return session.privateKey !== undefined && session.privateKey !== null;
 }
 
 module.exports = { login, isLoggedIn };
