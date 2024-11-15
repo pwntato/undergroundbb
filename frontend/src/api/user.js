@@ -24,3 +24,8 @@ export const validatePassword = async (password) => {
     }
   }
 };
+
+export const loginUser = async (username, password) => {
+  const data = await client('/login', 'POST', { username, password });
+  return data;
+};

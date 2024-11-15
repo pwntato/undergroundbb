@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { checkUsernameAvailability, validatePassword, createUser } from '../api/create_user';
+import { checkUsernameAvailability, validatePassword, createUser } from '../api/user';
 
 const CreateUser = () => {
   const [username, setUsername] = useState('');

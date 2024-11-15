@@ -1,6 +1,6 @@
 const express = require('express');
 const { isUsernameAvailable, validatePassword, createUser } = require('../users/create_user');
-const { isLoggedIn, loginUser } = require('../users/login');
+const { isLoggedIn, login } = require('../users/login');
 
 const router = express.Router();
 
@@ -56,7 +56,7 @@ router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     const session = req.session;
-    await loginUser(username, password, session);
+    await login(username, password, session);
     res.json({ message: 'Login successful', username });
   } catch (error) {
     console.log(error);
