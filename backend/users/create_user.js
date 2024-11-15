@@ -8,10 +8,30 @@ async function isUsernameAvailable(username) {
   return result.rows[0].count === '0';
 }
 
+function validatePassword(password) {
+  const minLength = 8;
+  const hasUpperCase = /[A-Z]/.test(password);
+  const hasLowerCase = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+
+  if (
+    password.length < minLength ||
+    !hasUpperCase ||
+    !hasLowerCase ||
+    !hasNumber ||
+    !hasSymbol
+  ) {
+    throw new Error('Password must be at least 8 characters long and include at least an uppercase letter, a lowercase letter, a number, and a symbol');
+  }
+}
+
 async function createUser(username, password) {
   if (!(await isUsernameAvailable(username))) {
     throw new Error('Username is already taken');
   }
+
+  validatePassword(password);
 
   const { salt, hash } = createHash(password);
   const { publicKey, privateKey } = generateKeyPair();
@@ -19,8 +39,8 @@ async function createUser(username, password) {
 
   await pool.query(
     'INSERT INTO users (username, email, public_key, private_key, salt) VALUES ($1, $2, $3, $4, $5)',
-    [username, '', publicKey, encryptedPrivateKey, salt]
+    [username, null, publicKey, encryptedPrivateKey, salt]
   );
 }
 
-module.exports = { isUsernameAvailable, createUser };
+module.exports = { isUsernameAvailable, validatePassword, createUser };

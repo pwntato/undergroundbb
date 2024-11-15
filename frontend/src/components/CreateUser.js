@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { checkUsernameAvailability, createUser } from '../api/create_user';
+import { checkUsernameAvailability, validatePassword, createUser } from '../api/create_user';
 
 const CreateUser = () => {
   const [username, setUsername] = useState('');
@@ -27,6 +27,20 @@ const CreateUser = () => {
       return;
     } else {
       setPasswordError('');
+    }
+
+    try {
+      const { valid, message } = await validatePassword(password);
+      if (!valid) {
+        setPasswordError(message);
+        return;
+      } else {
+        setPasswordError('');
+      }
+    } catch (error) {
+      console.error('Error validating password', error);
+      setPasswordError('An unknown error occurred');
+      return;
     }
 
     if (usernameError) {

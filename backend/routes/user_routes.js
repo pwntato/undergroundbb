@@ -1,5 +1,5 @@
 const express = require('express');
-const { isUsernameAvailable, createUser } = require('../users/create_user');
+const { isUsernameAvailable, validatePassword, createUser } = require('../users/create_user');
 const { isLoggedIn, loginUser } = require('../users/login');
 
 const router = express.Router();
@@ -12,6 +12,17 @@ router.get('/check-username/:username', async (req, res) => {
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error checking if username available" });
+  }
+});
+
+router.post('/validate-password', (req, res) => {
+  const { password } = req.body;
+
+  try {
+    validatePassword(password);
+    return res.status(200).json({ message: 'Password is valid' });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
   }
 });
 
