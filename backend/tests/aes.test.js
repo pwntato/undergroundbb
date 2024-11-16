@@ -1,4 +1,6 @@
 const { encrypt, decrypt } = require('../cryptography/aes');
+const { generateKeyPair } = require('../cryptography/rsa');
+const { createHash } = require('../cryptography/hash');
 
 describe('AES Encryption and Decryption', () => {
   const validSecretKeyHex = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; // 64-character hex string (32 bytes)
@@ -35,5 +37,16 @@ describe('AES Encryption and Decryption', () => {
     const encryptedMessage2 = encrypt(message, validSecretKeyHex2);
 
     expect(encryptedMessage1).not.toBe(encryptedMessage2);
+  });
+
+  test('should encrypt and decrypt RSA private key using AES with hashed key', () => {
+    const { publicKey, privateKey } = generateKeyPair();
+    const password = 'Password123!';
+    const { hash } = createHash(password);
+
+    const encryptedPrivateKey = encrypt(privateKey, hash);
+    const decryptedPrivateKey = decrypt(encryptedPrivateKey, hash);
+
+    expect(decryptedPrivateKey).toBe(privateKey);
   });
 });
