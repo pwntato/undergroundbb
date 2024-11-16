@@ -13,16 +13,13 @@ function validatePassword(password) {
   const hasUpperCase = /[A-Z]/.test(password);
   const hasLowerCase = /[a-z]/.test(password);
   const hasNumber = /[0-9]/.test(password);
-  const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-
   if (
     password.length < minLength ||
     !hasUpperCase ||
     !hasLowerCase ||
-    !hasNumber ||
-    !hasSymbol
+    !hasNumber
   ) {
-    throw new Error('Password must be at least 8 characters long and include at least an uppercase letter, a lowercase letter, a number, and a symbol');
+    throw new Error('Password must be at least 8 characters long and include at least an uppercase letter, a lowercase letter, and a number');
   }
 }
 
