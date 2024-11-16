@@ -12,12 +12,7 @@ async function login(username, password, session) {
   const user = result.rows[0];
 
   const hash = createHash(password, user.salt);
-  const decryptedPrivateKey = null;
-  try {
-    decryptedPrivateKey = decrypt(user.private_key, hash);
-  } catch (error) {
-    throw new Error('Invalid username or password', error);
-  }
+  const decryptedPrivateKey = decrypt(user.private_key, hash);
 
   const isValidKeyPair = verifyKeyPair(user.public_key, decryptedPrivateKey);
   if (!isValidKeyPair) {

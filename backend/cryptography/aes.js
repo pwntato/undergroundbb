@@ -25,13 +25,18 @@ function decrypt(ciphertext, secretKeyHex) {
     throw new Error('Secret key must be 32 bytes long');
   }
 
-  const parts = ciphertext.split(':');
-  const iv = Buffer.from(parts.shift(), 'hex');
-  const encryptedText = Buffer.from(parts.join(':'), 'hex');
-  const decipher = crypto.createDecipheriv(algorithm, secretKey, iv);
-  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+  try {
+    const parts = ciphertext.split(':');
+    const iv = Buffer.from(parts.shift(), 'hex');
+    const encryptedText = Buffer.from(parts.join(':'), 'hex');
+    const decipher = crypto.createDecipheriv(algorithm, secretKey, iv);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
+  catch (error) {
+    return null;;
+  }
 }
 
 module.exports = { encrypt, decrypt };
