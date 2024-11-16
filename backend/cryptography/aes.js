@@ -17,6 +17,9 @@ function encrypt(message, secretKeyHex) {
 }
 
 function decrypt(ciphertext, secretKeyHex) {
+  if (typeof secretKeyHex === 'object' && secretKeyHex.hash) {
+    secretKeyHex = secretKeyHex.hash;
+  }
   const secretKey = Buffer.from(secretKeyHex, 'hex');
   if (secretKey.length !== 32) {
     throw new Error('Secret key must be 32 bytes long');

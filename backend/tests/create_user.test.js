@@ -27,7 +27,7 @@ describe('User Management', () => {
     pool.query.mockResolvedValueOnce({ rows: [{ count: '0' }] });
     pool.query.mockResolvedValueOnce({ rows: [] });
 
-    await createUser('newuser', 'password123');
+    await createUser('newuser', 'Password123!');
 
     expect(pool.query).toHaveBeenCalledWith('SELECT COUNT(*) FROM users WHERE username = $1', ['newuser']);
     expect(pool.query).toHaveBeenCalledWith(

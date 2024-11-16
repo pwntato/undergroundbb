@@ -15,7 +15,7 @@ describe('User Login', () => {
 
   test('should log in a user with valid credentials', async () => {
     const username = 'testuser';
-    const password = 'password123';
+    const password = 'Password123!';
     const { salt, hash } = createHash(password);
     const { publicKey, privateKey } = generateKeyPair();
     const encryptedPrivateKey = encrypt(privateKey, hash);
@@ -25,7 +25,6 @@ describe('User Login', () => {
         {
           username,
           salt,
-          hash,
           public_key: publicKey,
           private_key: encryptedPrivateKey,
         },
@@ -58,7 +57,6 @@ describe('User Login', () => {
         {
           username,
           salt,
-          hash,
           public_key: publicKey,
           private_key: encryptedPrivateKey,
         },
@@ -82,7 +80,6 @@ describe('User Login', () => {
         {
           username,
           salt,
-          hash,
           public_key: publicKey,
           private_key: encryptedPrivateKey,
         },
