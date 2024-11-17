@@ -20,6 +20,8 @@ async function login(username, password, session) {
   }
 
   session.privateKey = decryptedPrivateKey;
+  session.username = username;
+  session.userUuid = user.uuid;
 
   return true;
 }
