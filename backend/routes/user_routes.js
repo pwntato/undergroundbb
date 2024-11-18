@@ -73,7 +73,6 @@ router.get('/user/:uuid', async (req, res) => {
     const currentUserUuid = session.userUuid;
 
     const user = await getUserByUuid(uuid);
-    console.log(user);
     console.log(currentUserUuid);
     console.log(session.username);
     if (user) {
