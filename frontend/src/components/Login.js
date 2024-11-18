@@ -9,7 +9,7 @@ const Login = ({ onLogin }) => {
   const handleLogin = async () => {
     try {
       await loginUser(username, password);
-      onLogin();
+      // onLogin();
     } catch (error) {
       setError('Invalid username or password');
     }

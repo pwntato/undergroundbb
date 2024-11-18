@@ -29,3 +29,8 @@ export const loginUser = async (username, password) => {
   const data = await client('/login', 'POST', { username, password });
   return data;
 };
+
+export const getCurrentUser = async () => {
+  const data = await client('/current-user');
+  return data;
+};
