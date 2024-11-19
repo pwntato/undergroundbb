@@ -32,5 +32,6 @@ export const loginUser = async (username, password) => {
 
 export const getCurrentUser = async () => {
   const data = await client('/current-user');
+  console.log('getCurrentUser', data);
   return data;
 };

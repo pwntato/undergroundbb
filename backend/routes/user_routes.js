@@ -56,8 +56,9 @@ router.get('/is-logged-in', (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const { session } = req;
+    const { session, sessionID } = req;
     await login(username, password, session);
+    console.log('sessionID login:', sessionID);
     res.json({ message: 'Login successful', username });
   } catch (error) {
     console.log(error);
@@ -100,9 +101,11 @@ router.get('/user/:uuid', async (req, res) => {
 
 router.get('/current-user', async (req, res) => {
   try {
-    const { session } = req;
+    const { session, sessionID } = req;
     const currentUserUuid = session.userUuid;
     const username = session.username;
+
+    console.log('sessionID current user:', sessionID);
 
     if (!currentUserUuid || !username) {
       return res.status(401).json({ error: 'User not logged in' });

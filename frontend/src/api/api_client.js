@@ -1,23 +1,18 @@
 import axios from 'axios';
 
-const apiUrl = process.env.REACT_APP_API_URL;
+const createApiClient = (baseURL) => {
+  const client = axios.create({
+    baseURL: process.env.REACT_APP_API_URL + baseURL,
+    withCredentials: true
+  });
 
-const createApiClient = (basePath) => {
-  return async (additionalPath, method = 'GET', body = null) => {
-    const url = `${apiUrl}${basePath}${additionalPath}`;
-    const config = {
-      method,
+  return async (url, method = 'GET', data = null) => {
+    const response = await client({
       url,
-      data: body,
-    };
-
-    try {
-      const response = await axios(config);
-      return response.data;
-    } catch (error) {
-      console.error(`There was an error with the request to ${url}!`, error);
-      throw error;
-    }
+      method,
+      data
+    });
+    return response.data;
   };
 };
 
