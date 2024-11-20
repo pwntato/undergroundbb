@@ -4,7 +4,6 @@ const client = createApiClient('/test');
 
 export const fetchUsers = async () => {
   const data = await client('/users');
-  console.log('fetchUsers', data);
   return data;
 };
 

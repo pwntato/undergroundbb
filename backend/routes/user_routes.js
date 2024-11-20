@@ -84,8 +84,6 @@ router.get('/user/:uuid', async (req, res) => {
       const isMemberOfSameGroup = currentUserGroups.some(group =>
         targetUserGroups.includes(group)
       );
-      // A console.log to log all the variables in the if statement with key/value pairs
-      console.log({ isCurrentUser: isCurrentUser, isHidden: isHidden, isMemberOfSameGroup: isMemberOfSameGroup });
       
       if (isCurrentUser || ! isHidden || isMemberOfSameGroup) {
         return res.json({ username: user.username, uuid: user.uuid });
@@ -104,8 +102,6 @@ router.get('/current-user', async (req, res) => {
     const { session, sessionID } = req;
     const currentUserUuid = session.userUuid;
     const username = session.username;
-
-    console.log('sessionID current user:', sessionID);
 
     if (!currentUserUuid || !username) {
       return res.status(401).json({ error: 'User not logged in' });
