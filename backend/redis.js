@@ -10,13 +10,14 @@ redisClient.connect().catch(console.error);
 
 const sessionMiddleware = session({
   store: new RedisStore({ client: redisClient }),
+  name: 'sessionID',
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: true,
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 30 * 60 * 1000 // 30 minutes
   }
 });

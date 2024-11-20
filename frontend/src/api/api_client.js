@@ -1,18 +1,24 @@
-import axios from 'axios';
-
 const createApiClient = (baseURL) => {
-  const client = axios.create({
-    baseURL: process.env.REACT_APP_API_URL + baseURL,
-    withCredentials: true
-  });
+  const apiUrl = process.env.REACT_APP_API_URL + baseURL;
 
   return async (url, method = 'GET', data = null) => {
-    const response = await client({
-      url,
+    const options = {
       method,
-      data
-    });
-    return response.data;
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include'
+    };
+
+    if (data) {
+      options.body = JSON.stringify(data);
+    }
+
+    const response = await fetch(apiUrl + url, options);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return response.json();
   };
 };
 
