@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Typography, Box } from '@mui/material';
 import { fetchTime } from '../api/test';
 
 function Time() {
@@ -18,9 +19,17 @@ function Time() {
   }, []);
 
   return (
-    <p>
-      What time is it? {time}
-    </p>
+    <Box 
+      sx={{
+        display: 'flex',
+        // flexDirection: 'column',
+        // alignItems: 'center',
+        // justifyContent: 'center',
+        // height: '100vh',
+      }}  
+    >
+      <Typography variant="h3" sx={{p: 1}}>What time is it? {time}</Typography>
+    </Box>
   );
 }
 
