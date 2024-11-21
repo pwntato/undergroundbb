@@ -4,7 +4,7 @@ const pool = require('../db');
 
 router.get('/users', async (req, res) => {
   try {
-    const result = await pool.query('SELECT username FROM users');
+    const result = await pool.query('SELECT username, uuid FROM users');
     res.send(result.rows);
   } catch (err) {
     console.error(err);

@@ -2,6 +2,7 @@ const pool = require('../db');
 
 const getUserByUuid = async (uuid) => {
   const result = await pool.query('SELECT * FROM users WHERE uuid = $1', [uuid]);
+  console.log(result.rows);
   if (result.rows.length === 0) {
     return null;
   }

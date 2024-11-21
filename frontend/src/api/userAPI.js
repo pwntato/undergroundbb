@@ -34,3 +34,8 @@ export const getCurrentUser = async () => {
   const data = await client('/current-user');
   return data;
 };
+
+export const getUserByUuid = async (uuid) => {
+  const data = await client(`/user/${uuid}`);
+  return data;
+};
