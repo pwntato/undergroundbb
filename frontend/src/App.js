@@ -1,10 +1,7 @@
 import React from 'react';
 import { Container } from '@mui/material';
 import { lightBlue } from '@mui/material/colors';
-import Login from './components/Login';
-import CreateUser from './components/CreateUser';
-import Time from './components/Time';
-import Users from './components/Users';
+import AppRoutes from './Routes';
 
 function App() {
   return (
@@ -15,14 +12,7 @@ function App() {
           height: '100vh' 
         }}
       >
-        <div className="App">
-          <header className="App-header">
-              <Time />
-              <Users />
-              <Login />
-              <CreateUser />
-          </header>
-        </div>
+        <AppRoutes />
       </Container>
     </React.StrictMode>
   );
