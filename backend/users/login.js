@@ -19,7 +19,7 @@ async function login(username, password, session) {
     throw new Error('Invalid username or password');
   }
 
-  session.privateKey = decryptedPrivateKey;
+  session.hash = hash.hash;
   session.username = username;
   session.userUuid = user.uuid;
 
