@@ -10,7 +10,6 @@ function Users() {
     const getUsers = async () => {
       try {
         const fetchedUsers = await fetchUsers();
-        console.log('fetchedUsers:', fetchedUsers);
         setUsers(fetchedUsers);
       } catch (error) {
         console.error('There was an error fetching the users!', error);

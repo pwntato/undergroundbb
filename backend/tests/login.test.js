@@ -35,7 +35,7 @@ describe('User Login', () => {
     const result = await login(username, password, session);
 
     expect(result).toBe(true);
-    expect(session.privateKey).toBe(privateKey);
+    expect(session.hash).toBe(hash);
   });
 
   test('should fail login with invalid username', async () => {

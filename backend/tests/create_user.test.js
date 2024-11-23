@@ -1,4 +1,4 @@
-const { isUsernameAvailable, createUser } = require('../users/create_user');
+const { isUsernameAvailable, createUser } = require('../users/user');
 const pool = require('../db');
 
 // Mock the pool module
