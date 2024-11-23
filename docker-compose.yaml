@@ -24,6 +24,7 @@ services:
     working_dir: /app
     volumes:
       - ./backend:/app
+      - ./node_modules
     command: ./entrypoint.sh
     ports:
       - "3000:3000"
