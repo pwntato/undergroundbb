@@ -7,7 +7,9 @@ const Header = () => {
     <AppBar position="static">
       <Toolbar>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          TrustBoard
+          <Button color="inherit" component={Link} to="/" sx={{ textTransform: 'none' }}>
+            TrustBoard
+          </Button>
         </Typography>
         <Button color="inherit" component={Link} to="/login">
           Login
