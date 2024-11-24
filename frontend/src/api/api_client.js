@@ -1,7 +1,10 @@
 const createApiClient = (baseURL) => {
+  console.log('API_URL:', process.env.REACT_APP_API_URL);
+  console.log('baseURL:', baseURL);
   const apiUrl = process.env.REACT_APP_API_URL + baseURL;
 
   return async (url, method = 'GET', data = null) => {
+    console.log('url:', url);
     const options = {
       method,
       headers: {
