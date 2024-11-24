@@ -3,13 +3,13 @@ import { createTheme } from '@mui/material/styles';
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#1976d2', // A shade of blue representing trust
+      main: '#1976d2',
     },
     secondary: {
-      main: '#4caf50', // A shade of green representing growth and safety
+      main: '#4caf50',
     },
     background: {
-      default: '#f5f5f5', // Light background for a clean look
+      default: '#f5f5f5',
     },
   },
   typography: {
