@@ -2,11 +2,19 @@ const { login, isLoggedIn } = require('../users/login');
 const pool = require('../db');
 const { createHash } = require('../cryptography/hash');
 const { generateKeyPair } = require('../cryptography/rsa');
-const { encrypt } = require('../cryptography/aes');
+const { encrypt, decrypt } = require('../cryptography/aes');
 
 jest.mock('../db', () => ({
   query: jest.fn(),
 }));
+
+const createMockResponse = () => {
+  const res = {};
+  res.cookie = jest.fn().mockReturnValue(res);
+  res.status = jest.fn().mockReturnValue(res);
+  res.send = jest.fn().mockReturnValue(res);
+  return res;
+};
 
 describe('User Login', () => {
   afterEach(() => {
@@ -32,10 +40,16 @@ describe('User Login', () => {
     });
 
     const session = {};
-    const result = await login(username, password, session);
+    const res = createMockResponse();
+    const result = await login(username, password, session, res);
 
     expect(result).toBe(true);
-    expect(session.hash).toBe(hash);
+    const tokenCookie = res.cookie.mock.calls.find(call => call[0] === 'token');
+    const token = Buffer.from(tokenCookie[1], 'base64');
+
+    const decryptedSessionPrivateKey = decrypt(session.sessionPrivateKey, token);
+
+    expect(decryptedSessionPrivateKey).toBe(privateKey);
   });
 
   test('should fail login with invalid username', async () => {

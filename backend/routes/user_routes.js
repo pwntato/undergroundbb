@@ -55,8 +55,8 @@ router.get('/is-logged-in', (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const { session, sessionID } = req;
-    await login(username, password, session);
+    const { session } = req;
+    await login(username, password, session, res);
     res.json({ message: 'Login successful', username });
   } catch (error) {
     console.log(error);
