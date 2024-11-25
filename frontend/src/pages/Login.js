@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { loginUser } from '../api/userAPI';
 import { useUser } from '../contexts/UserContext';
+import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -8,7 +9,8 @@ const Login = () => {
   const [error, setError] = useState('');
   const { dispatch } = useUser();
 
-  const handleLogin = async () => {
+  const handleLogin = async (event) => {
+    event.preventDefault(); // Prevent default form submission
     try {
       await loginUser(username, password);
       dispatch({ type: 'LOGIN', payload: { username } });
@@ -18,27 +20,51 @@ const Login = () => {
   };
 
   return (
-    <div>
-      <h2>Login</h2>
-      <div>
-        <label>Username:</label>
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-      </div>
-      <div>
-        <label>Password:</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-      </div>
-      {error && <div style={{ color: 'red', fontSize: 'small' }}>{error}</div>}
-      <button onClick={handleLogin}>Login</button>
-    </div>
+    <Container maxWidth="sm">
+      <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <Typography component="h1" variant="h5" sx={{ mb: 2 }}>
+          Login
+        </Typography>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        <Box component="form" onSubmit={handleLogin} sx={{ width: '100%' }}>
+          <TextField
+            variant="outlined"
+            margin="normal"
+            required
+            fullWidth
+            id="username"
+            label="Username"
+            name="username"
+            autoComplete="username"
+            autoFocus
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <TextField
+            variant="outlined"
+            margin="normal"
+            required
+            fullWidth
+            name="password"
+            label="Password"
+            type="password"
+            id="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <Button
+            type="submit"
+            fullWidth
+            variant="contained"
+            color="primary"
+            sx={{ mt: 3, mb: 2 }}
+          >
+            Login
+          </Button>
+        </Box>
+      </Box>
+    </Container>
   );
 };
 

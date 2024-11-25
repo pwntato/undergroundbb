@@ -42,11 +42,17 @@ function isLoggedIn(session) {
 }
 
 function logout(session, res) {
+  res.clearCookie('token');
   session.destroy((err) => {
     if (err) {
-      throw new Error('Failed to log out');
+      console.error('Failed to log out:', err);
+      if (!res.headersSent) {
+        return res.status(500).json({ error: 'Failed to log out' });
+      }
     }
-    res.clearCookie('token');
+    if (!res.headersSent) {
+      res.json({ message: 'Logout successful' });
+    }
   });
 }
 
