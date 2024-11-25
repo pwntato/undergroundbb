@@ -10,10 +10,11 @@ const Login = () => {
   const { dispatch } = useUser();
 
   const handleLogin = async (event) => {
-    event.preventDefault(); // Prevent default form submission
+    event.preventDefault();
     try {
       await loginUser(username, password);
       dispatch({ type: 'LOGIN', payload: { username } });
+      setError('');
     } catch (error) {
       setError('Invalid username or password');
     }
