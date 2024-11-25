@@ -44,3 +44,13 @@ export const logoutUser = async () => {
   const data = await client('/logout', 'POST');
   return data;
 };
+
+export const updateUser = async (userData) => {
+  const data = await client('/current-user', 'PUT', userData);
+  return data;
+};
+
+export const changePassword = async (oldPassword, newPassword) => {
+  const data = await client('/change-password', 'PUT', { oldPassword, newPassword });
+  return data;
+};

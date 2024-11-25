@@ -107,16 +107,57 @@ router.get('/current-user', async (req, res) => {
   try {
     const { session } = req;
     const currentUserUuid = session.userUuid;
-    const username = session.username;
 
-    if (!currentUserUuid || !username) {
+    if (!currentUserUuid) {
       return res.status(401).json({ error: 'User not logged in' });
     }
 
-    return res.json({ username, uuid: currentUserUuid });
+    const user = await getUserByUuid(currentUserUuid);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { username, email, bio, hidden, created_at } = user;
+    return res.json({ username, email, bio, hidden, created_at });
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error getting current user" });
+  }
+});
+
+router.put('/current-user', async (req, res) => {
+  try {
+    const { session } = req;
+    const currentUserUuid = session.userUuid;
+
+    if (!currentUserUuid) {
+      return res.status(401).json({ error: 'User not logged in' });
+    }
+
+    const { username, email, bio, hidden } = req.body;
+
+    const user = await getUserByUuid(currentUserUuid);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await updateUser(currentUserUuid, { email, bio, hidden });
+
+    return res.json({ message: 'User updated successfully' });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: "Error updating user" });
+  }
+});
+
+router.put('/change-password', async (req, res) => {
+  try {
+    const { username, oldPassword, newPassword } = req.body;
+    await changePassword(username, oldPassword, newPassword);
+    res.json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: 'Error changing password' });
   }
 });
 

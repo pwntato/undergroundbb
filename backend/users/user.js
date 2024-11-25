@@ -22,7 +22,6 @@ const getUserGroups = async (userUuid) => {
   return result.rows.map(row => row.uuid);
 };
 
-
 async function isUsernameAvailable(username) {
     const result = await pool.query('SELECT COUNT(*) FROM users WHERE username = $1', [username]);
     return result.rows[0].count === '0';
@@ -59,5 +58,12 @@ async function isUsernameAvailable(username) {
       [username, null, publicKey, encryptedPrivateKey, salt]
     );
   }
+
+  const updateUser = async (uuid, { email, bio, hidden }) => {
+    await pool.query(
+      'UPDATE users SET email = $1, bio = $2, hidden = $3 WHERE uuid = $4',
+      [email, bio, hidden, uuid]
+    );
+  };
   
-module.exports = { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser };
+module.exports = { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser };

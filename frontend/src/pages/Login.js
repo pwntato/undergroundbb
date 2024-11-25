@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { loginUser } from '../api/userAPI';
 import { useUser } from '../contexts/UserContext';
 import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
@@ -8,6 +9,7 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const { dispatch } = useUser();
+  const navigate = useNavigate();
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -15,6 +17,7 @@ const Login = () => {
       await loginUser(username, password);
       dispatch({ type: 'LOGIN', payload: { username } });
       setError('');
+      navigate('/');
     } catch (error) {
       setError('Invalid username or password');
     }
