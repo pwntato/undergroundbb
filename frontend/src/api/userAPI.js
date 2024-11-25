@@ -39,3 +39,8 @@ export const getUserByUuid = async (uuid) => {
   const data = await client(`/user/${uuid}`);
   return data;
 };
+
+export const logoutUser = async () => {
+  const data = await client('/logout', 'POST');
+  return data;
+};

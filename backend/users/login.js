@@ -41,4 +41,13 @@ function isLoggedIn(session) {
   return session.privateKey !== undefined && session.privateKey !== null;
 }
 
-module.exports = { login, isLoggedIn };
+function logout(session, res) {
+  session.destroy((err) => {
+    if (err) {
+      throw new Error('Failed to log out');
+    }
+    res.clearCookie('token');
+  });
+}
+
+module.exports = { login, isLoggedIn, logout };

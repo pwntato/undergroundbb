@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { loginUser } from '../api/userAPI';
+import { useUser } from '../contexts/UserContext';
 
-const Login = ({ onLogin }) => {
+const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const { dispatch } = useUser();
 
   const handleLogin = async () => {
     try {
       await loginUser(username, password);
-      // onLogin();
+      dispatch({ type: 'LOGIN', payload: { username } });
     } catch (error) {
       setError('Invalid username or password');
     }

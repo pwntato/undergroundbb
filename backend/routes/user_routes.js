@@ -1,5 +1,5 @@
 const express = require('express');
-const { isLoggedIn, login } = require('../users/login');
+const { isLoggedIn, login, logout } = require('../users/login');
 const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser } = require('../users/user');
 
 const router = express.Router();
@@ -61,6 +61,17 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error logging in" });
+  }
+});
+
+router.post('/logout', (req, res) => {
+  try {
+    const { session } = req;
+    logout(session, res);
+    res.json({ message: 'Logout successful' });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: "Error logging out" });
   }
 });
 
