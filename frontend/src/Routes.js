@@ -8,6 +8,7 @@ import Home from './pages/Home';
 import About from './pages/About';
 import Profile from './pages/Profile';
 import { useUser } from './contexts/UserContext';
+import PrivateRoute from './components/PrivateRoute';
 
 const AppRoutes = () => {
   const { state } = useUser();
@@ -18,8 +19,8 @@ const AppRoutes = () => {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<CreateUser />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/user/:uuid" element={<User />} />
+        <Route path="/profile" element={<PrivateRoute><Profile /></PrivateRoute>} />
+        <Route path="/user/:uuid" element={<PrivateRoute><User /></PrivateRoute>} />
         <Route path="/about" element={<About />} />
         <Route path="/" element={state.isLoggedIn ? <Home /> : <About />} />
       </Routes>
