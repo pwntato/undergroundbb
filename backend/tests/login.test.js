@@ -1,4 +1,4 @@
-const { login, isLoggedIn } = require('../users/login');
+const { login, isLoggedIn } = require('../services/login');
 const pool = require('../db');
 const { createHash } = require('../cryptography/hash');
 const { generateKeyPair } = require('../cryptography/rsa');
