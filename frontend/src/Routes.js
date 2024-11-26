@@ -20,6 +20,7 @@ const AppRoutes = () => {
         <Route path="/signup" element={<CreateUser />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/user/:uuid" element={<User />} />
+        <Route path="/about" element={<About />} />
         <Route path="/" element={state.isLoggedIn ? <Home /> : <About />} />
       </Routes>
     </Router>

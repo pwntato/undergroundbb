@@ -49,6 +49,9 @@ const Header = () => {
         >
           Donate
         </Button>
+        <Button color="inherit" component={Link} to="/about">
+          About
+        </Button>
         {state.isLoggedIn ? (
           <>
             <Button color="inherit" component={Link} to="/profile">
