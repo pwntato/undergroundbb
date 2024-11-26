@@ -9,7 +9,7 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Container sx={{ paddingLeft: 1, paddingRight: 1 }}>
+      <Container sx={{ paddingLeft: 1, paddingRight: 1, paddingBottom: 2 }}>
         <AppRoutes />
       </Container>
     </ThemeProvider>
