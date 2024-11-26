@@ -40,8 +40,13 @@ const Profile = () => {
       return;
     }
     try {
-      await changePassword(currentPassword, newPassword);
-      setPasswordMessage('Password changed successfully');
+      const result = await changePassword(currentPassword, newPassword);
+      if (result.error) {
+        setPasswordMessage(result.error);
+        return;
+      } else {
+        setPasswordMessage('Password changed successfully');
+      }
     } catch (error) {
       setPasswordMessage('Error changing password');
     }

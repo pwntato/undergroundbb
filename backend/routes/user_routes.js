@@ -1,6 +1,6 @@
 const express = require('express');
-const { isLoggedIn, login, logout } = require('../users/login');
-const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser } = require('../users/user');
+const { isLoggedIn, login, logout, changePassword } = require('../users/login');
+const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser } = require('../users/user');
 
 const router = express.Router();
 
@@ -152,12 +152,16 @@ router.put('/current-user', async (req, res) => {
 
 router.put('/change-password', async (req, res) => {
   try {
-    const { username, oldPassword, newPassword } = req.body;
-    await changePassword(username, oldPassword, newPassword);
+    const user = await getUserByUuid(req.session.userUuid);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const { oldPassword, newPassword } = req.body;
+    await changePassword(user.username, oldPassword, newPassword);
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     console.log(error);
-    res.status(500).json({ error: 'Error changing password' });
+    res.status(200).json({ error: error.message });
   }
 });
 
