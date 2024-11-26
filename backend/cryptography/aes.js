@@ -39,4 +39,8 @@ function decrypt(ciphertext, secretKeyHex) {
   }
 }
 
-module.exports = { encrypt, decrypt };
+function randomKey() {
+  return crypto.randomBytes(32);
+}
+
+module.exports = { encrypt, decrypt, randomKey };

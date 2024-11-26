@@ -1,7 +1,7 @@
 const pool = require('../db');
 const crypto = require('crypto');
 const { createHash } = require('../cryptography/hash');
-const { decrypt, encrypt } = require('../cryptography/aes');
+const { decrypt, encrypt, randomKey } = require('../cryptography/aes');
 const { verifyKeyPair } = require('../cryptography/rsa');
 
 async function login(username, password, session, res) {
@@ -20,7 +20,7 @@ async function login(username, password, session, res) {
     throw new Error('Invalid username or password');
   }
 
-  const token = crypto.randomBytes(32);
+  const token = randomKey();
   sessionPrivateKey = encrypt(decryptedPrivateKey, token);
 
   res.cookie('token', token.toString('base64'), {
