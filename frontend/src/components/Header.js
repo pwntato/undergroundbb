@@ -1,11 +1,26 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AppBar, Toolbar, Typography, Button } from '@mui/material';
 import { Link } from 'react-router-dom';
 import { useUser } from '../contexts/UserContext';
-import { logoutUser } from '../api/userAPI';
+import { getCurrentUser, logoutUser } from '../api/userAPI';
 
 const Header = () => {
   const { state, dispatch } = useUser();
+
+  useEffect(() => {
+    const fetchCurrentUser = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (user) {
+          dispatch({ type: 'LOGIN', payload: { username: user.username } });
+        }
+      } catch (error) {
+        console.error('Error fetching current user', error);
+      }
+    };
+
+    fetchCurrentUser();
+  }, [dispatch]);
 
   const handleLogout = async () => {
     await logoutUser();
