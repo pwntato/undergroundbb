@@ -1,6 +1,6 @@
 const express = require('express');
-const { isLoggedIn, login, logout, changePassword } = require('../users/login');
-const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser } = require('../users/user');
+const { isLoggedIn, login, logout } = require('../users/login');
+const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser, changePassword } = require('../users/user');
 
 const router = express.Router();
 

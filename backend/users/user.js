@@ -1,7 +1,7 @@
 const pool = require('../db');
 const { createHash } = require('../cryptography/hash');
-const { encrypt } = require('../cryptography/aes');
-const { generateKeyPair } = require('../cryptography/rsa');
+const { encrypt, decrypt } = require('../cryptography/aes');
+const { generateKeyPair, verifyKeyPair } = require('../cryptography/rsa');
 
 const getUserByUuid = async (uuid) => {
   const result = await pool.query('SELECT * FROM users WHERE uuid = $1', [uuid]);
@@ -65,5 +65,33 @@ async function isUsernameAvailable(username) {
       [email, bio, hidden, uuid]
     );
   };
+
+  async function changePassword(username, oldPassword, newPassword) {
+    validatePassword(newPassword);
+
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    if (result.rows.length === 0) {
+      throw new Error('User not found');
+    }
   
-module.exports = { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser };
+    const user = result.rows[0];
+  
+    const oldHash = createHash(oldPassword, user.salt);
+    const decryptedPrivateKey = decrypt(user.private_key, oldHash);
+    const isValidKeyPair = verifyKeyPair(user.public_key, decryptedPrivateKey);
+    if (!isValidKeyPair) {
+      throw new Error('Invalid old password');
+    }
+  
+    const { salt, hash: newHash } = createHash(newPassword);
+    const encryptedPrivateKey = encrypt(decryptedPrivateKey, newHash);
+  
+    await pool.query(
+      'UPDATE users SET salt = $1, private_key = $2 WHERE username = $3',
+      [salt, encryptedPrivateKey, username]
+    );
+  
+    return true;
+  }
+  
+module.exports = { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser, changePassword };
