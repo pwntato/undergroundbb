@@ -79,11 +79,11 @@ const Header = () => {
               {state.selectedGroup.name || 'Groups'}
             </Button>
             <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
-              {state.groups && state.groups.filter(group => group.uuid !== state.selectedGroup.uuid).map(group => (
+              {state.groups && Object.values(state.groups).filter(group => group.uuid !== state.selectedGroup.uuid).map(group => (
                 <MenuItem key={group.uuid} onClick={() => handleGroupSelect(group)}>
                   {group.name}
                 </MenuItem>
-              ))}
+)             )}
               <Divider />
               <MenuItem onClick={handleCreateGroup}>Create Group</MenuItem>
             </Menu>
