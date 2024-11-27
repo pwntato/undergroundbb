@@ -83,7 +83,7 @@ const Header = () => {
                 <MenuItem key={group.uuid} onClick={() => handleGroupSelect(group)}>
                   {group.name}
                 </MenuItem>
-)             )}
+              ))}
               <Divider />
               <MenuItem onClick={handleCreateGroup}>Create Group</MenuItem>
             </Menu>
