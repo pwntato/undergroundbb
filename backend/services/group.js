@@ -30,7 +30,7 @@ const createGroup = async (userUuid, name, description) => {
     );
 
     await client.query('COMMIT');
-    return { groupUuid, groupKey };
+    return groupUuid;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

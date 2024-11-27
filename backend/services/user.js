@@ -94,4 +94,12 @@ async function isUsernameAvailable(username) {
     return true;
   }
   
-module.exports = { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser, changePassword };
+module.exports = { 
+  getUserByUuid, 
+  getUserGroups, 
+  isUsernameAvailable, 
+  validatePassword, 
+  createUser, 
+  updateUser, 
+  changePassword
+};

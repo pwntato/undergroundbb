@@ -1,5 +1,5 @@
 const express = require('express');
-const { isLoggedIn, login, logout } = require('../services/login');
+const { login, logout } = require('../services/login');
 const { getUserByUuid, getUserGroups, isUsernameAvailable, validatePassword, createUser, updateUser, changePassword } = require('../services/user');
 
 const router = express.Router();
@@ -34,21 +34,6 @@ router.post('/create-user', async (req, res) => {
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error creating user" });
-  }
-});
-
-router.get('/is-logged-in', (req, res) => {
-  try {
-    const { session } = req;
-    const loggedIn = isLoggedIn(session);
-    if (loggedIn) {
-      res.json({ loggedIn: true, username: session.username });
-    } else {
-      res.json({ loggedIn: false });
-    }
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ error: "Error checking login status" });
   }
 });
 
@@ -118,7 +103,14 @@ router.get('/current-user', async (req, res) => {
     }
 
     const { username, email, bio, hidden, created_at } = user;
-    return res.json({ username, email, bio, hidden, created_at });
+
+    const groups = await getUserGroups(currentUserUuid);
+    const groupMap = groups.reduce((map, group) => {
+      map[group.uuid] = group.name;
+      return map;
+    }, {});
+
+    return res.json({ username, email, bio, hidden, created_at, groups: groupMap });
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error getting current user" });
@@ -134,7 +126,7 @@ router.put('/current-user', async (req, res) => {
       return res.status(401).json({ error: 'User not logged in' });
     }
 
-    const { username, email, bio, hidden } = req.body;
+    const { email, bio, hidden } = req.body;
 
     const user = await getUserByUuid(currentUserUuid);
     if (!user) {
