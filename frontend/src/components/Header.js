@@ -1,11 +1,13 @@
-import React, { useEffect } from 'react';
-import { AppBar, Toolbar, Typography, Button } from '@mui/material';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { AppBar, Toolbar, Typography, Button, Menu, MenuItem, Divider } from '@mui/material';
+import { Link, useNavigate } from 'react-router-dom';
 import { useUser } from '../contexts/UserContext';
 import { getCurrentUser, logoutUser } from '../api/userAPI';
 
 const Header = () => {
   const { state, dispatch } = useUser();
+  const [anchorEl, setAnchorEl] = useState(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchCurrentUser = async () => {
@@ -13,6 +15,7 @@ const Header = () => {
         const user = await getCurrentUser();
         if (user) {
           dispatch({ type: 'LOGIN', payload: { username: user.username } });
+          dispatch({ type: 'SET_GROUPS', payload: user.groups });
         }
       } catch (error) {
         console.error('Error fetching current user', error);
@@ -25,6 +28,24 @@ const Header = () => {
   const handleLogout = async () => {
     await logoutUser();
     dispatch({ type: 'LOGOUT' });
+  };
+
+  const handleMenuOpen = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleGroupSelect = (group) => {
+    dispatch({ type: 'SET_SELECTED_GROUP', payload: { name: group.name, uuid: group.uuid } });
+    handleMenuClose();
+  };
+
+  const handleCreateGroup = () => {
+    navigate('/create-group');
+    handleMenuClose();
   };
 
   return (
@@ -52,8 +73,20 @@ const Header = () => {
         <Button color="inherit" component={Link} to="/about">
           About
         </Button>
-        {state.isLoggedIn ? (
+        {state.isLoggedIn && (
           <>
+            <Button color="inherit" onClick={handleMenuOpen}>
+              {state.selectedGroup.name || 'Groups'}
+            </Button>
+            <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
+              {state.groups && state.groups.filter(group => group.uuid !== state.selectedGroup.uuid).map(group => (
+                <MenuItem key={group.uuid} onClick={() => handleGroupSelect(group)}>
+                  {group.name}
+                </MenuItem>
+              ))}
+              <Divider />
+              <MenuItem onClick={handleCreateGroup}>Create Group</MenuItem>
+            </Menu>
             <Button color="inherit" component={Link} to="/profile">
               {state.username}
             </Button>
@@ -61,7 +94,8 @@ const Header = () => {
               Logout
             </Button>
           </>
-        ) : (
+        )}
+        {!state.isLoggedIn && (
           <>
             <Button color="inherit" component={Link} to="/login">
               Login

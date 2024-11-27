@@ -110,7 +110,7 @@ router.get('/current-user', async (req, res) => {
       return map;
     }, {});
 
-    return res.json({ username, email, bio, hidden, created_at, groups: groupMap });
+    return res.json({ username, email, bio, hidden, created_at, groups: groupMap || [] });
   } catch (error) {
     console.log(error);
     res.status(500).json({ error: "Error getting current user" });

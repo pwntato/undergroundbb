@@ -5,10 +5,8 @@ const UserContext = createContext();
 const initialState = {
   isLoggedIn: false,
   username: '',
-  selectedGroup: {
-    name: null,
-    uuid: null,
-  },
+  selectedGroup: { name: null, uuid: null },
+  groups: [], // Initialize groups as an empty array
 };
 
 const userReducer = (state, action) => {
@@ -18,28 +16,18 @@ const userReducer = (state, action) => {
         ...state,
         isLoggedIn: true,
         username: action.payload.username,
-        selectedGroup: {
-          name: null,
-          uuid: null,
-        },
       };
     case 'LOGOUT':
-      return {
-        ...state,
-        isLoggedIn: false,
-        username: '',
-        selectedGroup: {
-          name: null,
-          uuid: null,
-        },
-      };
+      return initialState;
     case 'SET_SELECTED_GROUP':
       return {
         ...state,
-        selectedGroup: {
-          name: action.payload.name,
-          uuid: action.payload.uuid,
-        },
+        selectedGroup: action.payload,
+      };
+    case 'SET_GROUPS':
+      return {
+        ...state,
+        groups: action.payload,
       };
     default:
       return state;
