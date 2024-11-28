@@ -39,7 +39,7 @@ router.get("/group/:uuid", async (req, res) => {
     res.json({
       name: group.name,
       description: group.description,
-      createdAt: group.created_at,
+      created_at: group.created_at,
     });
   } catch (error) {
     console.error(error);
