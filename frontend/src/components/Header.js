@@ -1,8 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { AppBar, Toolbar, Typography, Button, Menu, MenuItem, Divider } from '@mui/material';
-import { Link, useNavigate } from 'react-router-dom';
-import { useUser } from '../contexts/UserContext';
-import { getCurrentUser, logoutUser } from '../api/userAPI';
+import React, { useEffect, useState } from "react";
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  Button,
+  Menu,
+  MenuItem,
+  Divider,
+} from "@mui/material";
+import { Link, useNavigate } from "react-router-dom";
+import { useUser } from "../contexts/UserContext";
+import { getCurrentUser, logoutUser } from "../api/userAPI";
 
 const Header = () => {
   const { state, dispatch } = useUser();
@@ -14,11 +22,11 @@ const Header = () => {
       try {
         const user = await getCurrentUser();
         if (user) {
-          dispatch({ type: 'LOGIN', payload: { username: user.username } });
-          dispatch({ type: 'SET_GROUPS', payload: user.groups });
+          dispatch({ type: "LOGIN", payload: { username: user.username } });
+          dispatch({ type: "SET_GROUPS", payload: user.groups });
         }
       } catch (error) {
-        console.error('Error fetching current user', error);
+        console.error("Error fetching current user", error);
       }
     };
 
@@ -27,7 +35,7 @@ const Header = () => {
 
   const handleLogout = async () => {
     await logoutUser();
-    dispatch({ type: 'LOGOUT' });
+    dispatch({ type: "LOGOUT" });
   };
 
   const handleMenuOpen = (event) => {
@@ -39,12 +47,16 @@ const Header = () => {
   };
 
   const handleGroupSelect = (group) => {
-    dispatch({ type: 'SET_SELECTED_GROUP', payload: { name: group.name, uuid: group.uuid } });
+    dispatch({
+      type: "SET_SELECTED_GROUP",
+      payload: { name: group.name, uuid: group.uuid },
+    });
     handleMenuClose();
+    navigate(`/group/${group.uuid}`);
   };
 
   const handleCreateGroup = () => {
-    navigate('/create-group');
+    navigate("/create-group");
     handleMenuClose();
   };
 
@@ -52,7 +64,12 @@ const Header = () => {
     <AppBar position="static">
       <Toolbar>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          <Button color="inherit" component={Link} to="/" sx={{ textTransform: 'none', fontSize: '1.5rem' }}>
+          <Button
+            color="inherit"
+            component={Link}
+            to="/"
+            sx={{ textTransform: "none", fontSize: "1.5rem" }}
+          >
             TrustBoard
           </Button>
         </Typography>
@@ -61,9 +78,9 @@ const Header = () => {
           component={Link}
           to="/donate"
           sx={{
-            backgroundColor: '#4caf50',
-            '&:hover': {
-              backgroundColor: '#388e3c',
+            backgroundColor: "#4caf50",
+            "&:hover": {
+              backgroundColor: "#388e3c",
             },
             marginRight: 2,
           }}
@@ -76,14 +93,24 @@ const Header = () => {
         {state.isLoggedIn && (
           <>
             <Button color="inherit" onClick={handleMenuOpen}>
-              {state.selectedGroup.name || 'Groups'}
+              {state.selectedGroup.name || "Groups"}
             </Button>
-            <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleMenuClose}>
-              {state.groups && Object.values(state.groups).filter(group => group.uuid !== state.selectedGroup.uuid).map(group => (
-                <MenuItem key={group.uuid} onClick={() => handleGroupSelect(group)}>
-                  {group.name}
-                </MenuItem>
-              ))}
+            <Menu
+              anchorEl={anchorEl}
+              open={Boolean(anchorEl)}
+              onClose={handleMenuClose}
+            >
+              {state.groups &&
+                Object.values(state.groups)
+                  .filter((group) => group.uuid !== state.selectedGroup.uuid)
+                  .map((group) => (
+                    <MenuItem
+                      key={group.uuid}
+                      onClick={() => handleGroupSelect(group)}
+                    >
+                      {group.name}
+                    </MenuItem>
+                  ))}
               <Divider />
               <MenuItem onClick={handleCreateGroup}>Create Group</MenuItem>
             </Menu>

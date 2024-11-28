@@ -8,6 +8,7 @@ import Home from './pages/Home';
 import About from './pages/About';
 import Profile from './pages/Profile';
 import CreateGroup from './pages/CreateGroup';
+import Group from './pages/Group';
 import { useUser } from './contexts/UserContext';
 import PrivateRoute from './components/PrivateRoute';
 
@@ -22,6 +23,7 @@ const AppRoutes = () => {
         <Route path="/signup" element={<CreateUser />} />
         <Route path="/profile" element={<PrivateRoute><Profile /></PrivateRoute>} />
         <Route path="/user/:uuid" element={<PrivateRoute><User /></PrivateRoute>} />
+        <Route path="/group/:uuid" element={<PrivateRoute><Group /></PrivateRoute>} />
         <Route path="/about" element={<About />} />
         <Route path="/create-group" element={<PrivateRoute><CreateGroup /></PrivateRoute>} />
         <Route path="/" element={state.isLoggedIn ? <Home /> : <About />} />
