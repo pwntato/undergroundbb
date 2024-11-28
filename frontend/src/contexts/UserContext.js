@@ -29,6 +29,14 @@ const userReducer = (state, action) => {
         ...state,
         groups: action.payload,
       };
+    case 'ADD_GROUP':
+      return {
+        ...state,
+        groups: {
+          ...state.groups,
+          [action.payload.uuid]: action.payload,
+        },
+      };
     default:
       return state;
   }

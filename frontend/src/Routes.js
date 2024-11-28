@@ -7,6 +7,7 @@ import User from './pages/User';
 import Home from './pages/Home';
 import About from './pages/About';
 import Profile from './pages/Profile';
+import CreateGroup from './pages/CreateGroup';
 import { useUser } from './contexts/UserContext';
 import PrivateRoute from './components/PrivateRoute';
 
@@ -22,6 +23,7 @@ const AppRoutes = () => {
         <Route path="/profile" element={<PrivateRoute><Profile /></PrivateRoute>} />
         <Route path="/user/:uuid" element={<PrivateRoute><User /></PrivateRoute>} />
         <Route path="/about" element={<About />} />
+        <Route path="/create-group" element={<PrivateRoute><CreateGroup /></PrivateRoute>} />
         <Route path="/" element={state.isLoggedIn ? <Home /> : <About />} />
       </Routes>
     </Router>
