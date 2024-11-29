@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { Container, Typography, Box } from "@mui/material";
-import { getGroupByUuid } from "../api/groupAPI";
+import { useParams, Link } from "react-router-dom";
+import { Container, Typography, Box, Button } from "@mui/material";
+import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
 
 const Group = () => {
   const { uuid } = useParams();
   const [group, setGroup] = useState(null);
   const [error, setError] = useState("");
+  const [userRole, setUserRole] = useState("");
 
   useEffect(() => {
     const fetchGroup = async () => {
@@ -18,7 +19,17 @@ const Group = () => {
       }
     };
 
+    const fetchUserRole = async () => {
+      try {
+        const role = await getUserRoleInGroup(uuid);
+        setUserRole(role);
+      } catch (error) {
+        console.error("Error fetching user role", error);
+      }
+    };
+
     fetchGroup();
+    fetchUserRole();
   }, [uuid]);
 
   if (error) {
@@ -39,9 +50,29 @@ const Group = () => {
           alignItems: "center",
         }}
       >
-        <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
-          {group.name}
-        </Typography>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            justifyContent: "space-between",
+          }}
+        >
+          <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
+            {group.name}
+          </Typography>
+          {userRole === "admin" && (
+            <Button
+              variant="contained"
+              color="primary"
+              component={Link}
+              to={`/group/${uuid}/edit`}
+              sx={{ ml: 2 }}
+            >
+              Edit Group
+            </Button>
+          )}
+        </Box>
         <Typography variant="body2" sx={{ mb: 4 }}>
           Created at: {new Date(group.created_at).toLocaleDateString()}
         </Typography>

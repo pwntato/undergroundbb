@@ -1,6 +1,7 @@
 const express = require("express");
 const { createGroup, getGroupByUuid } = require("../services/group");
 const { getUserByUuid } = require("../services/user");
+const { getUserRoleInGroup } = require("../services/membership");
 
 const router = express.Router();
 
@@ -63,8 +64,10 @@ router.put("/group/:uuid", async (req, res) => {
     }
 
     const userRole = await getUserRoleInGroup(user.id, uuid);
-    if (userRole !== 'admin') {
-      return res.status(403).json({ error: "User is not an admin of the group" });
+    if (userRole !== "admin") {
+      return res
+        .status(403)
+        .json({ error: "User is not an admin of the group" });
     }
 
     await editGroup(uuid, name, description, hidden, trust_trace);
@@ -73,6 +76,32 @@ router.put("/group/:uuid", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error updating group" });
+  }
+});
+
+router.get("/group/:uuid/role", async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    const { userUuid } = req.session;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const user = await getUserByUuid(userUuid);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userRole = await getUserRoleInGroup(user.id, uuid);
+    if (!userRole) {
+      return res.status(404).json({ error: "User not in group" });
+    }
+
+    res.json({ role: userRole });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error fetching user role in group" });
   }
 });
 
