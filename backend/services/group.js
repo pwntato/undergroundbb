@@ -50,4 +50,14 @@ const getGroupByUuid = async (uuid) => {
   return result.rows[0];
 };
 
-module.exports = { createGroup, getGroupByUuid };
+const editGroup = async (uuid, name, description, hidden, trust_trace) => {
+  const result = await pool.query(
+    "UPDATE groups SET name = $1, description = $2, hidden = $3, trust_trace = $4 WHERE uuid = $5 RETURNING uuid",
+    [name, description, hidden, trust_trace, uuid]
+  );
+  if (result.rows.length === 0) {
+    throw new Error("Group not found");
+  }
+};
+
+module.exports = { createGroup, getGroupByUuid, editGroup };
