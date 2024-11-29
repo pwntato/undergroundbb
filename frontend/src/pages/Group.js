@@ -22,7 +22,7 @@ const Group = () => {
     const fetchUserRole = async () => {
       try {
         const role = await getUserRoleInGroup(uuid);
-        setUserRole(role);
+        setUserRole(role["role"]);
       } catch (error) {
         console.error("Error fetching user role", error);
       }

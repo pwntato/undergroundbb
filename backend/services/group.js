@@ -51,10 +51,35 @@ const getGroupByUuid = async (uuid) => {
 };
 
 const editGroup = async (uuid, name, description, hidden, trust_trace) => {
-  const result = await pool.query(
-    "UPDATE groups SET name = $1, description = $2, hidden = $3, trust_trace = $4 WHERE uuid = $5 RETURNING uuid",
-    [name, description, hidden, trust_trace, uuid]
-  );
+  const fields = [];
+  const values = [uuid];
+
+  if (name != null) {
+    fields.push("name = $" + (fields.length + 2));
+    values.push(name);
+  }
+  if (description != null) {
+    fields.push("description = $" + (fields.length + 2));
+    values.push(description);
+  }
+  if (hidden != null) {
+    fields.push("hidden = $" + (fields.length + 2));
+    values.push(hidden);
+  }
+  if (trust_trace != null) {
+    fields.push("trust_trace = $" + (fields.length + 2));
+    values.push(trust_trace);
+  }
+
+  if (fields.length === 0) {
+    throw new Error("No fields to update");
+  }
+
+  const query = `UPDATE groups SET ${fields.join(
+    ", "
+  )} WHERE uuid = $1 RETURNING uuid`;
+  const result = await pool.query(query, values);
+
   if (result.rows.length === 0) {
     throw new Error("Group not found");
   }

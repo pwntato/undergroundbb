@@ -1,5 +1,5 @@
 const express = require("express");
-const { createGroup, getGroupByUuid } = require("../services/group");
+const { createGroup, getGroupByUuid, editGroup } = require("../services/group");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 
