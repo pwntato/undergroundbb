@@ -101,14 +101,14 @@ const Header = () => {
               onClose={handleMenuClose}
             >
               {state.groups &&
-                Object.values(state.groups)
-                  .filter((group) => group.uuid !== state.selectedGroup.uuid)
-                  .map((group) => (
+                Object.entries(state.groups)
+                  .filter(([uuid]) => uuid !== state.selectedGroup.uuid)
+                  .map(([uuid, name]) => (
                     <MenuItem
-                      key={group.uuid}
-                      onClick={() => handleGroupSelect(group)}
+                      key={uuid}
+                      onClick={() => handleGroupSelect({ uuid, name })}
                     >
-                      {group.name}
+                      {name}
                     </MenuItem>
                   ))}
               <Divider />

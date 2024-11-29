@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { loginUser } from '../api/userAPI';
+import { loginUser, getCurrentUser } from '../api/userAPI';
 import { useUser } from '../contexts/UserContext';
 import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
 
@@ -15,7 +15,11 @@ const Login = () => {
     event.preventDefault();
     try {
       await loginUser(username, password);
-      dispatch({ type: 'LOGIN', payload: { username } });
+      const user = await getCurrentUser();
+      if (user) {
+        dispatch({ type: 'LOGIN', payload: { username: user.username } });
+        dispatch({ type: 'SET_GROUPS', payload: user.groups });
+      }
       setError('');
       navigate('/');
     } catch (error) {

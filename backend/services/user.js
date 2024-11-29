@@ -13,13 +13,13 @@ const getUserByUuid = async (uuid) => {
 
 const getUserGroups = async (userUuid) => {
   const result = await pool.query(
-    `SELECT g.* FROM groups g
+    `SELECT g.uuid, g.name FROM groups g
      JOIN membership m ON g.id = m.group_id
      JOIN users u ON m.user_id = u.id
      WHERE u.uuid = $1`,
     [userUuid]
   );
-  return result.rows.map(row => row.uuid);
+  return result.rows;
 };
 
 async function isUsernameAvailable(username) {
