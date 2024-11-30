@@ -61,16 +61,29 @@ const Group = () => {
           <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
             {group.name}
           </Typography>
-          {userRole === "admin" && (
-            <Button
-              variant="contained"
-              color="primary"
-              component={Link}
-              to={`/group/${uuid}/edit`}
-              sx={{ ml: 2 }}
-            >
-              Edit Group
-            </Button>
+          {(userRole === "admin" || userRole === "ambassador") && (
+            <Box sx={{ display: "flex", alignItems: "center" }}>
+              <Button
+                variant="contained"
+                color="primary"
+                component={Link}
+                to={`/group/${uuid}/invite`}
+                sx={{ mr: 2 }}
+              >
+                Invite User
+              </Button>
+              {userRole === "admin" && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  component={Link}
+                  to={`/group/${uuid}/edit`}
+                  sx={{ ml: 2 }}
+                >
+                  Edit Group
+                </Button>
+              )}
+            </Box>
           )}
         </Box>
         <Typography variant="body2" sx={{ mb: 4 }}>
