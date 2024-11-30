@@ -8,7 +8,7 @@ import {
   MenuItem,
   Divider,
 } from "@mui/material";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useUser } from "../contexts/UserContext";
 import { getCurrentUser, logoutUser } from "../api/userAPI";
 
@@ -16,6 +16,7 @@ const Header = () => {
   const { state, dispatch } = useUser();
   const [anchorEl, setAnchorEl] = useState(null);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const fetchCurrentUser = async () => {
@@ -31,7 +32,7 @@ const Header = () => {
     };
 
     fetchCurrentUser();
-  }, [dispatch]);
+  }, [dispatch, location.pathname]);
 
   const handleLogout = async () => {
     await logoutUser();

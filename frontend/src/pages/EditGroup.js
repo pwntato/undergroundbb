@@ -26,7 +26,6 @@ const EditGroup = () => {
     const fetchGroup = async () => {
       try {
         const fetchedGroup = await getGroupByUuid(uuid);
-        console.log("fetchedGroup:", fetchedGroup); // REMOVE
         setGroup(fetchedGroup);
         setName(fetchedGroup.name);
         setDescription(fetchedGroup.description);
