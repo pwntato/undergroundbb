@@ -41,7 +41,7 @@ const createGroup = async (userUuid, name, description) => {
 
 const getGroupByUuid = async (uuid) => {
   const result = await pool.query(
-    "SELECT name, description, created_at FROM groups WHERE uuid = $1",
+    "SELECT name, description, created_at, hidden, trust_trace FROM groups WHERE uuid = $1",
     [uuid]
   );
   if (result.rows.length === 0) {

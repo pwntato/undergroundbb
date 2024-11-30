@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   Container,
   TextField,
@@ -21,17 +21,17 @@ const EditGroup = () => {
   const [trustTrace, setTrustTrace] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchGroup = async () => {
       try {
         const fetchedGroup = await getGroupByUuid(uuid);
+        console.log("fetchedGroup:", fetchedGroup); // REMOVE
         setGroup(fetchedGroup);
         setName(fetchedGroup.name);
         setDescription(fetchedGroup.description);
-        setHidden(fetchedGroup.hidden);
-        setTrustTrace(fetchedGroup.trust_trace);
+        setHidden(fetchedGroup.hidden ?? false);
+        setTrustTrace(fetchedGroup.trust_trace ?? false);
       } catch (error) {
         setError("Group not found");
       }
@@ -45,7 +45,6 @@ const EditGroup = () => {
     try {
       await editGroup(uuid, name, description, hidden, trustTrace);
       setSuccess("Group updated successfully");
-      navigate(`/group/${uuid}`);
     } catch (error) {
       setError("Error updating group");
     }

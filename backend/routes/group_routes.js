@@ -41,6 +41,8 @@ router.get("/group/:uuid", async (req, res) => {
       name: group.name,
       description: group.description,
       created_at: group.created_at,
+      hidden: group.hidden,
+      trust_trace: group.trust_trace,
     });
   } catch (error) {
     console.error(error);
