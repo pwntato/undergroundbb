@@ -85,4 +85,45 @@ const editGroup = async (uuid, name, description, hidden, trust_trace) => {
   }
 };
 
-module.exports = { createGroup, getGroupByUuid, editGroup };
+const inviteUserToGroup = async (groupUuid, userUuid) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const groupResult = await client.query(
+      "SELECT id FROM groups WHERE uuid = $1",
+      [groupUuid]
+    );
+    if (groupResult.rows.length === 0) {
+      throw new Error("Group not found");
+    }
+    const groupId = groupResult.rows[0].id;
+
+    const userResult = await client.query(
+      "SELECT id, public_key FROM users WHERE uuid = $1",
+      [userUuid]
+    );
+    if (userResult.rows.length === 0) {
+      throw new Error("User not found");
+    }
+    const user = userResult.rows[0];
+
+    const groupKey = randomKey();
+
+    const encryptedGroupKey = encrypt(groupKey, user.public_key);
+
+    await client.query(
+      "INSERT INTO membership (role, encrypted_group_key, invited_by, user_id, group_id) VALUES ($1, $2, $3, $4, $5)",
+      ["member", encryptedGroupKey, null, user.id, groupId]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { createGroup, getGroupByUuid, editGroup, inviteUserToGroup };

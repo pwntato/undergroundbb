@@ -7,17 +7,22 @@ export const createGroup = async (name, description) => {
   return data;
 };
 
-export const getGroupByUuid = async (uuid) => {
-  const data = await client(`/group/${uuid}`);
+export const getGroupByUuid = async (groupUuid) => {
+  const data = await client(`/group/${groupUuid}`);
   return data;
 };
 
-export const getUserRoleInGroup = async (uuid) => {
-  const data = await client(`/group/${uuid}/role`);
+export const getUserRoleInGroup = async (groupUuid) => {
+  const data = await client(`/group/${groupUuid}/role`);
   return data;
 };
 
-export const editGroup = async (uuid, name, description, hidden, trust_trace) => {
-  const data = await client(`/group/${uuid}`, "PUT", { name, description, hidden, trust_trace });
+export const editGroup = async (groupUuid, name, description, hidden, trust_trace) => {
+  const data = await client(`/group/${groupUuid}`, "PUT", { name, description, hidden, trust_trace });
+  return data;
+};
+
+export const inviteUserToGroup = async (groupUuid, userUuid) => {
+  const data = await client(`/group/${groupUuid}/invite`, "POST", { userUuid });
   return data;
 };

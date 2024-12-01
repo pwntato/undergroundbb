@@ -44,6 +44,11 @@ export const getUserByUuid = async (uuid) => {
   return data;
 };
 
+export const getUserByUsername = async (username) => {
+  const data = await client(`/user/username/${username}`);
+  return data;
+};
+
 export const logoutUser = async () => {
   const data = await client('/logout', 'POST');
   return data;
