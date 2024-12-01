@@ -71,7 +71,9 @@ router.post("/group/:uuid/invite", async (req, res) => {
 
     const userRole = await getUserRoleInGroup(currentUser.id, uuid);
     if (userRole !== "admin" && userRole !== "ambassador") {
-      return res.status(403).json({ error: "User does not have permission to invite users" });
+      return res
+        .status(403)
+        .json({ error: "User does not have permission to invite users" });
     }
 
     await inviteUserToGroup(uuid, userUuid);

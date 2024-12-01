@@ -4,7 +4,7 @@ const { encrypt, decrypt } = require('../cryptography/aes');
 const { generateKeyPair, verifyKeyPair } = require('../cryptography/rsa');
 
 const getUserByUuid = async (uuid) => {
-  const result = await pool.query('SELECT  username, uuid, bio, hidden, created_at FROM users WHERE uuid = $1', [uuid]);
+  const result = await pool.query('SELECT  username, id, uuid, bio, hidden, created_at FROM users WHERE uuid = $1', [uuid]);
   if (result.rows.length === 0) {
     return null;
   }
@@ -17,7 +17,7 @@ const getUserByUuid = async (uuid) => {
 };
 
 const getUserByUsername = async (username) => {
-  const result = await pool.query('SELECT username, uuid, bio, hidden, created_at FROM users WHERE username = $1', [username]);
+  const result = await pool.query('SELECT username, id, uuid, bio, hidden, created_at FROM users WHERE username = $1', [username]);
   if (result.rows.length === 0) {
     return null;
   }
