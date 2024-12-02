@@ -2,7 +2,7 @@ const pool = require("../db");
 
 const getUserRoleInGroup = async (userId, groupUuid) => {
   const result = await pool.query(
-    `SELECT role FROM membership m
+    `SELECT role, encrypted_group_key FROM membership m
      JOIN groups g ON m.group_id = g.id
      WHERE m.user_id = $1 AND g.uuid = $2`,
     [userId, groupUuid]
@@ -12,7 +12,7 @@ const getUserRoleInGroup = async (userId, groupUuid) => {
     return null;
   }
 
-  return result.rows[0].role;
+  return result.rows[0];
 };
 
 module.exports = { getUserRoleInGroup };

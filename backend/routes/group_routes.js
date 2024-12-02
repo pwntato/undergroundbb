@@ -1,7 +1,9 @@
 const express = require("express");
-const { createGroup, getGroupByUuid, editGroup } = require("../services/group");
+const { createGroup, getGroupByUuid, editGroup, inviteUserToGroup } = require("../services/group");
 const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
+const { decrypt: decryptAes } = require("../cryptography/aes");
+const { decrypt: decryptRsa } = require("../cryptography/rsa");
 
 const router = express.Router();
 
@@ -42,12 +44,12 @@ router.get("/group/:uuid/role", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userRole = await getUserRoleInGroup(user.id, uuid);
-    if (!userRole) {
+    const { role } = await getUserRoleInGroup(user.id, uuid);
+    if (!role) {
       return res.status(404).json({ error: "User not in group" });
     }
 
-    res.json({ role: userRole });
+    res.json({ role: role });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error fetching user role in group" });
@@ -57,8 +59,9 @@ router.get("/group/:uuid/role", async (req, res) => {
 router.post("/group/:uuid/invite", async (req, res) => {
   try {
     const { uuid } = req.params;
-    const { userUuid } = req.body;
-    const { userUuid: currentUserUuid } = req.session;
+    const { userUuid, inviteRole } = req.body;
+    const { userUuid: currentUserUuid, encryptedPrivateKey } = req.session;
+    const token = req.cookies.token;
 
     if (!currentUserUuid) {
       return res.status(401).json({ error: "User not logged in" });
@@ -69,14 +72,21 @@ router.post("/group/:uuid/invite", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userRole = await getUserRoleInGroup(currentUser.id, uuid);
-    if (userRole !== "admin" && userRole !== "ambassador") {
+    const { role: currentUserRole, encrypted_group_key: currentUserEncryptedGroupKey } = await getUserRoleInGroup(currentUser.id, uuid);
+    if (currentUserRole !== "admin" && currentUserRole !== "ambassador") {
       return res
         .status(403)
         .json({ error: "User does not have permission to invite users" });
     }
 
-    await inviteUserToGroup(uuid, userUuid);
+    const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
+    const decryptedGroupKey = decryptRsa(currentUserEncryptedGroupKey, decryptedPrivateKey);
+
+    if (!inviteRole || currentUserRole === "ambassador") {
+      inviteRole = "member";
+    }
+
+    await inviteUserToGroup(uuid, userUuid, decryptedGroupKey, inviteRole);
 
     res.json({ message: "User invited successfully" });
   } catch (error) {
@@ -122,7 +132,7 @@ router.put("/group/:uuid", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const userRole = await getUserRoleInGroup(user.id, uuid);
+    const { role: userRole } = await getUserRoleInGroup(user.id, uuid);
     if (userRole !== "admin") {
       return res
         .status(403)

@@ -85,7 +85,7 @@ const editGroup = async (uuid, name, description, hidden, trust_trace) => {
   }
 };
 
-const inviteUserToGroup = async (groupUuid, userUuid) => {
+const inviteUserToGroup = async (groupUuid, userUuid, decryptedGroupKey, inviteRole) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -108,13 +108,11 @@ const inviteUserToGroup = async (groupUuid, userUuid) => {
     }
     const user = userResult.rows[0];
 
-    const groupKey = randomKey();
-
-    const encryptedGroupKey = encrypt(groupKey, user.public_key);
+    const encryptedGroupKey = encrypt(decryptedGroupKey, user.public_key);
 
     await client.query(
       "INSERT INTO membership (role, encrypted_group_key, invited_by, user_id, group_id) VALUES ($1, $2, $3, $4, $5)",
-      ["member", encryptedGroupKey, null, user.id, groupId]
+      [inviteRole, encryptedGroupKey, null, user.id, groupId]
     );
 
     await client.query("COMMIT");
