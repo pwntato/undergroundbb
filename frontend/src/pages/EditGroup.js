@@ -9,8 +9,11 @@ import {
   Alert,
   FormControlLabel,
   Checkbox,
+  Grid2,
+  Select,
+  MenuItem,
 } from "@mui/material";
-import { getGroupByUuid, editGroup } from "../api/groupAPI";
+import { getGroupByUuid, editGroup, getUsersInGroup, updateUserRoleInGroup, getUserRoleInGroup } from "../api/groupAPI";
 
 const EditGroup = () => {
   const { uuid } = useParams();
@@ -21,6 +24,8 @@ const EditGroup = () => {
   const [trustTrace, setTrustTrace] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [users, setUsers] = useState([]);
+  const [userRole, setUserRole] = useState("");
 
   useEffect(() => {
     const fetchGroup = async () => {
@@ -36,7 +41,27 @@ const EditGroup = () => {
       }
     };
 
+    const fetchUsers = async () => {
+      try {
+        const fetchedUsers = await getUsersInGroup(uuid);
+        setUsers(fetchedUsers);
+      } catch (error) {
+        setError("Error fetching users");
+      }
+    };
+
+    const fetchUserRole = async () => {
+      try {
+        const role = await getUserRoleInGroup(uuid);
+        setUserRole(role.role);
+      } catch (error) {
+        setError("Error fetching user role");
+      }
+    };
+
     fetchGroup();
+    fetchUsers();
+    fetchUserRole();
   }, [uuid]);
 
   const handleEditGroup = async (event) => {
@@ -46,6 +71,23 @@ const EditGroup = () => {
       setSuccess("Group updated successfully");
     } catch (error) {
       setError("Error updating group");
+    }
+  };
+
+  const handleRoleChange = (userId, newRole) => {
+    setUsers((prevUsers) =>
+      prevUsers.map((user) =>
+        user.id === userId ? { ...user, role: newRole } : user
+      )
+    );
+  };
+
+  const handleUpdateRole = async (userId, newRole) => {
+    try {
+      await updateUserRoleInGroup(uuid, userId, newRole);
+      setSuccess("User role updated successfully");
+    } catch (error) {
+      setError("Error updating user role");
     }
   };
 
@@ -138,6 +180,33 @@ const EditGroup = () => {
             Save Changes
           </Button>
         </Box>
+        {userRole === "admin" && (
+          <Grid2 container spacing={2} sx={{ mt: 4 }}>
+            {users.map((user) => (
+              <Grid2 item xs={12} sm={6} md={4} key={user.id}>
+                <Typography>{user.username}</Typography>
+                <Select
+                  value={user.role}
+                  onChange={(e) => handleRoleChange(user.id, e.target.value)}
+                  fullWidth
+                >
+                  <MenuItem value="admin">Admin</MenuItem>
+                  <MenuItem value="ambassador">Ambassador</MenuItem>
+                  <MenuItem value="member">Member</MenuItem>
+                  <MenuItem value="banned">Banned</MenuItem>
+                </Select>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={() => handleUpdateRole(user.id, user.role)}
+                  sx={{ mt: 1 }}
+                >
+                  Update
+                </Button>
+              </Grid2>
+            ))}
+          </Grid2>
+        )}
       </Box>
     </Container>
   );

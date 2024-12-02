@@ -26,3 +26,13 @@ export const inviteUserToGroup = async (groupUuid, userUuid) => {
   const data = await client(`/group/${groupUuid}/invite`, "POST", { userUuid });
   return data;
 };
+
+export const getUsersInGroup = async (groupUuid) => {
+  const data = await client(`/group/${groupUuid}/users`);
+  return data;
+};
+
+export const updateUserRoleInGroup = async (groupUuid, userId, role) => {
+  const data = await client(`/group/${groupUuid}/update-role`, "POST", { userId, role });
+  return data;
+};
