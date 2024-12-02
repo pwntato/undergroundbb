@@ -4,6 +4,7 @@ const {
   getGroupByUuid,
   editGroup,
   inviteUserToGroup,
+  getUsersInGroup,
 } = require("../services/group");
 const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
@@ -109,6 +110,24 @@ router.post("/group/:uuid/invite", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error inviting user" });
+  }
+});
+
+router.get("/group/:uuid/users", async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    const { userUuid } = req.session;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const users = await getUsersInGroup(uuid, userUuid);
+
+    res.json(users);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error fetching users in group" });
   }
 });
 

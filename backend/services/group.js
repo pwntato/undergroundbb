@@ -124,4 +124,46 @@ const inviteUserToGroup = async (groupUuid, userUuid, decryptedGroupKey, inviteR
   }
 };
 
-module.exports = { createGroup, getGroupByUuid, editGroup, inviteUserToGroup };
+const getUsersInGroup = async (groupUuid, currentUserUuid) => {
+  const client = await pool.connect();
+  try {
+    const groupResult = await client.query(
+      "SELECT id FROM groups WHERE uuid = $1",
+      [groupUuid]
+    );
+    if (groupResult.rows.length === 0) {
+      throw new Error("Group not found");
+    }
+    const groupId = groupResult.rows[0].id;
+
+    const currentUserResult = await client.query(
+      "SELECT id FROM users WHERE uuid = $1",
+      [currentUserUuid]
+    );
+    if (currentUserResult.rows.length === 0) {
+      throw new Error("Current user not found");
+    }
+    const currentUserId = currentUserResult.rows[0].id;
+
+    const currentUserRoleResult = await client.query(
+      "SELECT role FROM membership WHERE user_id = $1 AND group_id = $2",
+      [currentUserId, groupId]
+    );
+    if (currentUserRoleResult.rows.length === 0 || currentUserRoleResult.rows[0].role !== 'admin') {
+      throw new Error("Current user is not an admin of the group");
+    }
+
+    const usersResult = await client.query(
+      `SELECT u.username, m.role FROM users u
+       JOIN membership m ON u.id = m.user_id
+       WHERE m.group_id = $1`,
+      [groupId]
+    );
+
+    return usersResult.rows;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { createGroup, getGroupByUuid, editGroup, inviteUserToGroup, getUsersInGroup };

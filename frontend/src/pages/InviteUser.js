@@ -10,11 +10,9 @@ import {
 } from "@mui/material";
 import { inviteUserToGroup } from "../api/groupAPI";
 import { getUserByUsername } from "../api/userAPI";
-import { useUser } from "../contexts/UserContext";
 
 const InviteUser = () => {
   const { uuid } = useParams();
-  const { state } = useUser();
   const [username, setUsername] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
