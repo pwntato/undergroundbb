@@ -9,6 +9,7 @@ const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
+const { Buffer } = require("buffer");
 
 const router = express.Router();
 
@@ -65,7 +66,10 @@ router.post("/group/:uuid/invite", async (req, res) => {
   try {
     const { uuid } = req.params;
     const { userUuid, inviteRole } = req.body;
-    const { userUuid: currentUserUuid, encryptedPrivateKey } = req.session;
+    const {
+      userUuid: currentUserUuid,
+      sessionPrivateKey: encryptedPrivateKey,
+    } = req.session;
     const tokenBase64 = req.cookies.token;
 
     if (!currentUserUuid) {
@@ -87,18 +91,19 @@ router.post("/group/:uuid/invite", async (req, res) => {
         .json({ error: "User does not have permission to invite users" });
     }
 
-    const token = Buffer.from(tokenBase64, 'base64');
+    const token = Buffer.from(tokenBase64, "base64");
     const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
     const decryptedGroupKey = decryptRsa(
       currentUserEncryptedGroupKey,
       decryptedPrivateKey
     );
 
-    if (!inviteRole || currentUserRole === "ambassador") {
-      inviteRole = "member";
-    }
-
-    await inviteUserToGroup(uuid, userUuid, decryptedGroupKey, inviteRole);
+    await inviteUserToGroup(
+      uuid,
+      userUuid,
+      decryptedGroupKey,
+      !inviteRole || currentUserRole === "ambassador" ? "member" : inviteRole
+    );
 
     res.json({ message: "User invited successfully" });
   } catch (error) {
