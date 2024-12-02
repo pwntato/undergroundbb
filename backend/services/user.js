@@ -19,7 +19,11 @@ const getUserByUuid = async (uuid) => {
   if (user.hidden) {
     delete user.bio;
   }
-  // Only return allowed fields (username, uuid, bio, created_at)
+  delete user.hidden;
+  delete user.salt;
+  delete user.private_key;
+  delete user.public_key
+  delete user.email;
   return user;
 };
 
