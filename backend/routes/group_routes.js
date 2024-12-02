@@ -1,6 +1,6 @@
 const express = require("express");
 const { createGroup, getGroupByUuid, editGroup } = require("../services/group");
-const { getUserByUuid } = require("../services/user");
+const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.post("/create-group", async (req, res) => {
       return res.status(401).json({ error: "User not logged in" });
     }
 
-    const user = await getUserByUuid(userUuid);
+    const user = await getUserByUuidUnsafe(userUuid);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }

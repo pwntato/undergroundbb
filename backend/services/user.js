@@ -3,17 +3,24 @@ const { createHash } = require('../cryptography/hash');
 const { encrypt, decrypt } = require('../cryptography/aes');
 const { generateKeyPair, verifyKeyPair } = require('../cryptography/rsa');
 
-const getUserByUuid = async (uuid) => {
-  const result = await pool.query('SELECT  username, id, uuid, bio, hidden, created_at FROM users WHERE uuid = $1', [uuid]);
+const getUserByUuidUnsafe = async (uuid) => {
+  const result = await pool.query('SELECT * FROM users WHERE uuid = $1', [uuid]);
   if (result.rows.length === 0) {
     return null;
   }
-  const user = result.rows[0];
+  return result.rows[0];
+};
+
+const getUserByUuid = async (uuid) => {
+  const user = await getUserByUuidUnsafe(uuid);
+  if (!user) {
+    return null;
+  }
   if (user.hidden) {
     delete user.bio;
   }
-  delete user.hidden;
-  return result.rows[0];
+  // Only return allowed fields (username, uuid, bio, created_at)
+  return user;
 };
 
 const getUserByUsername = async (username) => {
@@ -113,6 +120,7 @@ async function isUsernameAvailable(username) {
   }
   
 module.exports = { 
+  getUserByUuidUnsafe,
   getUserByUuid,
   getUserByUsername,
   getUserGroups, 
