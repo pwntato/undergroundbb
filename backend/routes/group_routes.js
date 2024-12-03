@@ -7,7 +7,7 @@ const {
   getUsersInGroup,
 } = require("../services/group");
 const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
-const { getUserRoleInGroup } = require("../services/membership");
+const { getUserRoleInGroup, updateUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
 const { Buffer } = require("buffer");
@@ -128,6 +128,35 @@ router.get("/group/:uuid/users", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error fetching users in group" });
+  }
+});
+
+router.post("/group/:uuid/update-role", async (req, res) => {
+  try {
+    const { uuid } = req.params;
+    const { targetUserUuid, newRole } = req.body;
+    const { userUuid } = req.session;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const user = await getUserByUuid(userUuid);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const { role: userRole } = await getUserRoleInGroup(user.id, uuid);
+    if (userRole !== "admin") {
+      return res.status(403).json({ error: "User is not an admin of the group" });
+    }
+
+    await updateUserRoleInGroup(userUuid, targetUserUuid, uuid, newRole);
+
+    res.json({ message: "User role updated successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error updating user role" });
   }
 });
 

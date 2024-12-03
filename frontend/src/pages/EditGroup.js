@@ -10,10 +10,14 @@ import {
   FormControlLabel,
   Checkbox,
   Grid2,
-  Select,
-  MenuItem,
 } from "@mui/material";
-import { getGroupByUuid, editGroup, getUsersInGroup, updateUserRoleInGroup, getUserRoleInGroup } from "../api/groupAPI";
+import {
+  getGroupByUuid,
+  editGroup,
+  getUsersInGroup,
+  getUserRoleInGroup,
+} from "../api/groupAPI";
+import UserRoleUpdater from "../components/UserRoleUpdater";
 
 const EditGroup = () => {
   const { uuid } = useParams();
@@ -74,21 +78,8 @@ const EditGroup = () => {
     }
   };
 
-  const handleRoleChange = (userId, newRole) => {
-    setUsers((prevUsers) =>
-      prevUsers.map((user) =>
-        user.id === userId ? { ...user, role: newRole } : user
-      )
-    );
-  };
-
-  const handleUpdateRole = async (userId, newRole) => {
-    try {
-      await updateUserRoleInGroup(uuid, userId, newRole);
-      setSuccess("User role updated successfully");
-    } catch (error) {
-      setError("Error updating user role");
-    }
+  const handleUpdate = () => {
+    // fetchUsers();
   };
 
   if (error) {
@@ -183,26 +174,14 @@ const EditGroup = () => {
         {userRole === "admin" && (
           <Grid2 container spacing={2} sx={{ mt: 4 }}>
             {users.map((user) => (
-              <Grid2 item={true} xs={12} sm={6} md={4} key={user.id}>
-                <Typography>{user.username}</Typography>
-                <Select
-                  value={user.role}
-                  onChange={(e) => handleRoleChange(user.id, e.target.value)}
-                  fullWidth
-                >
-                  <MenuItem value="admin">Admin</MenuItem>
-                  <MenuItem value="ambassador">Ambassador</MenuItem>
-                  <MenuItem value="member">Member</MenuItem>
-                  <MenuItem value="banned">Banned</MenuItem>
-                </Select>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  onClick={() => handleUpdateRole(user.id, user.role)}
-                  sx={{ mt: 1 }}
-                >
-                  Update
-                </Button>
+              <Grid2 item={true} xs={12} sm={6} md={4} key={user.uuid}>
+                <UserRoleUpdater
+                  userUuid={user.uuid}
+                  username={user.username}
+                  userRole={user.role}
+                  groupUuid={uuid}
+                  onUpdate={handleUpdate}
+                />
               </Grid2>
             ))}
           </Grid2>

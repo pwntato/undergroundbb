@@ -17,8 +17,31 @@ export const getUserRoleInGroup = async (groupUuid) => {
   return data;
 };
 
-export const editGroup = async (groupUuid, name, description, hidden, trust_trace) => {
-  const data = await client(`/group/${groupUuid}`, "PUT", { name, description, hidden, trust_trace });
+export const updateUserRoleInGroup = async (
+  groupUuid,
+  targetUserUuid,
+  newRole
+) => {
+  const data = await client(`/group/${groupUuid}/update-role`, "POST", {
+    targetUserUuid,
+    newRole,
+  });
+  return data;
+};
+
+export const editGroup = async (
+  groupUuid,
+  name,
+  description,
+  hidden,
+  trust_trace
+) => {
+  const data = await client(`/group/${groupUuid}`, "PUT", {
+    name,
+    description,
+    hidden,
+    trust_trace,
+  });
   return data;
 };
 
@@ -29,10 +52,5 @@ export const inviteUserToGroup = async (groupUuid, userUuid) => {
 
 export const getUsersInGroup = async (groupUuid) => {
   const data = await client(`/group/${groupUuid}/users`);
-  return data;
-};
-
-export const updateUserRoleInGroup = async (groupUuid, userId, role) => {
-  const data = await client(`/group/${groupUuid}/update-role`, "POST", { userId, role });
   return data;
 };
