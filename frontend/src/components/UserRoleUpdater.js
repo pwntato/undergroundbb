@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Typography, Select, MenuItem, Button, Box, Grid } from "@mui/material";
+import { Typography, Select, MenuItem, Button, Grid } from "@mui/material";
 import { updateUserRoleInGroup } from "../api/groupAPI";
 
 const UserRoleUpdater = ({ userUuid, username, userRole, groupUuid, onUpdate }) => {
