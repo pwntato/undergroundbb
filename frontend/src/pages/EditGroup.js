@@ -48,6 +48,7 @@ const EditGroup = () => {
     const fetchUsers = async () => {
       try {
         const fetchedUsers = await getUsersInGroup(uuid);
+        fetchedUsers.sort((a, b) => a.username.localeCompare(b.username));
         setUsers(fetchedUsers);
       } catch (error) {
         setError("Error fetching users");
@@ -172,19 +173,25 @@ const EditGroup = () => {
           </Button>
         </Box>
         {userRole === "admin" && (
-          <Grid2 container spacing={2} sx={{ mt: 4 }}>
-            {users.map((user) => (
-              <Grid2 item={true} xs={12} sm={6} md={4} key={user.uuid}>
-                <UserRoleUpdater
-                  userUuid={user.uuid}
-                  username={user.username}
-                  userRole={user.role}
-                  groupUuid={uuid}
-                  onUpdate={handleUpdate}
-                />
-              </Grid2>
-            ))}
-          </Grid2>
+          <>
+            <Typography variant="h6" sx={{ mt: 4, mb: 2 }}>
+              Users
+            </Typography>
+            <Grid2 container spacing={2}>
+              {users.map((user) => (
+                <Grid2 item xs={12} key={user.uuid}>
+                  <UserRoleUpdater
+                    userUuid={user.uuid}
+                    username={user.username}
+                    userRole={user.role}
+                    groupUuid={uuid}
+                    onUpdate={handleUpdate}
+                    sx={{ width: "100%" }}
+                  />
+                </Grid2>
+              ))}
+            </Grid2>
+          </>
         )}
       </Box>
     </Container>
