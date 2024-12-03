@@ -183,7 +183,7 @@ const EditGroup = () => {
         {userRole === "admin" && (
           <Grid2 container spacing={2} sx={{ mt: 4 }}>
             {users.map((user) => (
-              <Grid2 item xs={12} sm={6} md={4} key={user.id}>
+              <Grid2 item={true} xs={12} sm={6} md={4} key={user.id}>
                 <Typography>{user.username}</Typography>
                 <Select
                   value={user.role}
