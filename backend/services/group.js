@@ -154,7 +154,7 @@ const getUsersInGroup = async (groupUuid, currentUserUuid) => {
     }
 
     const usersResult = await client.query(
-      `SELECT u.username, m.role FROM users u
+      `SELECT u.uuid, u.username, m.role FROM users u
        JOIN membership m ON u.id = m.user_id
        WHERE m.group_id = $1`,
       [groupId]
