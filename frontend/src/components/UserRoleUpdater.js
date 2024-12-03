@@ -62,7 +62,7 @@ const UserRoleUpdater = ({
             color="primary"
             onClick={handleUpdateRole}
             size="small"
-            sx={{ width: "100px" }} // Ensure the button has a fixed width
+            sx={{ width: "100px" }}
           >
             Update
           </Button>
