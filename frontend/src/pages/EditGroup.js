@@ -9,7 +9,7 @@ import {
   Alert,
   FormControlLabel,
   Checkbox,
-  Grid2,
+  Grid,
 } from "@mui/material";
 import {
   getGroupByUuid,
@@ -177,20 +177,18 @@ const EditGroup = () => {
             <Typography variant="h6" sx={{ mt: 4, mb: 2 }}>
               Users
             </Typography>
-            <Grid2 container spacing={2}>
+            <Grid container spacing={2}>
               {users.map((user) => (
-                <Grid2 item xs={12} key={user.uuid}>
-                  <UserRoleUpdater
-                    userUuid={user.uuid}
-                    username={user.username}
-                    userRole={user.role}
-                    groupUuid={uuid}
-                    onUpdate={handleUpdate}
-                    sx={{ width: "100%" }}
-                  />
-                </Grid2>
+                <UserRoleUpdater
+                  key={user.uuid}
+                  userUuid={user.uuid}
+                  username={user.username}
+                  userRole={user.role}
+                  groupUuid={uuid}
+                  onUpdate={handleUpdate}
+                />
               ))}
-            </Grid2>
+            </Grid>
           </>
         )}
       </Box>
