@@ -32,11 +32,11 @@ const UserRoleUpdater = ({
   };
 
   return (
-    <Box sx={{ mt: 2, mb: 2 }}>
-      <Grid container alignItems="center" spacing={2} sx={{ mb: 1 }}>
+    <Box sx={{ mt: 0.5, mb: 0.5 }}>
+      <Grid container alignItems="center" spacing={0.5} sx={{ mb: 0.5 }}>
         <Grid item xs={4}>
           <Typography
-            variant="body1"
+            variant="body2"
             sx={{ fontWeight: "bold", textAlign: "right" }}
           >
             {username}
@@ -62,14 +62,22 @@ const UserRoleUpdater = ({
             color="primary"
             onClick={handleUpdateRole}
             size="small"
-            sx={{ width: "100px" }}
+            fullWidth
           >
             Update
           </Button>
         </Grid>
       </Grid>
-      {error && <Typography color="error">{error}</Typography>}
-      {success && <Typography color="success">{success}</Typography>}
+      {error && (
+        <Typography color="error" variant="body2">
+          {error}
+        </Typography>
+      )}
+      {success && (
+        <Typography color="success" variant="body2">
+          {success}
+        </Typography>
+      )}
     </Box>
   );
 };
