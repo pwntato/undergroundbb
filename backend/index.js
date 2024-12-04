@@ -4,6 +4,7 @@ const sessionMiddleware = require('./redis').sessionMiddleware;
 const cookieParser = require('cookie-parser');
 const userRoutes = require('./routes/user_routes');
 const groupRoutes = require('./routes/group_routes');
+const postRoutes = require('./routes/post_routes');
 
 const app = express();
 app.use(express.json());
@@ -17,6 +18,7 @@ app.use(cookieParser());
 
 app.use('/api/users', userRoutes);
 app.use('/api/groups', groupRoutes);
+app.use('/api/posts', postRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
