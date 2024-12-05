@@ -1,16 +1,17 @@
 const express = require("express");
+const { Buffer } = require("buffer");
 const { createPost } = require("../services/post");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
-const { Buffer } = require("buffer");
+const { getGroupByUuid } = require("../services/group");
 
 const router = express.Router();
 
 router.post("/create-post", async (req, res) => {
   try {
-    const { title, body, groupId, parentPostId } = req.body;
+    const { title, body, groupId: groupUuid, parentPostId } = req.body;
     const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
     const tokenBase64 = req.cookies.token;
 
@@ -26,14 +27,29 @@ router.post("/create-post", async (req, res) => {
     const token = Buffer.from(tokenBase64, "base64");
     const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
 
-    const { role, encrypted_group_key: encryptedGroupKey } = await getUserRoleInGroup(user.id, groupId);
+    const { role, encrypted_group_key: encryptedGroupKey } =
+      await getUserRoleInGroup(user.id, groupUuid);
     if (!role) {
-      return res.status(403).json({ error: "User is not a member of the group" });
+      return res
+        .status(403)
+        .json({ error: "User is not a member of the group" });
     }
 
-    const decryptedGroupKey = decryptRsa(encryptedGroupKey, decryptedPrivateKey);
+    const decryptedGroupKey = decryptRsa(
+      encryptedGroupKey,
+      decryptedPrivateKey
+    );
 
-    const post = await createPost(title, body, user.id, groupId, decryptedGroupKey, parentPostId);
+    const { id: groupId } = await getGroupByUuid(groupUuid);
+
+    const post = await createPost(
+      title,
+      body,
+      user.id,
+      groupId,
+      decryptedGroupKey,
+      parentPostId
+    );
     res.status(201).json(post);
   } catch (error) {
     console.error(error);
