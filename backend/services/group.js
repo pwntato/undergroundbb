@@ -1,7 +1,7 @@
 const pool = require("../db");
 const { randomKey } = require("../cryptography/aes");
 const { encrypt } = require("../cryptography/rsa");
-const { getUserByUuid } = require("./user");
+const { getUserByUuid, getUserByUuidUnsafe } = require("./user");
 
 const createGroup = async (userUuid, name, description) => {
   const client = await pool.connect();
@@ -15,14 +15,15 @@ const createGroup = async (userUuid, name, description) => {
     const groupId = groupResult.rows[0].id;
     const groupUuid = groupResult.rows[0].uuid;
 
-    const user = await getUserByUuid(userUuid);
+    const user = await getUserByUuidUnsafe(userUuid);
     if (!user) {
       throw new Error("User not found");
     }
 
     const groupKey = randomKey();
+    const groupKeyHex = groupKey.toString('hex');
 
-    const encryptedGroupKey = encrypt(groupKey, user.public_key);
+    const encryptedGroupKey = encrypt(groupKeyHex, user.public_key);
 
     await client.query(
       "INSERT INTO membership (role, encrypted_group_key, invited_by, user_id, group_id) VALUES ($1, $2, $3, $4, $5)",
@@ -85,7 +86,12 @@ const editGroup = async (uuid, name, description, hidden, trust_trace) => {
   }
 };
 
-const inviteUserToGroup = async (groupUuid, userUuid, decryptedGroupKey, inviteRole) => {
+const inviteUserToGroup = async (
+  groupUuid,
+  userUuid,
+  decryptedGroupKey,
+  inviteRole
+) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -149,7 +155,10 @@ const getUsersInGroup = async (groupUuid, currentUserUuid) => {
       "SELECT role FROM membership WHERE user_id = $1 AND group_id = $2",
       [currentUserId, groupId]
     );
-    if (currentUserRoleResult.rows.length === 0 || currentUserRoleResult.rows[0].role !== 'admin') {
+    if (
+      currentUserRoleResult.rows.length === 0 ||
+      currentUserRoleResult.rows[0].role !== "admin"
+    ) {
       throw new Error("Current user is not an admin of the group");
     }
 
@@ -166,4 +175,10 @@ const getUsersInGroup = async (groupUuid, currentUserUuid) => {
   }
 };
 
-module.exports = { createGroup, getGroupByUuid, editGroup, inviteUserToGroup, getUsersInGroup };
+module.exports = {
+  createGroup,
+  getGroupByUuid,
+  editGroup,
+  inviteUserToGroup,
+  getUsersInGroup,
+};

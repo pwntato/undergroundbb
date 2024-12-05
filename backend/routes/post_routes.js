@@ -39,6 +39,7 @@ router.post("/create-post", async (req, res) => {
       encryptedGroupKey,
       decryptedPrivateKey
     );
+    const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
 
     const { id: groupId } = await getGroupByUuid(groupUuid);
 
@@ -47,7 +48,7 @@ router.post("/create-post", async (req, res) => {
       body,
       user.id,
       groupId,
-      decryptedGroupKey,
+      decryptedGroupKeyHex,
       parentPostId
     );
     res.status(201).json(post);
