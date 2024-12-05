@@ -20,7 +20,6 @@ const updateUserRoleInGroup = async (currentUserUuid, targetUserUuid, groupUuid,
   try {
     await client.query("BEGIN");
 
-    // Get the group ID
     const groupResult = await client.query(
       "SELECT id FROM groups WHERE uuid = $1",
       [groupUuid]
@@ -30,7 +29,6 @@ const updateUserRoleInGroup = async (currentUserUuid, targetUserUuid, groupUuid,
     }
     const groupId = groupResult.rows[0].id;
 
-    // Get the current user ID and role
     const currentUserResult = await client.query(
       "SELECT id FROM users WHERE uuid = $1",
       [currentUserUuid]
@@ -48,7 +46,6 @@ const updateUserRoleInGroup = async (currentUserUuid, targetUserUuid, groupUuid,
       throw new Error("Current user is not an admin of the group");
     }
 
-    // Get the target user ID
     const targetUserResult = await client.query(
       "SELECT id FROM users WHERE uuid = $1",
       [targetUserUuid]
@@ -58,7 +55,6 @@ const updateUserRoleInGroup = async (currentUserUuid, targetUserUuid, groupUuid,
     }
     const targetUserId = targetUserResult.rows[0].id;
 
-    // Update the target user's role
     await client.query(
       "UPDATE membership SET role = $1 WHERE user_id = $2 AND group_id = $3",
       [newRole, targetUserId, groupId]
