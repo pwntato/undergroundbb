@@ -103,7 +103,11 @@ const Header = () => {
             >
               {state.groups &&
                 Object.entries(state.groups)
-                  .filter(([uuid]) => uuid !== state.selectedGroup.uuid)
+                  .sort(([uuidA, nameA], [uuidB, nameB]) => {
+                    if (uuidA === state.selectedGroup.uuid) return -1;
+                    if (uuidB === state.selectedGroup.uuid) return 1;
+                    return nameA.localeCompare(nameB);
+                  })
                   .map(([uuid, name]) => (
                     <MenuItem
                       key={uuid}
