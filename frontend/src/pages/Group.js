@@ -1,13 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Container, Typography, Box, Button } from "@mui/material";
+import { Container, Typography, Box, Button, CircularProgress } from "@mui/material";
 import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
+import { getPosts } from "../api/postAPI";
+import PostItem from "../components/PostItem";
 
 const Group = () => {
   const { uuid } = useParams();
   const [group, setGroup] = useState(null);
   const [error, setError] = useState("");
   const [userRole, setUserRole] = useState("");
+  const [posts, setPosts] = useState([]);
+  const [current, setCurrent] = useState(0);
+  const [next, setNext] = useState(null);
+  const [previous, setPrevious] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchGroup = async () => {
@@ -31,6 +38,36 @@ const Group = () => {
     fetchGroup();
     fetchUserRole();
   }, [uuid]);
+
+  useEffect(() => {
+    const fetchPosts = async () => {
+      setLoading(true);
+      try {
+        const { posts: fetchedPosts, pagination: fetchedPagination } = await getPosts(uuid, current);
+        setPosts(fetchedPosts);
+        setNext(fetchedPagination.next);
+        setPrevious(fetchedPagination.previous);
+      } catch (error) {
+        console.error("Error fetching posts", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPosts();
+  }, [uuid, current]);
+
+  const handleNextPage = () => {
+    if (next !== null) {
+      setCurrent(next);
+    }
+  };
+
+  const handlePreviousPage = () => {
+    if (previous !== null) {
+      setCurrent(previous);
+    }
+  };
 
   if (error) {
     return <div>{error}</div>;
@@ -71,6 +108,20 @@ const Group = () => {
             {group.description}
           </Typography>
         )}
+        <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
+          {posts.map((post) => (
+            <PostItem key={post.id} post={post} />
+          ))}
+        </Box>
+        <Box sx={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+          <Button variant="contained" color="primary" onClick={handlePreviousPage} disabled={previous === null}>
+            Previous
+          </Button>
+          <Button variant="contained" color="primary" onClick={handleNextPage} disabled={next === null}>
+            Next
+          </Button>
+        </Box>
+        {loading && <CircularProgress />}
       </Box>
     </Container>
   );

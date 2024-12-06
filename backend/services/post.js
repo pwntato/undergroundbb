@@ -1,7 +1,14 @@
-const pool = require('../db');
-const { encrypt, decrypt } = require('../cryptography/aes');
+const pool = require("../db");
+const { encrypt, decrypt } = require("../cryptography/aes");
 
-const createPost = async (title, body, userId, groupId, decryptedGroupKey, parentPostId = null) => {
+const createPost = async (
+  title,
+  body,
+  userId,
+  groupId,
+  decryptedGroupKey,
+  parentPostId = null
+) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -25,10 +32,16 @@ const createPost = async (title, body, userId, groupId, decryptedGroupKey, paren
   }
 };
 
-const getPosts = async (groupUuid, decryptedGroupKey, offset = 0, limit = 50, parentId = null) => {
+const getPosts = async (
+  groupUuid,
+  decryptedGroupKey,
+  offset = 0,
+  limit = 50,
+  parentId = null
+) => {
   const client = await pool.connect();
   try {
-    const queryParams = [groupUuid, limit, offset];
+    const queryParams = [groupUuid, limit, parseInt(offset)];
     let query = `
       SELECT 
         p.id, p.title, p.body, p.created_at, 
@@ -37,18 +50,22 @@ const getPosts = async (groupUuid, decryptedGroupKey, offset = 0, limit = 50, pa
       FROM posts p
       JOIN users u ON p.creator_id = u.id
       LEFT JOIN groups g ON p.group_id = g.id
-      WHERE g.uuid = $1 AND p.parent_post_id ${parentId === null ? 'IS NULL' : '= $4'}
+      WHERE g.uuid = $1 AND p.parent_post_id ${
+        parentId === null || parentId === "null" ? "IS NULL" : "= $4"
+      }
     `;
 
-    if (parentId !== null) {
+    if (parentId !== null && parentId !== "null") {
       queryParams.push(parentId);
     }
 
     query += ` ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`;
 
+    console.log("queryParams", queryParams);
+
     const result = await client.query(query, queryParams);
 
-    const posts = result.rows.map(post => {
+    const posts = result.rows.map((post) => {
       const decryptedTitle = decrypt(post.title, decryptedGroupKey);
       return {
         id: post.id,
@@ -57,12 +74,12 @@ const getPosts = async (groupUuid, decryptedGroupKey, offset = 0, limit = 50, pa
         created_at: post.created_at,
         author: {
           username: post.username,
-          uuid: post.user_uuid
+          uuid: post.user_uuid,
         },
         group: {
           name: post.group_name,
-          uuid: post.group_uuid
-        }
+          uuid: post.group_uuid,
+        },
       };
     });
 

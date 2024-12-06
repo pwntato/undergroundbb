@@ -6,6 +6,7 @@ const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
 const { getGroupByUuid } = require("../services/group");
+const { off } = require("process");
 
 const router = express.Router();
 
@@ -59,8 +60,10 @@ router.post("/create-post", async (req, res) => {
 });
 
 router.get("/posts", async (req, res) => {
+  const limit = 10;
+
   try {
-    const { groupUuid, parentId = null, limit = 10, offset = 0 } = req.query;
+    const { groupUuid, parentId = null, offset = 0 } = req.query;
     const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
     const tokenBase64 = req.cookies.token;
 
@@ -84,21 +87,14 @@ router.get("/posts", async (req, res) => {
     const decryptedGroupKey = decryptRsa(encryptedGroupKey, decryptedPrivateKey);
     const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
 
-    const posts = await getPosts(groupUuid, decryptedGroupKeyHex, parseInt(offset), parseInt(limit), parentId);
-
-    const nextOffset = parseInt(offset) + parseInt(limit);
-    const prevOffset = parseInt(offset) - parseInt(limit);
-
-    const nextPageToken = posts.length === parseInt(limit) ? Buffer.from(`${groupUuid}:${nextOffset}:${limit}:${parentId}`).toString('base64') : null;
-    const prevPageToken = parseInt(offset) > 0 ? Buffer.from(`${groupUuid}:${prevOffset}:${limit}:${parentId}`).toString('base64') : null;
-    const currentPageToken = Buffer.from(`${groupUuid}:${offset}:${limit}:${parentId}`).toString('base64');
+    const posts = await getPosts(groupUuid, decryptedGroupKeyHex, offset, limit, parentId);
 
     res.json({
       posts,
-      tokens: {
-        current: currentPageToken,
-        previous: prevPageToken,
-        next: nextPageToken
+      pagination: {
+        current: offset,
+        previous: offset - limit,
+        next: offset + limit
       }
     });
   } catch (error) {
