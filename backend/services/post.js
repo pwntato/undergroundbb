@@ -70,7 +70,6 @@ const getPosts = async (
       return {
         id: post.id,
         title: decryptedTitle,
-        body: post.body,
         created_at: post.created_at,
         author: {
           username: post.username,
