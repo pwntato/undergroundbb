@@ -1,12 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import {
-  Container,
-  Typography,
-  Box,
-  Button,
-  CircularProgress,
-} from "@mui/material";
+import { Container, Typography, Box, Button, CircularProgress } from "@mui/material";
 import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
 import { getPosts } from "../api/postAPI";
 import PostItem from "../components/PostItem";
@@ -49,8 +43,7 @@ const Group = () => {
     const fetchPosts = async () => {
       setLoading(true);
       try {
-        const { posts: fetchedPosts, pagination: fetchedPagination } =
-          await getPosts(uuid, current);
+        const { posts: fetchedPosts, pagination: fetchedPagination } = await getPosts(uuid, current);
         setPosts(fetchedPosts);
         setNext(fetchedPagination.next);
         setPrevious(fetchedPagination.previous);
@@ -86,27 +79,13 @@ const Group = () => {
 
   return (
     <Container maxWidth="md">
-      <Box
-        sx={{
-          mt: 8,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            width: "100%",
-            justifyContent: "space-between",
-          }}
-        >
+      <Box sx={{ mt: 8, display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <Box sx={{ display: "flex", alignItems: "center", width: "100%", justifyContent: "space-between" }}>
           <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
             {group.name}
           </Typography>
-          {(userRole === "admin" || userRole === "ambassador") && (
-            <Box sx={{ display: "flex", alignItems: "center" }}>
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            {(userRole === "admin" || userRole === "ambassador") && (
               <Button
                 variant="contained"
                 color="primary"
@@ -116,17 +95,19 @@ const Group = () => {
               >
                 Invite User
               </Button>
-              {userRole === "admin" && (
-                <Button
-                  variant="contained"
-                  color="primary"
-                  component={Link}
-                  to={`/group/${uuid}/edit`}
-                  sx={{ ml: 2 }}
-                >
-                  Edit Group
-                </Button>
-              )}
+            )}
+            {userRole === "admin" && (
+              <Button
+                variant="contained"
+                color="primary"
+                component={Link}
+                to={`/group/${uuid}/edit`}
+                sx={{ ml: 2 }}
+              >
+                Edit Group
+              </Button>
+            )}
+            {(userRole === "admin" || userRole === "ambassador" || userRole === "member") && (
               <Button
                 variant="contained"
                 color="primary"
@@ -136,8 +117,8 @@ const Group = () => {
               >
                 Create Post
               </Button>
-            </Box>
-          )}
+            )}
+          </Box>
         </Box>
         <Typography variant="body2" sx={{ mb: 4 }}>
           Created at: {new Date(group.created_at).toLocaleDateString()}
