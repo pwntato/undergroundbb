@@ -89,7 +89,7 @@ const getPosts = async (
   }
 };
 
-const getPostByUuid = async (postUuid, decryptedGroupKey) => {
+const getPostByUuid = async (postUuid) => {
   const client = await pool.connect();
   try {
     const query = `
@@ -107,16 +107,13 @@ const getPostByUuid = async (postUuid, decryptedGroupKey) => {
     if (result.rows.length === 0) {
       throw new Error("Post not found");
     }
-
     const post = result.rows[0];
-    const decryptedTitle = decrypt(post.title, decryptedGroupKey);
-    const decryptedBody = decrypt(post.body, decryptedGroupKey);
 
     return {
       id: post.id,
       uuid: post.uuid,
-      title: decryptedTitle,
-      body: decryptedBody,
+      title: post.title,
+      body: post.body,
       created_at: post.created_at,
       author: {
         username: post.username,

@@ -1,15 +1,14 @@
 const express = require("express");
 const { Buffer } = require("buffer");
-const {
-  createPost,
-  getPosts,
-  getPostByUuid,
-} = require("../services/post");
+const { createPost, getPosts, getPostByUuid } = require("../services/post");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
-const { getGroupByUuid, verifyUserMembershipAndDecryptGroupKey } = require("../services/group");
+const {
+  getGroupByUuid,
+  verifyUserMembershipAndDecryptGroupKey,
+} = require("../services/group");
 
 const router = express.Router();
 
@@ -124,32 +123,29 @@ router.get("/post/:uuid", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const token = Buffer.from(tokenBase64, "base64");
-    const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
-
-    const post = await getPostByUuid(postUuid, decryptedPrivateKey);
+    const post = await getPostByUuid(postUuid);
     if (!post) {
       return res.status(404).json({ error: "Post not found" });
     }
 
-    const { role, encrypted_group_key: encryptedGroupKey } =
-      await getUserRoleInGroup(user.id, post.group.uuid);
+    console.log("post", post);
+    const { role, decryptedGroupKeyHex } =
+      await verifyUserMembershipAndDecryptGroupKey(
+        user,
+        post.group.uuid,
+        encryptedPrivateKey,
+        tokenBase64
+      );
     if (!role || role === "banned") {
       return res
         .status(403)
         .json({ error: "User is not a member of the group" });
     }
 
-    const decryptedGroupKey = decryptRsa(
-      encryptedGroupKey,
-      decryptedPrivateKey
-    );
-    const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
-
     const decryptedPost = {
       ...post,
-      title: decrypt(post.title, decryptedGroupKeyHex),
-      body: decrypt(post.body, decryptedGroupKeyHex),
+      title: decryptAes(post.title, decryptedGroupKeyHex),
+      body: decryptAes(post.body, decryptedGroupKeyHex),
     };
 
     res.json(decryptedPost);
