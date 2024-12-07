@@ -129,18 +129,13 @@ router.get("/post/:uuid", async (req, res) => {
     }
 
     console.log("post", post);
-    const { role, decryptedGroupKeyHex } =
+    const { decryptedGroupKeyHex } =
       await verifyUserMembershipAndDecryptGroupKey(
         user,
         post.group.uuid,
         encryptedPrivateKey,
         tokenBase64
       );
-    if (!role || role === "banned") {
-      return res
-        .status(403)
-        .json({ error: "User is not a member of the group" });
-    }
 
     const decryptedPost = {
       ...post,
