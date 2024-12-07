@@ -128,7 +128,6 @@ router.get("/post/:uuid", async (req, res) => {
       return res.status(404).json({ error: "Post not found" });
     }
 
-    console.log("post", post);
     const { decryptedGroupKeyHex } =
       await verifyUserMembershipAndDecryptGroupKey(
         user,
