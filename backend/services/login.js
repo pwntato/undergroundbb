@@ -27,7 +27,7 @@ async function login(username, password, session, res) {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 30 * 60 * 1000 // 30 minutes
+    maxAge: process.env.SESSION_TIMEOUT_HOURS * 60 * 60 * 1000 
   });
 
   session.sessionPrivateKey = sessionPrivateKey;

@@ -41,6 +41,8 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       SESSION_SECRET: ${SESSION_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
+      SESSION_TIMEOUT_HOURS: ${SESSION_TIMEOUT_HOURS}
+
     networks:
       - app-network
 
