@@ -1,7 +1,8 @@
 const pool = require("../db");
-const { randomKey } = require("../cryptography/aes");
-const { encrypt } = require("../cryptography/rsa");
-const { getUserByUuid, getUserByUuidUnsafe } = require("./user");
+const { randomKey, decrypt: decryptAes } = require("../cryptography/aes");
+const { encrypt, decrypt: decryptRsa } = require("../cryptography/rsa");
+const { getUserByUuidUnsafe } = require("./user");
+const { getUserRoleInGroup } = require("./membership");
 
 const createGroup = async (userUuid, name, description) => {
   const client = await pool.connect();
@@ -21,7 +22,7 @@ const createGroup = async (userUuid, name, description) => {
     }
 
     const groupKey = randomKey();
-    const groupKeyHex = groupKey.toString('hex');
+    const groupKeyHex = groupKey.toString("hex");
 
     const encryptedGroupKey = encrypt(groupKeyHex, user.public_key);
 
@@ -175,10 +176,32 @@ const getUsersInGroup = async (groupUuid, currentUserUuid) => {
   }
 };
 
+const verifyUserMembershipAndDecryptGroupKey = async (
+  user,
+  groupUuid,
+  encryptedPrivateKey,
+  tokenBase64
+) => {
+  const token = Buffer.from(tokenBase64, "base64");
+  const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
+
+  const { role, encrypted_group_key: encryptedGroupKey } =
+    await getUserRoleInGroup(user.id, groupUuid);
+  if (!role || role === "banned") {
+    throw new Error("User is not a member of the group");
+  }
+
+  const decryptedGroupKey = decryptRsa(encryptedGroupKey, decryptedPrivateKey);
+  const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
+
+  return { role, decryptedGroupKeyHex };
+};
+
 module.exports = {
   createGroup,
   getGroupByUuid,
   editGroup,
   inviteUserToGroup,
   getUsersInGroup,
+  verifyUserMembershipAndDecryptGroupKey,
 };

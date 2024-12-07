@@ -22,7 +22,7 @@ function decrypt(ciphertext, secretKeyHex) {
   }
   const secretKey = Buffer.from(secretKeyHex, 'hex');
   if (secretKey.length !== 32) {
-    throw new Error('Secret key must be 32 bytes long');
+    throw new Error('Secret key must be 32 bytes long, it is ' + secretKey.length);
   }
 
   try {

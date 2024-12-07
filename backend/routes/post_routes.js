@@ -1,12 +1,15 @@
 const express = require("express");
 const { Buffer } = require("buffer");
-const { createPost, getPosts } = require("../services/post");
+const {
+  createPost,
+  getPosts,
+  getPostByUuid,
+} = require("../services/post");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
-const { getGroupByUuid } = require("../services/group");
-const { off } = require("process");
+const { getGroupByUuid, verifyUserMembershipAndDecryptGroupKey } = require("../services/group");
 
 const router = express.Router();
 
@@ -76,30 +79,83 @@ router.get("/posts", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const token = Buffer.from(tokenBase64, "base64");
-    const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
+    const { decryptedGroupKeyHex } =
+      await verifyUserMembershipAndDecryptGroupKey(
+        user,
+        groupUuid,
+        encryptedPrivateKey,
+        tokenBase64
+      );
 
-    const { role, encrypted_group_key: encryptedGroupKey } = await getUserRoleInGroup(user.id, groupUuid);
-    if (!role) {
-      return res.status(403).json({ error: "User is not a member of the group" });
-    }
-
-    const decryptedGroupKey = decryptRsa(encryptedGroupKey, decryptedPrivateKey);
-    const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
-
-    const posts = await getPosts(groupUuid, decryptedGroupKeyHex, offset, limit, parentId);
+    const posts = await getPosts(
+      groupUuid,
+      decryptedGroupKeyHex,
+      offset,
+      limit,
+      parentId
+    );
 
     res.json({
       posts,
       pagination: {
         current: offset,
         previous: offset - limit,
-        next: offset + limit
-      }
+        next: offset + limit,
+      },
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error fetching posts" });
+  }
+});
+
+router.get("/post/:uuid", async (req, res) => {
+  try {
+    const { uuid: postUuid } = req.params;
+    const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
+    const tokenBase64 = req.cookies.token;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const user = await getUserByUuid(userUuid);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const token = Buffer.from(tokenBase64, "base64");
+    const decryptedPrivateKey = decryptAes(encryptedPrivateKey, token);
+
+    const post = await getPostByUuid(postUuid, decryptedPrivateKey);
+    if (!post) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const { role, encrypted_group_key: encryptedGroupKey } =
+      await getUserRoleInGroup(user.id, post.group.uuid);
+    if (!role || role === "banned") {
+      return res
+        .status(403)
+        .json({ error: "User is not a member of the group" });
+    }
+
+    const decryptedGroupKey = decryptRsa(
+      encryptedGroupKey,
+      decryptedPrivateKey
+    );
+    const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
+
+    const decryptedPost = {
+      ...post,
+      title: decrypt(post.title, decryptedGroupKeyHex),
+      body: decrypt(post.body, decryptedGroupKeyHex),
+    };
+
+    res.json(decryptedPost);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error fetching post" });
   }
 });
 

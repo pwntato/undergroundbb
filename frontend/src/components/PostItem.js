@@ -9,7 +9,7 @@ const PostItem = ({ post }) => {
         <Typography
           variant="h6"
           component={Link}
-          to={`/post/${post.id}`}
+          to={`/post/${post.uuid}`}
           gutterBottom
         >
           {post.title}

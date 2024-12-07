@@ -12,3 +12,8 @@ export const getPosts = async (groupUuid, offset, parentId = null) => {
   const data = await client(`/posts?${params.toString()}`);
   return data;
 };
+
+export const getPostByUuid = async (postUuid) => {
+  const data = await client(`/post/${postUuid}`);
+  return data;
+};

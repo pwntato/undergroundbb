@@ -44,7 +44,7 @@ const getPosts = async (
     const queryParams = [groupUuid, limit, parseInt(offset)];
     let query = `
       SELECT 
-        p.id, p.title, p.body, p.created_at, 
+        p.id, p.uuid, p.title, p.body, p.created_at, 
         u.username, u.uuid as user_uuid, 
         g.name as group_name, g.uuid as group_uuid
       FROM posts p
@@ -61,14 +61,13 @@ const getPosts = async (
 
     query += ` ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`;
 
-    console.log("queryParams", queryParams);
-
     const result = await client.query(query, queryParams);
 
     const posts = result.rows.map((post) => {
       const decryptedTitle = decrypt(post.title, decryptedGroupKey);
       return {
         id: post.id,
+        uuid: post.uuid,
         title: decryptedTitle,
         created_at: post.created_at,
         author: {
@@ -90,4 +89,49 @@ const getPosts = async (
   }
 };
 
-module.exports = { createPost, getPosts };
+const getPostByUuid = async (postUuid, decryptedGroupKey) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      SELECT 
+        p.id, p.uuid, p.title, p.body, p.created_at, 
+        u.username, u.uuid as user_uuid, 
+        g.name as group_name, g.uuid as group_uuid
+      FROM posts p
+      JOIN users u ON p.creator_id = u.id
+      LEFT JOIN groups g ON p.group_id = g.id
+      WHERE p.uuid = $1
+    `;
+    const result = await client.query(query, [postUuid]);
+
+    if (result.rows.length === 0) {
+      throw new Error("Post not found");
+    }
+
+    const post = result.rows[0];
+    const decryptedTitle = decrypt(post.title, decryptedGroupKey);
+    const decryptedBody = decrypt(post.body, decryptedGroupKey);
+
+    return {
+      id: post.id,
+      uuid: post.uuid,
+      title: decryptedTitle,
+      body: decryptedBody,
+      created_at: post.created_at,
+      author: {
+        username: post.username,
+        uuid: post.user_uuid,
+      },
+      group: {
+        name: post.group_name,
+        uuid: post.group_uuid,
+      },
+    };
+  } catch (error) {
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { createPost, getPosts, getPostByUuid };
