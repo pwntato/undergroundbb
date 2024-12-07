@@ -35,14 +35,11 @@ const Post = () => {
         <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
           {post.title}
         </Typography>
-        <Typography variant="body1" sx={{ mb: 4 }}>
+        <Typography variant="body1" sx={{ mb: 2 }}>
           {post.body}
         </Typography>
-        <Typography variant="body2" sx={{ mb: 2 }}>
-          Created at: {new Date(post.created_at).toLocaleDateString()}
-        </Typography>
         <Typography variant="body2">
-          by <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
+          Created at: {new Date(post.created_at).toLocaleDateString()} by <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
         </Typography>
       </Box>
     </Container>
