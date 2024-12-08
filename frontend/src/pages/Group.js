@@ -4,6 +4,7 @@ import { Container, Typography, Box, Button, CircularProgress } from "@mui/mater
 import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
 import { getPosts } from "../api/postAPI";
 import PostItem from "../components/PostItem";
+import DateComponent from "../components/DateComponent";
 
 const Group = () => {
   const { uuid } = useParams();
@@ -126,7 +127,7 @@ const Group = () => {
           </Typography>
         )}
         <Typography variant="body2" sx={{ mb: 4 }}>
-          Created at: {new Date(group.created_at).toLocaleDateString()}
+          Created <DateComponent datetime={group.created_at} />
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
