@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Container, Typography, Box, Tooltip } from "@mui/material";
-import { formatDistanceToNow, format } from "date-fns";
+import { Container, Typography, Box } from "@mui/material";
 import { getPostByUuid } from "../api/postAPI";
+import DateComponent from "../components/DateComponent";
 
 const Post = () => {
   const { uuid } = useParams();
@@ -30,23 +30,27 @@ const Post = () => {
     return <div>Loading...</div>;
   }
 
-  const createdAt = new Date(post.created_at);
-  const formattedDate = format(createdAt, "PPpp");
-
   return (
     <Container maxWidth="md">
-      <Box sx={{ mt: 8, display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <Box
+        sx={{
+          mt: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
         <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
           {post.title}
         </Typography>
         <Typography variant="body1" sx={{ mb: 2 }}>
           {post.body}
         </Typography>
-        <Tooltip title={formattedDate}>
-          <Typography variant="body2">
-            Created {formatDistanceToNow(createdAt)} ago by <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
-          </Typography>
-        </Tooltip>
+        <DateComponent datetime={post.created_at} />
+        <Typography variant="body2">
+          by{" "}
+          <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
+        </Typography>
       </Box>
     </Container>
   );
