@@ -46,9 +46,8 @@ const Post = () => {
         <Typography variant="body1" sx={{ mb: 2 }}>
           {post.body}
         </Typography>
-        <DateComponent datetime={post.created_at} />
-        <Typography variant="body2">
-          by{" "}
+        <Typography variant="body2" component="span">
+          Created <DateComponent datetime={post.created_at} /> by{" "}
           <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
         </Typography>
       </Box>

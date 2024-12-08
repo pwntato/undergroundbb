@@ -1,4 +1,3 @@
-import React from "react";
 import { Tooltip, Typography } from "@mui/material";
 import { format, formatDistanceToNow } from "date-fns";
 
@@ -8,9 +7,9 @@ const DateComponent = ({ datetime }) => {
   const timeAgo = formatDistanceToNow(date);
 
   return (
-    <Tooltip title={formattedDate}>
-      <Typography variant="body2">
-        Created {timeAgo} ago
+    <Tooltip title={formattedDate} sx={{ display: "inline" }}>
+      <Typography variant="body2" component="span">
+        {timeAgo} ago
       </Typography>
     </Tooltip>
   );

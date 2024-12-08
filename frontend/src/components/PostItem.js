@@ -18,7 +18,7 @@ const PostItem = ({ post }) => {
         <Typography variant="body2" color="text.secondary">
           by{" "}
           <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>{" "}
-          <DateComponent datetime={post.created_at} />
+          created <DateComponent datetime={post.created_at} />
         </Typography>
       </CardContent>
     </Card>
