@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Typography, Card, CardContent } from "@mui/material";
+import DateComponent from "./DateComponent";
 
 const PostItem = ({ post }) => {
   return (
@@ -17,7 +18,7 @@ const PostItem = ({ post }) => {
         <Typography variant="body2" color="text.secondary">
           by{" "}
           <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>{" "}
-          {new Date(post.created_at).toLocaleString()}
+          <DateComponent datetime={post.created_at} />
         </Typography>
       </CardContent>
     </Card>
