@@ -122,11 +122,11 @@ const Group = () => {
           </Box>
         </Box>
         {group.description && (
-          <Typography variant="body1" sx={{ mb: 4 }}>
+          <Typography variant="body1" sx={{ mb: 2 }}>
             {group.description}
           </Typography>
         )}
-        <Typography variant="body2" sx={{ mb: 4 }}>
+        <Typography variant="body2" sx={{ mb: 2 }}>
           Created <DateComponent datetime={group.created_at} />
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
