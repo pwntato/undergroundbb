@@ -120,14 +120,14 @@ const Group = () => {
             )}
           </Box>
         </Box>
-        <Typography variant="body2" sx={{ mb: 4 }}>
-          Created at: {new Date(group.created_at).toLocaleDateString()}
-        </Typography>
         {group.description && (
           <Typography variant="body1" sx={{ mb: 4 }}>
             {group.description}
           </Typography>
         )}
+        <Typography variant="body2" sx={{ mb: 4 }}>
+          Created at: {new Date(group.created_at).toLocaleDateString()}
+        </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
             <PostItem key={post.id} post={post} />
