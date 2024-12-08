@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Container, Typography, Box } from "@mui/material";
+import { Container, Typography, Box, Tooltip } from "@mui/material";
+import { formatDistanceToNow, format } from "date-fns";
 import { getPostByUuid } from "../api/postAPI";
 
 const Post = () => {
@@ -29,6 +30,9 @@ const Post = () => {
     return <div>Loading...</div>;
   }
 
+  const createdAt = new Date(post.created_at);
+  const formattedDate = format(createdAt, "PPpp");
+
   return (
     <Container maxWidth="md">
       <Box sx={{ mt: 8, display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -38,9 +42,11 @@ const Post = () => {
         <Typography variant="body1" sx={{ mb: 2 }}>
           {post.body}
         </Typography>
-        <Typography variant="body2">
-          Created at: {new Date(post.created_at).toLocaleDateString()} by <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
-        </Typography>
+        <Tooltip title={formattedDate}>
+          <Typography variant="body2">
+            Created {formatDistanceToNow(createdAt)} ago by <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
+          </Typography>
+        </Tooltip>
       </Box>
     </Container>
   );
