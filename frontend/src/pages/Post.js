@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { Container, Typography, Box } from "@mui/material";
 import { getPostByUuid } from "../api/postAPI";
 import DateComponent from "../components/DateComponent";
+import CommentSection from "../components/CommentSection";
 
 const Post = () => {
   const { uuid } = useParams();
@@ -50,6 +51,7 @@ const Post = () => {
           Created <DateComponent datetime={post.created_at} /> by{" "}
           <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
         </Typography>
+        <CommentSection parentUuid={post.uuid} />
       </Box>
     </Container>
   );
