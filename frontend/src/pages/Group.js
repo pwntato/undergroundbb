@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { Container, Typography, Box, Button, CircularProgress } from "@mui/material";
+import {
+  Container,
+  Typography,
+  Box,
+  Button,
+  CircularProgress,
+} from "@mui/material";
 import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
 import { getPosts } from "../api/postAPI";
 import PostItem from "../components/PostItem";
@@ -14,7 +20,6 @@ const Group = () => {
   const [posts, setPosts] = useState([]);
   const [current, setCurrent] = useState(0);
   const [next, setNext] = useState(null);
-  const [previous, setPrevious] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -44,10 +49,15 @@ const Group = () => {
     const fetchPosts = async () => {
       setLoading(true);
       try {
-        const { posts: fetchedPosts, pagination: fetchedPagination } = await getPosts(uuid, current);
-        setPosts(fetchedPosts);
+        const { posts: fetchedPosts, pagination: fetchedPagination } =
+          await getPosts(uuid, current);
+        setPosts((prevPosts) => {
+          const newPosts = fetchedPosts.filter(
+            (post) => !prevPosts.some((prevPost) => prevPost.uuid === post.uuid)
+          );
+          return [...prevPosts, ...newPosts];
+        });
         setNext(fetchedPagination.next);
-        setPrevious(fetchedPagination.previous);
       } catch (error) {
         console.error("Error fetching posts", error);
       } finally {
@@ -58,15 +68,9 @@ const Group = () => {
     fetchPosts();
   }, [uuid, current]);
 
-  const handleNextPage = () => {
+  const handleMore = () => {
     if (next !== null) {
       setCurrent(next);
-    }
-  };
-
-  const handlePreviousPage = () => {
-    if (previous !== null) {
-      setCurrent(previous);
     }
   };
 
@@ -80,8 +84,22 @@ const Group = () => {
 
   return (
     <Container maxWidth="md">
-      <Box sx={{ mt: 8, display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <Box sx={{ display: "flex", alignItems: "center", width: "100%", justifyContent: "space-between" }}>
+      <Box
+        sx={{
+          mt: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            width: "100%",
+            justifyContent: "space-between",
+          }}
+        >
           <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
             {group.name}
           </Typography>
@@ -108,7 +126,9 @@ const Group = () => {
                 Edit Group
               </Button>
             )}
-            {(userRole === "admin" || userRole === "ambassador" || userRole === "member") && (
+            {(userRole === "admin" ||
+              userRole === "ambassador" ||
+              userRole === "member") && (
               <Button
                 variant="contained"
                 color="primary"
@@ -131,18 +151,17 @@ const Group = () => {
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
-            <PostItem key={post.id} post={post} />
+            <PostItem key={post.uuid} post={post} />
           ))}
         </Box>
-        <Box sx={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
-          {previous >= 0 && (
-            <Button variant="contained" color="primary" onClick={handlePreviousPage}>
-              Previous
-            </Button>
-          )}
-          <Box sx={{ flexGrow: 1 }} />
-          <Button variant="contained" color="primary" onClick={handleNextPage} disabled={next === null}>
-            Next
+        <Box sx={{ display: "flex", justifyContent: "center", width: "100%" }}>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleMore}
+            disabled={next === null}
+          >
+            More
           </Button>
         </Box>
         {loading && <CircularProgress />}
