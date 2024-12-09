@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Container, TextField, Button, Box, Alert } from "@mui/material";
 import { createPost } from "../api/postAPI";
 
-const CommentForm = ({ parentUuid, groupUuid }) => {
+const CommentForm = ({ parentUuid, groupUuid, onCommentAdded }) => {
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -13,9 +13,10 @@ const CommentForm = ({ parentUuid, groupUuid }) => {
     setSuccess("");
 
     try {
-      await createPost("", body, groupUuid, parentUuid);
+      const newComment = await createPost("", body, groupUuid, parentUuid);
       setSuccess("Comment added successfully");
       setBody("");
+      onCommentAdded(newComment);
     } catch (error) {
       setError("Error adding comment");
     }

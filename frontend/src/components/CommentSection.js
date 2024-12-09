@@ -17,6 +17,7 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
   const [previous, setPrevious] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(false);
 
   useEffect(() => {
     const fetchComments = async () => {
@@ -35,7 +36,7 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
     };
 
     fetchComments();
-  }, [groupUuid, current, parentUuid]);
+  }, [groupUuid, current, parentUuid, refresh]);
 
   const handleNextPage = () => {
     if (next !== null) {
@@ -49,10 +50,18 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
     }
   };
 
+  const handleCommentAdded = () => {
+    setRefresh((prev) => !prev);
+  };
+
   return (
     <Container maxWidth="md">
       <Box sx={{ mt: 4 }}>
-        <CommentForm parentUuid={parentUuid} groupUuid={groupUuid} />
+        <CommentForm
+          parentUuid={parentUuid}
+          groupUuid={groupUuid}
+          onCommentAdded={handleCommentAdded}
+        />
         {error && <Typography color="error">{error}</Typography>}
         {loading && <CircularProgress />}
         {comments.map((comment) => (
