@@ -14,7 +14,6 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
   const [comments, setComments] = useState([]);
   const [current, setCurrent] = useState(0);
   const [next, setNext] = useState(null);
-  const [previous, setPrevious] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(false);
@@ -25,9 +24,13 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
       try {
         const { posts: fetchedComments, pagination: fetchedPagination } =
           await getPosts(groupUuid, current, parentUuid);
-        setComments(fetchedComments);
+        setComments((prevComments) => {
+          const newComments = fetchedComments.filter(
+            (comment) => !prevComments.some((prevComment) => prevComment.uuid === comment.uuid)
+          );
+          return [...prevComments, ...newComments];
+        });
         setNext(fetchedPagination.next);
-        setPrevious(fetchedPagination.previous);
       } catch (error) {
         setError("Error fetching comments");
       } finally {
@@ -38,15 +41,9 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
     fetchComments();
   }, [groupUuid, current, parentUuid, refresh]);
 
-  const handleNextPage = () => {
+  const handleMore = () => {
     if (next !== null) {
       setCurrent(next);
-    }
-  };
-
-  const handlePreviousPage = () => {
-    if (previous !== null) {
-      setCurrent(previous);
     }
   };
 
@@ -70,28 +67,18 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
         <Box
           sx={{
             display: "flex",
-            justifyContent: "space-between",
+            justifyContent: "center",
             width: "100%",
             mt: 2,
           }}
         >
-          {previous >= 0 && (
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handlePreviousPage}
-            >
-              Previous
-            </Button>
-          )}
-          <Box sx={{ flexGrow: 1 }} />
           <Button
             variant="contained"
             color="primary"
-            onClick={handleNextPage}
+            onClick={handleMore}
             disabled={next === null}
           >
-            Next
+            More
           </Button>
         </Box>
       </Box>
