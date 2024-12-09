@@ -65,10 +65,12 @@ const getPosts = async (
 
     const posts = result.rows.map((post) => {
       const decryptedTitle = decrypt(post.title, decryptedGroupKey);
+      const decryptedBody = decrypt(post.body, decryptedGroupKey);
       return {
         id: post.id,
         uuid: post.uuid,
         title: decryptedTitle,
+        body: decryptedBody,
         created_at: post.created_at,
         author: {
           username: post.username,
