@@ -1,4 +1,5 @@
 const express = require("express");
+const pool = require("../db");
 const { Buffer } = require("buffer");
 const { createPost, getPosts, getPostByUuid } = require("../services/post");
 const { getUserByUuid } = require("../services/user");
@@ -14,7 +15,7 @@ const router = express.Router();
 
 router.post("/create-post", async (req, res) => {
   try {
-    const { title, body, groupId: groupUuid, parentPostId } = req.body;
+    const { title, body, groupId: groupUuid, parentPostUuid } = req.body;
     const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
     const tokenBase64 = req.cookies.token;
 
@@ -45,6 +46,17 @@ router.post("/create-post", async (req, res) => {
     const decryptedGroupKeyHex = Buffer.from(decryptedGroupKey, "hex");
 
     const { id: groupId } = await getGroupByUuid(groupUuid);
+
+    let parentPostId = null;
+    if (parentPostUuid) {
+      const parentPostResult = await pool.query(
+        "SELECT id FROM posts WHERE uuid = $1",
+        [parentPostUuid]
+      );
+      if (parentPostResult.rows.length > 0) {
+        parentPostId = parentPostResult.rows[0].id;
+      }
+    }
 
     const post = await createPost(
       title,

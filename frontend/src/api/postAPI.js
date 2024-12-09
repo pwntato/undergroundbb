@@ -2,8 +2,8 @@ import createApiClient from "./api_client";
 
 const client = createApiClient("/api/posts");
 
-export const createPost = async (title, body, groupId, parentPostId = null) => {
-  const data = await client("/create-post", "POST", { title, body, groupId, parentPostId });
+export const createPost = async (title, body, groupId, parentPostUuid = null) => {
+  const data = await client("/create-post", "POST", { title, body, groupId, parentPostUuid });
   return data;
 };
 

@@ -1,10 +1,8 @@
 import React, { useState } from "react";
-import { useParams } from "react-router-dom";
 import { Container, TextField, Button, Box, Alert } from "@mui/material";
 import { createPost } from "../api/postAPI";
 
-const CommentForm = ({ parentUuid }) => {
-  const { uuid: groupId } = useParams();
+const CommentForm = ({ parentUuid, groupUuid }) => {
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -15,7 +13,7 @@ const CommentForm = ({ parentUuid }) => {
     setSuccess("");
 
     try {
-      await createPost("", body, groupId, parentUuid);
+      await createPost("", body, groupUuid, parentUuid);
       setSuccess("Comment added successfully");
       setBody("");
     } catch (error) {

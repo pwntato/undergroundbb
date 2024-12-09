@@ -52,7 +52,7 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
   return (
     <Container maxWidth="md">
       <Box sx={{ mt: 4 }}>
-        <CommentForm parentUuid={parentUuid} />
+        <CommentForm parentUuid={parentUuid} groupUuid={groupUuid} />
         {error && <Typography color="error">{error}</Typography>}
         {loading && <CircularProgress />}
         {comments.map((comment) => (
