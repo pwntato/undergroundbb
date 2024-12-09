@@ -51,11 +51,11 @@ const getPosts = async (
       JOIN users u ON p.creator_id = u.id
       LEFT JOIN groups g ON p.group_id = g.id
       WHERE g.uuid = $1 AND p.parent_post_id ${
-        parentUuid === null || parentUuid === "null" ? "IS NULL" : "= (SELECT id FROM posts WHERE uuid = $4)"
+        parentUuid === null ? "IS NULL" : "= (SELECT id FROM posts WHERE uuid = $4)"
       }
     `;
 
-    if (parentUuid !== null && parentUuid !== "null") {
+    if (parentUuid !== null) {
       queryParams.push(parentUuid);
     }
 

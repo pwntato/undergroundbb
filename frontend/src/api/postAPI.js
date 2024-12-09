@@ -7,8 +7,8 @@ export const createPost = async (title, body, groupId, parentPostId = null) => {
   return data;
 };
 
-export const getPosts = async (groupUuid, offset, parentId = null) => {
-  const params = new URLSearchParams({ groupUuid, offset, parentId });
+export const getPosts = async (groupUuid, offset, parentUuid = null) => {
+  const params = new URLSearchParams({ groupUuid, offset, parentUuid: parentUuid });
   const data = await client(`/posts?${params.toString()}`);
   return data;
 };
