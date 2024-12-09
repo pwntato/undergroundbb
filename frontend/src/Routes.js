@@ -31,8 +31,8 @@ const AppRoutes = () => {
         <Route path="/group/:uuid" element={<PrivateRoute><Group /></PrivateRoute>} />
         <Route path="/group/:uuid/invite" element={<PrivateRoute><InviteUser /></PrivateRoute>} />
         <Route path="/group/:uuid/create-post" element={<PrivateRoute><CreatePost /></PrivateRoute>} />
+        <Route path="/group/:groupUuid/post/:postUuid" element={<PrivateRoute><Post /></PrivateRoute>} />
         <Route path="/create-group" element={<PrivateRoute><CreateGroup /></PrivateRoute>} />
-        <Route path="/post/:uuid" element={<PrivateRoute><Post /></PrivateRoute>} />
         <Route path="/about" element={<About />} />
         <Route path="/" element={state.isLoggedIn ? <Home /> : <About />} />
       </Routes>

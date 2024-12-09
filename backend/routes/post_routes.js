@@ -65,7 +65,7 @@ router.get("/posts", async (req, res) => {
   const limit = 10;
 
   try {
-    const { groupUuid, parentId = null, offset = 0 } = req.query;
+    const { groupUuid, parentUuid = null, offset = 0 } = req.query;
     const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
     const tokenBase64 = req.cookies.token;
 
@@ -91,7 +91,7 @@ router.get("/posts", async (req, res) => {
       decryptedGroupKeyHex,
       offset,
       limit,
-      parentId
+      parentUuid
     );
 
     res.json({

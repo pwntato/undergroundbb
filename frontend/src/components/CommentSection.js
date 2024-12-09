@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
-import { Container, Button, Box, CircularProgress, Typography } from "@mui/material";
+import {
+  Container,
+  Button,
+  Box,
+  CircularProgress,
+  Typography,
+} from "@mui/material";
 import CommentForm from "./CommentForm";
 import CommentItem from "./CommentItem";
 import { getPosts } from "../api/postAPI";
 
-const CommentSection = ({ parentUuid }) => {
-  const { uuid: groupId } = useParams();
+const CommentSection = ({ parentUuid, groupUuid }) => {
   const [comments, setComments] = useState([]);
   const [current, setCurrent] = useState(0);
   const [next, setNext] = useState(null);
@@ -18,7 +22,8 @@ const CommentSection = ({ parentUuid }) => {
     const fetchComments = async () => {
       setLoading(true);
       try {
-        const { posts: fetchedComments, pagination: fetchedPagination } = await getPosts(groupId, current, parentUuid);
+        const { posts: fetchedComments, pagination: fetchedPagination } =
+          await getPosts(groupUuid, current, parentUuid);
         setComments(fetchedComments);
         setNext(fetchedPagination.next);
         setPrevious(fetchedPagination.previous);
@@ -30,7 +35,7 @@ const CommentSection = ({ parentUuid }) => {
     };
 
     fetchComments();
-  }, [groupId, current, parentUuid]);
+  }, [groupUuid, current, parentUuid]);
 
   const handleNextPage = () => {
     if (next !== null) {
@@ -53,14 +58,30 @@ const CommentSection = ({ parentUuid }) => {
         {comments.map((comment) => (
           <CommentItem key={comment.uuid} comment={comment} />
         ))}
-        <Box sx={{ display: "flex", justifyContent: "space-between", width: "100%", mt: 2 }}>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            width: "100%",
+            mt: 2,
+          }}
+        >
           {previous >= 0 && (
-            <Button variant="contained" color="primary" onClick={handlePreviousPage}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handlePreviousPage}
+            >
               Previous
             </Button>
           )}
           <Box sx={{ flexGrow: 1 }} />
-          <Button variant="contained" color="primary" onClick={handleNextPage} disabled={next === null}>
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={handleNextPage}
+            disabled={next === null}
+          >
             Next
           </Button>
         </Box>
@@ -70,4 +91,3 @@ const CommentSection = ({ parentUuid }) => {
 };
 
 export default CommentSection;
-

@@ -6,14 +6,14 @@ import DateComponent from "../components/DateComponent";
 import CommentSection from "../components/CommentSection";
 
 const Post = () => {
-  const { uuid } = useParams();
+  const { postUuid, groupUuid } = useParams();
   const [post, setPost] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     const fetchPost = async () => {
       try {
-        const fetchedPost = await getPostByUuid(uuid);
+        const fetchedPost = await getPostByUuid(postUuid);
         setPost(fetchedPost);
       } catch (error) {
         setError("Post not found");
@@ -21,7 +21,7 @@ const Post = () => {
     };
 
     fetchPost();
-  }, [uuid]);
+  }, [postUuid]);
 
   if (error) {
     return <div>{error}</div>;
@@ -51,7 +51,7 @@ const Post = () => {
           Created <DateComponent datetime={post.created_at} /> by{" "}
           <Link to={`/user/${post.author.uuid}`}>{post.author.username}</Link>
         </Typography>
-        <CommentSection parentUuid={post.uuid} />
+        <CommentSection parentUuid={post.uuid} groupUuid={groupUuid} />
       </Box>
     </Container>
   );

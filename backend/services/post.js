@@ -37,7 +37,7 @@ const getPosts = async (
   decryptedGroupKey,
   offset = 0,
   limit = 50,
-  parentId = null
+  parentUuid = null
 ) => {
   const client = await pool.connect();
   try {
@@ -51,12 +51,12 @@ const getPosts = async (
       JOIN users u ON p.creator_id = u.id
       LEFT JOIN groups g ON p.group_id = g.id
       WHERE g.uuid = $1 AND p.parent_post_id ${
-        parentId === null || parentId === "null" ? "IS NULL" : "= $4"
+        parentUuid === null || parentUuid === "null" ? "IS NULL" : "= (SELECT id FROM posts WHERE uuid = $4)"
       }
     `;
 
-    if (parentId !== null && parentId !== "null") {
-      queryParams.push(parentId);
+    if (parentUuid !== null && parentUuid !== "null") {
+      queryParams.push(parentUuid);
     }
 
     query += ` ORDER BY p.created_at DESC LIMIT $2 OFFSET $3`;

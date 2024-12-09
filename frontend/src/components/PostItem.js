@@ -10,7 +10,7 @@ const PostItem = ({ post }) => {
         <Typography
           variant="h6"
           component={Link}
-          to={`/post/${post.uuid}`}
+          to={`/group/${post.group.uuid}/post/${post.uuid}`}
           gutterBottom
         >
           {post.title}
