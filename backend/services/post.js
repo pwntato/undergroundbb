@@ -57,8 +57,6 @@ const getPosts = async (
       }
     `;
 
-    console.log(query);
-
     if (parentUuid && parentUuid.length >= 36) {
       queryParams.push(parentUuid);
     }
