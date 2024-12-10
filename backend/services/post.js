@@ -46,7 +46,8 @@ const getPosts = async (
       SELECT 
         p.id, p.uuid, p.title, p.body, p.created_at, 
         u.username, u.uuid as user_uuid, 
-        g.name as group_name, g.uuid as group_uuid
+        g.name as group_name, g.uuid as group_uuid,
+        (SELECT COUNT(*) FROM posts WHERE parent_post_id = p.id) AS comments_count
       FROM posts p
       JOIN users u ON p.creator_id = u.id
       LEFT JOIN groups g ON p.group_id = g.id
@@ -82,6 +83,7 @@ const getPosts = async (
           name: post.group_name,
           uuid: post.group_uuid,
         },
+        comments_count: post.comments_count || 0,
       };
     });
 
