@@ -6,6 +6,7 @@ import AppRoutes from "./Routes";
 import theme from "./theme";
 import { useUser } from "./contexts/UserContext";
 import { getCurrentUser } from "./api/userAPI";
+import ErrorBoundary from "./ErrorBoundary";
 
 function App() {
   const { dispatch } = useUser();
@@ -30,7 +31,9 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Container sx={{ paddingLeft: 1, paddingRight: 1, paddingBottom: 2 }}>
-        <AppRoutes />
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
       </Container>
     </ThemeProvider>
   );
