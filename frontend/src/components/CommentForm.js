@@ -26,19 +26,19 @@ const CommentForm = ({ parentUuid, groupUuid, onCommentAdded }) => {
     <Container maxWidth="sm">
       <Box
         sx={{
-          mt: 4,
+          mt: 1,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
         }}
       >
         {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
+          <Alert severity="error" sx={{ mb: 1 }}>
             {error}
           </Alert>
         )}
         {success && (
-          <Alert severity="success" sx={{ mb: 2 }}>
+          <Alert severity="success" sx={{ mb: 1 }}>
             {success}
           </Alert>
         )}
@@ -66,7 +66,7 @@ const CommentForm = ({ parentUuid, groupUuid, onCommentAdded }) => {
             fullWidth
             variant="contained"
             color="primary"
-            sx={{ mt: 3, mb: 2 }}
+            sx={{ mt: 1, mb: 1 }}
           >
             Add Comment
           </Button>
