@@ -83,15 +83,15 @@ async function isUsernameAvailable(username) {
     const encryptedPrivateKey = encrypt(privateKey, hash);
   
     await pool.query(
-      'INSERT INTO users (username, email, public_key, private_key, salt) VALUES ($1, $2, $3, $4, $5)',
-      [username, null, publicKey, encryptedPrivateKey, salt]
+      'INSERT INTO users (username, email, public_key, private_key, salt, hidden) VALUES ($1, $2, $3, $4, $5, $6)',
+      [username, null, publicKey, encryptedPrivateKey, salt, false]
     );
   }
 
   const updateUser = async (uuid, { email, bio, hidden }) => {
     await pool.query(
       'UPDATE users SET email = $1, bio = $2, hidden = $3 WHERE uuid = $4',
-      [email, bio, hidden, uuid]
+      [null, bio, false, uuid]
     );
   };
 
