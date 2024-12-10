@@ -182,6 +182,23 @@ router.get("/group/:uuid", async (req, res) => {
   }
 });
 
+router.get("/group/:uuid/recent-posts", async (req, res) => {
+  try {
+    const { uuid: groupUuid } = req.params;
+    const { userUuid } = req.session;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const postCount = await getPostCountSinceLastLogin(groupUuid, userUuid);
+    res.json({ postCount });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error fetching post count" });
+  }
+});
+
 router.put("/group/:uuid", async (req, res) => {
   try {
     const { uuid } = req.params;

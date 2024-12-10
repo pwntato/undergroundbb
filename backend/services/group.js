@@ -197,6 +197,25 @@ const verifyUserMembershipAndDecryptGroupKey = async (
   return { role, decryptedGroupKeyHex };
 };
 
+const getPostCountSinceLastLogin = async (groupUuid, userUuid) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT COUNT(*) FROM posts p
+       JOIN groups g ON p.group_id = g.id
+       JOIN users u ON p.creator_id = u.id
+       WHERE g.uuid = $1 AND u.uuid = $2 AND p.created_at > u.last_login AND p.parent_id IS NULL`,
+      [groupUuid, userUuid]
+    );
+
+    return parseInt(result.rows[0].count, 10);
+  } catch (error) {
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   createGroup,
   getGroupByUuid,
@@ -204,4 +223,5 @@ module.exports = {
   inviteUserToGroup,
   getUsersInGroup,
   verifyUserMembershipAndDecryptGroupKey,
+  getPostCountSinceLastLogin,
 };

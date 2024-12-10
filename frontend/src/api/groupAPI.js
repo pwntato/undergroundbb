@@ -54,3 +54,8 @@ export const getUsersInGroup = async (groupUuid) => {
   const data = await client(`/group/${groupUuid}/users`);
   return data;
 };
+
+export const getPostCountSinceLastLogin = async (groupUuid) => {
+  const data = await client(`/group/${groupUuid}/recent-posts`);
+  return data.postCount;
+};
