@@ -5,9 +5,14 @@ const {
   editGroup,
   inviteUserToGroup,
   getUsersInGroup,
+  getUserGroups,
+  getPostCountSinceLastLogin,
 } = require("../services/group");
 const { getUserByUuid, getUserByUuidUnsafe } = require("../services/user");
-const { getUserRoleInGroup, updateUserRoleInGroup } = require("../services/membership");
+const {
+  getUserRoleInGroup,
+  updateUserRoleInGroup,
+} = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
 const { decrypt: decryptRsa } = require("../cryptography/rsa");
 const { Buffer } = require("buffer");
@@ -148,7 +153,9 @@ router.post("/group/:uuid/update-role", async (req, res) => {
 
     const { role: userRole } = await getUserRoleInGroup(user.id, uuid);
     if (userRole !== "admin") {
-      return res.status(403).json({ error: "User is not an admin of the group" });
+      return res
+        .status(403)
+        .json({ error: "User is not an admin of the group" });
     }
 
     await updateUserRoleInGroup(userUuid, targetUserUuid, uuid, newRole);
@@ -182,20 +189,33 @@ router.get("/group/:uuid", async (req, res) => {
   }
 });
 
-router.get("/group/:uuid/recent-posts", async (req, res) => {
+router.get("/user-groups", async (req, res) => {
   try {
-    const { uuid: groupUuid } = req.params;
     const { userUuid } = req.session;
 
     if (!userUuid) {
       return res.status(401).json({ error: "User not logged in" });
     }
 
-    const postCount = await getPostCountSinceLastLogin(groupUuid, userUuid);
-    res.json({ postCount });
+    const userGroups = await getUserGroups(userUuid);
+    const groupsWithPostCounts = await Promise.all(
+      userGroups.map(async (group) => {
+        const postCount = await getPostCountSinceLastLogin(
+          group.uuid,
+          userUuid
+        );
+        return { uuid: group.uuid, name: group.name, recentPosts: postCount };
+      })
+    );
+
+    groupsWithPostCounts.sort((a, b) => b.recentPosts - a.recentPosts);
+
+    res.json(groupsWithPostCounts);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Error fetching post count" });
+    res
+      .status(500)
+      .json({ error: "Error fetching user groups with recent posts" });
   }
 });
 

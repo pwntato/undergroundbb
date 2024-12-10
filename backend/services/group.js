@@ -204,11 +204,31 @@ const getPostCountSinceLastLogin = async (groupUuid, userUuid) => {
       `SELECT COUNT(*) FROM posts p
        JOIN groups g ON p.group_id = g.id
        JOIN users u ON p.creator_id = u.id
-       WHERE g.uuid = $1 AND u.uuid = $2 AND p.created_at > u.last_login AND p.parent_id IS NULL`,
+       WHERE g.uuid = $1 AND u.uuid = $2 AND p.created_at > u.last_login AND p.parent_post_id IS NULL`,
       [groupUuid, userUuid]
     );
 
     return parseInt(result.rows[0].count, 10);
+  } catch (error) {
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const getUserGroups = async (userUuid) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      `SELECT g.uuid, g.name 
+       FROM groups g
+       JOIN membership m ON g.id = m.group_id
+       JOIN users u ON m.user_id = u.id
+       WHERE u.uuid = $1`,
+      [userUuid]
+    );
+
+    return result.rows;
   } catch (error) {
     throw error;
   } finally {
@@ -224,4 +244,5 @@ module.exports = {
   getUsersInGroup,
   verifyUserMembershipAndDecryptGroupKey,
   getPostCountSinceLastLogin,
+  getUserGroups,
 };
