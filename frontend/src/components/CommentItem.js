@@ -35,8 +35,11 @@ const CommentItem = ({ comment }) => {
           </Typography>
         </Box>
         {showReplies && (
-          <Box sx={{ pl: 4, mt: 2 }}>
-            <CommentSection parentUuid={comment.uuid} groupUuid={comment.group.uuid} />
+          <Box sx={{ mt: 2 }}>
+            <CommentSection
+              parentUuid={comment.uuid}
+              groupUuid={comment.group.uuid}
+            />
           </Box>
         )}
       </CardContent>
