@@ -7,8 +7,6 @@ import {
   Typography,
   Box,
   Alert,
-  FormControlLabel,
-  Checkbox,
   Grid,
 } from "@mui/material";
 import {
@@ -139,28 +137,6 @@ const EditGroup = () => {
             rows={4}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={hidden}
-                onChange={(e) => setHidden(e.target.checked)}
-                name="hidden"
-                color="primary"
-              />
-            }
-            label="Hidden"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={trustTrace}
-                onChange={(e) => setTrustTrace(e.target.checked)}
-                name="trustTrace"
-                color="primary"
-              />
-            }
-            label="Trust Trace"
           />
           <Button
             type="submit"

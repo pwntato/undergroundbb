@@ -204,7 +204,7 @@ router.put("/group/:uuid", async (req, res) => {
         .json({ error: "User is not an admin of the group" });
     }
 
-    await editGroup(uuid, name, description, hidden, trust_trace);
+    await editGroup(uuid, name, description, true, true);
 
     res.json({ message: "Group updated successfully" });
   } catch (error) {
