@@ -37,7 +37,11 @@ const getUserByUsername = async (username) => {
     delete user.bio;
   }
   delete user.hidden;
-  return result.rows[0];
+  delete user.salt;
+  delete user.private_key;
+  delete user.public_key
+  delete user.email;
+  return user;
 };
 
 const getUserGroups = async (userUuid) => {
