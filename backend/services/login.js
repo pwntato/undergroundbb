@@ -1,5 +1,4 @@
 const pool = require('../db');
-const crypto = require('crypto');
 const { createHash } = require('../cryptography/hash');
 const { decrypt, encrypt, randomKey } = require('../cryptography/aes');
 const { verifyKeyPair } = require('../cryptography/rsa');
@@ -31,6 +30,9 @@ async function login(username, password, session, res) {
   });
 
   session.sessionPrivateKey = sessionPrivateKey;
+
+  await pool.query('UPDATE users SET last_login = current_timestamp WHERE id = $1', [user.id]);
+
   session.username = username;
   session.userUuid = user.uuid;
 
