@@ -76,19 +76,13 @@ router.get("/user/:uuid", async (req, res) => {
     const { session } = req;
     const currentUserUuid = session.userUuid;
 
+    if (!currentUserUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
     const user = await getUserByUuid(uuid);
     if (user) {
-      // const isCurrentUser = user.uuid === currentUserUuid;
-      // const isHidden = user.hidden;
-      // const currentUserGroups = await getUserGroups(currentUserUuid);
-      // const targetUserGroups = await getUserGroups(user.uuid);
-      // const isMemberOfSameGroup = currentUserGroups.some(group =>
-      //   targetUserGroups.includes(group)
-      // );
-
-      if (true || isCurrentUser || !isHidden || isMemberOfSameGroup) {
-        return res.json({ username: user.username, uuid: user.uuid });
-      }
+      return res.json(user);
     }
     return res.status(404).json({ error: ERROR_STRING });
   } catch (error) {
