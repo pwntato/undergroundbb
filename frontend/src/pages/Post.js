@@ -41,6 +41,9 @@ const Post = () => {
           alignItems: "center",
         }}
       >
+        <Box sx={{ alignSelf: "flex-start", mb: 2 }}>
+          <Link to={`/group/${groupUuid}`}>Back to Group</Link>
+        </Box>
         <Typography component="h1" variant="h4" sx={{ mb: 2 }}>
           {post.title}
         </Typography>
