@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   Container,
-  Button,
+  Link,
   Box,
   CircularProgress,
   Typography,
@@ -67,14 +67,15 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
             mt: 2,
           }}
         >
-          <Button
-            variant="contained"
-            color="primary"
+          <Link
+            component="button"
+            variant="body2"
             onClick={handleMore}
             disabled={next === null}
+            sx={{ textDecoration: "underline", color: "primary.main", cursor: "pointer", background: "none", border: "none", padding: 0 }}
           >
             More
-          </Button>
+          </Link>
         </Box>
         <CommentForm
           parentUuid={parentUuid}
