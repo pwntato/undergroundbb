@@ -9,7 +9,7 @@ import { getCurrentUser } from "./api/userAPI";
 import ErrorBoundary from "./ErrorBoundary";
 
 function App() {
-  const { dispatch } = useUser();
+  const { state, dispatch } = useUser();
 
   useEffect(() => {
     const fetchCurrentUser = async () => {
@@ -26,6 +26,14 @@ function App() {
 
     fetchCurrentUser();
   }, [dispatch]);
+
+  useEffect(() => {
+    if (state.selectedGroup && state.selectedGroup.name) {
+      document.title = `${state.selectedGroup.name} - UndergroundBB.net`;
+    } else {
+      document.title = "UndergroundBB.net";
+    }
+  }, [state.selectedGroup]);
 
   return (
     <ThemeProvider theme={theme}>
