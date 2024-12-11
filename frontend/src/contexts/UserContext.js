@@ -1,35 +1,37 @@
-import React, { createContext, useReducer, useContext } from 'react';
+import React, { createContext, useReducer, useContext } from "react";
 
 const UserContext = createContext();
 
 const initialState = {
   isLoggedIn: false,
-  username: '',
+  username: "",
   selectedGroup: { name: null, uuid: null },
-  groups: [], // Initialize groups as an empty array
+  lastLogin: null,
+  groups: [],
 };
 
 const userReducer = (state, action) => {
   switch (action.type) {
-    case 'LOGIN':
+    case "LOGIN":
       return {
         ...state,
         isLoggedIn: true,
         username: action.payload.username,
+        lastLogin: action.payload.lastLogin,
       };
-    case 'LOGOUT':
+    case "LOGOUT":
       return initialState;
-    case 'SET_SELECTED_GROUP':
+    case "SET_SELECTED_GROUP":
       return {
         ...state,
         selectedGroup: action.payload,
       };
-    case 'SET_GROUPS':
+    case "SET_GROUPS":
       return {
         ...state,
         groups: action.payload,
       };
-    case 'ADD_GROUP':
+    case "ADD_GROUP":
       return {
         ...state,
         groups: {

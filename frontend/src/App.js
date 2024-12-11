@@ -16,7 +16,7 @@ function App() {
       try {
         const user = await getCurrentUser();
         if (user) {
-          dispatch({ type: "LOGIN", payload: { username: user.username } });
+          dispatch({ type: "LOGIN", payload: { username: user.username, lastLogin: user.last_login } });
           dispatch({ type: "SET_GROUPS", payload: user.groups });
         }
       } catch (error) {

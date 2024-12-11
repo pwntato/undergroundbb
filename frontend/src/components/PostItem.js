@@ -1,9 +1,15 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Typography, Card, CardContent, Box } from "@mui/material";
+import NotificationsIcon from "@mui/icons-material/Notifications";
 import DateComponent from "./DateComponent";
+import { useUser } from "../contexts/UserContext";
 
 const PostItem = ({ post }) => {
+  const { state } = useUser();
+
+  const isNewComment = new Date(post.created_at) > new Date(state.lastLogin);
+
   return (
     <Card sx={{ mb: 2, maxHeight: 100 }}>
       <CardContent sx={{ padding: "8px 16px" }}>
@@ -15,6 +21,9 @@ const PostItem = ({ post }) => {
         >
           {post.title}
         </Typography>
+        {isNewComment && (
+          <NotificationsIcon sx={{ color: "red", fontSize: 16, mr: 1 }} />
+        )}
         <Box
           sx={{
             display: "flex",

@@ -119,6 +119,7 @@ router.get("/current-user", async (req, res) => {
       bio,
       hidden,
       created_at,
+      last_login: session.lastLogin,
       groups: groupMap || [],
     });
   } catch (error) {

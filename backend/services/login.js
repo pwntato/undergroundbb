@@ -31,6 +31,7 @@ async function login(username, password, session, res) {
 
   session.sessionPrivateKey = sessionPrivateKey;
 
+  session.lastLogin = user.last_login;
   await pool.query('UPDATE users SET last_login = current_timestamp WHERE id = $1', [user.id]);
 
   session.username = username;
