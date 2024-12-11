@@ -1,6 +1,9 @@
 const pool = require("../db");
 const { encrypt, decrypt } = require("../cryptography/aes");
 
+const max_title_length = 100;
+const max_post_length = 10000;
+
 const createPost = async (
   title,
   body,
@@ -9,6 +12,14 @@ const createPost = async (
   decryptedGroupKey,
   parentPostId = null
 ) => {
+  if (title.length > max_title_length) {
+    throw new Error(`Title exceeds maximum length of ${max_title_length} characters`);
+  }
+
+  if (body.length > max_post_length) {
+    throw new Error(`Body exceeds maximum length of ${max_post_length} characters`);
+  }
+  
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
