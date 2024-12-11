@@ -54,7 +54,7 @@ const Header = () => {
             to="/"
             sx={{ textTransform: "none", fontSize: "1.5rem" }}
           >
-            TrustBoard
+            UndergroundBB
           </Button>
         </Typography>
         <Button
