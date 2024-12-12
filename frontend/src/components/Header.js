@@ -54,7 +54,18 @@ const Header = () => {
             to="/"
             sx={{ textTransform: "none", fontSize: "1.5rem" }}
           >
-            UndergroundBB
+            <span>
+              UndergroundBB{" "}
+              <span
+                style={{
+                  color: "red",
+                  fontSize: "x-small",
+                  fontWeight: "bold",
+                }}
+              >
+                BETA
+              </span>
+            </span>
           </Button>
         </Typography>
         <Button
