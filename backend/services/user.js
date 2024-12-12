@@ -31,7 +31,7 @@ const getUserByUuid = async (uuid) => {
 
 const getUserByUsername = async (username) => {
   const result = await pool.query(
-    "SELECT username, id, uuid, bio, hidden, created_at FROM users WHERE username = $1",
+    "SELECT username, id, uuid, bio, hidden, created_at FROM users WHERE LOWER(username) = LOWER($1)",
     [username]
   );
   if (result.rows.length === 0) {
@@ -62,7 +62,7 @@ const getUserGroups = async (userUuid) => {
 
 async function isUsernameAvailable(username) {
   const result = await pool.query(
-    "SELECT COUNT(*) FROM users WHERE username = $1",
+    "SELECT COUNT(*) FROM users WHERE LOWER(username) = LOWER($1)",
     [username]
   );
   return result.rows[0].count === "0";
@@ -112,7 +112,7 @@ const updateUser = async (uuid, { email, bio, hidden }) => {
 async function changePassword(username, oldPassword, newPassword) {
   validatePassword(newPassword);
 
-  const result = await pool.query("SELECT * FROM users WHERE username = $1", [
+  const result = await pool.query("SELECT * FROM users WHERE LOWER(username) = LOWER($1)", [
     username,
   ]);
   if (result.rows.length === 0) {

@@ -16,7 +16,7 @@ async function login(username, password, session, res) {
     return { error: "Account locked out" };
   }
 
-  const result = await pool.query("SELECT * FROM users WHERE username = $1", [
+  const result = await pool.query("SELECT * FROM users WHERE LOWER(username) = LOWER($1)", [
     username,
   ]);
   if (result.rows.length === 0) {
