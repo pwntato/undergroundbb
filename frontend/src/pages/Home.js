@@ -47,23 +47,29 @@ const Home = () => {
         <Typography component="h1" variant="h4" sx={{ mb: 4 }}>
           My Groups
         </Typography>
-        <List sx={{ width: "100%" }}>
-          {groups.map((group) => (
-            <ListItem key={group.uuid}>
-              <ListItemText
-                primary={
-                  <Link
-                    component={RouterLink}
-                    to={`/group/${group.uuid}`}
-                    underline="hover"
-                  >
-                    {`${group.name} (${group.recentPosts})`}
-                  </Link>
-                }
-              />
-            </ListItem>
-          ))}
-        </List>
+        {groups.length === 0 ? (
+          <Typography variant="body1" sx={{ mb: 4 }}>
+            Create a new group or get a friend to invite you to an existing one
+          </Typography>
+        ) : (
+          <List sx={{ width: "100%" }}>
+            {groups.map((group) => (
+              <ListItem key={group.uuid}>
+                <ListItemText
+                  primary={
+                    <Link
+                      component={RouterLink}
+                      to={`/group/${group.uuid}`}
+                      underline="hover"
+                    >
+                      {`${group.name} (${group.recentPosts})`}
+                    </Link>
+                  }
+                />
+              </ListItem>
+            ))}
+          </List>
+        )}
         <Button
           variant="contained"
           color="primary"
