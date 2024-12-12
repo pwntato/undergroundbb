@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useNavigate } from "react-router-dom";
 import {
   Container,
   Typography,
@@ -8,10 +8,12 @@ import {
   ListItem,
   ListItemText,
   Link,
+  Button,
 } from "@mui/material";
 import { getUserGroups } from "../api/groupAPI";
 
 const Home = () => {
+  const navigate = useNavigate();
   const [groups, setGroups] = useState([]);
   const [error, setError] = useState("");
 
@@ -62,6 +64,14 @@ const Home = () => {
             </ListItem>
           ))}
         </List>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => navigate("/create-group")}
+          sx={{ mt: 4 }}
+        >
+          Create Group
+        </Button>
       </Box>
     </Container>
   );
