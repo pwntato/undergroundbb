@@ -13,43 +13,28 @@ function generateRandomString(length) {
   return result;
 }
 
-test("signup and login", async ({ page }) => {
-  const randomUsername = generateRandomString(8);
-  const randomPassword = generateRandomString(12);
-
+async function signUp(page, username = generateRandomString(8), password = generateRandomString(12)) {
   // Navigate to signup page
   await page.goto("/signup");
-  await page.fill('input[name="username"]', randomUsername);
-  await page.fill('input[name="password"]', randomPassword);
-  await page.fill('input[name="confirmPassword"]', randomPassword);
+  await page.fill('input[name="username"]', username);
+  await page.fill('input[name="password"]', password);
+  await page.fill('input[name="confirmPassword"]', password);
   await page.click('button[type="submit"]');
 
   // Verify redirection to login page
   await expect(page).toHaveURL("/login");
 
+  return { username, password };
+}
+
+test("signup and login", async ({ page }) => {
+  const { username, password } = await signUp(page);
+
   // Login with new username and password
-  await page.fill('input[name="username"]', randomUsername);
-  await page.fill('input[name="password"]', randomPassword);
+  await page.fill('input[name="username"]', username);
+  await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');
 
   // Verify login was successful
   await expect(page.locator("text=Logout")).toBeVisible();
 });
-
-/*
-// TODO: make this create a new user each time first, then try to create the same user again
-test("signup with existing username", async ({ page }) => {
-  const existingUsername = "testuser";
-  const randomPassword = generateRandomString(12);
-
-  // Navigate to signup page
-  await page.goto("/signup");
-  await page.fill('input[name="username"]', existingUsername);
-  await page.fill('input[name="password"]', randomPassword);
-  await page.fill('input[name="confirmPassword"]', randomPassword);
-  await page.click('button[type="submit"]');
-
-  // Verify error message for existing username
-  await expect(page.locator("text=Username is not available")).toBeVisible();
-});
-*/
