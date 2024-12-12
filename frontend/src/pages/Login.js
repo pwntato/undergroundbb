@@ -1,13 +1,20 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { loginUser, getCurrentUser } from '../api/userAPI';
-import { useUser } from '../contexts/UserContext';
-import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { loginUser, getCurrentUser } from "../api/userAPI";
+import { useUser } from "../contexts/UserContext";
+import {
+  Container,
+  TextField,
+  Button,
+  Typography,
+  Box,
+  Alert,
+} from "@mui/material";
 
 const Login = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const { dispatch } = useUser();
   const navigate = useNavigate();
 
@@ -15,31 +22,44 @@ const Login = () => {
     event.preventDefault();
     try {
       const result = await loginUser(username, password);
-      console.log("result", result);
       if (result.error) {
         setError(result.error);
         return;
       }
       const user = await getCurrentUser();
       if (user) {
-        dispatch({ type: 'LOGIN', payload: { username: user.username, lastLogin: user.last_login } });
-        dispatch({ type: 'SET_GROUPS', payload: user.groups });
+        dispatch({
+          type: "LOGIN",
+          payload: { username: user.username, lastLogin: user.last_login },
+        });
+        dispatch({ type: "SET_GROUPS", payload: user.groups });
       }
-      setError('');
-      navigate('/');
+      setError("");
+      navigate("/");
     } catch (error) {
-      setError('Invalid username or password');
+      setError("Invalid username or password");
     }
   };
 
   return (
     <Container maxWidth="sm">
-      <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <Box
+        sx={{
+          mt: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
         <Typography component="h1" variant="h5" sx={{ mb: 2 }}>
           Login
         </Typography>
-        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-        <Box component="form" onSubmit={handleLogin} sx={{ width: '100%' }}>
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        <Box component="form" onSubmit={handleLogin} sx={{ width: "100%" }}>
           <TextField
             variant="outlined"
             margin="normal"
