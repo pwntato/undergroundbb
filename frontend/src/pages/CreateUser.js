@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { checkUsernameAvailability, validatePassword, createUser } from '../api/userAPI';
 import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
+import { checkUsernameAvailability, validatePassword, createUser } from '../api/userAPI';
 
 const CreateUser = () => {
   const [username, setUsername] = useState('');
