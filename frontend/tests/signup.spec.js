@@ -27,14 +27,20 @@ async function signUp(page, username = generateRandomString(8), password = gener
   return { username, password };
 }
 
-test("signup and login", async ({ page }) => {
-  const { username, password } = await signUp(page);
-
-  // Login with new username and password
+async function login(page, username, password) {
+  // Navigate to login page
+  await page.goto("/login");
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.click('button[type="submit"]');
 
   // Verify login was successful
   await expect(page.locator("text=Logout")).toBeVisible();
+}
+
+test("signup and login", async ({ page }) => {
+  const { username, password } = await signUp(page);
+
+  // Login with new username and password
+  await login(page, username, password);
 });
