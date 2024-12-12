@@ -100,12 +100,12 @@ router.get("/current-user", async (req, res) => {
     const currentUserUuid = session.userUuid;
 
     if (!currentUserUuid) {
-      return res.status(401).json({ error: "User not logged in" });
+      return res.status(200).json({ error: "User not logged in" });
     }
 
     const user = await getUserByUuid(currentUserUuid);
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(200).json({ error: "User not found" });
     }
 
     const { username, email, bio, hidden, created_at } = user;
