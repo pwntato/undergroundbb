@@ -6,20 +6,21 @@ const { redisClient } = require("../redis");
 
 const LOCKOUT_TIME_S = 5 * 60;
 const LOCKOUT_COUNT = 5;
+const INVALID_USERNAME_PASSWORD_MESSAGE = "Invalid username or password";
 
 async function login(username, password, session, res) {
   const lockoutKey = `lockout:${username}`;
   const lockoutCount = await redisClient.get(lockoutKey);
 
   if (lockoutCount !== null && parseInt(lockoutCount) >= LOCKOUT_COUNT) {
-    throw new Error("Account locked out");
+    return { error: "Account locked out" };
   }
 
   const result = await pool.query("SELECT * FROM users WHERE username = $1", [
     username,
   ]);
   if (result.rows.length === 0) {
-    throw new Error("Invalid username or password");
+    return { error: INVALID_USERNAME_PASSWORD_MESSAGE };
   }
 
   const user = result.rows[0];
@@ -32,7 +33,7 @@ async function login(username, password, session, res) {
     await redisClient.incr(lockoutKey);
     await redisClient.expire(lockoutKey, LOCKOUT_TIME_S);
 
-    throw new Error("Invalid username or password");
+    return { error: INVALID_USERNAME_PASSWORD_MESSAGE };
   }
 
   await redisClient.del(lockoutKey);

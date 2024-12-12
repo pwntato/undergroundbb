@@ -14,7 +14,12 @@ const Login = () => {
   const handleLogin = async (event) => {
     event.preventDefault();
     try {
-      await loginUser(username, password);
+      const result = await loginUser(username, password);
+      console.log("result", result);
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
       const user = await getCurrentUser();
       if (user) {
         dispatch({ type: 'LOGIN', payload: { username: user.username, lastLogin: user.last_login } });
