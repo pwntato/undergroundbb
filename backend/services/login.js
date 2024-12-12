@@ -4,7 +4,7 @@ const { decrypt, encrypt, randomKey } = require("../cryptography/aes");
 const { verifyKeyPair } = require("../cryptography/rsa");
 const { redisClient } = require("../redis");
 
-const LOCKOUT_TIME_S = 15 * 60;
+const LOCKOUT_TIME_S = 5 * 60;
 const LOCKOUT_COUNT = 5;
 
 async function login(username, password, session, res) {
@@ -30,7 +30,7 @@ async function login(username, password, session, res) {
   const isValidKeyPair = verifyKeyPair(user.public_key, decryptedPrivateKey);
   if (!isValidKeyPair) {
     await redisClient.incr(lockoutKey);
-    await redisClient.expire(lockoutKey, LOCKOUT_TIME);
+    await redisClient.expire(lockoutKey, LOCKOUT_TIME_S);
 
     throw new Error("Invalid username or password");
   }
