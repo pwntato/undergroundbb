@@ -13,7 +13,11 @@ function generateRandomString(length) {
   return result;
 }
 
-async function signUp(page, username = generateRandomString(8), password = generateRandomString(12)) {
+async function signUp(
+  page,
+  username = generateRandomString(8),
+  password = generateRandomString(12)
+) {
   await page.goto("/signup");
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
@@ -34,4 +38,9 @@ async function login(page, username, password) {
   await expect(page.locator("text=Logout")).toBeVisible();
 }
 
-module.exports = { generateRandomString, signUp, login };
+async function logout(page) {
+  await page.click('button:text("Logout")');
+  await expect(page.locator("text=Login")).toBeVisible();
+}
+
+module.exports = { generateRandomString, signUp, login, logout };
