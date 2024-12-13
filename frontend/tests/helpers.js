@@ -43,4 +43,17 @@ async function logout(page) {
   await expect(page.locator("text=Login")).toBeVisible();
 }
 
-module.exports = { generateRandomString, signUp, login, logout };
+async function createGroup(page, groupName, groupDescription) {
+  await page.goto("/create-group");
+  await page.goto("/create-group");
+  await page.fill('input[name="name"]', groupName);
+  await page.fill('textarea[name="description"]', groupDescription);
+  await page.click('button[type="submit"]');
+
+  // Verify that the group has been created and is selected
+  await expect(page).toHaveURL(/\/group\/[a-f0-9-]+/);
+  await expect(page.locator("h1")).toHaveText(groupName);
+  await expect(page.locator(`text="${groupDescription}"`)).toBeVisible();
+}
+
+module.exports = { generateRandomString, signUp, login, logout, createGroup };
