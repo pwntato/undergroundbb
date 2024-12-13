@@ -38,7 +38,7 @@ router.post("/create-group", async (req, res) => {
     res.status(201).json({ message: "Group created successfully", groupUuid });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Error creating group" });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -246,7 +246,7 @@ router.put("/group/:uuid", async (req, res) => {
     res.json({ message: "Group updated successfully" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Error updating group" });
+    res.status(500).json({ error: error.message });
   }
 });
 

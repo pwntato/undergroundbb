@@ -72,8 +72,10 @@ const EditGroup = () => {
     try {
       await editGroup(uuid, name, description, hidden, trustTrace);
       setSuccess("Group updated successfully");
+      setError("");
     } catch (error) {
-      setError("Error updating group");
+      setError(error.response?.data?.error || "Error updating group");
+      setSuccess("");
     }
   };
 

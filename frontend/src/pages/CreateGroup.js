@@ -29,7 +29,7 @@ const CreateGroup = () => {
       });
       navigate(`/group/${groupUuid}`);
     } catch (error) {
-      setError("Error creating group");
+      setError(error.response?.data?.error || "Error creating group");
     }
   };
 

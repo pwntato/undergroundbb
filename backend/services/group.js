@@ -7,6 +7,10 @@ const { getUserRoleInGroup } = require("./membership");
 const createGroup = async (userUuid, name, description) => {
   const client = await pool.connect();
   try {
+    if (await getGroupByName(name)) {
+      throw new Error("Group with that name already exists");
+    }
+
     await client.query("BEGIN");
 
     const groupResult = await client.query(
@@ -52,11 +56,26 @@ const getGroupByUuid = async (uuid) => {
   return result.rows[0];
 };
 
+const getGroupByName = async (name) => {
+  const result = await pool.query(
+    "SELECT id, uuid, name, description, created_at, hidden, trust_trace FROM groups WHERE LOWER(name) = LOWER($1)",
+    [name]
+  );
+  if (result.rows.length === 0) {
+    return null;
+  }
+  return result.rows[0];
+};
+
 const editGroup = async (uuid, name, description, hidden, trust_trace) => {
   const fields = [];
   const values = [uuid];
 
   if (name != null) {
+    if (getGroupByName(name)) {
+      throw new Error("Group with that name already exists");
+    }
+    
     fields.push("name = $" + (fields.length + 2));
     values.push(name);
   }
@@ -239,6 +258,7 @@ const getUserGroups = async (userUuid) => {
 module.exports = {
   createGroup,
   getGroupByUuid,
+  getGroupByName,
   editGroup,
   inviteUserToGroup,
   getUsersInGroup,
