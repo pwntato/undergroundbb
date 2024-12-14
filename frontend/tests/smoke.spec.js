@@ -29,7 +29,10 @@ test("main smoke test", async ({ page }) => {
   const postBody = "This is the body of the test post.";
   await createPost(page, postTitle, postBody);
 
-  // await expect(page.locator(`text="${postBody}"`)).toBeVisible();
+  // Go to the post page
+  await page.click(`text="${postTitle}"`);
+  await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
+  await expect(page.locator(`text="${postBody}"`)).toBeVisible();
 
   await logout(page);
 });
