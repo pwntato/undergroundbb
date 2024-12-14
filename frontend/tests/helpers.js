@@ -56,4 +56,21 @@ async function createGroup(page, groupName, groupDescription) {
   await expect(page.locator(`text="${groupDescription}"`)).toBeVisible();
 }
 
-module.exports = { generateRandomString, signUp, login, logout, createGroup };
+async function createPost(page, postTitle, postBody) {
+  await page.click('text="Create Post"');
+  await page.fill('input[name="title"]', postTitle);
+  await page.fill('textarea[name="body"]', postBody);
+  await page.click('button:has-text("Create Post")');
+
+  // Verify the post was created
+  await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
+}
+
+module.exports = {
+  generateRandomString,
+  signUp,
+  login,
+  logout,
+  createGroup,
+  createPost,
+};

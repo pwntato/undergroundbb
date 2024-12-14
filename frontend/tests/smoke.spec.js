@@ -5,6 +5,7 @@ const {
   logout,
   generateRandomString,
   createGroup,
+  createPost,
 } = require("./helpers");
 
 test("main smoke test", async ({ page }) => {
@@ -26,16 +27,8 @@ test("main smoke test", async ({ page }) => {
   // Create a post
   const postTitle = "Test Post Title";
   const postBody = "This is the body of the test post.";
-  
-  await page.click('text="Create Post"');
-  await page.fill('input[name="title"]', postTitle);
-  await page.fill('textarea[name="body"]', postBody);
-  await page.click('button:has-text("Create Post")');
+  await createPost(page, postTitle, postBody);
 
-  // Verify the post was created
-  await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
-  
-  
   // await expect(page.locator(`text="${postBody}"`)).toBeVisible();
 
   await logout(page);
