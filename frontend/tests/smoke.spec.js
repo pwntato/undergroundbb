@@ -6,6 +6,7 @@ const {
   generateRandomString,
   createGroup,
   createPost,
+  inviteUserToGroup,
 } = require("./helpers");
 
 test("main smoke test", async ({ page }) => {
@@ -39,21 +40,12 @@ test("main smoke test", async ({ page }) => {
   const postBody = "This is the body of the test post.";
   await createPost(page, postTitle, postBody);
 
-  // Go to the post page
+  // Go to the post page and verify the post is visible
   await page.click(`text="${postTitle}"`);
   await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
   await expect(page.locator(`text="${postBody}"`)).toBeVisible();
 
-  // invite user
-  await page.goto(`/group/${groupUuid}`);
-  await page.click('text="Invite User"');
-  await page.fill('input[name="username"]', memberUsername);
-  await page.click('text="Invite"');
-
-  // Verify member user is in group
-  await page.goto(`/group/${groupUuid}`);
-  await page.click('text="Edit Group"');
-  await expect(page.locator(`text="${memberUsername}"`)).toBeVisible();
+  await inviteUserToGroup(page, groupUuid, memberUsername);
   
   await logout(page);
 });

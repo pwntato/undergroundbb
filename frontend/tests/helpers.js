@@ -71,6 +71,19 @@ async function createPost(page, postTitle, postBody) {
   await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
 }
 
+async function inviteUserToGroup(page, groupUuid, memberUsername) {
+  // Invite user
+  await page.goto(`/group/${groupUuid}`);
+  await page.click('text="Invite User"');
+  await page.fill('input[name="username"]', memberUsername);
+  await page.click('text="Invite"');
+
+  // Verify member user is in group
+  await page.goto(`/group/${groupUuid}`);
+  await page.click('text="Edit Group"');
+  await expect(page.locator(`text="${memberUsername}"`)).toBeVisible();
+}
+
 module.exports = {
   generateRandomString,
   signUp,
@@ -78,4 +91,5 @@ module.exports = {
   logout,
   createGroup,
   createPost,
+  inviteUserToGroup,
 };
