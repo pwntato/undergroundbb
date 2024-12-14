@@ -52,8 +52,13 @@ async function createGroup(page, groupName, groupDescription) {
 
   // Verify that the group has been created and is selected
   await expect(page).toHaveURL(/\/group\/[a-f0-9-]+/);
+  const url = page.url();
+  const groupUuidMatch = url.match(/\/group\/([a-f0-9-]+)/);
+  const groupUuid = groupUuidMatch ? groupUuidMatch[1] : null;
   await expect(page.locator("h1")).toHaveText(groupName);
   await expect(page.locator(`text="${groupDescription}"`)).toBeVisible();
+
+  return { groupUuid };
 }
 
 async function createPost(page, postTitle, postBody) {

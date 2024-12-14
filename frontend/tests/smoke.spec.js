@@ -11,13 +11,23 @@ const {
 test("main smoke test", async ({ page }) => {
   const currentTime = new Date().toLocaleTimeString();
 
-  const { username, password } = await signUp(page);
+  // create a member user to interact with the group
+  const { username: memberUsername, password: memberPassword } = await signUp(
+    page
+  );
+  await login(page, memberUsername, memberPassword);
+  await logout(page);
 
-  await login(page, username, password);
+  // create an admin user to create the group
+  const { username: adminUsername, password: adminPassword } = await signUp(
+    page
+  );
+
+  await login(page, adminUsername, adminPassword);
 
   const groupName = `Test Group ${generateRandomString(8)}  ${currentTime}`;
   const groupDescription = "This is a test group";
-  await createGroup(page, groupName, groupDescription);
+  const { groupUuid } = await createGroup(page, groupName, groupDescription);
 
   // Admin buttons are visible
   await expect(page.locator('text="Create Post"')).toBeVisible();
@@ -34,5 +44,16 @@ test("main smoke test", async ({ page }) => {
   await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
   await expect(page.locator(`text="${postBody}"`)).toBeVisible();
 
+  // invite user
+  await page.goto(`/group/${groupUuid}`);
+  await page.click('text="Invite User"');
+  await page.fill('input[name="username"]', memberUsername);
+  await page.click('text="Invite"');
+
+  // Verify member user is in group
+  await page.goto(`/group/${groupUuid}`);
+  await page.click('text="Edit Group"');
+  await expect(page.locator(`text="${memberUsername}"`)).toBeVisible();
+  
   await logout(page);
 });
