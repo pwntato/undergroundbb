@@ -35,7 +35,6 @@ test("main smoke test", async ({ page }) => {
   await expect(page.locator('text="Invite User"')).toBeVisible();
   await expect(page.locator('text="Edit Group"')).toBeVisible();
 
-  // Create a post
   const postTitle = "Test Post Title";
   const postBody = "This is the body of the test post.";
   await createPost(page, postTitle, postBody);
@@ -48,4 +47,25 @@ test("main smoke test", async ({ page }) => {
   await inviteUserToGroup(page, groupUuid, memberUsername);
   
   await logout(page);
+
+  await login(page, memberUsername, memberPassword);
+
+  // Go to the group page
+  await page.goto(`/group/${groupUuid}`);
+
+  // Verify the group name
+  await expect(page.locator("h1")).toHaveText(groupName);
+
+  // Only member buttons are visible
+  await expect(page.locator('text="Create Post"')).toBeVisible();
+  await expect(page.locator('text="Invite User"')).toBeHidden();
+  await expect(page.locator('text="Edit Group"')).toBeHidden();
+
+  // Verify the post is visible
+  await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
+
+  // Go to the post page and verify the post is visible
+  await page.click(`text="${postTitle}"`);
+  await expect(page.locator(`text="${postTitle}"`)).toBeVisible();
+  await expect(page.locator(`text="${postBody}"`)).toBeVisible();
 });

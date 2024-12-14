@@ -40,7 +40,7 @@ async function login(page, username, password) {
 
 async function logout(page) {
   await page.click('button:text("Logout")');
-  await expect(page.locator("text=Login")).toBeVisible();
+  await expect(page.locator("text=Signup")).toBeVisible();
 }
 
 async function createGroup(page, groupName, groupDescription) {
