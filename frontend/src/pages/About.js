@@ -37,7 +37,7 @@ const About = () => {
           See the code
         </Typography>
         <Typography variant="body1" sx={{ mb: 4 }}>
-          UndergroundBB is open source! Check out the code at:&nbsp;
+          UndergroundBB is open source! Check it out:&nbsp;
           <a
             href="https://github.com/pwntato/undergroundbb"
             target="_blank"
@@ -45,15 +45,14 @@ const About = () => {
           >
             UndergroundBB
           </a>
-          <br />
-          <br />
-          You can even run your own instance so no one can access the database
+          . You can even run your own instance so no one can access the database
           except you!
         </Typography>
         <Typography component="h2" variant="h5" sx={{ mb: 2 }}>
           How it works
         </Typography>
         <Typography variant="body1" sx={{ mb: 4 }}>
+          <h2>Building Trust Through Invitations</h2>
           <ul>
             <li>
               <strong>Creating Groups:</strong> Anyone can start a group and
