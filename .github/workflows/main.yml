@@ -22,6 +22,7 @@ env:
 
 jobs:
   setup:
+    environment: CI
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -54,6 +55,7 @@ jobs:
 
   backend:
     needs: setup
+    environment: CI
     runs-on: ubuntu-latest
     services:
       node:
@@ -94,6 +96,7 @@ jobs:
 
   frontend:
     needs: backend
+    environment: CI
     runs-on: ubuntu-latest
     services:
       nginx:
@@ -131,6 +134,7 @@ jobs:
 
   tests:
     needs: frontend
+    environment: CI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
