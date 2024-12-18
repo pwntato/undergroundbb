@@ -2,6 +2,8 @@ const session = require("express-session");
 const RedisStore = require("connect-redis").default;
 const redis = require("redis");
 
+console.log(`REDIS_PASSWORD: ${process.env.REDIS_PASSWORD}`);
+
 const redisClient = redis.createClient({
   url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:6379`,
 });
