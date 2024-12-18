@@ -12,20 +12,20 @@ jobs:
   test:
     environment: CI
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DB: testdb
+      POSTGRES_HOST: localhost
+      REDIS_HOST: localhost
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      FRONTEND_URL: http://localhost:3000
+      API_URL: http://localhost:3001
+      PORT: 3001
     services:
       postgres:
         image: postgres:latest
-        env:
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          POSTGRES_DB: testdb
-          POSTGRES_HOST: localhost
-          REDIS_HOST: localhost
-          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-          FRONTEND_URL: http://localhost:3000
-          API_URL: http://localhost:3001
-          PORT: 3001
         ports:
           - 5432:5432
         options: >-
