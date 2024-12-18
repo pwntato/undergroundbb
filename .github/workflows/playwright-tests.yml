@@ -91,6 +91,7 @@ jobs:
         run: |
           npm install -g playwright
           npm init playwright@latest
+          npx playwright install 
 
       - name: Run Playwright tests
         run: |
