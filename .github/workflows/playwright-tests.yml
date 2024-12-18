@@ -15,9 +15,16 @@ jobs:
       postgres:
         image: postgres:latest
         env:
-          POSTGRES_USER: user
-          POSTGRES_PASSWORD: password
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: testdb
+          POSTGRES_HOST: localhost
+          REDIS_HOST: localhost
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          FRONTEND_URL: http://localhost:3000
+          API_URL: http://localhost:3001
+          API_PORT: 3001
         ports:
           - 5432:5432
         options: >-
@@ -43,7 +50,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: "18"
 
       - name: Install backend dependencies
         run: |
@@ -67,6 +74,9 @@ jobs:
           cd frontend
           npm run start &
           sleep 10
+
+      - name: Install Playwright
+        run: npx playwright install
 
       - name: Run Playwright tests
         run: |
