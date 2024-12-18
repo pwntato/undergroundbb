@@ -23,7 +23,6 @@ jobs:
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       FRONTEND_URL: http://localhost:3000
       API_URL: http://localhost:3001
-      PORT: 3001
     services:
       postgres:
         image: postgres:latest
