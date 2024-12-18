@@ -26,6 +26,10 @@ jobs:
     services:
       postgres:
         image: postgres:latest
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
         ports:
           - 5432:5432
         options: >-
@@ -36,6 +40,8 @@ jobs:
 
       redis:
         image: redis:latest
+        env:
+          REDIS_PASSWORD: ${{ env.REDIS_PASSWORD }}
         ports:
           - 6379:6379
         options: >-
