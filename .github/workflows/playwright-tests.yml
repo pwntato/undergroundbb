@@ -80,9 +80,7 @@ jobs:
           sudo apt-get install -y \
             libwoff1 \
             libopus0 \
-            libwebp6 \
             libwebpdemux2 \
-            libenchant1c2a \
             libgudev-1.0-0 \
             libsecret-1-0 \
             libhyphen0 \
@@ -95,13 +93,11 @@ jobs:
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
             gstreamer1.0-x \
-            libgles2-mesa \
-            libx264-155 \
-            libx265-179
-            cd frontend
-            npm install
-            npm install -g serve
-            npm run build
+            libgles2-mesa
+          cd frontend
+          npm install
+          npm install -g serve
+          npm run build
 
       - name: Start frontend service
         run: |
