@@ -17,6 +17,7 @@ jobs:
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       POSTGRES_DB: testdb
       POSTGRES_HOST: localhost
+      DATABASE_URL: postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/testdb
       REDIS_HOST: localhost
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
