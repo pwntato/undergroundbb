@@ -63,10 +63,15 @@ jobs:
           cd backend
           npm install
 
+      - name: Run migrations
+        run: |
+          cd backend
+          npm run migrate
+
       - name: Start backend service
         run: |
           cd backend
-          ./entrypoint.sh
+          npm run start:dev
           sleep 10
 
       - name: Build frontend
