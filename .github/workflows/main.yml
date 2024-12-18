@@ -7,8 +7,7 @@ name: CI/CD Pipeline
 #  pull_request:
 #    branches:
 #      - main
-on:
-  workflow_dispatch
+on: workflow_dispatch
 
 env:
   POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
@@ -20,7 +19,7 @@ env:
   SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
   FRONTEND_URL: http://localhost:3000
   API_URL: http://localhost:3001
-  API_PORT: 3001
+  PORT: 3001
 
 jobs:
   setup:
@@ -152,7 +151,7 @@ jobs:
         run: |
           cd frontend
           npm install
-          npx playwright install 
+          npx playwright install
 
       - name: Run Playwright tests
         run: |
