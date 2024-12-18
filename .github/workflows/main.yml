@@ -89,6 +89,7 @@ jobs:
           REDIS_PASSWORD: ${{ env.REDIS_PASSWORD }}
           SESSION_SECRET: ${{ env.SESSION_SECRET }}
           FRONTEND_URL: ${{ env.FRONTEND_URL }}
+          PORT: ${{ env.API_PORT }}
         run: |
           cd backend
           npm run start:dev &
