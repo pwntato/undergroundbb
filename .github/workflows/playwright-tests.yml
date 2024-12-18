@@ -76,10 +76,32 @@ jobs:
 
       - name: Build frontend
         run: |
-          cd frontend
-          npm install
-          npm install -g serve
-          npm run build
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwoff1 \
+            libopus0 \
+            libwebp6 \
+            libwebpdemux2 \
+            libenchant1c2a \
+            libgudev-1.0-0 \
+            libsecret-1-0 \
+            libhyphen0 \
+            libgstreamer-gl1.0-0 \
+            libgstreamer-plugins-bad1.0-0 \
+            libgstreamer-plugins-good1.0-0 \
+            libgstreamer1.0-0 \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-x \
+            libgles2-mesa \
+            libx264-155 \
+            libx265-179
+            cd frontend
+            npm install
+            npm install -g serve
+            npm run build
 
       - name: Start frontend service
         run: |
