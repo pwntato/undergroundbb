@@ -90,7 +90,6 @@ jobs:
       - name: Install Playwright and dependencies
         run: |
           cd frontend
-          pwd
           npx playwright install --with-deps
 
       - name: Run Playwright tests
