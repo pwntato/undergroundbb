@@ -19,11 +19,11 @@ async function signUp(
   password = generateRandomString(12)
 ) {
   await page.goto("/signup");
-  await page.screenshot({ path: 'test-results/screenshots/signup.png' });
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.fill('input[name="confirmPassword"]', password);
   await page.click('button[type="submit"]');
+  await page.screenshot({ path: 'test-results/screenshots/signup.png' });
 
   await expect(page).toHaveURL("/login");
 
