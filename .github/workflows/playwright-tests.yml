@@ -84,7 +84,7 @@ jobs:
       - name: Start frontend service
         run: |
           cd frontend
-          serve -s build | tee backend.log &
+          serve -s build 2>&1 | tee backend.log &
           sleep 10
 
       - name: Install Playwright and dependencies
