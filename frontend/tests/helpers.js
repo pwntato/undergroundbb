@@ -21,22 +21,31 @@ async function signUp(
   await page.goto("/signup");
 
   // Capture the response
-  const response = await page.waitForResponse((response) =>
-    response.url().includes("/api/users/check-username")
-  );
+  const response = page
+    .waitForResponse((response) =>
+      response.url().includes("/api/users/check-username")
+    )
+    .then((response) => {
+      // Log the full response if there's an error
+      if (!response.ok()) {
+        response.text().then((text) => {
+          console.error(`Error checking username availability: ${text}`);
+        });
+      }
+    });
 
   // Log the full response if there's an error
   if (!response.ok()) {
     const responseBody = await response.text();
     console.error(`Error checking username availability: ${responseBody}`);
   }
-  
+
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.fill('input[name="confirmPassword"]', password);
   await page.click('button[type="submit"]');
-  
-  await page.screenshot({ path: 'test-results/screenshots/signup.png' });
+
+  await page.screenshot({ path: "test-results/screenshots/signup.png" });
 
   await expect(page).toHaveURL("/login");
 
