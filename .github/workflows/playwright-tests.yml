@@ -71,7 +71,7 @@ jobs:
       - name: Start backend service
         run: |
           cd backend
-          nohup npm run start:dev
+          npm run start:dev &
           sleep 10
 
       - name: Build frontend
