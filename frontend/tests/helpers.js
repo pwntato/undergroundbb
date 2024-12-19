@@ -26,12 +26,7 @@ async function signUp(
       response.url().includes("/api/users/check-username")
     )
     .then((response) => {
-      // Log the full response if there's an error
-      if (!response.ok()) {
-        response.text().then((text) => {
-          console.error(`Error checking username availability: ${text}`);
-        });
-      }
+      console.log(`Response: ${response}`);
     });
 
   // Log the full response if there's an error
