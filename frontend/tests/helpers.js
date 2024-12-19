@@ -21,7 +21,6 @@ async function signUp(
   await page.goto("/signup");
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
-  await page.fill('input[name="confirmPassword"]', password);
 
   // Capture the response
   const response = await page.waitForResponse((response) =>
@@ -34,6 +33,7 @@ async function signUp(
     console.error(`Error checking username availability: ${responseBody}`);
   }
   
+  await page.fill('input[name="confirmPassword"]', password);
   await page.click('button[type="submit"]');
   
   await page.screenshot({ path: 'test-results/screenshots/signup.png' });
