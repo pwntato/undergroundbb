@@ -71,7 +71,7 @@ jobs:
       - name: Start backend service
         run: |
           cd backend
-          npm run start:dev | tee backend.log &
+          npm run start:dev
           sleep 10
 
       - name: Build frontend
