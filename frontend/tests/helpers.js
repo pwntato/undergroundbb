@@ -19,7 +19,7 @@ async function signUp(
   password = generateRandomString(12)
 ) {
   await page.goto("/signup");
-  await page.screenshot({ path: 'signup.png' });
+  await page.screenshot({ path: 'test-results/screenshots/signup.png' });
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.fill('input[name="confirmPassword"]', password);
