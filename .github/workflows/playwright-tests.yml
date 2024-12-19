@@ -76,28 +76,6 @@ jobs:
 
       - name: Build frontend
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwoff1 \
-            libopus0 \
-            libwebpdemux2 \
-            libgudev-1.0-0 \
-            libsecret-1-0 \
-            libhyphen0 \
-            libgstreamer-gl1.0-0 \
-            libgstreamer-plugins-bad1.0-0 \
-            libgstreamer-plugins-good1.0-0 \
-            libgstreamer1.0-0 \
-            gstreamer1.0-libav \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-x \
-            libgles2-mesa \
-            libevent-2.1-7 \
-            libavif13 \
-            libharfbuzz-icu0 \
-            libmanette-0.2-0
           cd frontend
           npm install
           npm install -g serve
@@ -109,11 +87,8 @@ jobs:
           serve -s build &
           sleep 10
 
-      - name: Install Playwright
-        run: |
-          npm install -g playwright
-          npm init playwright@latest
-          npx playwright install 
+      - name: Install Playwright and dependencies
+        uses: microsoft/playwright-github-action@v1
 
       - name: Run Playwright tests
         run: |
