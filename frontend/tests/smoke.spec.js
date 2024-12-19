@@ -10,6 +10,9 @@ const {
 } = require("./helpers");
 
 test("main smoke test", async ({ page }) => {
+  // Capture console messages from the browser
+  page.on('console', msg => console.log(`BROWSER LOG: ${msg.type()}: ${msg.text()}`));
+  
   const currentTime = new Date().toLocaleTimeString();
 
   // create a member user to interact with the group
