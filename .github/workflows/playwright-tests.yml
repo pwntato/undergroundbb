@@ -99,14 +99,14 @@ jobs:
 
       - name: Upload backend log
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: backend-log
           path: backend/backend.log
       
       - name: Upload Playwright screenshots
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: playwright-screenshots
           path: frontend/test-results/screenshots
