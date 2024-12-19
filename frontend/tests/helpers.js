@@ -20,21 +20,6 @@ async function signUp(
 ) {
   await page.goto("/signup");
 
-  // Capture the response
-  const response = page
-    .waitForResponse((response) =>
-      response.url().includes("/api/users/check-username")
-    )
-    .then((response) => {
-      console.log(`Response: ${response}`);
-    });
-
-  // Log the full response if there's an error
-  if (!response.ok()) {
-    const responseBody = await response.text();
-    console.error(`Error checking username availability: ${responseBody}`);
-  }
-
   await page.fill('input[name="username"]', username);
   await page.fill('input[name="password"]', password);
   await page.fill('input[name="confirmPassword"]', password);
