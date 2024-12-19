@@ -77,7 +77,7 @@ jobs:
       - name: Build frontend
         run: |
           cd frontend
-          npx playwright instal
+          npx playwright install
           npm install
           npm install -g serve
           npm run build
