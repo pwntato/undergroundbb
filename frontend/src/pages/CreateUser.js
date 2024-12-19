@@ -1,45 +1,56 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Container, TextField, Button, Typography, Box, Alert } from '@mui/material';
-import { checkUsernameAvailability, validatePassword, createUser } from '../api/userAPI';
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  Container,
+  TextField,
+  Button,
+  Typography,
+  Box,
+  Alert,
+} from "@mui/material";
+import {
+  checkUsernameAvailability,
+  validatePassword,
+  createUser,
+} from "../api/userAPI";
 
 const CreateUser = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [usernameError, setUsernameError] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [generalError, setGeneralError] = useState('');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [usernameError, setUsernameError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [generalError, setGeneralError] = useState("");
   const navigate = useNavigate();
 
   const handleUsernameBlur = async () => {
     try {
       const available = await checkUsernameAvailability(username);
       if (!available) {
-        setUsernameError('Username is not available');
+        setUsernameError("Username is not available");
       } else {
-        setUsernameError('');
+        setUsernameError("");
       }
     } catch (error) {
-      console.error('Error checking username availability', error);
+      console.error("Error checking username availability", error.message);
     }
   };
 
   const handleConfirmPasswordBlur = () => {
     if (password !== confirmPassword) {
-      setPasswordError('Passwords do not match');
+      setPasswordError("Passwords do not match");
     } else {
-      setPasswordError('');
+      setPasswordError("");
     }
   };
 
   const handleCreateUser = async (event) => {
     event.preventDefault();
     if (password !== confirmPassword) {
-      setPasswordError('Passwords do not match');
+      setPasswordError("Passwords do not match");
       return;
     } else {
-      setPasswordError('');
+      setPasswordError("");
     }
 
     try {
@@ -48,11 +59,11 @@ const CreateUser = () => {
         setPasswordError(message);
         return;
       } else {
-        setPasswordError('');
+        setPasswordError("");
       }
     } catch (error) {
-      console.error('Error validating password', error);
-      setPasswordError('An unknown error occurred');
+      console.error("Error validating password", error);
+      setPasswordError("An unknown error occurred");
       return;
     }
 
@@ -62,21 +73,36 @@ const CreateUser = () => {
 
     try {
       await createUser(username, password);
-      navigate('/login');
+      navigate("/login");
     } catch (error) {
-      console.error('Error creating user', error);
-      setGeneralError('Error creating user');
+      console.error("Error creating user", error);
+      setGeneralError("Error creating user");
     }
   };
 
   return (
     <Container maxWidth="sm">
-      <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <Box
+        sx={{
+          mt: 8,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
         <Typography component="h1" variant="h5" sx={{ mb: 2 }}>
           Create User
         </Typography>
-        {generalError && <Alert severity="error" sx={{ mb: 2 }}>{generalError}</Alert>}
-        <Box component="form" onSubmit={handleCreateUser} sx={{ width: '100%' }}>
+        {generalError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {generalError}
+          </Alert>
+        )}
+        <Box
+          component="form"
+          onSubmit={handleCreateUser}
+          sx={{ width: "100%" }}
+        >
           <TextField
             variant="outlined"
             margin="normal"
