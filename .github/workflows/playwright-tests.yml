@@ -71,7 +71,7 @@ jobs:
       - name: Start backend service
         run: |
           cd backend
-          npm run start:dev &
+          npm run start:dev > backend.log 2>&1 &
           sleep 10
 
       - name: Build frontend
@@ -96,6 +96,13 @@ jobs:
         run: |
           cd frontend
           npx playwright test
+
+      - name: Upload backend log
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-log
+          path: backend/backend.log
       
       - name: Upload Playwright screenshots
         if: failure()
