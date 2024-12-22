@@ -9,12 +9,6 @@ UndergroundBB is a place where people can communicate with each other and know t
 1. Create `.env` file
    1. Copy the sample file: `cp .env.sample .env`
    1. Fill out the missing values in`.env`, anything alphanumeric should be fine for development, but choose strong secrets for production deploys
-1. Install the backend modules
-   1. Go to the backend folder: `cd backend`
-   1. Install the modules: `npm install`
-1. Install the frontend
-   1. Go to the frontend folder: `cd ../frontend`
-   1. Install the modules: `npm install`
 1. Return to root: `cd ..`
 1. Clean out any previous installs: `docker-compose down -v`
 1. Create the docker containers: `docker-compose build --no-cache`
