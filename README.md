@@ -11,7 +11,7 @@ UndergroundBB is a place where people can communicate with each other and know t
    1. Fill out the missing values in`.env`, anything alphanumeric should be fine for development, but choose strong secrets for production deploys
 1. Clean out any previous installs: `docker-compose down -v`
 1. Create the docker containers: `docker-compose build --no-cache`
-1. Start the docker containers: `docker-compose up` (might need to run twice)
+1. Start the docker containers: `docker-compose up`
 1. Make sure the smoke tests pass
    1. Go to the frontend folder: `cd frontend`
    1. Run the Playwright tests: `npm run test:e2e`
