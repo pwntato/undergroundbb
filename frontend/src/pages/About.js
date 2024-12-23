@@ -1,130 +1,144 @@
 import React from "react";
-import { Container, Link, Typography, Box } from "@mui/material";
+import { Container, Link, Typography, Box, List, ListItem, ListItemText } from "@mui/material";
 
 const About = () => {
   return (
     <Container maxWidth="md">
-      <Box
-        sx={{
-          mt: 8,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-        }}
-      >
-        <Typography component="h1" variant="h4" sx={{ mb: 4 }}>
+      <Box sx={{ mt: 4, mb: 4 }}>
+        <Typography variant="h4" sx={{ mb: 4 }}>
           About UndergroundBB
         </Typography>
-        <Typography component="h2" variant="h5" sx={{ mb: 2 }}>
+        
+        <Typography variant="h5" sx={{ mb: 2 }}>
           Our Mission
         </Typography>
-        <Typography variant="body1" sx={{ mb: 4 }}>
+        <Typography variant="body1" sx={{ mb: 2 }}>
           UndergroundBB is a place where people can communicate with each other
-          and know their conversations are safe. <br />
-          <br />
+          and know their conversations are safe.
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 2 }}>
           All posts (and comments) are encrypted and users can only join groups
           if invited by already trusted group users. It is impossible to see
-          group posts or comments using information stored server side. <br />
-          <br />
+          group posts or comments using information stored server side.
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 2 }}>
           It is a place where people can share their thoughts and organize,
           whether that be activism or unionization.
-          <br />
-          <br />
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 4 }}>
           Finally, and maybe most importantly, UndergroundBB is not run for
           profit. It is a place for the people, by the people.
         </Typography>
-        <Typography component="h2" variant="h5" sx={{ mb: 2 }}>
+
+        <Typography variant="h5" sx={{ mb: 2 }}>
           See the code
         </Typography>
         <Typography variant="body1" sx={{ mb: 4 }}>
           UndergroundBB is open source! Check it out:&nbsp;
-          <a
+          <Link
             href="https://github.com/pwntato/undergroundbb"
             target="_blank"
             rel="noopener noreferrer"
           >
             UndergroundBB
-          </a>
+          </Link>
           . You can even run your own instance so no one can access the database
           except you!
         </Typography>
-        <Typography component="h2" variant="h5" sx={{ mb: 2 }}>
+
+        <Typography variant="h5" sx={{ mb: 2 }}>
           How it works
         </Typography>
-        <Typography variant="body1" sx={{ mb: 4 }}>
-          <h2>Building Trust Through Invitations</h2>
-          <ul>
-            <li>
-              <strong>Creating Groups:</strong> Anyone can start a group and
-              becomes the Admin, the top role in the group. Admins can invite
-              others, adjust roles, and manage group settings.
-            </li>
-            <li>
-              <strong>Joining a Group:</strong> New users join as Members after
-              being invited by an Admin or a trusted user with an Ambassador
-              role. Members can view and post content within the group.
-            </li>
-            <li>
-              <strong>Ambassadors:</strong> Admins can promote trusted Members
-              to Ambassadors, who can then invite new Members. Unlike Admins,
-              Ambassadors cannot change group settings or manage roles, but they
-              play a key role in growing the group by extending invitations.
-              This creates a "chain of trust," where only trusted users can
-              bring others into the group.
-            </li>
-          </ul>
 
-          <h2>Ensuring Security with Encryption</h2>
-          <p>
-            UndergroundBB uses advanced technology to keep your data safe,
-            including your personal account details, group messages, and shared
-            content:
-          </p>
-          <ul>
-            <li>
-              Your account and private information are protected with strong
-              encryption, so only you can access them.
-            </li>
-            <li>
-              Group content, like posts and comments, is locked with a secure
-              key that only group members can use.
-            </li>
-            <li>
-              Even if someone tries to break in, the layers of security make it
-              nearly impossible for them to access your data.
-            </li>
-          </ul>
-
-          <h2>Keeping Posts and Comments Secure</h2>
-          <ul>
-            <li>
-              Each time a user interacts with the group, their private key is
-              unlocked briefly and securely using a session token. This process
-              ensures the user can access encrypted group content without
-              compromising security. This key is used to access the group’s
-              encrypted content, like posts and comments.
-            </li>
-            <li>
-              All group content is encrypted using the group key, so only
-              members of the group can view or share it.
-            </li>
-          </ul>
-
-          <h2>Why It Matters</h2>
-          <p>This layered security ensures that:</p>
-          <ul>
-            <li>Only trusted users can join groups and access content.</li>
-            <li>
-              Your private information stays private, even if someone else gets
-              access to the servers, because all sensitive data is encrypted and
-              can only be unlocked with your unique keys.
-            </li>
-            <li>
-              Group content is protected from outsiders, providing a safe and
-              secure environment for sharing.
-            </li>
-          </ul>
+        <Typography variant="h6" sx={{ mb: 2 }}>
+          Building Trust Through Invitations
         </Typography>
+        <List sx={{ width: '100%', mb: 4, pl: 0 }}>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              primary={<Typography variant="subtitle1">Creating Groups</Typography>}
+              secondary={<Typography variant="body1">Anyone can start a group and becomes the Admin, the top role in the group. Admins can invite others, adjust roles, and manage group settings.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              primary={<Typography variant="subtitle1">Joining a Group</Typography>}
+              secondary={<Typography variant="body1">New users join as Members after being invited by an Admin or a trusted user with an Ambassador role. Members can view and post content within the group.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              primary={<Typography variant="subtitle1">Ambassadors</Typography>}
+              secondary={<Typography variant="body1">Admins can promote trusted Members to Ambassadors, who can then invite new Members. Unlike Admins, Ambassadors cannot change group settings or manage roles, but they play a key role in growing the group by extending invitations. This creates a 'chain of trust,' where only trusted users can bring others into the group.</Typography>}
+            />
+          </ListItem>
+        </List>
+
+        <Typography variant="h6" sx={{ mb: 2 }}>
+          Ensuring Security with Encryption
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 2 }}>
+          UndergroundBB uses advanced technology to keep your data safe,
+          including your personal account details, group messages, and shared
+          content:
+        </Typography>
+        <List sx={{ width: '100%', mb: 4, pl: 0 }}>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Your account and private information are protected with strong encryption, so only you can access them.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Group content, like posts and comments, is locked with a secure key that only group members can use.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Even if someone tries to break in, the layers of security make it nearly impossible for them to access your data.</Typography>}
+            />
+          </ListItem>
+        </List>
+
+        <Typography variant="h6" sx={{ mb: 2 }}>
+          Keeping Posts and Comments Secure
+        </Typography>
+        <List sx={{ width: '100%', mb: 4, pl: 0 }}>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Each time a user interacts with the group, their private key is unlocked briefly and securely using their password or a session token. This process ensures the user can access encrypted group content without compromising security. This key is used to access the group's encrypted content, like posts and comments.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">All group content is encrypted using the group key, so only members of the group can view or share it.</Typography>}
+            />
+          </ListItem>
+        </List>
+
+        <Typography variant="h6" sx={{ mb: 2 }}>
+          Why It Matters
+        </Typography>
+        <Typography variant="body1" sx={{ mb: 2 }}>
+          This layered security ensures that:
+        </Typography>
+        <List sx={{ width: '100%', mb: 4, pl: 0 }}>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Only trusted users can join groups and access content.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Your private information stays private, even if someone else gets access to the servers, because all sensitive data is encrypted and can only be unlocked with your unique keys.</Typography>}
+            />
+          </ListItem>
+          <ListItem sx={{ pl: 0 }}>
+            <ListItemText
+              secondary={<Typography variant="body1">Group content is protected from outsiders, providing a safe and secure environment for sharing.</Typography>}
+            />
+          </ListItem>
+        </List>
       </Box>
 
       <Box>
