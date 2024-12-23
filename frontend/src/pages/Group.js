@@ -23,6 +23,12 @@ const Group = () => {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setPosts([]);  // Clear posts when group changes
+    setCurrent(0); // Reset pagination
+    setNext(null);
+  }, [uuid]);
+
+  useEffect(() => {
     const fetchGroup = async () => {
       try {
         const fetchedGroup = await getGroupByUuid(uuid);
