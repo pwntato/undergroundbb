@@ -160,16 +160,17 @@ const Group = () => {
             <PostItem key={post.uuid} post={post} />
           ))}
         </Box>
-        <Box sx={{ display: "flex", justifyContent: "center", width: "100%" }}>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleMore}
-            disabled={next === null}
-          >
-            More
-          </Button>
-        </Box>
+        {next !== null && (
+          <Box sx={{ display: "flex", justifyContent: "center", width: "100%" }}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleMore}
+            >
+              More
+            </Button>
+          </Box>
+        )}
         {loading && <CircularProgress />}
       </Box>
     </Container>

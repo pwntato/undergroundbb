@@ -106,12 +106,15 @@ router.get("/posts", async (req, res) => {
       parentUuid
     );
 
+    // Check if there are more posts after the current page
+    const hasMore = posts.length === limit;
+
     res.json({
       posts,
       pagination: {
         current: offset,
-        previous: offset - limit,
-        next: offset + limit,
+        previous: offset - limit >= 0 ? offset - limit : null,
+        next: hasMore ? offset + limit : null,
       },
     });
   } catch (error) {

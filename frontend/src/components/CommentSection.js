@@ -59,24 +59,25 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
         {comments.map((comment) => (
           <CommentItem key={comment.uuid} comment={comment} />
         ))}
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "center",
-            width: "100%",
-            mt: 2,
-          }}
-        >
-          <Link
-            component="button"
-            variant="body2"
-            onClick={handleMore}
-            disabled={next === null}
-            sx={{ textDecoration: "underline", color: "primary.main", cursor: "pointer", background: "none", border: "none", padding: 0 }}
+        {next !== null && (
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              width: "100%",
+              mt: 2,
+            }}
           >
-            More
-          </Link>
-        </Box>
+            <Link
+              component="button"
+              variant="body2"
+              onClick={handleMore}
+              sx={{ textDecoration: "underline", color: "primary.main", cursor: "pointer", background: "none", border: "none", padding: 0 }}
+            >
+              More
+            </Link>
+          </Box>
+        )}
         <CommentForm
           parentUuid={parentUuid}
           groupUuid={groupUuid}
