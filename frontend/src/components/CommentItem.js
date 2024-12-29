@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Typography, Card, CardContent, Box, IconButton } from "@mui/material";
 import NotificationsIcon from "@mui/icons-material/Notifications";
@@ -7,11 +7,35 @@ import DateComponent from "./DateComponent";
 import CommentSection from "./CommentSection";
 import { useUser } from "../contexts/UserContext";
 import { deletePost } from "../api/postAPI";
+import { getUserRoleInGroup } from "../api/groupAPI";
 
 const CommentItem = ({ comment, onCommentDeleted }) => {
   const [showReplies, setShowReplies] = useState(false);
   const [body, setBody] = useState(comment.body);
+  const [canDelete, setCanDelete] = useState(false);
   const { state } = useUser();
+
+  useEffect(() => {
+    const checkDeletePermission = async () => {
+      const isAuthor = state.uuid === comment?.author?.uuid;
+      if (isAuthor) {
+        setCanDelete(true);
+        return;
+      }
+      
+      if (comment?.group?.uuid) {
+        try {
+          const response = await getUserRoleInGroup(comment.group.uuid);
+          setCanDelete(response?.role === "admin");
+        } catch (error) {
+          console.error("Error checking user role:", error);
+          setCanDelete(false);
+        }
+      }
+    };
+    
+    checkDeletePermission();
+  }, [state.uuid, comment?.author?.uuid, comment?.group?.uuid]);
 
   const handleToggleReplies = () => {
     setShowReplies((prev) => !prev);
@@ -30,8 +54,6 @@ const CommentItem = ({ comment, onCommentDeleted }) => {
   };
 
   const isNewComment = new Date(comment.created_at) > new Date(state.lastLogin);
-  const canDelete = state.uuid === comment?.author?.uuid || 
-                   (state.groupRoles && comment?.group?.uuid && state.groupRoles[comment.group.uuid] === "admin");
 
   return (
     <Card sx={{ mb: 2 }}>
