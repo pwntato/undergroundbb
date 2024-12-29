@@ -207,14 +207,8 @@ router.delete("/post/:postUuid", async (req, res) => {
     await deletePost(postUuid, user.id, decryptedGroupKeyHex);
     res.status(200).json({ message: "Post deleted successfully" });
   } catch (error) {
-    if (error.message === "Post not found") {
-      res.status(404).json({ error: error.message });
-    } else if (error.message === "Unauthorized to delete this post") {
-      res.status(403).json({ error: error.message });
-    } else {
-      console.error(error);
-      res.status(500).json({ error: "Error deleting post" });
-    }
+    console.error(error);
+    res.status(500).json({ error: "Error deleting post" });
   }
 });
 
