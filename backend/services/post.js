@@ -148,7 +148,7 @@ const getPostByUuid = async (postUuid) => {
   }
 };
 
-const deletePost = async (postUuid, userId) => {
+const deletePost = async (postUuid, userId, decryptedGroupKey) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -179,10 +179,15 @@ const deletePost = async (postUuid, userId) => {
       throw new Error("Unauthorized to delete this post");
     }
 
-    // Delete the post
+    // Update the post with encrypted [DELETED] values
+    const encryptedDeleted = encrypt("[DELETED]", decryptedGroupKey);
+
     await client.query(
-      "DELETE FROM posts WHERE id = $1",
-      [post.id]
+      `UPDATE posts 
+       SET title = CAST($1 AS varchar(255)), 
+           body = CAST($1 AS text)
+       WHERE id = $2`,
+      [encryptedDeleted, post.id]
     );
 
     await client.query("COMMIT");

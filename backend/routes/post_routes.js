@@ -172,7 +172,8 @@ router.get("/post/:uuid", async (req, res) => {
 router.delete("/post/:postUuid", async (req, res) => {
   try {
     const { postUuid } = req.params;
-    const { userUuid } = req.session;
+    const { userUuid, sessionPrivateKey: encryptedPrivateKey } = req.session;
+    const tokenBase64 = req.cookies.token;
 
     if (!userUuid) {
       return res.status(401).json({ error: "User not logged in" });
@@ -183,7 +184,27 @@ router.delete("/post/:postUuid", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    await deletePost(postUuid, user.id);
+    // Get post's group to get the group key
+    const postResult = await pool.query(
+      `SELECT g.uuid as group_uuid
+       FROM posts p 
+       JOIN groups g ON p.group_id = g.id
+       WHERE p.uuid = $1`,
+      [postUuid]
+    );
+
+    if (postResult.rows.length === 0) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const { decryptedGroupKeyHex } = await verifyUserMembershipAndDecryptGroupKey(
+      user,
+      postResult.rows[0].group_uuid,
+      encryptedPrivateKey,
+      tokenBase64
+    );
+
+    await deletePost(postUuid, user.id, decryptedGroupKeyHex);
     res.status(200).json({ message: "Post deleted successfully" });
   } catch (error) {
     if (error.message === "Post not found") {
@@ -191,8 +212,8 @@ router.delete("/post/:postUuid", async (req, res) => {
     } else if (error.message === "Unauthorized to delete this post") {
       res.status(403).json({ error: error.message });
     } else {
-      console.error("Error deleting post:", error);
-      res.status(500).json({ error: "Internal server error" });
+      console.error(error);
+      res.status(500).json({ error: "Error deleting post" });
     }
   }
 });
