@@ -10,7 +10,7 @@ const app = express();
 app.use(express.json());
 app.use(cors({
   origin: process.env.FRONTEND_URL,
-  methods: ['POST', 'PUT', 'GET', 'OPTIONS', 'HEAD'],
+  methods: ['POST', 'PUT', 'GET', 'DELETE', 'OPTIONS', 'HEAD'],
   credentials: true
 }));
 app.use(sessionMiddleware);
