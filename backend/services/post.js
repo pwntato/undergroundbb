@@ -169,7 +169,7 @@ const deletePost = async (postUuid, userId) => {
 
     // Check if user is post creator or admin
     const userRoleResult = await client.query(
-      `SELECT role FROM group_members 
+      `SELECT role FROM membership 
        WHERE user_id = $1 AND group_id = $2`,
       [userId, post.group_id]
     );

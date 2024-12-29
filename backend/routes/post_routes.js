@@ -1,7 +1,12 @@
 const express = require("express");
 const pool = require("../db");
 const { Buffer } = require("buffer");
-const { createPost, getPosts, getPostByUuid, deletePost } = require("../services/post");
+const {
+  createPost,
+  getPosts,
+  getPostByUuid,
+  deletePost,
+} = require("../services/post");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
@@ -164,7 +169,7 @@ router.get("/post/:uuid", async (req, res) => {
   }
 });
 
-router.delete("/:postUuid", async (req, res) => {
+router.delete("/post/:postUuid", async (req, res) => {
   try {
     const { postUuid } = req.params;
     const { userUuid } = req.session;
