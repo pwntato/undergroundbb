@@ -1,35 +1,59 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { Typography, Card, CardContent, Box } from "@mui/material";
+import { Typography, Card, CardContent, Box, IconButton } from "@mui/material";
 import NotificationsIcon from "@mui/icons-material/Notifications";
+import DeleteIcon from "@mui/icons-material/Delete";
 import DateComponent from "./DateComponent";
 import CommentSection from "./CommentSection";
 import { useUser } from "../contexts/UserContext";
+import { deletePost } from "../api/postAPI";
 
-const CommentItem = ({ comment }) => {
+const CommentItem = ({ comment, onCommentDeleted }) => {
   const [showReplies, setShowReplies] = useState(false);
+  const [body, setBody] = useState(comment.body);
   const { state } = useUser();
 
   const handleToggleReplies = () => {
     setShowReplies((prev) => !prev);
   };
 
+  const handleDelete = async () => {
+    try {
+      await deletePost(comment.uuid);
+      setBody("[DELETED]");
+      if (onCommentDeleted) {
+        onCommentDeleted(comment.uuid);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const isNewComment = new Date(comment.created_at) > new Date(state.lastLogin);
+  const canDelete = state.uuid === comment?.author?.uuid || 
+                   (state.groupRoles && comment?.group?.uuid && state.groupRoles[comment.group.uuid] === "admin");
 
   return (
     <Card sx={{ mb: 2 }}>
       <CardContent>
-        <Typography variant="body1" sx={{ mb: 1 }}>
-          {comment.body}
-          {isNewComment && (
-            <NotificationsIcon sx={{ color: "red", fontSize: 16, mr: 1 }} />
+        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <Typography variant="body1" sx={{ mb: 1, flex: 1 }}>
+            {body}
+            {isNewComment && (
+              <NotificationsIcon sx={{ color: "red", fontSize: 16, mr: 1 }} />
+            )}
+          </Typography>
+          {canDelete && (
+            <IconButton onClick={handleDelete} size="small" sx={{ ml: 1 }}>
+              <DeleteIcon />
+            </IconButton>
           )}
-        </Typography>
+        </Box>
         <Box sx={{ display: "flex", justifyContent: "space-between" }}>
           <Typography variant="body2" color="text.secondary">
             Created <DateComponent datetime={comment.created_at} /> by{" "}
-            <Link to={`/user/${comment.author.uuid}`}>
-              {comment.author.username}
+            <Link to={`/user/${comment?.author?.uuid}`}>
+              {comment?.author?.username}
             </Link>
           </Typography>
           <Typography
@@ -46,7 +70,7 @@ const CommentItem = ({ comment }) => {
           <Box sx={{ mt: 2 }}>
             <CommentSection
               parentUuid={comment.uuid}
-              groupUuid={comment.group.uuid}
+              groupUuid={comment?.group?.uuid}
             />
           </Box>
         )}
