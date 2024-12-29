@@ -108,7 +108,7 @@ router.get("/current-user", async (req, res) => {
       return res.status(200).json({ error: "User not found" });
     }
 
-    const { username, email, bio, hidden, created_at } = user;
+    const { username, uuid, email, bio, hidden, created_at } = user;
 
     const groups = await getUserGroups(currentUserUuid);
     const groupMap = groups.reduce((map, group) => {
@@ -118,6 +118,7 @@ router.get("/current-user", async (req, res) => {
 
     return res.json({
       username,
+      uuid,
       email,
       bio,
       hidden,

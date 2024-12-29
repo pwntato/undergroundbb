@@ -5,18 +5,21 @@ const UserContext = createContext();
 const initialState = {
   isLoggedIn: false,
   username: "",
+  uuid: null,
   selectedGroup: { name: null, uuid: null },
   lastLogin: null,
   groups: [],
 };
 
 const userReducer = (state, action) => {
+  console.log("action", action);
   switch (action.type) {
     case "LOGIN":
       return {
         ...state,
         isLoggedIn: true,
         username: action.payload.username,
+        uuid: action.payload.uuid,
         lastLogin: action.payload.lastLogin,
       };
     case "LOGOUT":
