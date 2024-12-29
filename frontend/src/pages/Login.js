@@ -27,10 +27,15 @@ const Login = () => {
         return;
       }
       const user = await getCurrentUser();
+      console.log("user", user);
       if (user) {
         dispatch({
           type: "LOGIN",
-          payload: { username: user.username, lastLogin: user.last_login },
+          payload: { 
+            username: user.username, 
+            uuid: user.uuid,
+            lastLogin: user.last_login 
+          },
         });
         dispatch({ type: "SET_GROUPS", payload: user.groups });
       }
