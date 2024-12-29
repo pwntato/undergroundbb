@@ -17,3 +17,8 @@ export const getPostByUuid = async (postUuid) => {
   const data = await client(`/post/${postUuid}`);
   return data;
 };
+
+export const deletePost = async (postUuid) => {
+  const data = await client(`/post/${postUuid}`, "DELETE");
+  return data;
+};
