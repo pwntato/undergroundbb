@@ -81,7 +81,13 @@ const Group = () => {
   };
 
   const handlePostDelete = (postUuid) => {
-    setPosts((prevPosts) => prevPosts.filter((post) => post.uuid !== postUuid));
+    setPosts((prevPosts) =>
+      prevPosts.map((post) =>
+        post.uuid === postUuid
+          ? { ...post, title: "[DELETED]", body: "[DELETED]" }
+          : post
+      )
+    );
   };
 
   if (error) {
