@@ -80,6 +80,10 @@ const Group = () => {
     }
   };
 
+  const handlePostDelete = (postUuid) => {
+    setPosts((prevPosts) => prevPosts.filter((post) => post.uuid !== postUuid));
+  };
+
   if (error) {
     return <div>{error}</div>;
   }
@@ -157,7 +161,7 @@ const Group = () => {
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
-            <PostItem key={post.uuid} post={post} />
+            <PostItem key={post.uuid} post={post} onDelete={handlePostDelete} />
           ))}
         </Box>
         {next !== null && (
