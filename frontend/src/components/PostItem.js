@@ -7,12 +7,13 @@ import DateComponent from "./DateComponent";
 import { useUser } from "../contexts/UserContext";
 import { deletePost } from "../api/postAPI";
 
-const PostItem = ({ post, onDelete }) => {
+const PostItem = ({ post, onDelete, userRole }) => {
   const { state } = useUser();
   const navigate = useNavigate();
 
   const isNewComment = new Date(post.created_at) > new Date(state.lastLogin);
   const isAuthor = state.uuid === post.author.uuid;
+  const canDelete = isAuthor || userRole === 'admin';
 
   const handleDelete = async (e) => {
     e.preventDefault(); // Prevent navigation
@@ -49,7 +50,7 @@ const PostItem = ({ post, onDelete }) => {
           >
             {post.title}
           </Typography>
-          {isAuthor && (
+          {canDelete && (
             <IconButton
               size="small"
               onClick={handleDelete}

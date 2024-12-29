@@ -167,7 +167,12 @@ const Group = () => {
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
-            <PostItem key={post.uuid} post={post} onDelete={handlePostDelete} />
+            <PostItem
+              key={post.uuid}
+              post={post}
+              onDelete={handlePostDelete}
+              userRole={userRole}
+            />
           ))}
         </Box>
         {next !== null && (
