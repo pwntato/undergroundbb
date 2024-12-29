@@ -27,7 +27,6 @@ const Login = () => {
         return;
       }
       const user = await getCurrentUser();
-      console.log("user", user);
       if (user) {
         dispatch({
           type: "LOGIN",
