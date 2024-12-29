@@ -13,7 +13,6 @@ const PostItem = ({ post, onDelete }) => {
 
   const isNewComment = new Date(post.created_at) > new Date(state.lastLogin);
   const isAuthor = state.uuid === post.author.uuid;
-  console.log("state", state);
 
   const handleDelete = async (e) => {
     e.preventDefault(); // Prevent navigation
