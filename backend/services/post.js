@@ -148,4 +148,51 @@ const getPostByUuid = async (postUuid) => {
   }
 };
 
-module.exports = { createPost, getPosts, getPostByUuid };
+const deletePost = async (postUuid, userId) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    
+    // Get post and check if it exists
+    const postResult = await client.query(
+      `SELECT p.id, p.creator_id, p.group_id 
+       FROM posts p 
+       WHERE p.uuid = $1`,
+      [postUuid]
+    );
+
+    if (postResult.rows.length === 0) {
+      throw new Error("Post not found");
+    }
+
+    const post = postResult.rows[0];
+
+    // Check if user is post creator or admin
+    const userRoleResult = await client.query(
+      `SELECT role FROM group_members 
+       WHERE user_id = $1 AND group_id = $2`,
+      [userId, post.group_id]
+    );
+
+    if (post.creator_id !== userId && 
+        (!userRoleResult.rows[0] || userRoleResult.rows[0].role !== 'admin')) {
+      throw new Error("Unauthorized to delete this post");
+    }
+
+    // Delete the post
+    await client.query(
+      "DELETE FROM posts WHERE id = $1",
+      [post.id]
+    );
+
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { createPost, getPosts, getPostByUuid, deletePost };

@@ -1,7 +1,7 @@
 const express = require("express");
 const pool = require("../db");
 const { Buffer } = require("buffer");
-const { createPost, getPosts, getPostByUuid } = require("../services/post");
+const { createPost, getPosts, getPostByUuid, deletePost } = require("../services/post");
 const { getUserByUuid } = require("../services/user");
 const { getUserRoleInGroup } = require("../services/membership");
 const { decrypt: decryptAes } = require("../cryptography/aes");
@@ -161,6 +161,34 @@ router.get("/post/:uuid", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error fetching post" });
+  }
+});
+
+router.delete("/:postUuid", async (req, res) => {
+  try {
+    const { postUuid } = req.params;
+    const { userUuid } = req.session;
+
+    if (!userUuid) {
+      return res.status(401).json({ error: "User not logged in" });
+    }
+
+    const user = await getUserByUuid(userUuid);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    await deletePost(postUuid, user.id);
+    res.status(200).json({ message: "Post deleted successfully" });
+  } catch (error) {
+    if (error.message === "Post not found") {
+      res.status(404).json({ error: error.message });
+    } else if (error.message === "Unauthorized to delete this post") {
+      res.status(403).json({ error: error.message });
+    } else {
+      console.error("Error deleting post:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
