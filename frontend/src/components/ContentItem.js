@@ -23,7 +23,7 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
         setCanDelete(true);
         return;
       }
-      
+
       if (!isPost && content?.group?.uuid) {
         try {
           const response = await getUserRoleInGroup(content.group.uuid);
@@ -33,12 +33,18 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
           setCanDelete(false);
         }
       } else if (isPost) {
-        setCanDelete(isAuthor || userRole === 'admin');
+        setCanDelete(isAuthor || userRole === "admin");
       }
     };
-    
+
     checkDeletePermission();
-  }, [state.uuid, content?.author?.uuid, content?.group?.uuid, isPost, userRole]);
+  }, [
+    state.uuid,
+    content?.author?.uuid,
+    content?.group?.uuid,
+    isPost,
+    userRole,
+  ]);
 
   const handleToggleReplies = () => {
     setShowReplies((prev) => !prev);
@@ -46,7 +52,7 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
 
   const handleDelete = async (e) => {
     if (e) e.preventDefault();
-    
+
     if (window.confirm("Are you sure you want to delete this?")) {
       try {
         await deletePost(content.uuid);
@@ -68,7 +74,7 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
   const isNewContent = new Date(content.created_at) > new Date(state.lastLogin);
 
   return (
-    <Card sx={{ mb: 2, maxHeight: isPost ? 100 : 'none' }}>
+    <Card sx={{ mb: 2, maxHeight: isPost ? 100 : "none" }}>
       <CardContent sx={{ padding: isPost ? "8px 16px" : "16px" }}>
         <Box
           sx={{
@@ -91,20 +97,22 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
               {body}
             </Typography>
           )}
-          {canDelete && (
-            <IconButton
-              size="small"
-              onClick={handleDelete}
-              sx={{ ml: 1 }}
-              aria-label={`delete ${isPost ? 'post' : 'comment'}`}
-            >
-              <DeleteIcon />
-            </IconButton>
-          )}
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            {isNewContent && (
+              <NotificationsIcon sx={{ color: "red", fontSize: 16, mr: 1 }} />
+            )}
+            {canDelete && (
+              <IconButton
+                size="small"
+                onClick={handleDelete}
+                sx={{ ml: 1 }}
+                aria-label={`delete ${isPost ? "post" : "comment"}`}
+              >
+                <DeleteIcon />
+              </IconButton>
+            )}
+          </Box>
         </Box>
-        {isNewContent && (
-          <NotificationsIcon sx={{ color: "red", fontSize: 16, mr: 1 }} />
-        )}
         {isPost && content.body && (
           <Typography variant="body1" sx={{ mb: 1 }}>
             {content.body}
@@ -129,7 +137,11 @@ const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
             variant="body2"
             color="text.secondary"
             component={isPost ? Link : "span"}
-            to={isPost ? `/group/${content.group.uuid}/post/${content.uuid}` : undefined}
+            to={
+              isPost
+                ? `/group/${content.group.uuid}/post/${content.uuid}`
+                : undefined
+            }
             onClick={!isPost ? handleToggleReplies : undefined}
             sx={!isPost ? { cursor: "pointer" } : {}}
           >
