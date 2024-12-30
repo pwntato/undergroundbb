@@ -71,6 +71,21 @@ const Header = () => {
         <Button
           color="inherit"
           component={Link}
+          to="https://github.com/pwntato/undergroundbb"
+          target="_blank"
+          sx={{
+            backgroundColor: "#1565c0",
+            "&:hover": {
+              backgroundColor: "#0d47a1",
+            },
+            marginRight: 2,
+          }}
+        >
+          Code
+        </Button>
+        <Button
+          color="inherit"
+          component={Link}
           to="https://www.patreon.com/c/UndergroundBB"
           target="_blank"
           sx={{
