@@ -71,7 +71,8 @@ const Header = () => {
         <Button
           color="inherit"
           component={Link}
-          to="/donate"
+          to="https://www.patreon.com/c/UndergroundBB"
+          target="_blank"
           sx={{
             backgroundColor: "#4caf50",
             "&:hover": {
