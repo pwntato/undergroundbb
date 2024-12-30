@@ -4,6 +4,7 @@ import { Container, Typography, Box } from "@mui/material";
 import { getPostByUuid } from "../api/postAPI";
 import DateComponent from "../components/DateComponent";
 import CommentSection from "../components/CommentSection";
+import { transformContent } from "../utils/contentTransform";
 
 const Post = () => {
   const { postUuid, groupUuid } = useParams();
@@ -48,7 +49,7 @@ const Post = () => {
           {post.title}
         </Typography>
         <Typography variant="body1" sx={{ mb: 2 }}>
-          {post.body}
+          {transformContent(post.body)}
         </Typography>
         <Typography variant="body2" component="span">
           Created <DateComponent datetime={post.created_at} /> by{" "}
