@@ -9,7 +9,7 @@ import {
 } from "@mui/material";
 import { getGroupByUuid, getUserRoleInGroup } from "../api/groupAPI";
 import { getPosts } from "../api/postAPI";
-import PostItem from "../components/PostItem";
+import ContentItem from "../components/ContentItem";
 import DateComponent from "../components/DateComponent";
 
 const Group = () => {
@@ -167,11 +167,12 @@ const Group = () => {
         </Typography>
         <Box sx={{ width: "100%", bgcolor: "background.paper", mb: 4 }}>
           {posts.map((post) => (
-            <PostItem
+            <ContentItem
               key={post.uuid}
-              post={post}
+              content={post}
               onDelete={handlePostDelete}
               userRole={userRole}
+              isPost={true}
             />
           ))}
         </Box>
