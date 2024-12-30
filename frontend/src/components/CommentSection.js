@@ -7,7 +7,7 @@ import {
   Typography,
 } from "@mui/material";
 import CommentForm from "./CommentForm";
-import CommentItem from "./CommentItem";
+import ContentItem from "./ContentItem";
 import { getPosts } from "../api/postAPI";
 
 const CommentSection = ({ parentUuid, groupUuid }) => {
@@ -57,7 +57,7 @@ const CommentSection = ({ parentUuid, groupUuid }) => {
         {error && <Typography color="error">{error}</Typography>}
         {loading && <CircularProgress />}
         {comments.map((comment) => (
-          <CommentItem key={comment.uuid} comment={comment} />
+          <ContentItem key={comment.uuid} content={comment} isPost={false} />
         ))}
         {next !== null && (
           <Box
