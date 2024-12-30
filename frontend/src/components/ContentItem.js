@@ -10,9 +10,6 @@ import { deletePost } from "../api/postAPI";
 import { getUserRoleInGroup } from "../api/groupAPI";
 import { transformContent } from "../utils/contentTransform";
 
-const urlRegex = /(https?:\/\/[^\s]+)/g;
-const imageExtRegex = /\.(jpg|jpeg|png|gif|webp)$/i;
-
 const ContentItem = ({ content, onDelete, userRole, isPost = false }) => {
   const [showReplies, setShowReplies] = useState(false);
   const [body, setBody] = useState(content.body);
