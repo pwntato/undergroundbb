@@ -84,6 +84,22 @@ rather than impossible. Weak passwords remain weak. The endpoint is rate-limited
 accounts lock for five minutes after five failed attempts, but neither prevents a determined
 attacker from collecting blobs.
 
+It is unavoidable only for an *unauthenticated* endpoint, which is a choice rather than a law. A
+proof-of-work or CAPTCHA in front of blob release would not change the cryptography, but it would
+raise the cost of harvesting blobs in bulk — the exact gap named above. It is not in v1 because it
+trades a real usability and accessibility cost on every login against an attacker who, at this
+project's scale, can equally well collect blobs slowly. That trade is worth revisiting if the
+deployment is large enough to be worth harvesting.
+
+**The lockout is itself an availability weakness.** It is keyed on the account, not the source, and
+usernames are enumerable — so anyone can lock any account by making five bad guesses, and keep it
+locked by repeating. This is a deliberate inheritance from the original implementation, and it
+protects the thing that matters more here: without it, an attacker gets unlimited online guesses
+against a password whose only other defence is Argon2id. A source-scoped counter would avoid the
+denial of service but is trivially defeated by rotating IPs, which is the harder problem. Naming it
+plainly: an attacker who wants to keep a specific user logged out can do so, and no design in this
+document prevents that.
+
 ## Limitations
 
 The three things below are the real boundaries of what this software can promise.
@@ -121,10 +137,11 @@ Rotation cuts them off from future posts; nothing recovers the past. In `Open` g
 rotation, a removed member could decrypt future posts too if they retain a copy of the data.
 
 Rotation is not instantaneous. It is a resumable batched job, and new posts use the previous
-generation until it finishes — seconds in a small group, tens of seconds near the 1,000-member cap,
-and longer if a client fails partway and the job is resumed later. Anything posted in that window is
-readable by the removed member. Removal is therefore an eventual cryptographic boundary, not an
-immediate one.
+generation until it finishes — well under a second in a small group, and a few seconds at the
+1,000-member cap. The number that matters is not the normal case, though: if the client running the
+rotation fails partway, the window stays open until someone resumes the job, which could be minutes
+or longer. Anything posted before it closes is readable by the removed member. Removal is therefore
+an eventual cryptographic boundary, not an immediate one.
 
 Expiration is the mitigation that actually scales — content that no longer exists cannot be read.
 
@@ -169,4 +186,6 @@ filtered. A Content-Security-Policy of `style-src 'self'` without `unsafe-inline
 
 ## Reporting a vulnerability
 
-Please open a private security advisory through GitHub rather than a public issue.
+Please report privately rather than in a public issue. If GitHub's private vulnerability reporting
+is enabled on this repository, use it; otherwise open an issue asking for a private channel without
+including details of the vulnerability.

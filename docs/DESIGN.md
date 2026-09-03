@@ -64,6 +64,31 @@ has permanently lost access — the server has nothing to reset, by design.
 Changing a password does **not** change keys. It unwraps the private keys with the old password and
 re-wraps them under the new one. Nothing else in the system is affected.
 
+### Key pinning and verification
+
+The invite handshake stops the server substituting a key for someone you are *already* connected to,
+because the invitee signs their own keys. It cannot help on **first contact**: the first time you
+are handed a public key for a username you have never seen, you have nothing to compare it against.
+
+The answer is trust on first use. A client **pins** a user's public keys the first time it sees
+them, storing them under `PIN#<other>`. If a pinned key later changes, the client **hard-blocks**
+rather than warning — it refuses to encrypt to the new key or to accept content signed by it until a
+person resolves it. The reasoning is that a key change is genuinely rare, so it can afford real
+friction, while the operation it protects is common and must not train people to click through
+warnings.
+
+Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
+**re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
+re-invites them through the same signed handshake, which forces exactly one deliberate check by
+someone with authority rather than N warnings across N members. Other members' pins update once
+that has happened. This delegates verification to whoever re-invited — a real trust decision, and
+the honest limit of what pinning gives you.
+
+Verification stays **available rather than mandatory**: fingerprints are shown on profiles, there is
+an explicit verify affordance, and a badge appears when two users have verified each other. Invite
+links additionally carry the inviter's fingerprint in the URL fragment, which the browser never
+transmits, so the invitee's client can check it against a value the server never saw.
+
 ## Groups
 
 ### Invites — the signed handshake
@@ -138,17 +163,21 @@ Each group therefore chooses a mode **at creation**:
 - **Rotating** — removal mints a new key generation, wrapped to every remaining member. The removed
   member keeps history but is cut off from new posts. Capped at 1,000 members (matching Signal's
   Sender Keys limit). Adding member 1,001 **fails with an explicit error** explaining that the group
-  re-keys on removal and that this is what bounds it. It never silently becomes an `Open` group: a
-  security property must not degrade as a side effect of someone adding a member.
+  re-keys on removal and that this is what bounds it. It never silently becomes an `Open` group.
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
 
-The cap is set by the write burst, not the CPU. Rotating a 10,000-member group means one wrap per
-remaining member — around half a second of CPU, which is nothing — but also one DynamoDB write per
-member, issued **from a browser**: roughly 400 batched round trips over tens of seconds. The
-dangerous property is not that it is slow, it is that **it can fail halfway** — a closed tab or a
+The cap is set by the write burst, not the CPU. Rotation costs one wrap per remaining member, which
+is cheap, and one DynamoDB write per member, which is not — and those writes are issued **from a
+browser**. `BatchWriteItem` takes 25 items at a time, so a rotation at the 1,000-member cap is about
+40 batched round trips, on the order of a few seconds.
+
+That is the sizing the cap is chosen to hold. It is worth seeing what the same arithmetic does
+without one: a 10,000-member group would need roughly 400 round trips over tens of seconds, and the
+dangerous property there is not that it is slow but that **it can fail halfway** — a closed tab or a
 dropped connection at member 5,000 leaves the group split across two generations, some members
-holding the new key and some not.
+holding the new key and some not. The cap keeps that window small; it does not remove it, because
+even 40 round trips can be interrupted.
 
 Rotation is therefore specified as a **resumable job**, not a single operation. The server tracks a
 rotation-in-progress marker, the client posts wrapped keys in batches and can resume where it left
@@ -214,6 +243,11 @@ that gates every group operation is a single `GetItem`.
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
 capped at 8. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
 reaction on the post itself, so reactions sort alongside the thread they belong to.
+
+**Notifications are server-computed metadata.** The server knows thread structure and author
+fields — those are metadata, not content — so it can tell that someone replied to your post without
+being able to read either. Notifications therefore carry **no content preview**: "Alice replied to
+your post in Roof Group" and nothing more. They expire via the same TTL mechanism as posts.
 
 **Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
 the day gives a dump only day-level granularity while the precise timestamp rides inside the
