@@ -62,7 +62,18 @@ wrapped under it. A user who forgets their password can recover with the code. A
 has permanently lost access — the server has nothing to reset, by design.
 
 Changing a password does **not** change keys. It unwraps the private keys with the old password and
-re-wraps them under the new one. Nothing else in the system is affected.
+re-wraps them under the new one — the keypairs, group memberships, and everything signed by them are
+untouched.
+
+It does, however, **issue a new recovery code and re-wrap the recovery copy under it**, invalidating
+the old code. This is deliberate. The recovery copy decrypts to the same private keys, so leaving it
+alone would mean a user who changes their password because they believe they are compromised gains
+nothing at all if the attacker also holds their recovery code — they would have done the one thing
+the interface offers and still be exposed. Because a password change therefore always produces a new
+code, the flow has to make the user store it before completing.
+
+Changing a password is still not a **key rotation**. See below for that, which is a much heavier
+operation and the only one that invalidates existing wrapped group keys.
 
 ### Key pinning and verification
 
@@ -80,7 +91,12 @@ warnings.
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
 re-invites them through the same signed handshake, which forces exactly one deliberate check by
-someone with authority rather than N warnings across N members. Other members' pins update once
+someone with authority rather than N warnings across N members.
+
+The re-invitation flow is therefore the one path that **clears a stale pin rather than blocking on
+it**. The authorizing admin's own client also sees the mismatch, and a blanket "hard-block on
+mismatch" check would block the very operation that resolves it, making a key change unrecoverable.
+Approving the re-invite *is* the trust decision, and it replaces that admin's pin explicitly. Other members' pins update once
 that has happened. This delegates verification to whoever re-invited — a real trust decision, and
 the honest limit of what pinning gives you.
 
@@ -106,6 +122,15 @@ invitee's:
 For the server to insert itself it would have to forge an Ed25519 signature, which it cannot.
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.
+
+> **Open question — `ephemeral_pubkey`.** It is signed into the step 1 payload and then plays no
+> part in steps 2 or 3, which wrap using the inviter's own X25519 key. Either it is vestigial and
+> should be dropped, or it is meant to give the wrap forward secrecy — in which case step 3 must
+> wrap with the ephemeral *private* key and this document must say where that key lives between
+> steps 1 and 3, which for a browser-held key is the hard part. It is called out rather than
+> quietly removed because signing a field with no defined semantics reliably produces
+> implementations that generate it, sign it, and discard it — the ceremony without the property.
+> This is resolved before the invite handshake is built.
 
 Invite links carry the inviter's key fingerprint in the **URL fragment**, which browsers never
 transmit. An invitee's client can therefore verify the inviter's key against a value the server
@@ -185,6 +210,13 @@ off, and **new posts continue to use the previous generation until the rotation 
 implementation that treats rotation as one atomic client-side loop is wrong, and will corrupt groups
 at the top of the supported range.
 
+Something must also **act on that marker**, because rotation is client-driven and the group key
+exists in plaintext only inside a member's browser — so a rotation whose client never comes back has
+no other actor that can finish it. Left alone, the removed member goes on reading every new post
+indefinitely, and nothing in the group indicates anything is wrong. The marker therefore carries a
+staleness deadline, and a rotation past it is **surfaced to every remaining admin** so that someone
+else can resume it. Without that, a closed tab silently converts a removal into no removal at all.
+
 A group can be converted Rotating → Open deliberately. The reverse is not offered: everyone who was
 ever a member already holds the old keys, so "upgrading" would imply a guarantee it cannot deliver.
 
@@ -195,10 +227,20 @@ change as a side effect of someone adding one more member.
 
 Each rotation creates a generation, and a post records the generation it was encrypted under.
 
-Each generation's key is wrapped under the previous generation's key, so members hold only their
-newest generation directly and walk the chain backward to read older content. Storage is
-`O(members + generations)` rather than `O(members × generations)`, which removes the 400KB item
-ceiling a per-member-per-generation layout would hit.
+**Each generation's key is wrapped under its successor**: generation N is encrypted under
+generation N+1, never the reverse. A member holds only the newest generation directly and unwraps
+backward from it — gen(N) yields gen(N−1), which yields gen(N−2), and so on.
+
+The direction is the whole security property, so it is worth stating what it buys and what the
+opposite would cost. Because wrapping runs newest-to-oldest, a member cut off at generation N holds
+nothing that derives generation N+1: rotation actually revokes. Chaining the other way — each new
+generation encrypted under the *previous* one — would let anyone who ever held a generation derive
+every generation that followed it, so removal would cut off nobody and the guarantee in Limitation 3
+of the threat model would be void. **An implementation that gets this backwards still passes a
+round-trip test.**
+
+Storage is `O(members + generations)` rather than `O(members × generations)`, which removes the
+400KB item ceiling a per-member-per-generation layout would hit.
 
 The cost is that reading old content takes one unwrap per generation crossed, rather than a constant
 one. This is paid only when reading back past a rotation, and the unwrapped generation keys are
@@ -236,12 +278,24 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | |
 | Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | |
 
+**The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
+plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need,
+the Argon2id salt, and the wrapped private keys. It also holds an **encrypted preferences blob** —
+display name, theme and font choices — sealed under a key derived alongside the user's own private
+keys, so preferences do not become another identifying signal in a dump. The email, when present, is
+encrypted separately under a **server-held** key, because the server has to read it to send mail.
+Three different protections in one item, and the distinction is the point: only the preferences blob
+is beyond the operator's reach.
+
 **Membership items do double duty**, holding both the wrapped group key and the role, so the check
 that gates every group operation is a single `GetItem`.
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
-capped at 8. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
+capped at 8, and each segment is **four digits, zero-padded** — the padding is what makes the
+ordering property hold, since unpadded segments would sort sibling `10` before sibling `2` and
+scramble the thread. That fixes the schema's bounds: at most 9,999 replies to any one comment, and a
+sort key no longer than eight five-character segments. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
 reaction on the post itself, so reactions sort alongside the thread they belong to.
 
 **Notifications are server-computed metadata.** The server knows thread structure and author
@@ -300,9 +354,15 @@ CloudFront  (+ AWS WAF)
 Same origin for app and API, so there is no CORS configuration. The Lambda holds no state between
 requests and never possesses key material.
 
-Rate limiting is enforced by WAF rate-based rules. This is a **cost** control as much as a security
-one: login runs Argon2id at ~64MB and hundreds of milliseconds, so an attacker hammering the login
-endpoint burns compute budget.
+Rate limiting is enforced by WAF rate-based rules. Note what it is and is not protecting: Argon2id
+runs in the **client's** browser, so a login costs the server only a DynamoDB read and, on the second
+leg, one Ed25519 verification. An attacker hammering the endpoint burns their own CPU, not the
+operator's.
+
+The thing worth bounding is therefore **bulk harvesting**, not compute. `POST /api/auth/challenge`
+hands out a salt and wrapped private keys to anyone who names a username, which is offline-cracking
+material; the rate limit exists to make collecting it at scale slow. Size the limits against
+harvesting rate, not against a server cost that this design does not have.
 
 Environments are Terraform workspaces (`dev`, `prod`) in one AWS account, with resource names derived
 from the workspace so a mistyped variable cannot cross-wire them.

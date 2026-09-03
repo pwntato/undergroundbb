@@ -29,8 +29,11 @@ public keys, so a server cannot swap in a key of its own without forging a signa
 **Role claims.** Role grants are signed by the granting admin, forming a verifiable chain back to
 the group creator. A server cannot fabricate a role.
 
-**User preferences.** Theme and font choices live inside the encrypted profile, so they do not
-become another identifying signal in a database dump.
+**User preferences.** Display name, theme and font choices live in an encrypted blob inside the user
+item, sealed under a key only that user holds, so they do not become another identifying signal in a
+database dump. The rest of that item — username, public keys, salt, wrapped private keys — is
+necessarily readable, and the email is encrypted under a server key rather than a user one. Only the
+preferences blob is beyond the operator's reach.
 
 ## What is not protected
 
@@ -93,9 +96,11 @@ deployment is large enough to be worth harvesting.
 
 **The lockout is itself an availability weakness.** It is keyed on the account, not the source, and
 usernames are enumerable — so anyone can lock any account by making five bad guesses, and keep it
-locked by repeating. This is a deliberate inheritance from the original implementation, and it
-protects the thing that matters more here: without it, an attacker gets unlimited online guesses
-against a password whose only other defence is Argon2id. A source-scoped counter would avoid the
+locked by repeating. This is a deliberate inheritance from the original implementation.
+Its value is narrower than it first appears: since the challenge endpoint already hands out
+crackable material, an attacker who wants to guess a password does it offline, where no lockout
+reaches them. What the lockout still bounds is **online** abuse — credential stuffing and signature
+replay against a known account. A source-scoped counter would avoid the
 denial of service but is trivially defeated by rotating IPs, which is the harder problem. Naming it
 plainly: an attacker who wants to keep a specific user logged out can do so, and no design in this
 document prevents that.
@@ -186,6 +191,6 @@ filtered. A Content-Security-Policy of `style-src 'self'` without `unsafe-inline
 
 ## Reporting a vulnerability
 
-Please report privately rather than in a public issue. If GitHub's private vulnerability reporting
-is enabled on this repository, use it; otherwise open an issue asking for a private channel without
-including details of the vulnerability.
+Please report privately rather than in a public issue. Use the **Report a vulnerability** button
+under this repository's **Security** tab, which opens a private advisory visible only to the
+maintainers.

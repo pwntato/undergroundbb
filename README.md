@@ -19,7 +19,8 @@ the metadata it needs to route requests — nothing else.
   [the threat model explains this](docs/THREAT_MODEL.md#login-material).)
 - **Invites use a signed handshake**, so the server cannot substitute its own key to read along.
 - **Posts are signed**, so members cannot forge messages as one another.
-- **Groups expire content** on a schedule — 30 days by default.
+- **Groups expire content** on a schedule — 30 days by default, though a deployment may allow groups
+  to turn expiration off.
 - **Themes**, because you should be comfortable in a tool you spend hours in.
 
 ## How it works, briefly
