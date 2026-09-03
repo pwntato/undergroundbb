@@ -8,8 +8,10 @@ For how the system works, see [DESIGN.md](DESIGN.md).
 
 ## What is protected
 
-**Message content.** Post titles, post bodies, and comments are encrypted with AES-256-GCM under a
-group key that the server never possesses. A complete copy of the database yields ciphertext.
+**Message content.** Post titles, post bodies, comments, and reactions are encrypted with AES-256-GCM
+under a group key that the server never possesses. A complete copy of the database yields ciphertext.
+Reactions are encrypted in their content but not in their existence: a dump shows that a given user
+reacted to a given comment at a given time, and only the emoji itself is unreadable.
 
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
@@ -149,6 +151,10 @@ or longer. Anything posted before it closes is readable by the removed member. R
 an eventual cryptographic boundary, not an immediate one.
 
 Expiration is the mitigation that actually scales — content that no longer exists cannot be read.
+**Where a deployment permits it, a group can disable expiration**, and such a group has none of this:
+past content is retained indefinitely, and removal's boundary is bounded by rotation alone. That is a
+deliberate option for groups that need a permanent record, and it should be chosen knowing it
+switches off the only mechanism here that limits past exposure at any group size.
 
 ## Specific attack scenarios
 
@@ -162,9 +168,9 @@ Expiration is the mitigation that actually scales — content that no longer exi
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
 | Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
-| Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout. |
+| Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
-| Removed member reading future posts | Blocked in `Rotating` groups **once rotation completes** — until then, new posts still use the generation they hold. Possible indefinitely in `Open` groups. |
+| Removed member reading future posts | **Eventually blocked** in `Rotating` groups — new posts use the old generation until rotation finishes, and a rotation abandoned by its client stays open until an admin notices the stale marker and resumes it. Possible indefinitely in `Open` groups. |
 
 ## Why custom themes are JSON, not CSS
 

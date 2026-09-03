@@ -32,9 +32,9 @@ Both private keys are encrypted with AES-256-GCM under a key derived from the us
 **Argon2id**, and the resulting blob is stored on the server. The password itself is never
 transmitted, and neither is anything derived from it.
 
-Groups have a symmetric **group key** (AES-256-GCM) that encrypts every post, comment, and — for
-private groups — the group's name and description. Each member holds a copy of the group key wrapped
-to their X25519 public key.
+Groups have a symmetric **group key** (AES-256-GCM) that encrypts every post, comment, and reaction,
+and — for private groups — the group's name and description. Each member holds a copy of the group
+key wrapped to their X25519 public key.
 
 ### Login
 
@@ -164,6 +164,23 @@ all identical.
 This is deliberate. A separate one-to-one message path would be a second implementation of the same
 cryptography, and the second implementation is where the bug lives. There is one codepath.
 
+Three group-level settings still need answers, because "identical" would otherwise answer them by
+omission:
+
+- **Revocation mode is not offered.** Neither mode means anything for two people — removing the other
+  member leaves a group of one — so `type: "dm"` skips the choice rather than defaulting to a value
+  the interface never shows. An implementation reusing the group-creation path wholesale must not
+  present the mode picker.
+- **Expiration behaves exactly as in any other group**, defaulting to 30 days. DMs are not the one
+  place in the system with permanent retention, which is the right outcome given they hold the
+  content with the smallest anonymity set.
+- **A first DM to someone you have never contacted is the TOFU case**, and the handshake does not
+  help: there is no inviter and invitee here, the sender picks the recipient, so the server supplies
+  the recipient's key with nothing to check it against. The key is pinned at that moment and any
+  later change hard-blocks, but the first contact itself is trust-on-first-use. This is the row the
+  threat model's attack table marks **Possible**, and fingerprint verification is the only thing that
+  closes it.
+
 ### Roles and the chain of trust
 
 | Role | Can invite | Can remove / change roles |
@@ -270,6 +287,9 @@ post bodies and quietly fail for everything hanging off them.
 
 Expiration is the only forward-secrecy mechanism that works at any group size — rotation protects
 future posts and costs `O(members)`, while expiration limits past exposure at `O(1)` per item.
+**It is also optional**, where a deployment permits it: a group set to never expire keeps that
+mechanism switched off permanently, and the consequences below and in the threat model apply to it
+in full.
 
 It also lets the generation chain be truncated, but **only from the old end, and only contiguously**.
 Because generation *n* is reachable solely by unwrapping generation *n+1*, every generation is a
@@ -293,7 +313,11 @@ knows where the chain floor is and stops there rather than treating an absent `G
 corrupted chain.
 
 That is a weaker bound than it first appears, and worth being honest about: a single long-lived post
-under an early generation pins the whole chain from that point forward. `Rotating` groups rotate on
+under an early generation pins the whole chain from that point forward. **In a group with expiration
+disabled there is no truncation at all** — nothing ever ages out, so "the chain accumulates without
+bound under churn" stops being a worst case and becomes the certain one. That is an operational cost
+of `no expiration`, not only a security one, and it is the reason the setting is a deployment
+decision rather than something every group is offered by default. `Rotating` groups rotate on
 every removal, so generation count tracks membership churn rather than time, while truncation only
 ever bites at the old end. A group with steady churn and any pinned early content accumulates
 generations without bound, and the per-read cost of walking the chain grows with it. Client-side
@@ -379,11 +403,29 @@ scramble the thread. That fixes the schema's bounds: at most 9,999 replies to an
 comment sort key no longer than 39 characters — eight four-digit segments plus the seven separators
 between them — or 43 with the `CMT#` prefix. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
 reaction on the post itself, so reactions sort alongside the thread they belong to.
+**A reaction's target is plaintext; the reaction itself is not.** The comment path sits in the sort
+key so the server can order reactions with their thread, but which emoji was chosen is encrypted
+under the group key like any other content. The server therefore knows that a user reacted to a
+particular comment, and not what they said by it — the same split posts already make between a
+day-granular sort key and an encrypted body. The cost is that reaction counts are computed
+client-side after decryption rather than aggregated by the server.
 
-**Notifications are server-computed metadata.** The server knows thread structure and author
-fields — those are metadata, not content — so it can tell that someone replied to your post without
-being able to read either. Notifications therefore carry **no content preview**: "Alice replied to
-your post in Roof Group" and nothing more. They expire via the same TTL mechanism as posts.
+**Notification items hold identifiers, not text.** The server knows thread structure and author
+ids — those are metadata — so it can tell that someone replied to your post without being able to
+read either. But it cannot compose a human-readable notification: a private group's name is
+encrypted under the group key, and a user's display name lives in that user's sealed preferences
+blob, so the server has neither of the two strings such a sentence needs.
+
+A notification item therefore stores `{kind, actor_uuid, group_id, post_id}` and nothing more. **The
+client renders the text**, resolving the group name with the group key it already holds and the
+display name from the member list. "Alice replied to your post in Roof Group" is what the user sees;
+it is not what the table contains, and no notification is ever a ready-to-display message.
+
+**Email notifications are the exception, and they are strictly poorer for it.** The server composes
+those itself — it decrypts the address to send them — so it can use only what it can read. An email
+says there is activity and links to it; it names neither the group nor the actor. Anything richer
+would mean handing the group name to the server, which is the property this design exists to keep.
+Notification items expire via the same TTL mechanism as posts.
 
 **Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
 the day gives a dump only day-level granularity while the precise timestamp rides inside the
@@ -448,6 +490,12 @@ harvesting rate, not against a server cost that this design does not have.
 
 Environments are Terraform workspaces (`dev`, `prod`) in one AWS account, with resource names derived
 from the workspace so a mistyped variable cannot cross-wire them.
+
+Whether `no expiration` is permitted deserves particular care: enabling it lets a group turn off the
+mitigation that Limitation 3 of the threat model, the forward-secrecy argument above, and generation
+chain truncation all depend on. There are real reasons to want a permanent group, so the setting
+exists — but a deployment that enables it should expect those three properties to be absent from any
+group that uses it.
 
 Site name, domain, registration policy, and whether "no expiration" is a permitted group setting are
 all runtime configuration, served to the SPA from an unauthenticated `/api/config`. Nothing about a

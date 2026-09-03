@@ -8,9 +8,9 @@ the server, and the server never has the keys to read them.
 
 ## What it does
 
-Create a group, invite people you trust, and talk. Every post title, post body, and comment is
-encrypted with a key that only group members hold. The server stores ciphertext, public keys, and
-the metadata it needs to route requests — nothing else.
+Create a group, invite people you trust, and talk. Every post title, post body, comment, and
+reaction is encrypted with a key that only group members hold. The server stores ciphertext, public
+keys, and the metadata it needs to route requests — nothing else.
 
 - **Your password is never sent to the server**, not even hashed. Login is a signed challenge.
   (The flip side: anyone can ask the server for a given username's salt and wrapped keys, because a
@@ -19,8 +19,8 @@ the metadata it needs to route requests — nothing else.
   [the threat model explains this](docs/THREAT_MODEL.md#login-material).)
 - **Invites use a signed handshake**, so the server cannot substitute its own key to read along.
 - **Posts are signed**, so members cannot forge messages as one another.
-- **Groups expire content** on a schedule — 30 days by default, though a deployment may allow groups
-  to turn expiration off.
+- **Groups expire content** on a schedule — 30 days by default. A deployment may allow groups to turn
+  expiration off; doing so keeps everything forever and gives up the guarantee this bullet describes.
 - **Themes**, because you should be comfortable in a tool you spend hours in.
 
 ## How it works, briefly
