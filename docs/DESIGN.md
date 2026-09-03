@@ -102,10 +102,23 @@ Removing a member cannot retroactively revoke what they have already seen — th
 Each group therefore chooses a mode **at creation**:
 
 - **Rotating** — removal mints a new key generation, wrapped to every remaining member. The removed
-  member keeps history but is cut off from new posts. Capped at 1,000 members, because rotation cost
-  is linear in membership.
+  member keeps history but is cut off from new posts. Capped at 1,000 members (matching Signal's
+  Sender Keys limit).
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
+
+The cap is set by the write burst, not the CPU. Rotating a 10,000-member group means one wrap per
+remaining member — around half a second of CPU, which is nothing — but also one DynamoDB write per
+member, issued **from a browser**: roughly 400 batched round trips over tens of seconds. The
+dangerous property is not that it is slow, it is that **it can fail halfway** — a closed tab or a
+dropped connection at member 5,000 leaves the group split across two generations, some members
+holding the new key and some not.
+
+Rotation is therefore specified as a **resumable job**, not a single operation. The server tracks a
+rotation-in-progress marker, the client posts wrapped keys in batches and can resume where it left
+off, and **new posts continue to use the previous generation until the rotation completes**. Any
+implementation that treats rotation as one atomic client-side loop is wrong, and will corrupt groups
+at the top of the supported range.
 
 A group can be converted Rotating → Open deliberately. The reverse is not offered: everyone who was
 ever a member already holds the old keys, so "upgrading" would imply a guarantee it cannot deliver.
@@ -115,13 +128,16 @@ change as a side effect of someone adding one more member.
 
 ### Key generations
 
-Each rotation creates a generation. Generations are **parallel, not nested** — a post records its
-generation, and the client performs exactly one unwrap to read it regardless of how many generations
-exist.
+Each rotation creates a generation, and a post records the generation it was encrypted under.
 
 Each generation's key is wrapped under the previous generation's key, so members hold only their
 newest generation directly and walk the chain backward to read older content. Storage is
-`O(members + generations)` rather than `O(members × generations)`.
+`O(members + generations)` rather than `O(members × generations)`, which removes the 400KB item
+ceiling a per-member-per-generation layout would hit.
+
+The cost is that reading old content takes one unwrap per generation crossed, rather than a constant
+one. This is paid only when reading back past a rotation, and the unwrapped generation keys are
+cacheable client-side, so a session walks any given stretch of the chain once.
 
 ### Message expiration
 
@@ -138,7 +154,8 @@ read rather than trusting deletion to have occurred.
 
 ## Data model
 
-One DynamoDB table, one GSI. Every access pattern is a single `Query` or `GetItem`; nothing scans.
+One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single `Query` or
+`GetItem` — with one exception, grant-chain verification, noted beneath the table.
 
 | Item | PK | SK | GSI1PK | GSI1SK |
 |---|---|---|---|---|
@@ -164,6 +181,16 @@ capped at 8.
 **Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
 the day gives a dump only day-level granularity while the precise timestamp rides inside the
 encrypted payload. DynamoDB pagination is cursor-based natively, so infinite scroll needs no offsets.
+The trade this makes: because the exact time is encrypted, the server can filter no finer than a
+day. Anything needing sub-day server-side time filtering would require a schema migration, so this
+is a deliberate and hard-to-reverse choice, not an incidental one.
+
+**Role grants are keyed by group, not by subject.** Verifying a grant chain therefore queries the
+group partition and filters client-side; it is a `Query`, never a `Scan`, but the read grows with
+total role churn in the group rather than with the length of the chain being checked, and DynamoDB
+bills the filtered-out items. Acceptable at the group sizes this design targets. A group with heavy
+role churn would want a GSI keyed by subject, which is additive and needs no migration of existing
+items.
 
 ## Frontend
 

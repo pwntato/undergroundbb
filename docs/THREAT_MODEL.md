@@ -108,6 +108,12 @@ A removed member retains any group key they were given, and any content they alr
 Rotation cuts them off from future posts; nothing recovers the past. In `Open` groups, without
 rotation, a removed member could decrypt future posts too if they retain a copy of the data.
 
+Rotation is not instantaneous. It is a resumable batched job, and new posts use the previous
+generation until it finishes — seconds in a small group, tens of seconds near the 1,000-member cap,
+and longer if a client fails partway and the job is resumed later. Anything posted in that window is
+readable by the removed member. Removal is therefore an eventual cryptographic boundary, not an
+immediate one.
+
 Expiration is the mitigation that actually scales — content that no longer exists cannot be read.
 
 ## Specific attack scenarios
@@ -124,7 +130,7 @@ Expiration is the mitigation that actually scales — content that no longer exi
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout. |
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
-| Removed member reading future posts | Blocked in `Rotating` groups. Possible in `Open` groups. |
+| Removed member reading future posts | Blocked in `Rotating` groups **once rotation completes** — until then, new posts still use the generation they hold. Possible indefinitely in `Open` groups. |
 
 ## Why custom themes are JSON, not CSS
 
