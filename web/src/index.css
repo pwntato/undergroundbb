@@ -1,0 +1,86 @@
+@import 'tailwindcss';
+
+/*
+ * Theme tokens.
+ *
+ * Every visual value Tailwind can emit is declared here as a CSS custom
+ * property rather than baked into a config file. Themes (M5: Refined Terminal
+ * as the default, plus BBS Revival and Zine) are then a matter of overriding
+ * these properties on a [data-theme] selector — no component markup changes,
+ * no rebuild.
+ *
+ * The palette below is a neutral placeholder so the shell renders sensibly.
+ * The real design system replaces these values.
+ */
+@theme {
+  /* Colors */
+  --color-background: var(--ubb-background);
+  --color-foreground: var(--ubb-foreground);
+  --color-muted: var(--ubb-muted);
+  --color-muted-foreground: var(--ubb-muted-foreground);
+  --color-surface: var(--ubb-surface);
+  --color-surface-foreground: var(--ubb-surface-foreground);
+  --color-border: var(--ubb-border);
+  --color-input: var(--ubb-input);
+  --color-ring: var(--ubb-ring);
+  --color-primary: var(--ubb-primary);
+  --color-primary-foreground: var(--ubb-primary-foreground);
+  --color-accent: var(--ubb-accent);
+  --color-accent-foreground: var(--ubb-accent-foreground);
+  --color-destructive: var(--ubb-destructive);
+  --color-destructive-foreground: var(--ubb-destructive-foreground);
+
+  /* Fonts */
+  --font-sans: var(--ubb-font-sans);
+  --font-mono: var(--ubb-font-mono);
+
+  /* Radii */
+  --radius-sm: var(--ubb-radius-sm);
+  --radius-md: var(--ubb-radius-md);
+  --radius-lg: var(--ubb-radius-lg);
+
+  /* Shadows */
+  --shadow-sm: var(--ubb-shadow-sm);
+  --shadow-md: var(--ubb-shadow-md);
+  --shadow-lg: var(--ubb-shadow-lg);
+}
+
+/*
+ * Default theme values. M5 overrides these under [data-theme="..."].
+ */
+:root {
+  --ubb-background: oklch(0.16 0.01 260);
+  --ubb-foreground: oklch(0.93 0.01 260);
+  --ubb-muted: oklch(0.24 0.01 260);
+  --ubb-muted-foreground: oklch(0.68 0.01 260);
+  --ubb-surface: oklch(0.21 0.01 260);
+  --ubb-surface-foreground: oklch(0.93 0.01 260);
+  --ubb-border: oklch(0.3 0.01 260);
+  --ubb-input: oklch(0.3 0.01 260);
+  --ubb-ring: oklch(0.7 0.13 165);
+  --ubb-primary: oklch(0.75 0.15 165);
+  --ubb-primary-foreground: oklch(0.16 0.01 260);
+  --ubb-accent: oklch(0.72 0.16 320);
+  --ubb-accent-foreground: oklch(0.16 0.01 260);
+  --ubb-destructive: oklch(0.62 0.2 25);
+  --ubb-destructive-foreground: oklch(0.98 0 0);
+
+  --ubb-font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ubb-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --ubb-radius-sm: 0.125rem;
+  --ubb-radius-md: 0.25rem;
+  --ubb-radius-lg: 0.5rem;
+
+  --ubb-shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.3);
+  --ubb-shadow-md: 0 4px 6px -1px oklch(0 0 0 / 0.4);
+  --ubb-shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.5);
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+}
