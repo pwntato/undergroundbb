@@ -13,6 +13,10 @@ encrypted with a key that only group members hold. The server stores ciphertext,
 the metadata it needs to route requests — nothing else.
 
 - **Your password is never sent to the server**, not even hashed. Login is a signed challenge.
+  (The flip side: anyone can ask the server for a given username's salt and wrapped keys, because a
+  client needs them to attempt a login. That makes offline password guessing possible, which is why
+  Argon2id is used and why a weak password is still a weak password —
+  [the threat model explains this](docs/THREAT_MODEL.md#login-material).)
 - **Invites use a signed handshake**, so the server cannot substitute its own key to read along.
 - **Posts are signed**, so members cannot forge messages as one another.
 - **Groups expire content** on a schedule — 30 days by default.
@@ -69,7 +73,8 @@ Setup instructions will land with the first deployable release.
 ## Contributing
 
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one
-touches no application logic. See `docs/THEMING.md` once it exists.
+touches no application logic. A theming guide is tracked in
+[issue #80](https://github.com/pwntato/undergroundbb/issues/80).
 
 All changes go through a pull request with passing CI.
 

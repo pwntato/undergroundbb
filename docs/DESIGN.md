@@ -13,6 +13,12 @@ The stack is a Go binary on AWS Lambda behind CloudFront, a single DynamoDB tabl
 served as static files. There is no application server holding state, no session store, and no
 plaintext content anywhere in the backend.
 
+**This document describes the complete design, not the current state of the code.** The whole
+design is settled and nothing here is speculative, but it is built in milestones: private groups,
+invites, posts and comments come first, while public groups, join requests, notifications and
+custom themes are deliberately sequenced later. Where something is not yet built, it is because of
+ordering, not doubt. Progress is tracked in the repository's issues and milestones.
+
 ## The cryptographic core
 
 Each user has two keypairs:
@@ -80,6 +86,34 @@ Invite links carry the inviter's key fingerprint in the **URL fragment**, which 
 transmit. An invitee's client can therefore verify the inviter's key against a value the server
 never saw.
 
+### Visibility — private and public groups
+
+A group is **private** or **public**, chosen at creation.
+
+**Private** groups encrypt their name and description under the group key, so they are invisible to
+non-members, and the only way in is an invite.
+
+**Public** groups keep name and description in plaintext so they can be listed in a directory and
+searched. **Posts are still encrypted under the group key** — public means *discoverable*, not
+*readable*. Someone browsing the directory sees that a group exists and what it calls itself; they
+see none of its content.
+
+In both cases the **member list is visible to members only**. There is no setting that changes this.
+
+Public groups are joined by **request**, which is the invite handshake run in the opposite
+direction: the requester signs a request carrying their public keys, and an admin or ambassador
+approves it by wrapping the group key to the keys that were signed. The server can no more
+substitute a key here than it can during an invite — same machinery, same guarantee.
+
+### Direct messages
+
+A DM is **a group with `type: "dm"`**: exactly two members, no further invites, and no name (the UI
+renders the other member's display name). Group key, key wrapping, signed posts and encryption are
+all identical.
+
+This is deliberate. A separate one-to-one message path would be a second implementation of the same
+cryptography, and the second implementation is where the bug lives. There is one codepath.
+
 ### Roles and the chain of trust
 
 | Role | Can invite | Can remove / change roles |
@@ -103,7 +137,9 @@ Each group therefore chooses a mode **at creation**:
 
 - **Rotating** — removal mints a new key generation, wrapped to every remaining member. The removed
   member keeps history but is cut off from new posts. Capped at 1,000 members (matching Signal's
-  Sender Keys limit).
+  Sender Keys limit). Adding member 1,001 **fails with an explicit error** explaining that the group
+  re-keys on removal and that this is what bounds it. It never silently becomes an `Open` group: a
+  security property must not degrade as a side effect of someone adding a member.
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
 
@@ -166,7 +202,7 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 | Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | |
 | Post | `GROUP#<gid>` | `POST#<day>#<ulid>` | | |
 | Comment | `POST#<pid>` | `CMT#<path>` | | |
-| Reaction | `POST#<pid>` | `RXN#<path>#<uuid>` | | |
+| Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` |
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | |
 | Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | |
@@ -176,7 +212,8 @@ that gates every group operation is a single `GetItem`.
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
-capped at 8.
+capped at 8. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
+reaction on the post itself, so reactions sort alongside the thread they belong to.
 
 **Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
 the day gives a dump only day-level granularity while the precise timestamp rides inside the

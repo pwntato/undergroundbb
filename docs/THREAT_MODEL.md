@@ -14,9 +14,14 @@ group key that the server never possesses. A complete copy of the database yield
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
 
-**Private group names and descriptions.** Encrypted under the group key.
+**Private group names and descriptions.** Encrypted under the group key. Public groups, by
+definition, have plaintext names and descriptions so they can be listed and searched — that is the
+trade they make, and it is why the choice is per-group.
 
-**Email addresses.** Optional, and encrypted at rest when present.
+**Email addresses.** Optional, and encrypted at rest under a key **held by the server**, so a
+stolen database does not yield them. This is the one item in this section the server can decrypt —
+it has to, in order to send mail. If you do not want the operator to have your email address, do
+not provide one; in-app notifications work without it.
 
 **Key substitution during invites.** The invite handshake requires the invitee to sign their own
 public keys, so a server cannot swap in a key of its own without forging a signature.
@@ -43,6 +48,13 @@ listing into an encrypted blob requiring a read-modify-write on every join and l
 
 The mitigating factor is that UndergroundBB performs **no identity verification**. Accounts are a
 username and an optional encrypted email. The graph therefore links pseudonyms to pseudonyms.
+
+### Public group names and descriptions
+
+A public group's name and description are stored in plaintext, because a directory cannot list or
+search what it cannot read. This is the entire trade a public group makes, and it is chosen per
+group at creation. Its **posts remain encrypted** — public means discoverable, not readable — and
+its member list, like every group's, is visible only to members.
 
 ### Activity timing
 
