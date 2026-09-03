@@ -1,0 +1,25 @@
+# Go
+/bootstrap
+/lambda.zip
+*.test
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+.terraform.lock.hcl
+
+# Env / secrets
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
