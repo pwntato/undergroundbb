@@ -248,16 +248,42 @@ cacheable client-side, so a session walks any given stretch of the chain once.
 
 ### Message expiration
 
-Every group has an expiration policy, defaulting to **30 days**. Expired posts are deleted by
+Every group has an expiration policy, defaulting to **30 days**. Expired items are deleted by
 DynamoDB TTL.
 
-Expiration does more work than it appears to. It bounds key-generation growth, since generations with
-nothing left to decrypt can be dropped. And it is the only forward-secrecy mechanism that works at
-any group size — rotation protects future posts and costs `O(members)`, while expiration limits past
-exposure at `O(1)` per item.
+**Comments and reactions carry their own TTL attribute**, set from the parent post's expiry when
+they are written. DynamoDB deletes items individually and does not cascade, and comments live in a
+different partition from their post (`POST#<pid>` rather than `GROUP#<gid>`), so a TTL on the post
+alone would delete the post and leave its entire thread in the table indefinitely. They cannot
+inherit the expiry lazily either — once the post is gone there is nothing left to inherit from. This
+matters because comments are encrypted under the same group key as posts and are usually the larger
+share of a thread's text: without their own TTL, the forward-secrecy property below would hold for
+post bodies and quietly fail for everything hanging off them.
+
+Expiration is the only forward-secrecy mechanism that works at any group size — rotation protects
+future posts and costs `O(members)`, while expiration limits past exposure at `O(1)` per item.
+
+It also lets the generation chain be truncated, but **only from the old end, and only contiguously**.
+Because generation *n* is reachable solely by unwrapping generation *n+1*, every generation is a
+load-bearing link regardless of whether any of its own posts survive: dropping an empty generation
+from the middle of the chain destroys access to every older generation behind it, including content
+that has not expired. Truncation therefore starts at generation 1 and stops at the first generation
+with surviving content. **A middle generation is never droppable, however empty it is.**
+
+That is a weaker bound than it first appears, and worth being honest about: a single long-lived post
+under an early generation pins the whole chain from that point forward. `Rotating` groups rotate on
+every removal, so generation count tracks membership churn rather than time, while truncation only
+ever bites at the old end. A group with steady churn and any pinned early content accumulates
+generations without bound, and the per-read cost of walking the chain grows with it. Client-side
+caching of unwrapped generation keys is what keeps that tolerable in practice; if it ever stops
+being tolerable, the fix is re-wrapping a member's entry point deeper into the chain, not dropping
+links out of the middle.
 
 Because TTL deletion is eventual (typically within 48 hours), clients also filter expired items on
-read rather than trusting deletion to have occurred.
+read rather than trusting deletion to have occurred. That filter is a **display convenience, not the
+deletion mechanism** — it hides items that are still in the table, so it will happily mask ciphertext
+that was never given a TTL at all. Do not treat a clean-looking UI as evidence that expiry is
+working; check the table.
 
 ## Data model
 
@@ -270,6 +296,8 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | |
 | Group | `GROUP#<gid>` | `META` | | |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` |
+| Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | |
+| Rotation marker | `GROUP#<gid>` | `ROTATION` | | |
 | Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | |
 | Post | `GROUP#<gid>` | `POST#<day>#<ulid>` | | |
 | Comment | `POST#<pid>` | `CMT#<path>` | | |
@@ -288,14 +316,35 @@ Three different protections in one item, and the distinction is the point: only 
 is beyond the operator's reach.
 
 **Membership items do double duty**, holding both the wrapped group key and the role, so the check
-that gates every group operation is a single `GetItem`.
+that gates every group operation is a single `GetItem`. The key it holds is **one** key: the member's
+copy of the group's *current* generation, wrapped to their X25519 key, and the item records which
+generation number that is. It is the member's **entry point** into the chain, not the chain itself.
+Rotation replaces it; it never accumulates.
+
+**Generation key items are the chain.** `GENKEY#<n>` holds generation *n* wrapped under generation
+*n+1*, written **once per rotation for the whole group** rather than once per member per rotation.
+This is what makes storage `O(members + generations)`: the `members` term is the one current key in
+each membership item, and the `generations` term is this set of group-wide links. Storing history in
+the membership items instead — a wrapped key per member per generation — is the
+`O(members × generations)` layout that this design rejects, and it walks into the 400KB item ceiling.
+A member reads old content by unwrapping their current generation and then walking `GENKEY#<n−1>`,
+`GENKEY#<n−2>`, and so on.
+
+**The rotation marker is the one item with a liveness requirement.** `ROTATION` records the
+in-progress generation, how far the batched writes have got, and when the job started. Nothing on
+the server acts on it: **admin clients compare its timestamp against the staleness deadline when
+they load the group**, and surface a stalled rotation for resumption. This is deliberate — no
+server-side process can complete a rotation anyway, because the group key exists in plaintext only
+inside a member's browser, so a scheduled Lambda could detect staleness but could do nothing about
+it. Detection therefore lives where the remedy lives.
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
 capped at 8, and each segment is **four digits, zero-padded** — the padding is what makes the
 ordering property hold, since unpadded segments would sort sibling `10` before sibling `2` and
 scramble the thread. That fixes the schema's bounds: at most 9,999 replies to any one comment, and a
-sort key no longer than eight five-character segments. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
+comment sort key no longer than 39 characters — eight four-digit segments plus the seven separators
+between them — or 43 with the `CMT#` prefix. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
 reaction on the post itself, so reactions sort alongside the thread they belong to.
 
 **Notifications are server-computed metadata.** The server knows thread structure and author
