@@ -27,8 +27,9 @@ keys, and the metadata it needs to route requests — nothing else.
 
 Your password derives a key via Argon2id. That key unwraps your Ed25519 signing key and X25519
 wrapping key, which live encrypted on the server and are useless without your password. Groups have
-a symmetric key wrapped to each member's public key; it encrypts everything posted in that group.
-Inviting someone means unwrapping the group key and re-wrapping it to them — all in your browser.
+a symmetric key wrapped to each member's public key; it encrypts everything posted in that group,
+and removing a member mints a new one. Inviting someone means unwrapping the group key and
+re-wrapping it to them — all in your browser.
 
 Because the password is the only credential, you can log in from any device with no pairing step.
 For the same reason, **if you lose both your password and your recovery code, your data is gone.**

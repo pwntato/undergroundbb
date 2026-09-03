@@ -158,7 +158,7 @@ substitute a key here than it can during an invite — same machinery, same guar
 ### Direct messages
 
 A DM is **a group with `type: "dm"`**: exactly two members, no further invites, and no name (the UI
-renders the other member's display name). Group key, key wrapping, signed posts and encryption are
+renders the other member's username). Group key, key wrapping, signed posts and encryption are
 all identical.
 
 This is deliberate. A separate one-to-one message path would be a second implementation of the same
@@ -298,15 +298,13 @@ from the middle of the chain destroys access to every older generation behind it
 that has not expired. Truncation therefore starts at generation 1 and stops at the first generation
 with surviving content. **A middle generation is never droppable, however empty it is.**
 
-**`GENKEY#<n>` items therefore carry no TTL attribute, ever.** Every other item in the group
-partition expires by DynamoDB TTL, which is per-item and unconditional — it deletes on a schedule
-without consulting anything else. The truncation rule here is global: a link may go only once every
-older link has already gone. TTL cannot express that precondition, so a TTL on a `GENKEY` item would
-eventually delete a middle link and destroy access to everything behind it, silently and
-irreversibly, with nothing in the table recording that the link was load-bearing. Truncation is a
-deliberate operation that walks forward from the oldest surviving generation and stops at the first
-one with content. This exemption is easy to undo by adding a TTL later "for consistency" with its
-neighbours, so it is called out here and again in the data model.
+**`GENKEY#<n>` items therefore carry no TTL attribute, ever.** Posts do expire by DynamoDB TTL,
+which is per-item and unconditional — it deletes on a schedule without consulting anything else. The
+truncation rule here is global: a link may go only once every older link has already gone. TTL cannot
+express that precondition, so a TTL on a `GENKEY` item would eventually delete a middle link and
+destroy access to everything behind it, silently and irreversibly, with nothing in the table
+recording that the link was load-bearing. Truncation is a deliberate operation that walks forward
+from the oldest surviving generation and stops at the first one with content.
 
 The group's `META` item records the **oldest surviving generation**, so a member walking backward
 knows where the chain floor is and stops there rather than treating an absent `GENKEY` as a
@@ -356,11 +354,18 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
 plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need,
 the Argon2id salt, and the wrapped private keys. It also holds an **encrypted preferences blob** —
-display name, theme and font choices — sealed under a key derived alongside the user's own private
-keys, so preferences do not become another identifying signal in a dump. The email, when present, is
-encrypted separately under a **server-held** key, because the server has to read it to send mail.
-Three different protections in one item, and the distinction is the point: only the preferences blob
-is beyond the operator's reach.
+theme and font choices — sealed under a key derived alongside the user's own private keys, so they do
+not become another identifying signal in a dump. The email, when present, is encrypted separately
+under a **server-held** key, because the server has to read it to send mail. Three different
+protections in one item, and the distinction is the point: only the preferences blob is beyond the
+operator's reach.
+
+**There is no separate display name.** Users are identified everywhere by their username, which is
+plaintext by necessity — login requires looking a user up by name. A display name sealed under a key
+only its owner holds would be unreadable by the people meant to read it, and one readable by other
+members would have to be either plaintext or group-scoped, neither of which buys anything a username
+does not. Preferences in this blob are therefore strictly **self-directed**: they change what their
+owner sees, never what anyone else sees.
 
 **Membership items do double duty**, holding both the wrapped group key and the role, so the check
 that gates every group operation is a single `GetItem`. The key it holds is **one** key: the member's
@@ -376,8 +381,16 @@ the membership items instead — a wrapped key per member per generation — is 
 `O(members × generations)` layout that this design rejects, and it walks into the 400KB item ceiling.
 A member reads old content by unwrapping their current generation and then walking `GENKEY#<n−1>`,
 `GENKEY#<n−2>`, and so on, stopping at the oldest surviving generation recorded on the group's `META`
-item. **`GENKEY` items are the one item class in the group partition with no TTL attribute** — see
-the expiration section for why giving them one destroys history.
+item.
+
+**Which items carry a TTL attribute, and which never do.** Expiring items are `POST#`, `CMT#`,
+`RXN#` and `NOTIF#` — content and the pointers to it. Everything else is durable for the life of the
+group or account: `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE` and
+`CLAIM`. This is a deliberate list rather than an accident of which items happened to get an
+attribute, and each durable class has a reason: `META` records the chain floor, `MEMBER#` is a
+member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in
+progress, and `GRANT#` must stay verifiable back to the group creator. **A default-TTL-on-write rule
+with exceptions is the wrong shape here** — most of this partition does not expire.
 
 **Join requests mirror invites in the opposite direction.** A request lives in the group partition,
 so an admin loading a public group reads its pending requests with one `Query`, and GSI1 carries the
@@ -413,19 +426,23 @@ client-side after decryption rather than aggregated by the server.
 **Notification items hold identifiers, not text.** The server knows thread structure and author
 ids — those are metadata — so it can tell that someone replied to your post without being able to
 read either. But it cannot compose a human-readable notification: a private group's name is
-encrypted under the group key, and a user's display name lives in that user's sealed preferences
-blob, so the server has neither of the two strings such a sentence needs.
+encrypted under the group key, so the server cannot name the group a notification refers to.
 
 A notification item therefore stores `{kind, actor_uuid, group_id, post_id}` and nothing more. **The
 client renders the text**, resolving the group name with the group key it already holds and the
-display name from the member list. "Alice replied to your post in Roof Group" is what the user sees;
-it is not what the table contains, and no notification is ever a ready-to-display message.
+actor's username from their user item. "alice replied to your post in Roof Group" is what the user
+sees; it is not what the table contains, and no notification is ever a ready-to-display message.
 
 **Email notifications are the exception, and they are strictly poorer for it.** The server composes
 those itself — it decrypts the address to send them — so it can use only what it can read. An email
 says there is activity and links to it; it names neither the group nor the actor. Anything richer
 would mean handing the group name to the server, which is the property this design exists to keep.
-Notification items expire via the same TTL mechanism as posts.
+**A notification inherits the expiration policy of the group that generated it**, so it never
+outlives the content it points at. Notifications live in the user's partition rather than a group's,
+so a single user's list mixes policies from every group they belong to — and one from a group with
+expiration disabled does not expire either. A notification whose target has already been deleted is
+filtered on read like any other expired item, since the client renders from identifiers and an
+unresolvable `post_id` would otherwise show as a reply linking to nothing.
 
 **Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
 the day gives a dump only day-level granularity while the precise timestamp rides inside the

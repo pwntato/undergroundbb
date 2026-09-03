@@ -31,9 +31,10 @@ public keys, so a server cannot swap in a key of its own without forging a signa
 **Role claims.** Role grants are signed by the granting admin, forming a verifiable chain back to
 the group creator. A server cannot fabricate a role.
 
-**User preferences.** Display name, theme and font choices live in an encrypted blob inside the user
-item, sealed under a key only that user holds, so they do not become another identifying signal in a
-database dump. The rest of that item — username, public keys, salt, wrapped private keys — is
+**User preferences.** Theme and font choices live in an encrypted blob inside the user item, sealed
+under a key only that user holds, so they do not become another identifying signal in a database
+dump. These are self-directed settings only — there is no display name, and users are named
+everywhere by their plaintext username. The rest of that item — username, public keys, salt, wrapped private keys — is
 necessarily readable, and the email is encrypted under a server key rather than a user one. Only the
 preferences blob is beyond the operator's reach.
 
@@ -166,6 +167,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
 | Malicious operator fabricates a role grant | Blocked — clients verify the signature chain. |
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
+| First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
 | Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |
