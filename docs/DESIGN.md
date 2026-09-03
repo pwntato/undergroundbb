@@ -192,10 +192,18 @@ Each group therefore chooses a mode **at creation**:
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
 
-The cap is set by the write burst, not the CPU. Rotation costs one wrap per remaining member, which
-is cheap, and one DynamoDB write per member, which is not — and those writes are issued **from a
-browser**. `BatchWriteItem` takes 25 items at a time, so a rotation at the 1,000-member cap is about
-40 batched round trips, on the order of a few seconds.
+The cap is set by the write burst, not the CPU. A rotation writes one `GENKEY` chain link for the
+whole group, and then re-wraps **every remaining member's entry point** — and it is that second,
+per-member set of writes the cap is sized against. The wraps themselves are cheap; the writes are
+not, and they are issued **from a browser**. `BatchWriteItem` takes 25 items at a time, so a rotation
+at the 1,000-member cap is about 40 batched round trips, on the order of a few seconds.
+
+**The chain link must be committed before any membership item points at the new generation.** A
+member who fetches a re-wrapped entry point for generation N while `GENKEY#<N−1>` does not yet exist
+holds a key into a chain with a missing link, and cannot read history at all. A resumed rotation
+must therefore re-use the generation key the interrupted one minted rather than issuing a fresh one,
+and the batch cursor in the marker is a position in the **membership** list, not in anything
+group-wide.
 
 That is the sizing the cap is chosen to hold. It is worth seeing what the same arithmetic does
 without one: a 10,000-member group would need roughly 400 round trips over tens of seconds, and the
@@ -270,6 +278,20 @@ from the middle of the chain destroys access to every older generation behind it
 that has not expired. Truncation therefore starts at generation 1 and stops at the first generation
 with surviving content. **A middle generation is never droppable, however empty it is.**
 
+**`GENKEY#<n>` items therefore carry no TTL attribute, ever.** Every other item in the group
+partition expires by DynamoDB TTL, which is per-item and unconditional — it deletes on a schedule
+without consulting anything else. The truncation rule here is global: a link may go only once every
+older link has already gone. TTL cannot express that precondition, so a TTL on a `GENKEY` item would
+eventually delete a middle link and destroy access to everything behind it, silently and
+irreversibly, with nothing in the table recording that the link was load-bearing. Truncation is a
+deliberate operation that walks forward from the oldest surviving generation and stops at the first
+one with content. This exemption is easy to undo by adding a TTL later "for consistency" with its
+neighbours, so it is called out here and again in the data model.
+
+The group's `META` item records the **oldest surviving generation**, so a member walking backward
+knows where the chain floor is and stops there rather than treating an absent `GENKEY` as a
+corrupted chain.
+
 That is a weaker bound than it first appears, and worth being honest about: a single long-lived post
 under an early generation pins the whole chain from that point forward. `Rotating` groups rotate on
 every removal, so generation count tracks membership churn rather than time, while truncation only
@@ -303,6 +325,7 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 | Comment | `POST#<pid>` | `CMT#<path>` | | |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` |
+| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` |
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | |
 | Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | |
 
@@ -328,7 +351,17 @@ each membership item, and the `generations` term is this set of group-wide links
 the membership items instead — a wrapped key per member per generation — is the
 `O(members × generations)` layout that this design rejects, and it walks into the 400KB item ceiling.
 A member reads old content by unwrapping their current generation and then walking `GENKEY#<n−1>`,
-`GENKEY#<n−2>`, and so on.
+`GENKEY#<n−2>`, and so on, stopping at the oldest surviving generation recorded on the group's `META`
+item. **`GENKEY` items are the one item class in the group partition with no TTL attribute** — see
+the expiration section for why giving them one destroys history.
+
+**Join requests mirror invites in the opposite direction.** A request lives in the group partition,
+so an admin loading a public group reads its pending requests with one `Query`, and GSI1 carries the
+reverse lookup — a requester listing their own outstanding requests. That is the same pair of access
+patterns the `Invite` item serves, keyed the other way round, because the approving party is the
+group rather than the individual. Public groups and join requests are M7; the row is here because
+this table describes the complete design, and an item missing from it is otherwise indistinguishable
+from an oversight.
 
 **The rotation marker is the one item with a liveness requirement.** `ROTATION` records the
 in-progress generation, how far the batched writes have got, and when the job started. Nothing on
