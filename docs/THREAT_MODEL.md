@@ -87,8 +87,11 @@ offline password-cracking attack is available on request.**
 
 This is precisely why Argon2id is used rather than a fast hash: it makes offline guessing expensive
 rather than impossible. Weak passwords remain weak. The endpoint is rate-limited per IP, and
-accounts lock for five minutes after five failed attempts, but neither prevents a determined
-attacker from collecting blobs.
+accounts lock for five minutes after five failed **signature verifications**, but neither prevents a
+determined attacker from collecting blobs. The lockout counts signature failures rather than wrong
+passwords because a wrong password fails inside the browser and never reaches the server — see the
+login sequence in [DESIGN.md](DESIGN.md); it is a control on replay and credential stuffing, not on
+guessing.
 
 It is unavoidable only for an *unauthenticated* endpoint, which is a choice rather than a law. A
 proof-of-work or CAPTCHA in front of blob release would not change the cryptography, but it would
@@ -98,8 +101,8 @@ project's scale, can equally well collect blobs slowly. That trade is worth revi
 deployment is large enough to be worth harvesting.
 
 **The lockout is itself an availability weakness.** It is keyed on the account, not the source, and
-usernames are enumerable — so anyone can lock any account by making five bad guesses, and keep it
-locked by repeating. This is a deliberate inheritance from the original implementation.
+usernames are enumerable — so anyone can lock any account by submitting five bad signatures against
+its username, and keep it locked by repeating. This is a deliberate inheritance from the original implementation.
 Its value is narrower than it first appears: since the challenge endpoint already hands out
 crackable material, an attacker who wants to guess a password does it offline, where no lockout
 reaches them. What the lockout still bounds is **online** abuse — credential stuffing and signature

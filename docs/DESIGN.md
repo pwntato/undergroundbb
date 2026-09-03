@@ -48,6 +48,18 @@ The server learns only that someone holding the private key was present. Decrypt
 key happens entirely in the browser, and GCM's authentication tag failing *is* the wrong-password
 signal — no separate password verifier is stored.
 
+**This means the server cannot count wrong passwords.** A mistyped password fails at step 3, inside
+the browser, and never reaches the server at all. What the server can count is **failed signature
+verifications at step 4**, which a normal user with a wrong password never reaches. The
+five-attempts-in-five-minutes lockout therefore counts signature failures, and the attack it bounds
+is replay and credential stuffing rather than password guessing — someone guessing a password is
+limited by Argon2id and by the challenge endpoint's rate limit, not by the lockout.
+
+The counter and a lock-until timestamp live as attributes on the user's `PROFILE` item, incremented
+on a failed step 4 and cleared on a successful one. The lock-until value is the one short-lived
+thing in an item class that never expires, so it is a timestamp compared on read rather than a TTL:
+the item must outlive the lock.
+
 ### Multi-device
 
 There is no device pairing, key sync protocol, or device registry. Any device can log in with the
@@ -167,10 +179,12 @@ cryptography, and the second implementation is where the bug lives. There is one
 Three group-level settings still need answers, because "identical" would otherwise answer them by
 omission:
 
-- **Revocation mode is not offered.** Neither mode means anything for two people — removing the other
-  member leaves a group of one — so `type: "dm"` skips the choice rather than defaulting to a value
-  the interface never shows. An implementation reusing the group-creation path wholesale must not
-  present the mode picker.
+- **A DM is `Open`, with the mode picker hidden.** Rotating would be meaningless: removing the other
+  member leaves a group of one, so there is nothing to re-key to. Saying a DM *is* `Open` rather than
+  that it has no mode keeps the design at two revocation modes instead of three, and gives blocking a
+  correspondent a defined meaning — it is a UI state with no key consequence, exactly as removal is
+  in any other `Open` group. A DM therefore has one generation for its whole life: the chain, its
+  truncation rule and the `META` chain floor exist but never advance.
 - **Expiration behaves exactly as in any other group**, defaulting to 30 days. DMs are not the one
   place in the system with permanent retention, which is the right outcome given they hold the
   content with the smallest anonymity set.
@@ -354,11 +368,19 @@ One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
 plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need,
 the Argon2id salt, and the wrapped private keys. It also holds an **encrypted preferences blob** —
-theme and font choices — sealed under a key derived alongside the user's own private keys, so they do
-not become another identifying signal in a dump. The email, when present, is encrypted separately
+theme and font choices — sealed under a key **derived by HKDF from the user's X25519 private key**,
+so they do not become another identifying signal in a dump. That derivation is deliberate: the
+recovery code restores the same private keys, so preferences survive a password change and a
+recovery alike, with no second wrapped copy to keep in step. Deriving the key from the password
+instead would leave a recovered account's preferences permanently unreadable — and it would fail
+silently, looking like a theme that reset itself rather than a key that was lost. The email, when present, is encrypted separately
 under a **server-held** key, because the server has to read it to send mail. Three different
 protections in one item, and the distinction is the point: only the preferences blob is beyond the
 operator's reach.
+
+Reads of another user go through a **projection exposing only the username and public keys** —
+never the salt or the wrapped private keys, which leave the server only via the rate-limited
+challenge endpoint.
 
 **There is no separate display name.** Users are identified everywhere by their username, which is
 plaintext by necessity — login requires looking a user up by name. A display name sealed under a key
@@ -383,14 +405,29 @@ A member reads old content by unwrapping their current generation and then walki
 `GENKEY#<n−2>`, and so on, stopping at the oldest surviving generation recorded on the group's `META`
 item.
 
-**Which items carry a TTL attribute, and which never do.** Expiring items are `POST#`, `CMT#`,
-`RXN#` and `NOTIF#` — content and the pointers to it. Everything else is durable for the life of the
-group or account: `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE` and
-`CLAIM`. This is a deliberate list rather than an accident of which items happened to get an
-attribute, and each durable class has a reason: `META` records the chain floor, `MEMBER#` is a
-member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in
-progress, and `GRANT#` must stay verifiable back to the group creator. **A default-TTL-on-write rule
-with exceptions is the wrong shape here** — most of this partition does not expire.
+**Which items carry a TTL attribute, and which never do.** This list covers every class in the table
+above, and is a deliberate assignment rather than an accident of which items happened to get an
+attribute.
+
+**Expiring:** `POST#`, `CMT#`, `RXN#` and `NOTIF#` — content and the pointers to it — plus
+`INVITE#`, whose TTL is **set from the `expires_at` the inviter signed** so that the stored lifetime
+and the signed one cannot drift. An invite is the one item here whose expiry is part of a signed
+payload, and the storage layer must honour it rather than leave a year-old invite acceptable.
+Clients still verify `expires_at` against the signature when accepting, because TTL deletion is
+eventual and an expired-but-not-yet-deleted invite must be refused: for invites that check is a
+**security control, not a display convenience**, and it runs only after the inviter's signature has
+been verified, since an unverified `expires_at` is a value the server could have altered.
+
+**Never expiring:** `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE`
+and `CLAIM`. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
+into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in progress, `GRANT#` must stay
+verifiable back to the group creator, and `PIN#` is the record a key change is checked against.
+`REQ#` is durable **unlike an invite** because a join request carries no signed lifetime — it is
+resolved by an admin approving or denying it, and a request left pending stays visible to its
+requester rather than silently vanishing.
+
+**A default-TTL-on-write rule with exceptions is the wrong shape here** — most of this partition
+does not expire.
 
 **Join requests mirror invites in the opposite direction.** A request lives in the group partition,
 so an admin loading a public group reads its pending requests with one `Query`, and GSI1 carries the
@@ -429,9 +466,21 @@ read either. But it cannot compose a human-readable notification: a private grou
 encrypted under the group key, so the server cannot name the group a notification refers to.
 
 A notification item therefore stores `{kind, actor_uuid, group_id, post_id}` and nothing more. **The
-client renders the text**, resolving the group name with the group key it already holds and the
-actor's username from their user item. "alice replied to your post in Roof Group" is what the user
-sees; it is not what the table contains, and no notification is ever a ready-to-display message.
+client renders the text**: "alice replied to your post in Roof Group" is what the user sees, not what
+the table contains, and no notification is ever a ready-to-display message.
+
+Both halves of that rendering need a mechanism, and neither is free:
+
+- **The group name.** Like a post, the group's `META` item **records the generation its name and
+  description were encrypted under**, so a client that has walked the chain can read a name written
+  before it joined. Rotation does *not* re-encrypt the name — that would add a write the rotation
+  sizing does not account for, and it is unnecessary: the name is reachable through the same backward
+  walk as any older content.
+- **The actor's username.** Usernames are read through `GET /api/users/:id`, a **projection over the
+  user item exposing only the username and the two public keys**. The full `PROFILE` item also holds
+  the Argon2id salt and the wrapped private keys, which is offline-cracking material, and no ordinary
+  read path may hand those out — that blob is available only from `POST /api/auth/challenge`, which
+  is rate-limited precisely because it does. The key-pinning flow reads the same projection.
 
 **Email notifications are the exception, and they are strictly poorer for it.** The server composes
 those itself — it decrypts the address to send them — so it can use only what it can read. An email
