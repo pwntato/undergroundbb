@@ -270,7 +270,8 @@ take the link flow with it.
 inviter's client is online" means that client must find **its own invites that have been accepted
 and are awaiting completion** — a query keyed on the inviter, which neither `INVITE#<iid>` (it needs
 the id you are trying to discover) nor a GSI keyed to the invitee can answer. Hence the second row:
-the inviter's client lists `USER#<inviter>` / `SENT#` and completes anything accepted. Without it
+the inviter's client lists `USER#<inviter>` / `SENT#` and completes anything accepted, **deleting
+each row as it completes** so the query returns pending work rather than a history. Without it
 the only implementations available are a `Scan` or a fan-out across the inviter's groups, and this
 design permits neither. **Completion is driven by that query on login**, not by the notification
 path — notifications carry no content a client can act on, and step 3 must work for an inviter who
@@ -505,25 +506,31 @@ grant-chain verification, walking the generation chain to read older content, an
 notification each need a small bounded sequence — but none of them scans, and none is unbounded in
 the size of the table.
 
-| Item | PK | SK | GSI1PK | GSI1SK |
-|---|---|---|---|---|
-| User | `USER#<uuid>` | `PROFILE` | | |
-| Recovery blob | `USER#<uuid>` | `RECOVERY` | | |
-| Login challenge | `USER#<uuid>` | `CHALLENGE#<nonce>` | | |
-| Username claim | `USERNAME#<lower>` | `CLAIM` | | |
-| Group | `GROUP#<gid>` | `META` | | |
-| Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` |
-| Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | |
-| Rotation marker | `GROUP#<gid>` | `ROTATION` | | |
-| Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | |
-| Post | `GROUP#<gid>` | `POST#<day>#<ulid>` | | |
-| Comment | `POST#<pid>` | `CMT#<path>` | | |
-| Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | |
-| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` |
-| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | |
-| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` |
-| Key pin | `USER#<uuid>` | `PIN#<other>` | | |
-| Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | |
+| Item | PK | SK | GSI1PK | GSI1SK | TTL |
+|---|---|---|---|---|---|
+| User | `USER#<uuid>` | `PROFILE` | | | never |
+| Recovery blob | `USER#<uuid>` | `RECOVERY` | | | never |
+| Login challenge | `USER#<uuid>` | `CHALLENGE#<nonce>` | | | ~2 min |
+| Username claim | `USERNAME#<lower>` | `CLAIM` | | | never |
+| Group | `GROUP#<gid>` | `META` | | | never |
+| Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` | never |
+| Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | | never |
+| Rotation marker | `GROUP#<gid>` | `ROTATION` | | | never |
+| Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | | never |
+| Post | `GROUP#<gid>` | `POST#<day>#<ulid>` | | | group policy |
+| Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
+| Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | | group policy |
+| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
+| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
+| Key pin | `USER#<uuid>` | `PIN#<other>` | | | never |
+| Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | | group policy |
+
+**The TTL column is part of the table on purpose.** This assignment was prose for several revisions
+and drifted every time a row was added — a new row would arrive and the separate list would not be
+updated, which is a defect the list's own claim to be exhaustive actively hides. Answering the
+question in the row makes it impossible to add an item without deciding, and the paragraphs below
+explain the reasoning rather than carrying the assignment.
 
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
 plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need,
@@ -597,23 +604,32 @@ item. The **walk is cryptographic, not a sequence of round trips**: every `GENKE
 of `GENKEY#` and then unwraps locally, generation by generation. Only the unwrapping is sequential —
 each link decrypts the one below it — and its cost is CPU, not latency.
 
-**Which items carry a TTL attribute, and which never do.** This list covers every class in the table
-above, and is a deliberate assignment rather than an accident of which items happened to get an
-attribute.
+**Why each item expires or does not.** The assignment itself is the TTL column above; what follows
+is the reasoning behind it, not a second copy of it.
 
 **Expiring:** `POST#`, `CMT#`, `RXN#` and `NOTIF#` — content and the pointers to it — plus
 `CHALLENGE#`, which carries the shortest TTL in the system (a minute or two) and is normally deleted
 by the conditional write that spends it, the TTL existing only to collect challenges nobody ever
-answers — plus `INVITE#`, whose TTL is **set from the `expires_at` the inviter signed** so that the stored lifetime
-and the signed one cannot drift. An invite is the one item here whose expiry is part of a signed
+answers — plus the invite pair, `INVITE#` and `SENT#`, whose TTL is **set from the `expires_at` the
+inviter signed** so that the stored lifetime and the signed one cannot drift. An invite is the one item here whose expiry is part of a signed
 payload, and the storage layer must honour it rather than leave a year-old invite acceptable.
 Clients still verify `expires_at` against the signature when accepting, because TTL deletion is
 eventual and an expired-but-not-yet-deleted invite must be refused: for invites that check is a
 **security control, not a display convenience**, and it runs only after the inviter's signature has
 been verified, since an unverified `expires_at` is a value the server could have altered.
 
-**Never expiring:** `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE`,
-`RECOVERY` and `CLAIM`. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
+**Both copies of an invite take their TTL from the same signed value, and the inviter's copy is
+deleted when step 3 completes.** `SENT#` is a pointer to `INVITE#`, so deriving both lifetimes from
+the one signed `expires_at` keeps them in step by construction rather than by discipline. Deletion
+at completion is what keeps the step-3 query honest: it returns **invites still awaiting
+completion**, not a history of everything the user ever sent. Without it the query grows without
+bound and the client re-wraps the group key for already-completed invites on every login —
+idempotent, but permanently accumulating. The TTL is therefore only a backstop, covering invites
+nobody ever accepts, and it means the inviter's partition never becomes a durable log of who they
+approached. A `SENT#` row whose `INVITE#` is already gone is filtered on read, as a notification
+whose target was deleted is.
+
+**Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
 into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in progress, `GRANT#` must stay
 verifiable back to the group creator, and `PIN#` is the signed record a key change is checked
 against.
