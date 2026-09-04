@@ -669,7 +669,7 @@ a `Query`, and it is discussed with the notification item below.
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`, cleared at acceptance |
-| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<YYYY-MM-DD, UTC>#<rand>#<iid>` | | | signed `expires_at`, cleared at acceptance |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`, cleared at acceptance |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
@@ -835,9 +835,28 @@ of a 7-day window expires on day 7 with both rows: the `SENT#` row the inviter's
 found is deleted, so nothing completes, and the invitee — who signed their keys, completed their
 half, and was told it succeeded — never receives a group key and is never told why. The read-time
 check does not catch this; that check correctly refuses an *expired* invite at step 2, and here
-acceptance happened while the invite was valid. So at step 2, in the same write that adds the
-`USER#<invitee>` GSI entry, **the TTL attribute is removed from both rows** (or replaced with a
-completion deadline measured from acceptance). The signed `expires_at` keeps its real job of
+acceptance happened while the invite was valid. So at step 2, **the TTL attribute is removed from
+both rows** (or replaced with a completion deadline measured from acceptance).
+
+**That clearing is a `TransactWriteItems`, and it is why `SENT#` is keyed on the iid alone.** The
+two rows are in different partitions — `INVITE#<iid>` and `USER#<inviter>` — so this is a
+transaction, the same two-partition shape signup gets one for, and not the single `UpdateItem` that
+adds the `USER#<invitee>` GSI entry. More importantly, step 2 is the **invitee's** action, and the
+invitee must be able to address both rows: they hold `<iid>` because it is in the link they
+followed, and `SENT#<iid>` is constructible from it. A `SENT#` key carrying the creation day and a
+128-bit random component would not be — neither value is in the signed step-1 payload, neither is
+derivable from `<iid>`, and a `begins_with` cannot help because those components would precede the
+one component the invitee actually has. An implementer who found the row unaddressable would clear
+only `INVITE#`'s TTL and reintroduce exactly the bug above. Keying on the iid costs nothing that
+was not already conceded: `SENT#` is queried as pending work rather than in time order.
+
+The write is still **server-mediated and server-authorized** — the invitee supplies `<iid>` and
+nothing else, and the server composes the transaction after verifying the invite. A second party
+never names a row in the inviter's partition directly, which matters because `USER#<inviter>` also
+holds their `PROFILE`, `RECOVERY`, `CHALLENGE` and `PIN#` rows, and letting a caller choose what to
+write there is the shape the single-slot challenge argument rejects.
+
+The signed `expires_at` keeps its real job of
 bounding how long an *unaccepted* link stays usable, which is the property the signature protects
 and is unaffected. What a dump yields is unchanged in kind — a completed step 3 deletes the `SENT#`
 row regardless, so the residue is still work genuinely outstanding.
@@ -958,8 +977,28 @@ It is paid for twice, and both costs belong here rather than being discovered la
   structure it buys, and it is worth noting that the same trade is *not* worth it for posts, which
   would gain no traversal property in exchange.
 
-A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a reaction on
-the post itself, so reactions sort alongside the thread they belong to.
+A reaction's `<cmtpath>` is the path of the comment it attaches to, and **`0000` for a reaction on
+the post itself** — a sentinel, because a real comment path's segments are four-digit ordinals
+starting at `0001`, so `0000` is a value no path can take and it sorts before all of them.
+
+**The empty string was the obvious choice here and it is a trap.** `RXN##<reactor>` doubles the
+delimiter, and splitting it on `#` yields an empty middle field — survivable only if every
+implementation splits with a limit and never collapses empties. Several standard splits do collapse
+them, and then a post-level reaction parses as two fields with the **reactor landing in the cmtpath
+slot**: a silent misparse producing a reaction attributed to a comment path that happens to look
+like a uuid. With the sentinel every `RXN#` key is exactly three non-empty `#`-delimited fields.
+This is the same class as the zero-padding rule below — an unconstrained component in a delimited
+key misbehaves — and it is worth stating as its own rule: **no component of a sort key in this
+schema is ever the empty string.**
+
+**What the `<cmtpath>` component buys is ordering among reactions, not interleaving with comments.**
+Sort keys compare from the first byte, so the `CMT#` / `RXN#` prefix dominates: the partition holds
+the entire comment thread in traversal order, and *then* the entire reaction block. A reaction never
+sorts adjacent to the comment it targets. What it does do is put the reactions in the **same order
+as the thread**, so a client that reads the partition in one `Query` walks the two blocks in step
+and zips them together. Saying it "sorts alongside the thread" invites a single-pass renderer that
+consumes the query in order — which works on a thread with no reactions and breaks on the first
+one.
 
 **A reaction is keyed by its reactor, not by a fresh id**, which is what makes it removable. Every
 reaction UI toggles — click to react, click again to undo — and undoing needs an addressable
@@ -979,7 +1018,7 @@ plaintext in the sort key, which is what the threat model already states — a d
 to what, and only the emoji is unreadable.
 
 **A reaction's target is plaintext; the reaction itself is not.** The comment path sits in the sort
-key so the server can order reactions with their thread, but which emoji was chosen is encrypted
+key so reactions order among themselves in thread order, but which emoji was chosen is encrypted
 under the group key like any other content. The server therefore knows that a user reacted to a
 particular comment, and not what they said by it. The cost is that reaction counts are computed
 client-side after decryption rather than aggregated by the server.
@@ -1097,26 +1136,39 @@ partition, so a time-ordered id there is a millisecond-resolution activity log f
 spanning every group they belong to — a worse disclosure per item than posts, which are at least
 scoped to a group. It carries a day prefix for the same reason posts do.
 
-**`INVITE#`, `SENT#` and `REQ#` use the same day-plus-random construct, and there is no `<ts>`
-anywhere in this schema.** A field named `ts` invites `Date.now()`, an ISO-8601 instant, or a Unix
-epoch, every one of which puts millisecond or second resolution back into a plaintext sort key —
-the leak the random id exists to remove. Two of these three sit in the *user's* partition, which is
-the sharper case named just above: `INVITE#` is a precise timeline of when a named person was
-invited to things, and `SENT#` is the same for who they approached, which the threat model treats as
-the more sensitive half because it is intent rather than association. The `<rand>` suffix closes a
-collision too — two invites to the same invitee on the same day would otherwise project the same
-GSI1 key and one would silently overwrite the other, the same failure as the directory collision
-above. What this costs is sub-day ordering on the two listings a user reads, `INVITE#` and `REQ#`,
-which is the trade posts already accept. `SENT#` is queried as pending work rather than in time
-order, so it loses nothing.
+**There is no `<ts>` anywhere in this schema.** A field named `ts` invites `Date.now()`, an
+ISO-8601 instant, or a Unix epoch, every one of which puts millisecond or second resolution back
+into a plaintext sort key — the leak the random id exists to remove. `INVITE#` and `REQ#` therefore
+use the day-plus-random construct, and `SENT#` carries **no time component at all**.
 
-**Role grants are keyed by group, not by subject, and are append-only.** Verifying a grant chain
-therefore queries the group partition and filters client-side; it is a `Query`, never a `Scan`, but
-the read returns role *history* rather than current roles, so it grows with total role churn in the
-group rather than with membership or with the length of the chain being checked, and DynamoDB bills
-the filtered-out items. Acceptable at the group sizes this design targets. A group with heavy
-role churn would want a GSI keyed by subject, which is additive and needs no migration of existing
-items.
+Both of the keys that keep a day sit in a *user's* partition, which is the sharper case named just
+above: `INVITE#` is a precise timeline of when a named person was invited to things, and `REQ#` of
+what they asked to join. The `<rand>` suffix closes a collision too — two invites to the same
+invitee on the same day would otherwise project the same GSI1 key and one would silently overwrite
+the other, the same failure as the directory collision above. What that costs is sub-day ordering on
+those two listings, which is the trade posts already accept.
+
+**`SENT#<iid>` is the exception, and drops the day for a reason beyond disclosure.** The invitee has
+to address that row at acceptance to clear its TTL, and can construct the key only from the `<iid>`
+in the link they followed — a day and a 128-bit random component would be unreachable to them. It
+loses nothing by dropping them: `SENT#` is queried as pending work rather than in time order, and
+`<iid>` is already unique so there is no collision to close. It also happens to be the strongest
+version of the disclosure property, since the inviter's partition — who they approached, which the
+threat model treats as the more sensitive half, being intent rather than association — now carries
+no timing in the clear at all.
+
+**Role grants live in the group partition but are keyed by subject within it, and are append-only.**
+Verifying a chain is therefore one `begins_with(SK, "GRANT#" + uuid)` per hop — a keyed range read
+that returns only that subject's grant history, typically a row or two, with nothing fetched and
+discarded. The cost of a full walk is bounded by the **depth of the chain**, not by how much role
+churn the group has seen and not by its membership. That is what the round-22 key shape buys: with
+`GRANT#<uuid>` alone the walk was a filtered scan of the whole group's role history, and DynamoDB
+billed every row it discarded.
+
+A **group-wide** role-history read — an audit view listing every grant in the group, rather than one
+subject's — is the access pattern the table does not serve natively; it is a filtered `Query` over
+the partition, and its cost does grow with total churn. That is the reason to add a GSI here if one
+is ever wanted, and it is additive and needs no migration of existing items.
 
 ## Frontend
 
