@@ -97,8 +97,9 @@ rather than impossible. Weak passwords remain weak. The endpoint is rate-limited
 accounts lock for five minutes after five failed **signature verifications**, but neither prevents a
 determined attacker from collecting blobs. The lockout counts signature failures rather than wrong
 passwords because a wrong password fails inside the browser and never reaches the server — see the
-login sequence in [DESIGN.md](DESIGN.md); it is a control on replay and credential stuffing, not on
-guessing.
+login sequence in [DESIGN.md](DESIGN.md); it is a control on credential stuffing, not on guessing.
+It is **not** what stops replay either — that is the single-use nonce, since a replayed valid
+signature verifies successfully and so never increments a counter of failures.
 
 It is unavoidable only for an *unauthenticated* endpoint, which is a choice rather than a law. A
 proof-of-work or CAPTCHA in front of blob release would not change the cryptography, but it would
@@ -112,8 +113,8 @@ usernames are enumerable — so anyone can lock any account by submitting five b
 its username, and keep it locked by repeating. This is a deliberate inheritance from the original implementation.
 Its value is narrower than it first appears: since the challenge endpoint already hands out
 crackable material, an attacker who wants to guess a password does it offline, where no lockout
-reaches them. What the lockout still bounds is **online** abuse — credential stuffing and signature
-replay against a known account. A source-scoped counter would avoid the
+reaches them. What the lockout still bounds is **online** abuse — credential stuffing against a
+known account. A source-scoped counter would avoid the
 denial of service but is trivially defeated by rotating IPs, which is the harder problem. Naming it
 plainly: an attacker who wants to keep a specific user logged out can do so, and no design in this
 document prevents that.
@@ -209,6 +210,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
 | Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |
 | Attacker obtains a user's recovery code | **Total account compromise**, equivalent to learning the password. Neutralized only by a password change, which reissues the code. See [The recovery code](#the-recovery-code). |
+| Login challenge response replayed | Blocked — the nonce is stored server-side and spent by a conditional delete, so a captured response is worthless the moment it is used once. Note the lockout does not help here: a replayed *valid* signature never fails verification, so nothing counts it. |
 | Session cookie stolen | Reads ciphertext, membership and metadata; **no plaintext and no keys**, which stay in the browser. Cannot forge posts — those carry an Ed25519 signature the cookie cannot produce. Not revocable: valid until it expires, and unaffected by a password change or lockout. |
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |

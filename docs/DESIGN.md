@@ -11,7 +11,8 @@ reaches the server, and the server never holds the keys to read any of it.
 
 The stack is a Go binary on AWS Lambda behind CloudFront, a single DynamoDB table, and a React SPA
 served as static files. There is no application server holding state, no session store, and no
-plaintext content anywhere in the backend.
+plaintext content anywhere in the backend. (The one exception is the short-lived login challenge
+item described below, which holds a random number and no key material.)
 
 **This document describes the complete design, not the current state of the code.** The whole
 design is settled and nothing here is speculative, but it is built in milestones: private groups,
@@ -39,14 +40,37 @@ key wrapped to their X25519 public key.
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
-2. Server returns the user's salt, their wrapped private keys, and a random nonce.
+2. Server generates a random nonce, **stores it** as a `USER#<uuid>` / `CHALLENGE#<nonce>` item with
+   a short TTL, and returns it along with the user's salt and their wrapped private keys.
 3. Client derives the key from the password with Argon2id, unwraps the private keys, and signs the
    nonce with the Ed25519 key.
-4. Server verifies the signature against the stored public key and issues a session cookie.
+4. Server **deletes the challenge item with a conditional write** and, only if that delete succeeds,
+   verifies the signature against the stored public key and issues a session cookie.
 
 The server learns only that someone holding the private key was present. Decryption of the private
 key happens entirely in the browser, and GCM's authentication tag failing *is* the wrong-password
 signal — no separate password verifier is stored.
+
+**The challenge item is deliberate state, and the conditional delete is what makes the ceremony
+sound.** A signed challenge response is a bearer credential until something marks it spent: the
+tempting implementation — a timestamp or an HMAC over a server key, validated on return but never
+recorded — verifies signatures correctly and **does not prevent replay**, so anyone who captures one
+valid response can trade it for a fresh session repeatedly for as long as the window lasts. Making
+the delete a condition of the verification, rather than a cleanup after it, is what spends the
+nonce: two requests carrying the same nonce race for one delete and exactly one wins. A single-use
+nonce is a requirement here, not an optimization.
+
+This is the one piece of cross-request state in the system, and the statelessness claims elsewhere
+mean **no session store and no key material** — never "no items with a short life." The challenge
+item holds a random number and nothing else: no key material, nothing derived from the password,
+and nothing that helps an attacker who steals it, since using it still requires a signature from a
+private key the server does not have.
+
+Note that step 2 is an **unauthenticated write** — anyone can request a challenge for any username,
+and usernames are enumerable — so it is a write-amplification target and is rate-limited on those
+terms, not merely on the harvesting terms discussed under Operations below. The TTL
+is short (a minute or two, enough for a slow Argon2id derivation on a phone) so abandoned challenges
+expire quickly rather than accumulating.
 
 **The session cookie authenticates; it decrypts nothing.** It is a short-lived signed token —
 there is no session store, so the server holds nothing to look up — carried in an `HttpOnly`,
@@ -69,11 +93,15 @@ dismissed, since it reintroduces exactly the server-side state this architecture
 the browser, and never reaches the server at all. What the server can count is **failed signature
 verifications at step 4**, which a normal user with a wrong password never reaches. The
 five-attempts-in-five-minutes lockout therefore counts signature failures, and the attack it bounds
-is replay and credential stuffing rather than password guessing — someone guessing a password is
-limited by Argon2id and by the challenge endpoint's rate limit, not by the lockout.
+is credential stuffing rather than password guessing — someone guessing a password is limited by
+Argon2id and by the challenge endpoint's rate limit, not by the lockout. **Replay is bounded by the
+single-use nonce, not by this lockout**, which is worth separating because a replayed valid
+signature never fails verification and so never increments a counter that only counts failures.
 
 The counter and a lock-until timestamp live as attributes on the user's `PROFILE` item, incremented
-on a failed step 4 and cleared on a successful one. The lock-until value is the one short-lived
+on a failed step 4 and cleared on a successful one. **That increment is an unauthenticated write** —
+step 4 takes a username and a signature, and the signature does not need to be valid to cause it —
+so it needs a rate limit of its own; see Operations. The lock-until value is the one short-lived
 thing in an item class that never expires, so it is a timestamp compared on read rather than a TTL:
 the item must outlive the lock.
 
@@ -227,6 +255,26 @@ invitee's:
 For the server to insert itself it would have to forge an Ed25519 signature, which it cannot.
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.
+
+**Two storage details make the ceremony work, and both are easy to get wrong.**
+
+*An invite has no invitee until step 2.* The step 1 payload deliberately contains no invitee
+identity — an invite is a link, handed to someone who may not have an account yet, and
+`GET /api/invites/:id` is unauthenticated for exactly that reason. So the invite item is **written
+without a GSI1 entry**, and DynamoDB simply omits it from the index; the `USER#<invitee>` /
+`INVITE#<ts>` entry is **added at acceptance**, once there is a uuid to point at. Reading the table
+row as though GSI1PK were populated at creation makes accountless invites impossible, which would
+take the link flow with it.
+
+*Step 3 needs an inviter-keyed lookup, and the invitee index cannot serve it.* "The next time the
+inviter's client is online" means that client must find **its own invites that have been accepted
+and are awaiting completion** — a query keyed on the inviter, which neither `INVITE#<iid>` (it needs
+the id you are trying to discover) nor a GSI keyed to the invitee can answer. Hence the second row:
+the inviter's client lists `USER#<inviter>` / `SENT#` and completes anything accepted. Without it
+the only implementations available are a `Scan` or a fan-out across the inviter's groups, and this
+design permits neither. **Completion is driven by that query on login**, not by the notification
+path — notifications carry no content a client can act on, and step 3 must work for an inviter who
+never opens the notification.
 
 > **Open question — `ephemeral_pubkey`.** It is signed into the step 1 payload and then plays no
 > part in steps 2 or 3, which wrap using the inviter's own X25519 key. Either it is vestigial and
@@ -461,6 +509,7 @@ the size of the table.
 |---|---|---|---|---|
 | User | `USER#<uuid>` | `PROFILE` | | |
 | Recovery blob | `USER#<uuid>` | `RECOVERY` | | |
+| Login challenge | `USER#<uuid>` | `CHALLENGE#<nonce>` | | |
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | |
 | Group | `GROUP#<gid>` | `META` | | |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` |
@@ -471,6 +520,7 @@ the size of the table.
 | Comment | `POST#<pid>` | `CMT#<path>` | | |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` |
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | |
 | Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | |
@@ -552,7 +602,9 @@ above, and is a deliberate assignment rather than an accident of which items hap
 attribute.
 
 **Expiring:** `POST#`, `CMT#`, `RXN#` and `NOTIF#` — content and the pointers to it — plus
-`INVITE#`, whose TTL is **set from the `expires_at` the inviter signed** so that the stored lifetime
+`CHALLENGE#`, which carries the shortest TTL in the system (a minute or two) and is normally deleted
+by the conditional write that spends it, the TTL existing only to collect challenges nobody ever
+answers — plus `INVITE#`, whose TTL is **set from the `expires_at` the inviter signed** so that the stored lifetime
 and the signed one cannot drift. An invite is the one item here whose expiry is part of a signed
 payload, and the storage layer must honour it rather than leave a year-old invite acceptable.
 Clients still verify `expires_at` against the signature when accepting, because TTL deletion is
@@ -686,18 +738,31 @@ CloudFront  (+ AWS WAF)
                     └── DynamoDB (single table)
 ```
 
-Same origin for app and API, so there is no CORS configuration. The Lambda holds no state between
-requests and never possesses key material.
+Same origin for app and API, so there is no CORS configuration. The Lambda holds no state in
+**memory** between requests and never possesses key material. The single piece of cross-request
+state it writes is the login challenge item, which lives in DynamoDB with a short TTL and is spent
+by a conditional delete.
 
 Rate limiting is enforced by WAF rate-based rules. Note what it is and is not protecting: Argon2id
 runs in the **client's** browser, so a login costs the server only a DynamoDB read and, on the second
 leg, one Ed25519 verification. An attacker hammering the endpoint burns their own CPU, not the
 operator's.
 
-The thing worth bounding is therefore **bulk harvesting**, not compute. `POST /api/auth/challenge`
+The first thing worth bounding is **bulk harvesting**, not compute. `POST /api/auth/challenge`
 hands out a salt and wrapped private keys to anyone who names a username, which is offline-cracking
-material; the rate limit exists to make collecting it at scale slow. Size the limits against
+material; the rate limit exists to make collecting it at scale slow. Size those limits against
 harvesting rate, not against a server cost that this design does not have.
+
+**The second is writes on unauthenticated paths, which have the opposite cost model and need their
+own limits.** Two endpoints let an anonymous caller cause a write against a named user's partition:
+`POST /api/auth/challenge` creates the challenge item, and the verify leg increments the failure
+counter on that user's `PROFILE` — failing is what triggers it, so no valid signature is required.
+Both target items in a single partition, `PROFILE` being the hottest item that user has and the one
+every login must read, so sustained hammering is the classic hot-partition case. Unlike harvesting,
+**this cost falls on the operator**, in write capacity and in contention against legitimate logins,
+and it is precisely the cost the paragraph above says the design does not have — that claim is true
+of Argon2id and the challenge leg, and not of these writes. A limit sized only against harvesting
+rate will not necessarily catch it, so bound the verify endpoint on its own terms.
 
 Environments are Terraform workspaces (`dev`, `prod`) in one AWS account, with resource names derived
 from the workspace so a mistyped variable cannot cross-wire them.
