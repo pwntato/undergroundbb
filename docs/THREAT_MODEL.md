@@ -21,9 +21,11 @@ definition, have plaintext names and descriptions so they can be listed and sear
 trade they make, and it is why the choice is per-group.
 
 **Email addresses.** Optional, and encrypted at rest under a key **held by the server**, so a
-stolen database does not yield them. This is the one item in this section the server can decrypt —
-it has to, in order to send mail. If you do not want the operator to have your email address, do
-not provide one; in-app notifications work without it.
+stolen database *alone* does not yield them. Be precise about which attack that covers: the
+protection is against a dump reaching someone who does not also hold the server's key, and a
+compromise deep enough to read the server's key reads the addresses too. This is the one item in
+this section the server can decrypt — it has to, in order to send mail. If you do not want the
+operator to have your email address, do not provide one; in-app notifications work without it.
 
 **Key substitution during invites.** The invite handshake requires the invitee to sign their own
 public keys, so a server cannot swap in a key of its own without forging a signature.
@@ -198,8 +200,8 @@ switches off the only mechanism here that limits past exposure at any group size
 
 | Attack | Outcome |
 |---|---|
-| Database dump stolen | Content safe. Social graph, usernames, day-level timing, and volume exposed. |
-| Server compromised, database only | Same as above. |
+| Database dump stolen | Content safe. Social graph, usernames, day-level timing, and volume exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
+| Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
 | Malicious operator fabricates a role grant | Blocked — clients verify the signature chain. |

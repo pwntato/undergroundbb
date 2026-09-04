@@ -79,10 +79,18 @@ the item must outlive the lock.
 
 ### Multi-device
 
-There is no device pairing, key sync protocol, or device registry. Any device can log in with the
-username and password: it downloads the same encrypted key blob and derives the same key. The
+**There is no device identity.** No device is registered, distinguishable from another, or
+separately revocable, and there is no pairing step or key sync protocol. Any device can log in with
+the username and password: it downloads the same encrypted key blob and derives the same key. The
 password is the portable credential, and the encrypted blob is safe to store centrally precisely
 because it is encrypted.
+
+What that does *not* mean is that everything is per-device local state. Per-user state that is not a
+private key **follows the user across devices**, because it is stored server-side and protected by a
+key the password reproduces: the preferences blob is sealed to a user-derived key, and key pins are
+**signed** with the user's Ed25519 key and stored under their own partition — deliberately, so a new
+device inherits what an existing one verified rather than re-TOFUing every counterparty from
+scratch. The distinction is that the server holds this state without being trusted with it.
 
 ### Recovery
 
@@ -104,8 +112,54 @@ nothing at all if the attacker also holds their recovery code — they would hav
 the interface offers and still be exposed. Because a password change therefore always produces a new
 code, the flow has to make the user store it before completing.
 
-Changing a password is still not a **key rotation**. See below for that, which is a much heavier
-operation and the only one that invalidates existing wrapped group keys.
+Changing a password is still not a **key rotation**, which is the subject of the next section: a
+much heavier operation, and the only one that invalidates existing wrapped group keys.
+
+### Key rotation
+
+Three operations get conflated under "changing my keys," and only the third one actually changes
+them. A password change (above) and a recovery-code reset both re-wrap **the same private keys**
+under a new wrapper. **Key rotation replaces the keypairs themselves**, and it happens in exactly
+two cases:
+
+1. The user has lost **both** their password and their recovery code. The private keys still exist
+   in the database but nothing can unwrap them, so they are permanently useless and the account
+   needs new ones to keep participating.
+2. Deliberate invalidation after suspected compromise — a stolen laptop, malware.
+
+Naming both cases is what makes "rare but heavyweight" a fact rather than an assertion: it takes a
+double loss or a security incident, so it should happen a handful of times in a deployment's life.
+
+The consequence is the reason it is heavy. **Every group key the user holds was wrapped to the old
+X25519 key**, which they can no longer unwrap, so they are locked out of all group content while
+still appearing in every member list. The design's answer is **dormant memberships plus a
+re-invitation per group**: the membership rows survive — the user stays in the member list and their
+post history stays attributed to them — but they cannot read until an admin or ambassador in each
+group re-wraps the current group key to their new public key. That concentrates the work into one
+deliberate action per group, taken by someone who already has the authority, rather than spreading
+confusion across every co-member. It is the same re-invitation event the pinning section describes,
+and this is its cause.
+
+Two properties are easy to get wrong when implementing it:
+
+- **A rotating user re-enters the chain at the current generation, and keeps their history.** Their
+  new entry point is a wrap of the *current* group key, and the older `GENKEY#` links are reachable
+  backward from it. Rotation therefore costs no history — the backward chain rescues this case for
+  free, which is worth knowing before someone builds an expensive re-wrap that is not needed.
+- **A dormant membership is not a removal, and must not mint a generation.** In a `Rotating` group
+  a removal triggers a re-key; if dormancy were implemented as remove-then-re-invite, every user
+  keypair rotation would burn a generation in every group that user belongs to and drag the entire
+  membership through a re-wrap. The distinction is invisible unless stated, and the cost of missing
+  it scales with how many groups the rotating user is in.
+
+**The interface must clearly distinguish "change password" from "rotate keys."** They sound alike
+and differ enormously: one is trivial and keeps everything, the other invalidates every wrapped
+group key the user holds and requires an admin in every one of their groups to act. A user who
+conflates them picks the destructive one believing it is the cheap one.
+
+**Group governance rules — who may leave, what happens to the last admin of a group, how a
+successor is chosen — are decided in the issues rather than here.** They are membership policy
+rather than cryptography, and they do not change any key or item in this document.
 
 ### Key pinning and verification
 
@@ -119,6 +173,25 @@ rather than warning — it refuses to encrypt to the new key or to accept conten
 person resolves it. The reasoning is that a key change is genuinely rare, so it can afford real
 friction, while the operation it protects is common and must not train people to click through
 warnings.
+
+**Every pin is signed with the pinning user's own Ed25519 key, and an unsigned or badly-signed pin
+is not a pin.** This is the property the whole mechanism rests on, and it is not optional. `PIN#`
+is a row in the same table as everything else, so without a signature the hard-block compares a key
+the server just served against a pin the server also just served: an operator substituting a key
+does not have to defeat the comparison, it rewrites the pin to match, and the client compares two
+attacker-chosen values and sees nothing wrong. No mismatch, no hard-block, no re-invitation
+ceremony. The signature is what makes the record trustworthy to the only party who cares about it —
+the client that wrote it — and a client that stores a pin and reads it back without verifying has
+implemented something that passes every test and protects against nothing.
+
+**Pins live server-side deliberately, under the pinning user's own partition, so a new device
+inherits what an existing one verified.** The alternative — pins as local browser state — means
+every new login re-TOFUs every counterparty, and warnings that fire constantly are warnings nobody
+reads. This is state that follows the user rather than the browser, which is possible precisely
+because the signature makes server storage safe. One consequence follows and is worth stating here
+rather than rediscovering later: since a pin is signed by the pinning user's Ed25519 key, **rotating
+that keypair invalidates that user's entire pin set**, exactly as it resets the preferences blob.
+Rebuilding it is one more thing a re-invitation event has to do.
 
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
@@ -490,7 +563,8 @@ been verified, since an unverified `expires_at` is a value the server could have
 **Never expiring:** `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE`,
 `RECOVERY` and `CLAIM`. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
 into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in progress, `GRANT#` must stay
-verifiable back to the group creator, and `PIN#` is the record a key change is checked against.
+verifiable back to the group creator, and `PIN#` is the signed record a key change is checked
+against.
 `REQ#` is durable **unlike an invite** because a join request carries no signed lifetime — it is
 resolved by an admin approving or denying it, and a request left pending stays visible to its
 requester rather than silently vanishing. `RECOVERY` never expires for the plainest reason of all:
