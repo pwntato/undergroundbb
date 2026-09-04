@@ -162,6 +162,15 @@ against a known account. A source-scoped counter would avoid the denial of servi
 defeated by rotating IPs, which is the harder problem. Naming it plainly: an attacker who wants to
 keep a specific user logged out can do so, and no design in this document prevents that.
 
+**What that same attacker cannot do is inflate the victim's partition.** The lockout counter and the
+login challenge are both **single items** in `USER#<uuid>` — the counter is an attribute update, and
+the challenge is one slot per user, overwritten on each request rather than one item per nonce. So
+repeated unauthenticated requests against a chosen username cost the operator writes and add
+contention on that partition, which is a rate problem the design treats as the operator's cost, but
+they do not grow storage without bound and they do not accumulate items that a TTL then has to
+remove on an eventual schedule. Cardinality and rate are separate controls here, and only the rate
+one is left open.
+
 ### The recovery code
 
 At signup every account is issued a **recovery code**, and a second copy of the private keys is

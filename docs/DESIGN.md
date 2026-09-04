@@ -40,7 +40,7 @@ key wrapped to their X25519 public key.
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
-2. Server generates a random nonce, **stores it** as a `USER#<uuid>` / `CHALLENGE#<nonce>` item with
+2. Server generates a random nonce, **stores it** as the `USER#<uuid>` / `CHALLENGE` item with
    a short TTL, and returns it along with the user's salt and their wrapped private keys.
 3. Client derives the key from the password with Argon2id, unwraps the private keys, and signs the
    nonce with the Ed25519 key.
@@ -71,6 +71,21 @@ and usernames are enumerable — so it is a write-amplification target and is ra
 terms, not merely on the harvesting terms discussed under Infrastructure below. The TTL
 is short (a minute or two, enough for a slow Argon2id derivation on a phone) so abandoned challenges
 expire quickly rather than accumulating.
+
+**The challenge is a single slot per user — `CHALLENGE`, not `CHALLENGE#<nonce>` — and that is a
+bound, not a tidiness preference.** Putting the nonce in the sort key makes every request a distinct
+item, so an attacker who picks an enumerable username can inflate that user's partition without
+limit, and the only thing removing the items is a TTL. TTL deletion is eventual — typically within
+48 hours, as the cost section says — so a short TTL promises only that items become *eligible*, and
+the steady-state count for a targeted user can far exceed what the rate limit implies per window.
+It also lands in `USER#<uuid>`, the same partition as `PROFILE`, which is the hottest item that user
+has and the one every login must read, so this is contention against the legitimate login path and
+not merely storage. Every other unauthenticated write in the system is bounded this way already: the
+failure counter is an attribute update on one existing item, so hammering it costs contention but
+not cardinality. Overwriting one slot gives the challenge the same property, and a new challenge
+invalidates any outstanding one. Single use is unaffected — the conditional delete still spends the
+nonce and two racing requests still resolve to one winner. The cost is that a user with two tabs
+mid-login has the first tab's challenge replaced, which fails closed: that tab retries.
 
 **The session cookie authenticates; it decrypts nothing.** It is a short-lived signed token —
 there is no session store, so the server holds nothing to look up — carried in an `HttpOnly`,
@@ -261,7 +276,24 @@ reads. This is state that follows the user rather than the browser, which is pos
 because the signature makes server storage safe. One consequence follows and is worth stating here
 rather than rediscovering later: since a pin is signed by the pinning user's Ed25519 key, **rotating
 that keypair invalidates that user's entire pin set**, exactly as it resets the preferences blob.
-Rebuilding it is one more thing a re-invitation event has to do.
+
+**Rotation must therefore re-sign every pin row under the new key, and must do it before the old key
+is discarded.** The superseded-key retention above rescues posts and grants because those carry a
+day in the sort key, which says which key interval to verify against; `PIN#<other-uuid>` carries no
+day and no timestamp, so that rule cannot be applied to it at all. A client loading its own pins
+after a rotation would hold the superseded key set with no way to know which interval any pin
+belongs to, and would be left with the three bad options this section already rejects: drop the
+unverifiable pins and every counterparty silently returns to first contact — reproducing, across the
+whole pin set at once, the deletion attack the threat model marks *Possible*; trust them unverified,
+which is the unsigned pin the section calls protection against nothing; or prompt on all of them,
+which is the warning fatigue the re-invitation flow exists to avoid. The material for the re-sign is
+all local — the client already holds its pins — and it is one `BatchWriteItem` loop of the same
+shape as the rotation and mark-read loops, interruptible in the same way. **The ordering is the part
+most likely to be got wrong: re-sign, then discard the old private key.** Because that loop can be
+interrupted, the pin row also carries the **interval of the pinning key it was signed under**, so a
+half-re-signed set can be finished on the next login instead of being ambiguous forever. Rebuilding
+a pin set from scratch remains one more thing a re-invitation event has to do, but a rotation alone
+no longer requires it.
 
 **A signature authenticates a pin's contents, not its existence, and that gap is not closed in v1.**
 The operator cannot rewrite a pin, but it can withhold or delete one. If the server serves a
@@ -322,7 +354,8 @@ plaintext only inside a member's browser, so no server-side process can complete
 identity — an invite is a link, handed to someone who may not have an account yet, and
 `GET /api/invites/:id` is unauthenticated for exactly that reason. So the invite item is **written
 without a GSI1 entry**, and DynamoDB simply omits it from the index; the `USER#<invitee>` /
-`INVITE#<ts>` entry is **added at acceptance**, once there is a uuid to point at. Reading the table
+`INVITE#<YYYY-MM-DD, UTC>#<rand>` entry is **added at acceptance**, once there is a uuid to point
+at. Reading the table
 row as though GSI1PK were populated at creation makes accountless invites impossible, which would
 take the link flow with it.
 
@@ -359,8 +392,21 @@ non-members, and the only way in is an invite.
 
 **Public** groups keep name and description in plaintext so they can be listed in a directory and
 searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
-as the partition, the group's name as the sort key, so browsing is a `Query` and prefix search is a
-`begins_with` on it. Private groups write no entry at all and are therefore absent from the index
+as the partition, `NAME#<name>#<gid>` as the sort key, so browsing is a `Query` and prefix search is
+a `begins_with` on it.
+
+**Group names are deliberately not unique, and the gid suffix on that sort key is what makes
+non-uniqueness safe.** Two clubs both calling themselves "Book Club" is normal, and forbidding it
+would be a worse product — so unlike usernames, group names get no claim item and no conditional
+write. But a GSI key is not a primary key: DynamoDB does not reject a duplicate, it keeps one entry
+per distinct index key, so two public groups sharing a name **and** a shard would project the same
+key and the second would silently overwrite the first. The older group would vanish from the
+directory while its `GROUP#<gid>` / `META` row sat in the table intact, reachable only by someone who
+already had the gid — no error to either party, and a name-squatting primitive available to any
+account, since the shard fan-out is small by design and a handful of attempts covers it. Appending
+the gid makes the key unique by construction. `begins_with(GSI1SK, "NAME#" + prefix)` is the only
+read this index serves, and the suffix does not disturb it. A directory listing is therefore
+expected to show duplicate names, and the interface must not assume otherwise. Private groups write no entry at all and are therefore absent from the index
 rather than filtered out of it — the strongest form of "invisible to non-members", and the reason
 this costs nothing for the groups that want privacy. The shard exists only to keep one directory
 partition from becoming a write hotspot as the deployment grows; a small fixed fan-out is enough,
@@ -432,6 +478,19 @@ omission:
 Role changes are **signed by the granting admin**, so a client can verify a chain of grants back to
 the group's creator without trusting the server. A server that fabricates a role cannot produce the
 signature to back it.
+
+**Grants are append-only, and that is what makes the chain walkable.** A chain is
+`creator → Alice → Bob`: verifying Bob's grant means checking it was signed by Alice *while Alice
+held admin*, which means reading Alice's grant, and so on back to the creator. One row per subject
+cannot express that — demoting Alice would overwrite the very row Bob's grant is verified against,
+and Bob's legitimately-granted role would become unverifiable in exactly the way a forgery looks.
+So the sort key is `GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand>`: a subject's history is
+`begins_with(SK, "GRANT#" + uuid)`, and verifying a grant signed on day D means finding the
+grantor's grant that was current on D. That is the same point-in-time reasoning the superseded-key
+retention uses, at the same day resolution, applied to roles instead of keys. **Revocation is an
+appended row, never a delete** — a deleted grant is indistinguishable from one that never existed.
+The hot path is untouched: the current role lives on the membership item and gates writes with a
+`GetItem`, so this history is read only by the chain walk, which is already the slow path.
 
 Note the limit: signed grants prevent the *server* from lying about roles. They do not prevent a
 legitimately-privileged member from misusing their authority. Once someone holds the group key and
@@ -538,7 +597,7 @@ from the middle of the chain destroys access to every older generation behind it
 that has not expired. Truncation therefore starts at generation 1 and stops at the first generation
 with surviving content. **A middle generation is never droppable, however empty it is.**
 
-**`GENKEY#<n>` items therefore carry no TTL attribute, ever.** Posts do expire by DynamoDB TTL,
+**`GENKEY#<nnnnnn>` items therefore carry no TTL attribute, ever.** Posts do expire by DynamoDB TTL,
 which is per-item and unconditional — it deletes on a schedule without consulting anything else. The
 truncation rule here is global: a link may go only once every older link has already gone. TTL cannot
 express that precondition, so a TTL on a `GENKEY` item would eventually delete a middle link and
@@ -549,6 +608,22 @@ from the oldest surviving generation and stops at the first one with content.
 The group's `META` item records the **oldest surviving generation**, so a member walking backward
 knows where the chain floor is and stops there rather than treating an absent `GENKEY` as a
 corrupted chain.
+
+**Truncation must re-encrypt a private group's name and description before it advances past their
+generation, or it destroys them permanently.** The name is not content: it is an attribute on `META`,
+it has no TTL, and `META` never expires because it records the floor. So a private group created at
+generation 1, whose early posts have all aged out, truncates generation 1 away — and the name, still
+sitting on `META` and still claiming generation 1, becomes undecryptable to **every member,
+forever**. Not a stale-history edge case: the group's own name. The truncation walk is defined over
+posts, and surviving content is the only thing that pins the floor, which is exactly what the name is
+not. The fix belongs here rather than where the name is described, because here is where an
+implementer is standing when they get it wrong: **when truncation would advance the floor past the
+generation the name and description were encrypted under, re-encrypt them under the current
+generation first.** That is one write, on an item the truncation already updates to move the floor,
+and it leaves the "rotation does not re-encrypt the name" sizing untouched — the cost is paid at
+truncation, not at rotation. Treating the name's generation as content instead, so the floor may
+never pass it, would pin the chain at generation 1 for every group forever and defeat truncation
+entirely. Public groups need none of this; their names are plaintext.
 
 That is a weaker bound than it first appears, and worth being honest about: a single long-lived post
 under an early generation pins the whole chain from that point forward. **In a group with expiration
@@ -583,19 +658,19 @@ a `Query`, and it is discussed with the notification item below.
 |---|---|---|---|---|---|
 | User | `USER#<uuid>` | `PROFILE` | | | never |
 | Recovery blob | `USER#<uuid>` | `RECOVERY` | | | never |
-| Login challenge | `USER#<uuid>` | `CHALLENGE#<nonce>` | | | ~2 min |
+| Login challenge | `USER#<uuid>` | `CHALLENGE` | | | ~2 min |
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | | never |
-| Group | `GROUP#<gid>` | `META` | `PUBLIC#<shard>` (public only) | `NAME#<name>` | never |
+| Group | `GROUP#<gid>` | `META` | `PUBLIC#<shard>` (public only) | `NAME#<name>#<gid>` | never |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` | never |
-| Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | | never |
+| Generation key | `GROUP#<gid>` | `GENKEY#<nnnnnn>` | | | never |
 | Rotation marker | `GROUP#<gid>` | `ROTATION` | | | never |
-| Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | | never |
+| Role grant | `GROUP#<gid>` | `GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand>` | | | never |
 | Post | `GROUP#<gid>` | `POST#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
-| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
-| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
-| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
+| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`, cleared at acceptance |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<YYYY-MM-DD, UTC>#<rand>#<iid>` | | | signed `expires_at`, cleared at acceptance |
+| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
@@ -703,7 +778,7 @@ copy of the group's *current* generation, wrapped to their X25519 key, and the i
 generation number that is. It is the member's **entry point** into the chain, not the chain itself.
 Rotation replaces it; it never accumulates.
 
-**Generation key items are the chain.** `GENKEY#<n>` holds generation *n* wrapped under generation
+**Generation key items are the chain.** `GENKEY#<nnnnnn>` holds generation *n* wrapped under generation
 *n+1*, written **once per rotation for the whole group** rather than once per member per rotation.
 This is what makes storage `O(members + generations)`: the `members` term is the one current key in
 each membership item, and the `generations` term is this set of group-wide links. Storing history in
@@ -716,11 +791,22 @@ item. The **walk is cryptographic, not a sequence of round trips**: every `GENKE
 of `GENKEY#` and then unwraps locally, generation by generation. Only the unwrapping is sequential —
 each link decrypts the one below it — and its cost is CPU, not latency.
 
+**The generation number is zero-padded to six digits — `GENKEY#000008`, not `GENKEY#8`.** Sort keys
+compare as UTF-8 bytes, so an unpadded integer sorts `GENKEY#10` before `GENKEY#2`, and the two reads
+above both depend on the ordering: the range fetch is a `BETWEEN` on the sort key, and lexically
+`GENKEY#8` through `GENKEY#20` contains `GENKEY#9` but not `GENKEY#10` through `GENKEY#19`, so it
+returns a chain with a hole and the client cannot decrypt anything below the top — a failure that
+looks like corruption rather than a bad query. The chain-floor comparison below breaks the same way.
+Six digits is a million generations, past anything the 1,000-member rotation cap and truncation can
+produce. This is the third place the rule bites, after the comment path and the day format, so state
+it once as a rule: **every numeric component of a sort key in this schema is zero-padded to a fixed
+width.**
+
 **Why each item expires or does not.** The assignment itself is the TTL column above; what follows
 is the reasoning behind it, not a second copy of it.
 
 **Expiring:** `POST#`, `CMT#`, `RXN#` and `NOTIF#` — content and the pointers to it — plus
-`CHALLENGE#`, which carries the shortest TTL in the system (a minute or two) and is normally deleted
+`CHALLENGE`, which carries the shortest TTL in the system (a minute or two) and is normally deleted
 by the conditional write that spends it, the TTL existing only to collect challenges nobody ever
 answers — plus the invite pair, `INVITE#` and `SENT#`, whose TTL is **set from the `expires_at` the
 inviter signed** so that the stored lifetime and the signed one cannot drift. An invite is the one
@@ -742,12 +828,39 @@ nobody ever accepts, and it means the inviter's partition never becomes a durabl
 approached. A `SENT#` row whose `INVITE#` is already gone is filtered on read, as a notification
 whose target was deleted is.
 
+**Acceptance clears the TTL on both rows, and skipping that loses invites silently.** Step 3 runs on
+the inviter's *next login*, so the gap between acceptance and completion is however long the inviter
+stays away. Leave the signed `expires_at` in place across that gap and an invite accepted on day 6
+of a 7-day window expires on day 7 with both rows: the `SENT#` row the inviter's client would have
+found is deleted, so nothing completes, and the invitee — who signed their keys, completed their
+half, and was told it succeeded — never receives a group key and is never told why. The read-time
+check does not catch this; that check correctly refuses an *expired* invite at step 2, and here
+acceptance happened while the invite was valid. So at step 2, in the same write that adds the
+`USER#<invitee>` GSI entry, **the TTL attribute is removed from both rows** (or replaced with a
+completion deadline measured from acceptance). The signed `expires_at` keeps its real job of
+bounding how long an *unaccepted* link stays usable, which is the property the signature protects
+and is unaffected. What a dump yields is unchanged in kind — a completed step 3 deletes the `SENT#`
+row regardless, so the residue is still work genuinely outstanding.
+
 **Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a
 member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in
 progress, `GRANT#` must stay verifiable back to the group creator, and `PIN#` is the signed record a
 key change is checked against. `REQ#` is durable **unlike an invite** because a join request carries
 no signed lifetime — it is resolved by an admin approving or denying it, and a request left pending
-stays visible to its requester rather than silently vanishing. `RECOVERY` never expires for the
+stays visible to its requester rather than silently vanishing. **Denial is a status on the row with
+a cool-off TTL, not a delete and not a permanent slot.** The sort key is `REQ#<uuid>` on the
+requester's uuid, so there is exactly one slot per user per group, and the three obvious readings
+are all wrong: deleting the row makes the request vanish from the requester's list, which is what
+this sentence rules out, and lets them immediately re-request with no record that an admin already
+said no; keeping it forever with `attribute_not_exists(SK)` as the write condition turns one admin
+decision into a permanent silent ban, a moderation power no role in the table grants; and keeping it
+with no expiry at all leaves denied rows in the group partition where the admin's pending-request
+`Query` must filter them, a filtered read whose cost grows with total denial history. A cool-off
+TTL — days, not forever — gets all three: the requester sees "declined" rather than a vanishing row,
+the admin queue keys on status, and the slot frees itself. **`REQ#` is the one item with a
+conditional TTL**, which is why its row above reads `never (pending) / cool-off (denied)`. The
+pending-request `Query` is a filtered read for as long as denied rows share the partition, bounded
+by the cool-off window rather than by history. `RECOVERY` never expires for the
 plainest reason of all: it is used precisely when a user has been away long enough to forget their
 password, so any lifetime short enough to limit exposure is short enough to destroy the account it
 exists to save.
@@ -906,11 +1019,14 @@ in M7:
 
 Both halves of that rendering need a mechanism, and neither is free:
 
-- **The group name.** Like a post, the group's `META` item **records the generation its name and
-  description were encrypted under**, so a client that has walked the chain can read a name written
-  before it joined. Rotation does *not* re-encrypt the name — that would add a write the rotation
-  sizing does not account for, and it is unnecessary: the name is reachable through the same backward
-  walk as any older content.
+- **The group name.** In a **private** group the name and description are encrypted under the group
+  key, so — like a post — the `META` item **records the generation they were encrypted under**, and a
+  client that has walked the chain can read a name written before it joined. Rotation does *not*
+  re-encrypt the name: that would add a write the rotation sizing does not account for, and it is
+  unnecessary, since the name is reachable through the same backward walk as any older content. **A
+  public group's name is plaintext** — it is the `GSI1SK` the directory does `begins_with` on — so
+  there is no generation to record and nothing to walk; a client rendering the notification just
+  reads the attribute.
 - **The actor's username.** Usernames are read through `GET /api/users/:id`, a **projection over the
 user item exposing only the username and the public keys, current and superseded**. The full
 `PROFILE` item also holds
@@ -981,10 +1097,24 @@ partition, so a time-ordered id there is a millisecond-resolution activity log f
 spanning every group they belong to — a worse disclosure per item than posts, which are at least
 scoped to a group. It carries a day prefix for the same reason posts do.
 
-**Role grants are keyed by group, not by subject.** Verifying a grant chain therefore queries the
-group partition and filters client-side; it is a `Query`, never a `Scan`, but the read grows with
-total role churn in the group rather than with the length of the chain being checked, and DynamoDB
-bills the filtered-out items. Acceptable at the group sizes this design targets. A group with heavy
+**`INVITE#`, `SENT#` and `REQ#` use the same day-plus-random construct, and there is no `<ts>`
+anywhere in this schema.** A field named `ts` invites `Date.now()`, an ISO-8601 instant, or a Unix
+epoch, every one of which puts millisecond or second resolution back into a plaintext sort key —
+the leak the random id exists to remove. Two of these three sit in the *user's* partition, which is
+the sharper case named just above: `INVITE#` is a precise timeline of when a named person was
+invited to things, and `SENT#` is the same for who they approached, which the threat model treats as
+the more sensitive half because it is intent rather than association. The `<rand>` suffix closes a
+collision too — two invites to the same invitee on the same day would otherwise project the same
+GSI1 key and one would silently overwrite the other, the same failure as the directory collision
+above. What this costs is sub-day ordering on the two listings a user reads, `INVITE#` and `REQ#`,
+which is the trade posts already accept. `SENT#` is queried as pending work rather than in time
+order, so it loses nothing.
+
+**Role grants are keyed by group, not by subject, and are append-only.** Verifying a grant chain
+therefore queries the group partition and filters client-side; it is a `Query`, never a `Scan`, but
+the read returns role *history* rather than current roles, so it grows with total role churn in the
+group rather than with membership or with the length of the chain being checked, and DynamoDB bills
+the filtered-out items. Acceptable at the group sizes this design targets. A group with heavy
 role churn would want a GSI keyed by subject, which is additive and needs no migration of existing
 items.
 
