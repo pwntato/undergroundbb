@@ -48,6 +48,23 @@ The server learns only that someone holding the private key was present. Decrypt
 key happens entirely in the browser, and GCM's authentication tag failing *is* the wrong-password
 signal — no separate password verifier is stored.
 
+**The session cookie authenticates; it decrypts nothing.** It is a short-lived signed token —
+there is no session store, so the server holds nothing to look up — carried in an `HttpOnly`,
+`Secure`, `SameSite=Lax` cookie. It names the user to the API and nothing more. The private keys
+stay in the browser's memory for the life of the tab and are never sent anywhere, so a stolen cookie
+yields ciphertext, group membership and metadata, but no plaintext and no key. Nor can it write
+convincingly: every post carries an Ed25519 signature the cookie cannot produce, so forged content
+from a stolen session fails verification in every reader's client. Session theft here is a genuinely
+smaller event than in an ordinary application.
+
+The cost of statelessness is the other half, and it is a real one: **a stateless session cannot be
+revoked.** A stolen cookie stays valid until it expires. Neither a password change nor the
+five-minute lockout ends a live session — which matters most for the user the password-change flow
+is designed for, someone who believes they are compromised and reasonably expects that changing
+their password logs the attacker out. It does not. Keeping sessions short is the only control here,
+and it is a bounded one; a revocation list is the standard fix and is deferred rather than
+dismissed, since it reintroduces exactly the server-side state this architecture does without.
+
 **This means the server cannot count wrong passwords.** A mistyped password fails at step 3, inside
 the browser, and never reaches the server at all. What the server can count is **failed signature
 verifications at step 4**, which a normal user with a wrong password never reaches. The
@@ -70,8 +87,11 @@ because it is encrypted.
 ### Recovery
 
 At signup, a high-entropy recovery code is generated and a **second copy** of the private keys is
-wrapped under it. A user who forgets their password can recover with the code. A user who loses both
-has permanently lost access — the server has nothing to reset, by design.
+wrapped under it, stored as its own `USER#<uuid>` / `RECOVERY` item and served by no read path. A
+user who forgets their password can recover with the code. A user who loses both has permanently
+lost access — the server has nothing to reset, by design. The code is a **second full credential**,
+with the exposure that implies — see
+[the threat model](THREAT_MODEL.md#the-recovery-code).
 
 Changing a password does **not** change keys. It unwraps the private keys with the old password and
 re-wraps them under the new one — the keypairs, group memberships, and everything signed by them are
@@ -172,6 +192,19 @@ substitute a key here than it can during an invite — same machinery, same guar
 A DM is **a group with `type: "dm"`**: exactly two members, no further invites, and no name (the UI
 renders the other member's username). Group key, key wrapping, signed posts and encryption are
 all identical.
+
+`type` is a **plaintext attribute on the group's `META` item**, not a separate row — a DM occupies
+the same `GROUP#<gid>` partition as any other group, which is what lets one codepath serve both. It
+is the only attribute in this design that changes an item's validation rules, and it needs a stated
+home for that reason: the three invariants above — two members, no invites, no name — are enforced
+against it, and nothing else records them. It is also one of the few constraints the **server** can
+usefully check in a design that pushes almost everything client-side, since membership count and
+invite creation are both server-mediated operations.
+
+A DM appears in a user's group list like any other group, through the same `USER#<uuid>` GSI1 entry
+on its membership item. That is deliberate — one listing query, no special case — and it means a
+database dump shows who direct-messages whom exactly as clearly as it shows group membership. See
+[the social graph](THREAT_MODEL.md#the-social-graph).
 
 This is deliberate. A separate one-to-one message path would be a second implementation of the same
 cryptography, and the second implementation is where the bug lives. There is one codepath.
@@ -345,12 +378,16 @@ working; check the table.
 
 ## Data model
 
-One DynamoDB table, one GSI. Nothing scans, and every access pattern is a single `Query` or
-`GetItem` — with one exception, grant-chain verification, noted beneath the table.
+One DynamoDB table, one GSI. **Nothing scans: every read is a `Query` or a `GetItem`.** That is the
+property worth claiming, and it holds everywhere. Several operations take more than one such read —
+grant-chain verification, walking the generation chain to read older content, and rendering a
+notification each need a small bounded sequence — but none of them scans, and none is unbounded in
+the size of the table.
 
 | Item | PK | SK | GSI1PK | GSI1SK |
 |---|---|---|---|---|
 | User | `USER#<uuid>` | `PROFILE` | | |
+| Recovery blob | `USER#<uuid>` | `RECOVERY` | | |
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | |
 | Group | `GROUP#<gid>` | `META` | | |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` |
@@ -378,9 +415,28 @@ under a **server-held** key, because the server has to read it to send mail. Thr
 protections in one item, and the distinction is the point: only the preferences blob is beyond the
 operator's reach.
 
+That derivation does have one case it does not survive, and it is worth naming rather than leaving
+to be discovered: a **keypair change resets preferences**. A pinned key change is a re-invitation
+event, and the new X25519 key is a new HKDF input, so the old blob will not open. This is acceptable
+only because of what the blob holds — a theme and a font, both re-choosable in a few seconds — and
+it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
+the design should be keyed this way.
+
+**The recovery copy is a separate item, not an attribute of the profile.** `USER#<uuid>` /
+`RECOVERY` holds a **second copy of the private keys wrapped under a key derived from the recovery
+code**, with its own salt — derived from the recovery code alone, with **no dependence on the
+password**. That independence is the whole point of the item: it is what a user who has forgotten
+their password has left. Wrapping this copy under the password-derived key instead would be
+self-defeating in the exact situation it exists for, and it is a plausible enough mistake to be
+worth foreclosing here.
+
 Reads of another user go through a **projection exposing only the username and public keys** —
 never the salt or the wrapped private keys, which leave the server only via the rate-limited
-challenge endpoint.
+challenge endpoint. **The `RECOVERY` item is served by no read path at all.** It is
+offline-cracking material exactly as the password-wrapped blob is — against a higher-entropy secret,
+but with the same consequence if it leaks — and unlike the login blob it has no reason to leave the
+server, since recovery is a write path: the client submits proof it can use the code rather than
+asking for the blob to try codes against.
 
 **There is no separate display name.** Users are identified everywhere by their username, which is
 plaintext by necessity — login requires looking a user up by name. A display name sealed under a key
@@ -403,7 +459,10 @@ the membership items instead — a wrapped key per member per generation — is 
 `O(members × generations)` layout that this design rejects, and it walks into the 400KB item ceiling.
 A member reads old content by unwrapping their current generation and then walking `GENKEY#<n−1>`,
 `GENKEY#<n−2>`, and so on, stopping at the oldest surviving generation recorded on the group's `META`
-item.
+item. The **walk is cryptographic, not a sequence of round trips**: every `GENKEY#` shares the
+`GROUP#<gid>` partition, so a client fetches the range it needs in **one `Query`** with an SK prefix
+of `GENKEY#` and then unwraps locally, generation by generation. Only the unwrapping is sequential —
+each link decrypts the one below it — and its cost is CPU, not latency.
 
 **Which items carry a TTL attribute, and which never do.** This list covers every class in the table
 above, and is a deliberate assignment rather than an accident of which items happened to get an
@@ -418,13 +477,15 @@ eventual and an expired-but-not-yet-deleted invite must be refused: for invites 
 **security control, not a display convenience**, and it runs only after the inviter's signature has
 been verified, since an unverified `expires_at` is a value the server could have altered.
 
-**Never expiring:** `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE`
-and `CLAIM`. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
+**Never expiring:** `META`, `MEMBER#`, `GENKEY#`, `ROTATION`, `GRANT#`, `REQ#`, `PIN#`, `PROFILE`,
+`RECOVERY` and `CLAIM`. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
 into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in progress, `GRANT#` must stay
 verifiable back to the group creator, and `PIN#` is the record a key change is checked against.
 `REQ#` is durable **unlike an invite** because a join request carries no signed lifetime — it is
 resolved by an admin approving or denying it, and a request left pending stays visible to its
-requester rather than silently vanishing.
+requester rather than silently vanishing. `RECOVERY` never expires for the plainest reason of all:
+it is used precisely when a user has been away long enough to forget their password, so any lifetime
+short enough to limit exposure is short enough to destroy the account it exists to save.
 
 **A default-TTL-on-write rule with exceptions is the wrong shape here** — most of this partition
 does not expire.

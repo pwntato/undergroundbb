@@ -52,6 +52,11 @@ This was chosen consciously: hiding it would require pseudonymous membership key
 group key, which would break the ability to list a user's groups efficiently and would push that
 listing into an encrypted blob requiring a read-modify-write on every join and leave.
 
+**This includes direct messages.** A DM is a group like any other and its membership is recorded the
+same way, so a dump reveals who direct-messages whom as plainly as it reveals group rosters — and
+that is the pairwise case, the one with the smallest anonymity set and usually the most to give
+away. The pairwise case gets no special treatment, and nobody should assume it does.
+
 The mitigating factor is that UndergroundBB performs **no identity verification**. Accounts are a
 username and an optional encrypted email. The graph therefore links pseudonyms to pseudonyms.
 
@@ -110,6 +115,35 @@ replay against a known account. A source-scoped counter would avoid the
 denial of service but is trivially defeated by rotating IPs, which is the harder problem. Naming it
 plainly: an attacker who wants to keep a specific user logged out can do so, and no design in this
 document prevents that.
+
+### The recovery code
+
+At signup every account is issued a **recovery code**, and a second copy of the private keys is
+wrapped under it. It is therefore **a second full credential**: anyone holding it can unwrap the
+same private keys, and through them every group key the user holds. It is equivalent to the
+password, not a lesser factor.
+
+Three things follow, and none of them is stated anywhere else:
+
+- **Its strength is where the user put it.** The code is high-entropy and generated for the user, so
+  unlike a password it cannot be guessed — the Argon2id stretching applied when wrapping under it is
+  defence in depth rather than the primary control. What guards it is storage. A code in a password
+  manager is strong; the same code on a sticky note or in a screenshot is the weakest thing in this
+  document. Of every limitation listed here, this is the one an attacker is likeliest to reach
+  without any skill at all.
+- **It is not served by any endpoint.** Unlike the password-wrapped blob described in
+  [Login material](#login-material), the recovery-wrapped copy leaves the server through no read
+  path — recovery is a write path, where the client proves it can use the code rather than fetching
+  the blob to try codes against. A database dump still exposes it, like everything else in the
+  table, but it is not available on request the way login material is. That is a deliberate
+  protection and the reason the two blobs are separate items.
+- **A leaked code is neutralized only by changing the password.** There is no "revoke my recovery
+  code" operation, because a password change already reissues the code and re-wraps the copy under
+  the new one, invalidating the old. A user who believes their code has leaked should change their
+  password — an instruction worth putting in front of them, since nothing about it is obvious.
+
+The converse of the guarantee in the README — lose both password and code and the data is gone — is
+that holding either one is total account access, indefinitely, until a password change.
 
 ## Limitations
 
@@ -172,6 +206,8 @@ switches off the only mechanism here that limits past exposure at any group size
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
 | First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
 | Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |
+| Attacker obtains a user's recovery code | **Total account compromise**, equivalent to learning the password. Neutralized only by a password change, which reissues the code. See [The recovery code](#the-recovery-code). |
+| Session cookie stolen | Reads ciphertext, membership and metadata; **no plaintext and no keys**, which stay in the browser. Cannot forge posts — those carry an Ed25519 signature the cookie cannot produce. Not revocable: valid until it expires, and unaffected by a password change or lockout. |
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
