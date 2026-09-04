@@ -119,6 +119,11 @@ private.
 The number of groups, their member counts, post counts, thread shapes, and ciphertext lengths are
 all visible in a dump. Padding could obscure lengths; it is not currently implemented.
 
+**A deleted post leaves a tombstone**, which keeps replies coherent but is itself a durable record
+that something was posted there, by whom, and on what day it was removed. Tombstones expire with
+the group's retention policy like any other item — so in a group that has disabled expiration, the
+marker is permanent even though the content is gone.
+
 ### Login material
 
 `POST /api/auth/challenge` returns the salt and the wrapped private keys for any username given to
@@ -237,11 +242,12 @@ switches off the only mechanism here that limits past exposure at any group size
 | Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
-| Malicious operator fabricates a role grant | Blocked — clients verify the signature chain. |
+| Malicious operator fabricates a role grant | Blocked — clients verify the signature chain, back to the group creator's key that was current when each grant was signed. |
 | Malicious operator deletes a pin, then substitutes that key | **Possible.** A pin's signature authenticates its contents, not its existence, and nothing binds the pin *set* — so a withheld pin is indistinguishable from genuine first contact and the hard-block never fires. Fingerprint verification is the only control. See the pinning section in [DESIGN.md](DESIGN.md). |
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
 | First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
-| Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |
+| Author deletes a post, expecting it to be gone | **Advisory only.** The stored copy is replaced with a tombstone, but any member who already read the post could have kept a copy, exactly as with removal (Limitation 3). Deletion removes what the server holds, not what has been seen. |
+| Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key, and superseded public keys are retained so a rotation does not turn the author's own history into unverifiable content. |
 | Attacker obtains a user's recovery code | **Total account compromise**, equivalent to learning the password. Neutralized only by a password change, which reissues the code. See [The recovery code](#the-recovery-code). |
 | Login challenge response replayed | Blocked — the nonce is stored server-side and spent by a conditional delete, so a captured response is worthless the moment it is used once. Note the lockout does not help here: a replayed *valid* signature never fails verification, so nothing counts it. |
 | Session cookie stolen | Reads ciphertext, membership and metadata; **no plaintext and no keys**, which stay in the browser. Cannot forge posts — those carry an Ed25519 signature the cookie cannot produce. Not revocable: valid until it expires, and unaffected by a password change or lockout. |

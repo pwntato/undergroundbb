@@ -186,7 +186,29 @@ deliberate action per group, taken by someone who already has the authority, rat
 confusion across every co-member. It is the same re-invitation event the pinning section describes,
 and this is its cause.
 
-Two properties are easy to get wrong when implementing it:
+**The Ed25519 half of a rotation is the harder half, and it is why the user item keeps a key
+history.** Replacing a signing key does not merely affect what the user signs next — it invalidates
+every signature they have ever made, because the only public key a reader could fetch would be the
+new one. Two of those signatures are claimed as permanent properties: every post and comment carries
+one, and `GRANT#` items must stay verifiable back to the group creator *forever*, which is why they
+never expire. A rotating creator would otherwise strand the root of every role chain in their group.
+There is no re-signing path either, since case 1 is a user who no longer holds the old private key
+and cannot reproduce anything with it.
+
+So **superseded Ed25519 public keys are retained on the `PROFILE`, each with the interval it was
+current for, and a signature is verified against the key that was current when the item was
+written** — the day in the sort key gives that to the resolution required. A rotation appends to
+this history rather than replacing an entry, the `GET /api/users/:id` projection serves the whole
+set, and `PIN#` accordingly pins a key *set* rather than a single key. Without the history a client
+has only bad options: reject unverifiable posts and the user's history vanishes, contradicting the
+attribution this section promises; show them unverified and "forged" becomes indistinguishable from
+"signed with a superseded key"; or stop verifying old items and the property is gone altogether.
+
+Retention is why this is affordable: the history holds public keys only, it grows by one entry per
+rotation, and rotations are rare by construction. The X25519 half needs no equivalent — group keys
+are re-wrapped to the new key, so nothing verifies against an old one.
+
+Two further properties are easy to get wrong when implementing it:
 
 - **A rotating user re-enters the chain at the current generation, and keeps their history.** Their
   new entry point is a wrap of the *current* group key, and the older `GENKEY#` links are reachable
@@ -540,7 +562,9 @@ One DynamoDB table, one GSI. **Nothing scans: every read is a `Query` or a `GetI
 property worth claiming, and it holds everywhere. Several operations take more than one such read —
 grant-chain verification, walking the generation chain to read older content, and rendering a
 notification each need a small bounded sequence — but none of them scans, and none is unbounded in
-the size of the table.
+the size of the table. The one read whose cost is not bounded by what it returns is the **unread
+notification count**, a filtered `Query` over a range that grows with retained history; it is still
+a `Query`, and it is discussed with the notification item below.
 
 | Item | PK | SK | GSI1PK | GSI1SK | TTL |
 |---|---|---|---|---|---|
@@ -569,8 +593,10 @@ question in the row makes it impossible to add an item without deciding, and the
 explain the reasoning rather than carrying the assignment.
 
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
-plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need,
-the Argon2id salt, and the wrapped private keys. It also holds an **encrypted preferences blob** —
+plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need
+— including **superseded Ed25519 public keys with the intervals they were current for**, without
+which no signature written before a rotation could ever be verified — the Argon2id salt, and the
+wrapped private keys. It also holds an **encrypted preferences blob** —
 theme and font choices — sealed under a key **derived by HKDF from the user's X25519 private key**,
 so they do not become another identifying signal in a dump. That derivation is deliberate: the
 recovery code restores the same private keys, so preferences survive a password change and a
@@ -639,7 +665,8 @@ their password has left. Wrapping this copy under the password-derived key inste
 self-defeating in the exact situation it exists for, and it is a plausible enough mistake to be
 worth foreclosing here.
 
-Reads of another user go through a **projection exposing only the username and public keys** —
+Reads of another user go through a **projection exposing only the username and public keys —
+current and superseded, since verifying an older signature needs the key that was current then** —
 never the salt or the wrapped private keys, which leave the server only via the rate-limited
 challenge endpoint. **The `RECOVERY` item is served by no read path at all.** It is
 offline-cracking material exactly as the password-wrapped blob is — against a higher-entropy secret,
@@ -728,6 +755,29 @@ server-side process can complete a rotation anyway, because the group key exists
 inside a member's browser, so a scheduled Lambda could detect staleness but could do nothing about
 it. Detection therefore lives where the remedy lives.
 
+**Editing is in place; deletion is a tombstone.** An edit overwrites the ciphertext and bumps an
+`edited_at` field, leaving no earlier plaintext anywhere — there is no revision history, which is
+the point rather than a shortcut. A delete replaces the content with a tombstone rather than
+removing the item, because comments hang off posts and replies hang off comments: removing the row
+outright would orphan or reorder everything beneath it, and the materialized path a thread is
+rendered from would break.
+
+Three consequences the rest of this document constrains:
+
+- **An edit re-signs, and it re-encrypts under the generation the item already records.** A post
+  records the generation it was encrypted under, and an edit must keep that field and the ciphertext
+  agreeing — re-encrypting under the *current* generation while the item still claims an older one
+  produces content nobody can read, and the reverse strands a reader walking the chain. The
+  signature is regenerated with the author's current key, which is also the only mechanism in the
+  design by which a user re-signs their own content: it does not rescue history after a rotation,
+  because it requires the author to still be able to read and re-encrypt the item.
+- **A tombstone inherits `group policy`**, like the content it replaces, since it is an item state
+  and not a new row. In a group with expiration disabled that makes it permanent, and a permanent
+  tombstone is a durable record that a post existed, by whom, and on what day it was removed.
+- **Deletion is advisory.** It removes the copy the server holds; it cannot remove what any member
+  already decrypted and kept. This is the same limit removal has, and it is stated in the threat
+  model beside it.
+
 **`<pid>` is a post's full address, not just its random half:** `<gid>#<YYYY-MM-DD>#<rand>`, the
 group and day and random id joined. Comments and reactions are the only rows keyed under something
 other than `GROUP#<gid>`, and defining `<pid>` this way is what keeps them reachable — three
@@ -749,7 +799,9 @@ to anyone holding a link, both of which that person can see anyway if they can r
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
-capped at 8, and each segment is **four digits, zero-padded** — the padding is what makes the
+capped at 8 — **past the cap a reply attaches at the cap level** rather than being refused, so a
+conversation never dead-ends on a structural limit — and each segment is **four digits,
+zero-padded** — the padding is what makes the
 ordering property hold, since unpadded segments would sort sibling `10` before sibling `2` and
 scramble the thread. That fixes the schema's bounds: at most 9,999 replies to any one comment, and a
 comment sort key no longer than 39 characters — eight four-digit segments plus the seven separators
@@ -815,9 +867,26 @@ ids — those are metadata — so it can tell that someone replied to your post 
 read either. But it cannot compose a human-readable notification: a private group's name is
 encrypted under the group key, so the server cannot name the group a notification refers to.
 
-A notification item therefore stores `{kind, actor_uuid, group_id, post_id}` and nothing more. **The
-client renders the text**: "alice replied to your post in Roof Group" is what the user sees, not what
-the table contains, and no notification is ever a ready-to-display message.
+A notification item therefore stores `{kind, actor_uuid, group_id, post_id, cmt_path, read}` and
+**no content of any kind**. **The client renders the text**: "alice replied to your post in Roof
+Group" is what the user sees, not what the table contains, and no notification is ever a
+ready-to-display message.
+
+`cmt_path` is what makes a reaction notification land where the reaction is: `kind` distinguishes a
+reply from a reaction, but `post_id` alone resolves to the post, and a reaction to a comment must
+link to that comment rather than to the top of a thread. `read` is the flag the unread badge and
+the mark-read operation act on, and it carries two costs worth stating here rather than discovering
+in M7:
+
+- **Unread count is the one read in this design whose cost grows with retained history.** A flag is
+  an attribute, not a key component, so counting unread items is a `Query` over the user's whole
+  `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
+  ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
+  history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
+  and would make a **fourth** contested write, alongside the three named above.
+- **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
+  `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
+  the rotation loop, and it should be built with the same expectation that it is interruptible.
 
 Both halves of that rendering need a mechanism, and neither is free:
 
@@ -827,7 +896,8 @@ Both halves of that rendering need a mechanism, and neither is free:
   sizing does not account for, and it is unnecessary: the name is reachable through the same backward
   walk as any older content.
 - **The actor's username.** Usernames are read through `GET /api/users/:id`, a **projection over the
-  user item exposing only the username and the two public keys**. The full `PROFILE` item also holds
+user item exposing only the username and the public keys, current and superseded**. The full
+`PROFILE` item also holds
   the Argon2id salt and the wrapped private keys, which is offline-cracking material, and no ordinary
   read path may hand those out — that blob is available only from `POST /api/auth/challenge`, which
   is rate-limited precisely because it does. The key-pinning flow reads the same projection.
