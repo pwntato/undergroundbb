@@ -79,7 +79,9 @@ username and an optional encrypted email. The graph therefore links pseudonyms t
 A public group's name and description are stored in plaintext, because a directory cannot list or
 search what it cannot read. This is the entire trade a public group makes, and it is chosen per
 group at creation. Its **posts remain encrypted** — public means discoverable, not readable — and
-its member list, like every group's, is visible only to members.
+its member list, like every group's, is visible only to members. A private group writes no directory
+entry at all, so it is **absent from the index rather than filtered out of it**: there is no listing
+a bug or a permissive query could expose it through.
 
 ### Activity timing
 
@@ -110,9 +112,13 @@ alone, and membership is the disclosure this document already treats as the seri
 
 ### Usernames
 
-Usernames are stored in plaintext — login requires looking a user up by name — and are enumerable
-through search and the signup availability check. Both endpoints are rate-limited; neither is
-private.
+Usernames are stored in plaintext — login requires looking a user up by name — and are
+**confirmable one at a time**: the signup availability check and `/auth/challenge` both reveal
+whether a given name exists. There is no username search, and the design deliberately provides no
+read path for one — matching partial names would need a `Scan` or a search index, and the schema
+has neither — so an attacker can test names but cannot ask for a list of them. Both endpoints are
+rate-limited; neither is private. Confirming names one at a time is still enough to enumerate a
+deployment given time, which is what the lockout weakness below assumes.
 
 ### Volume and structure
 

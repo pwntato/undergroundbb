@@ -236,7 +236,9 @@ because the invitee signs their own keys. It cannot help on **first contact**: t
 are handed a public key for a username you have never seen, you have nothing to compare it against.
 
 The answer is trust on first use. A client **pins** a user's public keys the first time it sees
-them, storing them under `PIN#<other>`. If a pinned key later changes, the client **hard-blocks**
+them, storing them under `PIN#<other-uuid>` — **keyed by the pinned user's uuid, not their
+username**, so that a name displayed as typed can never split one person across two pin rows and
+silently re-TOFU them. If a pinned key later changes, the client **hard-blocks**
 rather than warning — it refuses to encrypt to the new key or to accept content signed by it until a
 person resolves it. The reasoning is that a key change is genuinely rare, so it can afford real
 friction, while the operation it protects is common and must not train people to click through
@@ -263,7 +265,7 @@ Rebuilding it is one more thing a re-invitation event has to do.
 
 **A signature authenticates a pin's contents, not its existence, and that gap is not closed in v1.**
 The operator cannot rewrite a pin, but it can withhold or delete one. If the server serves a
-substituted key for Bob *and* omits Alice's `PIN#<bob>` row, Alice's client finds no pin, concludes
+substituted key for Bob *and* omits Alice's `PIN#` row for him, Alice's client finds no pin, concludes
 this is a first sighting, and pins the substituted key — no signature is forged and no check fails,
 because there is no record left to check. The hard-block is conditional on a pin being present, and
 **absence is indistinguishable from genuine first contact**. So pinning protects a connection the
@@ -356,7 +358,18 @@ A group is **private** or **public**, chosen at creation.
 non-members, and the only way in is an invite.
 
 **Public** groups keep name and description in plaintext so they can be listed in a directory and
-searched. **Posts are still encrypted under the group key** — public means *discoverable*, not
+searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
+as the partition, the group's name as the sort key, so browsing is a `Query` and prefix search is a
+`begins_with` on it. Private groups write no entry at all and are therefore absent from the index
+rather than filtered out of it — the strongest form of "invisible to non-members", and the reason
+this costs nothing for the groups that want privacy. The shard exists only to keep one directory
+partition from becoming a write hotspot as the deployment grows; a small fixed fan-out is enough,
+and a browse reads all shards and merges.
+
+This shares GSI1 with the three user reverse-lookups rather than adding a second index, which works
+because those all partition on `USER#<uuid>` and this partitions on `PUBLIC#<shard>` — the key
+spaces cannot collide. Without it a directory would need a `Scan`, which is the one thing this
+schema does not do. **Posts are still encrypted under the group key** — public means *discoverable*, not
 *readable*. Someone browsing the directory sees that a group exists and what it calls itself; they
 see none of its content.
 
@@ -572,7 +585,7 @@ a `Query`, and it is discussed with the notification item below.
 | Recovery blob | `USER#<uuid>` | `RECOVERY` | | | never |
 | Login challenge | `USER#<uuid>` | `CHALLENGE#<nonce>` | | | ~2 min |
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | | never |
-| Group | `GROUP#<gid>` | `META` | | | never |
+| Group | `GROUP#<gid>` | `META` | `PUBLIC#<shard>` (public only) | `NAME#<name>` | never |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` | never |
 | Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | | never |
 | Rotation marker | `GROUP#<gid>` | `ROTATION` | | | never |
@@ -583,7 +596,7 @@ a `Query`, and it is discussed with the notification item below.
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
-| Key pin | `USER#<uuid>` | `PIN#<other>` | | | never |
+| Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
@@ -626,6 +639,9 @@ item decides the first half: `Alice` and `alice` cannot both exist, and **every 
 including `POST /api/auth/challenge` — a user who signed up as `Alice` logs in as `alice`. The
 `PROFILE` item keeps the username as typed, and that is what is projected, displayed and shown
 beside a fingerprint, because a name the user chose the capitalization of is theirs to present.
+**The claim item holds the uuid its username resolves to**, which is what makes it a lookup and not
+merely a lock: every other user row is keyed `USER#<uuid>`, and a login arrives with a username, so
+this row is the only thing that bridges the two.
 
 **The claim is only a claim because the write is conditional on `attribute_not_exists(PK)`.**
 Without that, two concurrent signups for `alice` both read the name as available and both write:
