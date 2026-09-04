@@ -517,14 +517,14 @@ the size of the table.
 | Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | | never |
 | Rotation marker | `GROUP#<gid>` | `ROTATION` | | | never |
 | Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | | never |
-| Post | `GROUP#<gid>` | `POST#<day>#<ulid>` | | | group policy |
+| Post | `GROUP#<gid>` | `POST#<day>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | | group policy |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | | never |
-| Notification | `USER#<uuid>` | `NOTIF#<ulid>` | | | group policy |
+| Notification | `USER#<uuid>` | `NOTIF#<day>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
 and drifted every time a row was added — a new row would arrive and the separate list would not be
@@ -706,12 +706,31 @@ expiration disabled does not expire either. A notification whose target has alre
 filtered on read like any other expired item, since the client renders from identifiers and an
 unresolvable `post_id` would otherwise show as a reply linking to nothing.
 
-**Sort keys carry a day and a ULID.** ULIDs sort by creation time and need no coordinating counter;
-the day gives a dump only day-level granularity while the precise timestamp rides inside the
-encrypted payload. DynamoDB pagination is cursor-based natively, so infinite scroll needs no offsets.
-The trade this makes: because the exact time is encrypted, the server can filter no finer than a
-day. Anything needing sub-day server-side time filtering would require a schema migration, so this
-is a deliberate and hard-to-reverse choice, not an incidental one.
+**Sort keys carry a day and a random id — deliberately not a ULID.** A ULID would be the obvious
+choice here and it is the wrong one: a ULID *is* a timestamp. Its leading 48 bits are the Unix time
+in **milliseconds**, sitting in plaintext in the first 10 characters of the id, so a sort key built
+on one carries millisecond timing regardless of what the day prefix says and regardless of what the
+encrypted payload holds. The day prefix would coarsen nothing, because the precise time it was
+meant to withhold would be sitting beside it. **The id is therefore 128 random bits**, and the day
+is the only time component in the key.
+
+That makes the claim honest: the exact timestamp exists **only** inside the encrypted payload, so a
+dump yields the day a post was written and nothing finer. The cost is paid in ordering, and it is
+worth stating plainly: posts are **ordered by day in the table and by decrypted timestamp within a
+day**. The server can sort no finer than a day, so a day's page is fetched and ordered client-side
+after decryption. That is cheap here — the client decrypts every post it renders anyway — but it
+means intra-day ordering is a client responsibility, and a client that skips the sort will render a
+day in arbitrary order. Random ids keep the property that made ULIDs attractive in the first place:
+no coordinating counter, no serializing every write to a group through one item.
+
+DynamoDB pagination is cursor-based natively, so infinite scroll needs no offsets. Anything needing
+sub-day server-side time filtering or server-side intra-day ordering would require a schema
+migration, so this is a deliberate and hard-to-reverse choice, not an incidental one.
+
+**`NOTIF#` uses the same random id, and for a sharper reason.** Notifications live in the *user's*
+partition, so a time-ordered id there is a millisecond-resolution activity log for one named person
+spanning every group they belong to — a worse disclosure per item than posts, which are at least
+scoped to a group. It carries a day prefix for the same reason posts do.
 
 **Role grants are keyed by group, not by subject.** Verifying a grant chain therefore queries the
 group partition and filters client-side; it is a `Query`, never a `Scan`, but the read grows with

@@ -81,8 +81,22 @@ its member list, like every group's, is visible only to members.
 ### Activity timing
 
 Sort keys carry day-level granularity, so a dump reveals what day something was posted and by whom.
-Precise timestamps are encrypted, which blunts fine-grained traffic analysis but does not eliminate
-it.
+Precise timestamps exist only inside the encrypted payload, which is why the ids in sort keys are
+**random rather than time-ordered** — a ULID or similar would have put a millisecond timestamp in
+plaintext beside the day prefix and made the day meaningless.
+
+**This includes notifications**, which are `NOTIF#<day>#<rand>` in the *user's* own partition. That
+is a per-user timeline rather than a per-group one, and it spans every group the user belongs to, so
+it is a distinct disclosure from "what day something was posted in this group" — which is why it
+gets the same day-granular, randomly-ordered treatment.
+
+What day-level timing still gives an observer is real: activity on a given date, per user, per
+group, and a rough correlation of who was active on the same days. What it withholds is the
+fine-grained analysis that a millisecond timeline supports — inter-post intervals, session
+boundaries, and reply latency. That last one matters most in the pairwise case named under
+[the social graph](#the-social-graph): in a two-member DM, millisecond reply latency correlates two
+accounts far more strongly than membership alone, and membership is the disclosure this document
+already treats as the serious one.
 
 ### Usernames
 
@@ -210,7 +224,7 @@ switches off the only mechanism here that limits past exposure at any group size
 
 | Attack | Outcome |
 |---|---|
-| Database dump stolen | Content safe. Social graph, usernames, day-level timing, volume, and **currently outstanding invitations** — who approached whom, even where nobody joined — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
+| Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
 | Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
