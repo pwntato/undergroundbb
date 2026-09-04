@@ -241,3 +241,10 @@ filtered. A Content-Security-Policy of `style-src 'self'` without `unsafe-inline
 Please report privately rather than in a public issue. Use the **Report a vulnerability** button
 under this repository's **Security** tab, which opens a private advisory visible only to the
 maintainers.
+
+**What to expect, stated honestly because the alternative is silence:** this is a personal project,
+not a funded one, and it has no on-call rotation. The best-effort target is an acknowledgement
+within **one week**. There is no bounty. Fixes are made in the open and the advisory is published
+once a fix is available, crediting the reporter unless they prefer otherwise. If a report goes
+unacknowledged past that window, escalating publicly is a reasonable thing to do — a project that
+cannot answer a security report in a week has no standing to ask for continued silence.

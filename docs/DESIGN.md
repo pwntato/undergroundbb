@@ -422,6 +422,16 @@ only because of what the blob holds — a theme and a font, both re-choosable in
 it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
 the design should be keyed this way.
 
+**Usernames are unique case-insensitively, and displayed as typed.** The `USERNAME#<lower>` claim
+item decides the first half: `Alice` and `alice` cannot both exist, and **every lookup lowercases**,
+including `POST /api/auth/challenge` — a user who signed up as `Alice` logs in as `alice`. The
+`PROFILE` item keeps the username as typed, and that is what is projected, displayed and shown
+beside a fingerprint, because a name the user chose the capitalization of is theirs to present.
+Since the claim is case-folded, no two accounts can differ by case alone, so displaying the typed
+form costs nothing in impersonation terms. **Homoglyphs across scripts are a harder version of this
+problem and are not solved here** — fingerprint verification, not the username, is what ultimately
+identifies a counterparty.
+
 **The recovery copy is a separate item, not an attribute of the profile.** `USER#<uuid>` /
 `RECOVERY` holds a **second copy of the private keys wrapped under a key derived from the recovery
 code**, with its own salt — derived from the recovery code alone, with **no dependence on the
