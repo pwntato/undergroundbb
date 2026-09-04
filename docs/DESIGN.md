@@ -68,7 +68,7 @@ private key the server does not have.
 
 Note that step 2 is an **unauthenticated write** — anyone can request a challenge for any username,
 and usernames are enumerable — so it is a write-amplification target and is rate-limited on those
-terms, not merely on the harvesting terms discussed under Operations below. The TTL
+terms, not merely on the harvesting terms discussed under Infrastructure below. The TTL
 is short (a minute or two, enough for a slow Argon2id derivation on a phone) so abandoned challenges
 expire quickly rather than accumulating.
 
@@ -101,7 +101,7 @@ signature never fails verification and so never increments a counter that only c
 The counter and a lock-until timestamp live as attributes on the user's `PROFILE` item, incremented
 on a failed step 4 and cleared on a successful one. **That increment is an unauthenticated write** —
 step 4 takes a username and a signature, and the signature does not need to be valid to cause it —
-so it needs a rate limit of its own; see Operations. The lock-until value is the one short-lived
+so it needs a rate limit of its own; see Infrastructure. The lock-until value is the one short-lived
 thing in an item class that never expires, so it is a timestamp compared on read rather than a TTL:
 the item must outlive the lock.
 
@@ -140,8 +140,26 @@ nothing at all if the attacker also holds their recovery code — they would hav
 the interface offers and still be exposed. Because a password change therefore always produces a new
 code, the flow has to make the user store it before completing.
 
-Changing a password is still not a **key rotation**, which is the subject of the next section: a
-much heavier operation, and the only one that invalidates existing wrapped group keys.
+**Recovering with the code is the mirror flow, and it behaves symmetrically.** A user who has
+forgotten their password authenticates by proving possession of the recovery code — the one flow in
+the system that proves possession of something other than the password, which works because the
+recovery copy has its own salt and no dependence on the password at all. The client unwraps the
+private keys with the code, sets a new password, and re-wraps the `PROFILE` copy under it. **It
+also issues a new recovery code and re-wraps the `RECOVERY` copy under that**, for the same reason
+a password change does: a user recovering because they lost control of their password should not
+remain reachable through a code that may well have leaked alongside it. Neither flow leaves the
+other credential untouched, so neither leaves a user who has acted on a compromise still exposed
+through the credential they did not think about.
+
+Both copies are therefore rewritten together, and — like signup — **that is one
+`TransactWriteItems`**. It writes `PROFILE` and `RECOVERY`, and this time both live in the same
+partition, but the partial-write exposure is the same one: a `PROFILE` re-wrapped under the new
+password with a `RECOVERY` item still holding the old code leaves exactly the stale credential the
+flow exists to invalidate, and the reverse leaves an account whose recovery code no longer matches
+the password that works.
+
+Neither operation is a **key rotation**, which is the subject of the next section: a much heavier
+operation, and the only one that invalidates existing wrapped group keys.
 
 ### Key rotation
 
@@ -786,8 +804,8 @@ particular comment, and not what they said by it. The cost is that reaction coun
 client-side after decryption rather than aggregated by the server.
 
 **Reactions carry no time at all**, which is a smaller disclosure than posts make and is deliberate.
-Their sort key holds the target path and a random id — no day prefix — and the item records no
-creation timestamp, encrypted or otherwise. Nothing needs one: reactions are read as a set with
+Their sort key holds the target path and the reactor's id — no day prefix — and the item records
+no creation timestamp, encrypted or otherwise. Nothing needs one: reactions are read as a set with
 their thread and counted after decryption, never ordered or filtered by time. So a reaction is the
 one item in this schema that discloses an association without a date, and adding a timestamp later
 would be adding a disclosure, not filling a gap.
