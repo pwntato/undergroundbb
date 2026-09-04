@@ -11,7 +11,10 @@ For how the system works, see [DESIGN.md](DESIGN.md).
 **Message content.** Post titles, post bodies, comments, and reactions are encrypted with AES-256-GCM
 under a group key that the server never possesses. A complete copy of the database yields ciphertext.
 Reactions are encrypted in their content but not in their existence: a dump shows that a given user
-reacted to a given comment at a given time, and only the emoji itself is unreadable.
+reacted to a given post or comment, and only the emoji itself is unreadable. It does **not** show
+when — a reaction's sort key carries its target and a random id, with no day prefix and no
+timestamp, and reactions record no creation time at all. They are the one item here that discloses
+an association without a date.
 
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
@@ -85,15 +88,22 @@ Precise timestamps exist only inside the encrypted payload, which is why the ids
 **random rather than time-ordered** — a ULID or similar would have put a millisecond timestamp in
 plaintext beside the day prefix and made the day meaningless.
 
-**This includes notifications**, which are `NOTIF#<day>#<rand>` in the *user's* own partition. That
+**Comments are the exception, and they disclose sequence.** A comment's sort key is a materialized
+path of sibling ordinals, so a dump shows the exact order of a thread — third top-level comment,
+first reply beneath it — though not the wall-clock time of any of them. Read alongside day prefixes,
+that bounds how a conversation interleaved within a day. The ordinals are what make one query return
+a thread in display order, and that structure was judged worth the disclosure; it is named here
+because it is genuinely more than the day-level granularity everything else exposes.
+
+**This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` in the *user's* own partition. That
 is a per-user timeline rather than a per-group one, and it spans every group the user belongs to, so
 it is a distinct disclosure from "what day something was posted in this group" — which is why it
 gets the same day-granular, randomly-ordered treatment.
 
 What day-level timing still gives an observer is real: activity on a given date, per user, per
-group, and a rough correlation of who was active on the same days. What it withholds is the
-fine-grained analysis that a millisecond timeline supports — inter-post intervals, session
-boundaries, and reply latency. That last one matters most in the pairwise case named under
+group, and a rough correlation of who was active on the same days, plus thread sequence where
+comments are involved. What it withholds is the fine-grained analysis that a millisecond timeline
+supports — inter-post intervals, session boundaries, and reply latency in wall-clock terms. That last one matters most in the pairwise case named under
 [the social graph](#the-social-graph): in a two-member DM, millisecond reply latency correlates two
 accounts far more strongly than membership alone, and membership is the disclosure this document
 already treats as the serious one.

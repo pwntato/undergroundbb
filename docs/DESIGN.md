@@ -517,14 +517,14 @@ the size of the table.
 | Generation key | `GROUP#<gid>` | `GENKEY#<n>` | | | never |
 | Rotation marker | `GROUP#<gid>` | `ROTATION` | | | never |
 | Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | | never |
-| Post | `GROUP#<gid>` | `POST#<day>#<rand>` | | | group policy |
+| Post | `GROUP#<gid>` | `POST#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | | group policy |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
 | Key pin | `USER#<uuid>` | `PIN#<other>` | | | never |
-| Notification | `USER#<uuid>` | `NOTIF#<day>#<rand>` | | | group policy |
+| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
 and drifted every time a row was added — a new row would arrive and the separate list would not be
@@ -664,14 +664,42 @@ capped at 8, and each segment is **four digits, zero-padded** — the padding is
 ordering property hold, since unpadded segments would sort sibling `10` before sibling `2` and
 scramble the thread. That fixes the schema's bounds: at most 9,999 replies to any one comment, and a
 comment sort key no longer than 39 characters — eight four-digit segments plus the seven separators
-between them — or 43 with the `CMT#` prefix. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
+between them — or 43 with the `CMT#` prefix.
+
+**Comments are the one place this design accepts a sequential id, and it is a deliberate exception
+to the rule posts follow.** A sibling ordinal buys the property the whole materialized path exists
+for: lexicographic order *is* depth-first display order, so one query returns a thread ready to
+render. A random segment would destroy exactly that and leave the client reconstructing the tree,
+which is why posts and comments land on opposite answers — a random id costs a post only intra-day
+sorting, and would cost a comment the entire structure.
+
+It is paid for twice, and both costs belong here rather than being discovered later:
+
+- **It needs write-time coordination**, which the post ids specifically avoid. Writing the fourth
+  reply means first learning that three exist, so two clients replying to the same parent can both
+  read three siblings and both write `…0004`, with the second silently overwriting the first —
+  a lost comment and no error anywhere. **The write is therefore conditional on
+  `attribute_not_exists(SK)`, retrying with the next ordinal on failure.** This is the only place in
+  the schema where a write races another write.
+- **It discloses sequence in plaintext.** `CMT#0003.0001.0002` says third top-level comment, first
+  reply beneath it, second beneath that. That is exact intra-thread order, in the clear — not
+  wall-clock time, which stays encrypted like any other content, but enough to bound how a
+  conversation interleaved when read alongside day prefixes. The trade is judged worth it for the
+  structure it buys, and it is worth noting that the same trade is *not* worth it for posts, which
+  would gain no traversal property in exchange. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
 reaction on the post itself, so reactions sort alongside the thread they belong to.
 **A reaction's target is plaintext; the reaction itself is not.** The comment path sits in the sort
 key so the server can order reactions with their thread, but which emoji was chosen is encrypted
 under the group key like any other content. The server therefore knows that a user reacted to a
-particular comment, and not what they said by it — the same split posts already make between a
-day-granular sort key and an encrypted body. The cost is that reaction counts are computed
+particular comment, and not what they said by it. The cost is that reaction counts are computed
 client-side after decryption rather than aggregated by the server.
+
+**Reactions carry no time at all**, which is a smaller disclosure than posts make and is deliberate.
+Their sort key holds the target path and a random id — no day prefix — and the item records no
+creation timestamp, encrypted or otherwise. Nothing needs one: reactions are read as a set with
+their thread and counted after decryption, never ordered or filtered by time. So a reaction is the
+one item in this schema that discloses an association without a date, and adding a timestamp later
+would be adding a disclosure, not filling a gap.
 
 **Notification items hold identifiers, not text.** The server knows thread structure and author
 ids — those are metadata — so it can tell that someone replied to your post without being able to
@@ -714,6 +742,20 @@ encrypted payload holds. The day prefix would coarsen nothing, because the preci
 meant to withhold would be sitting beside it. **The id is therefore 128 random bits**, and the day
 is the only time component in the key.
 
+**One id convention, used everywhere the table writes `<rand>` or `<uuid>`:** 128 bits from a
+cryptographic RNG, rendered as **32 lowercase hex characters**. Fixed-width and byte-ordered, so
+prefix comparisons and `begins_with` behave. The encoding is worth pinning because the obvious
+alternatives are not interchangeable — base64url is unsafe here, since its alphabet contains `-`
+and does not sort in byte order, and `uuidv4()` yields 122 random bits rather than 128, with version
+and variant nibbles pinned in fixed positions. Neither is a security problem at these sizes; both
+are avoidable surprises in sort keys. The two placeholders name the same construct and are not a
+distinction.
+
+**Do not substitute UUIDv7 anywhere in this table.** It is time-ordered by design — the same
+timestamp-in-the-id trap as a ULID, wearing a more standard-looking name, and it would reintroduce
+the millisecond leak in rows that were never part of the fix. The same goes for any other sortable
+id format: if an id in this schema orders by time, that is a defect, not a feature.
+
 That makes the claim honest: the exact timestamp exists **only** inside the encrypted payload, so a
 dump yields the day a post was written and nothing finer. The cost is paid in ordering, and it is
 worth stating plainly: posts are **ordered by day in the table and by decrypted timestamp within a
@@ -723,9 +765,21 @@ means intra-day ordering is a client responsibility, and a client that skips the
 day in arbitrary order. Random ids keep the property that made ULIDs attractive in the first place:
 no coordinating counter, no serializing every write to a group through one item.
 
-DynamoDB pagination is cursor-based natively, so infinite scroll needs no offsets. Anything needing
-sub-day server-side time filtering or server-side intra-day ordering would require a schema
-migration, so this is a deliberate and hard-to-reverse choice, not an incidental one.
+**The day is `YYYY-MM-DD` in UTC, and both halves of that matter.** UTC because a client stamping
+its *local* day would leak the author's timezone — a disclosure the threat model does not account
+for, and one that measurably shrinks the anonymity set it relies on, since "pseudonyms to
+pseudonyms" is weaker when a pseudonym carries a UTC offset. Local stamping also makes two clients
+in different zones write different prefixes for the same instant, so a group stops sorting
+consistently across readers. Zero-padded `YYYY-MM-DD` because the ordering is lexicographic:
+`2026-9-4` sorts after `2026-10-01`. That is the same padding bug the comment path already guards
+against, and it applies here for the same reason.
+
+DynamoDB pagination is cursor-based natively, so infinite scroll needs no offsets. **A day boundary
+is a hard pagination seam, though, and that is a real cost of this design**: "the newest 20 posts"
+spans days, so a client walks day partitions backward without knowing in advance how many it must
+cross to fill a screen, and a quiet group can need several empty-day queries to render one page.
+Anything needing sub-day server-side time filtering or server-side intra-day ordering would require
+a schema migration, so this is a deliberate and hard-to-reverse choice, not an incidental one.
 
 **`NOTIF#` uses the same random id, and for a sharper reason.** Notifications live in the *user's*
 partition, so a time-ordered id there is a millisecond-resolution activity log for one named person
