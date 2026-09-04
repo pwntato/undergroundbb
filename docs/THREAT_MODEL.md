@@ -11,10 +11,10 @@ For how the system works, see [DESIGN.md](DESIGN.md).
 **Message content.** Post titles, post bodies, comments, and reactions are encrypted with AES-256-GCM
 under a group key that the server never possesses. A complete copy of the database yields ciphertext.
 Reactions are encrypted in their content but not in their existence: a dump shows that a given user
-reacted to a given post or comment, and only the emoji itself is unreadable. It does **not** show
-when — a reaction's sort key carries its target and a random id, with no day prefix and no
-timestamp, and reactions record no creation time at all. They are the one item here that discloses
-an association without a date.
+reacted to a given post or comment, and only the emoji itself is unreadable — the reactor's id is
+in the sort key, because that is what makes a reaction removable. It does **not** show when: the key
+carries the target and the reactor, with no day prefix and no timestamp, and reactions record no
+creation time at all. They are the one item here that discloses an association without a date.
 
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
@@ -39,9 +39,9 @@ the group creator. A server cannot fabricate a role.
 **User preferences.** Theme and font choices live in an encrypted blob inside the user item, sealed
 under a key only that user holds, so they do not become another identifying signal in a database
 dump. These are self-directed settings only — there is no display name, and users are named
-everywhere by their plaintext username. The rest of that item — username, public keys, salt, wrapped private keys — is
-necessarily readable, and the email is encrypted under a server key rather than a user one. Only the
-preferences blob is beyond the operator's reach.
+everywhere by their plaintext username. The rest of that item — username, public keys, salt, wrapped
+private keys — is necessarily readable, and the email is encrypted under a server key rather than a
+user one. Only the preferences blob is beyond the operator's reach.
 
 ## What is not protected
 
@@ -95,18 +95,18 @@ that bounds how a conversation interleaved within a day. The ordinals are what m
 a thread in display order, and that structure was judged worth the disclosure; it is named here
 because it is genuinely more than the day-level granularity everything else exposes.
 
-**This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` in the *user's* own partition. That
-is a per-user timeline rather than a per-group one, and it spans every group the user belongs to, so
-it is a distinct disclosure from "what day something was posted in this group" — which is why it
-gets the same day-granular, randomly-ordered treatment.
+**This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` in the *user's* own
+partition. That is a per-user timeline rather than a per-group one, and it spans every group the
+user belongs to, so it is a distinct disclosure from "what day something was posted in this group" —
+which is why it gets the same day-granular, randomly-ordered treatment.
 
 What day-level timing still gives an observer is real: activity on a given date, per user, per
 group, and a rough correlation of who was active on the same days, plus thread sequence where
 comments are involved. What it withholds is the fine-grained analysis that a millisecond timeline
-supports — inter-post intervals, session boundaries, and reply latency in wall-clock terms. That last one matters most in the pairwise case named under
-[the social graph](#the-social-graph): in a two-member DM, millisecond reply latency correlates two
-accounts far more strongly than membership alone, and membership is the disclosure this document
-already treats as the serious one.
+supports — inter-post intervals, session boundaries, and reply latency in wall-clock terms. That
+last one matters most in the pairwise case named under [the social graph](#the-social-graph): in a
+two-member DM, millisecond reply latency correlates two accounts far more strongly than membership
+alone, and membership is the disclosure this document already treats as the serious one.
 
 ### Usernames
 
@@ -143,14 +143,13 @@ deployment is large enough to be worth harvesting.
 
 **The lockout is itself an availability weakness.** It is keyed on the account, not the source, and
 usernames are enumerable — so anyone can lock any account by submitting five bad signatures against
-its username, and keep it locked by repeating. This is a deliberate inheritance from the original implementation.
-Its value is narrower than it first appears: since the challenge endpoint already hands out
-crackable material, an attacker who wants to guess a password does it offline, where no lockout
-reaches them. What the lockout still bounds is **online** abuse — credential stuffing against a
-known account. A source-scoped counter would avoid the
-denial of service but is trivially defeated by rotating IPs, which is the harder problem. Naming it
-plainly: an attacker who wants to keep a specific user logged out can do so, and no design in this
-document prevents that.
+its username, and keep it locked by repeating. This is a deliberate inheritance from the original
+implementation. Its value is narrower than it first appears: since the challenge endpoint already
+hands out crackable material, an attacker who wants to guess a password does it offline, where no
+lockout reaches them. What the lockout still bounds is **online** abuse — credential stuffing
+against a known account. A source-scoped counter would avoid the denial of service but is trivially
+defeated by rotating IPs, which is the harder problem. Naming it plainly: an attacker who wants to
+keep a specific user logged out can do so, and no design in this document prevents that.
 
 ### The recovery code
 

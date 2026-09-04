@@ -229,9 +229,9 @@ someone with authority rather than N warnings across N members.
 The re-invitation flow is therefore the one path that **clears a stale pin rather than blocking on
 it**. The authorizing admin's own client also sees the mismatch, and a blanket "hard-block on
 mismatch" check would block the very operation that resolves it, making a key change unrecoverable.
-Approving the re-invite *is* the trust decision, and it replaces that admin's pin explicitly. Other members' pins update once
-that has happened. This delegates verification to whoever re-invited — a real trust decision, and
-the honest limit of what pinning gives you.
+Approving the re-invite *is* the trust decision, and it replaces that admin's pin explicitly. Other
+members' pins update once that has happened. This delegates verification to whoever re-invited — a
+real trust decision, and the honest limit of what pinning gives you.
 
 Verification stays **available rather than mandatory**: fingerprints are shown on profiles, there is
 an explicit verify affordance, and a badge appears when two users have verified each other. Invite
@@ -519,7 +519,7 @@ the size of the table.
 | Role grant | `GROUP#<gid>` | `GRANT#<uuid>` | | | never |
 | Post | `GROUP#<gid>` | `POST#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
-| Reaction | `POST#<pid>` | `RXN#<cmtpath>#<uuid>` | | | group policy |
+| Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<ts>` | signed `expires_at` |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<ts>#<iid>` | | | signed `expires_at` |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<ts>` | never |
@@ -540,10 +540,10 @@ so they do not become another identifying signal in a dump. That derivation is d
 recovery code restores the same private keys, so preferences survive a password change and a
 recovery alike, with no second wrapped copy to keep in step. Deriving the key from the password
 instead would leave a recovered account's preferences permanently unreadable — and it would fail
-silently, looking like a theme that reset itself rather than a key that was lost. The email, when present, is encrypted separately
-under a **server-held** key, because the server has to read it to send mail. Three different
-protections in one item, and the distinction is the point: only the preferences blob is beyond the
-operator's reach.
+silently, looking like a theme that reset itself rather than a key that was lost. The email, when
+present, is encrypted separately under a **server-held** key, because the server has to read it to
+send mail. Three different protections in one item, and the distinction is the point: only the
+preferences blob is beyond the operator's reach.
 
 That derivation does have one case it does not survive, and it is worth naming rather than leaving
 to be discovered: a **keypair change resets preferences**. A pinned key change is a re-invitation
@@ -552,11 +552,24 @@ only because of what the blob holds — a theme and a font, both re-choosable in
 it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
 the design should be keyed this way.
 
+**Three writes in this schema are contested, and all three are conditional.** The comment ordinal
+above is one. The second is the login challenge delete, where two requests carrying the same nonce
+race for one delete and exactly one wins — that race is the replay guarantee, not an incidental
+detail. The third is the username claim below. Nothing else in the table has two writers competing
+for one key.
+
 **Usernames are unique case-insensitively, and displayed as typed.** The `USERNAME#<lower>` claim
 item decides the first half: `Alice` and `alice` cannot both exist, and **every lookup lowercases**,
 including `POST /api/auth/challenge` — a user who signed up as `Alice` logs in as `alice`. The
 `PROFILE` item keeps the username as typed, and that is what is projected, displayed and shown
 beside a fingerprint, because a name the user chose the capitalization of is theirs to present.
+
+**The claim is only a claim because the write is conditional on `attribute_not_exists(PK)`.**
+Without that, two concurrent signups for `alice` both read the name as available and both write:
+two `PROFILE` items believing they own it, one claim row pointing at one of them, and the loser's
+account reachable by no login at all, since `/auth/challenge` lowercases and resolves through the
+claim. The account would exist, hold keys, and be unreachable — a worse outcome than a lost
+comment, and silent in the same way.
 Since the claim is case-folded, no two accounts can differ by case alone, so displaying the typed
 form costs nothing in impersonation terms. **Homoglyphs across scripts are a harder version of this
 problem and are not solved here** — fingerprint verification, not the username, is what ultimately
@@ -611,10 +624,11 @@ is the reasoning behind it, not a second copy of it.
 `CHALLENGE#`, which carries the shortest TTL in the system (a minute or two) and is normally deleted
 by the conditional write that spends it, the TTL existing only to collect challenges nobody ever
 answers — plus the invite pair, `INVITE#` and `SENT#`, whose TTL is **set from the `expires_at` the
-inviter signed** so that the stored lifetime and the signed one cannot drift. An invite is the one item here whose expiry is part of a signed
-payload, and the storage layer must honour it rather than leave a year-old invite acceptable.
-Clients still verify `expires_at` against the signature when accepting, because TTL deletion is
-eventual and an expired-but-not-yet-deleted invite must be refused: for invites that check is a
+inviter signed** so that the stored lifetime and the signed one cannot drift. An invite is the one
+item here whose expiry is part of a signed payload, and the storage layer must honour it rather than
+leave a year-old invite acceptable. Clients still verify `expires_at` against the signature when
+accepting, because TTL deletion is eventual and an expired-but-not-yet-deleted invite must be
+refused: for invites that check is a
 **security control, not a display convenience**, and it runs only after the inviter's signature has
 been verified, since an unverified `expires_at` is a value the server could have altered.
 
@@ -629,15 +643,15 @@ nobody ever accepts, and it means the inviter's partition never becomes a durabl
 approached. A `SENT#` row whose `INVITE#` is already gone is filtered on read, as a notification
 whose target was deleted is.
 
-**Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a member's entry point
-into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in progress, `GRANT#` must stay
-verifiable back to the group creator, and `PIN#` is the signed record a key change is checked
-against.
-`REQ#` is durable **unlike an invite** because a join request carries no signed lifetime — it is
-resolved by an admin approving or denying it, and a request left pending stays visible to its
-requester rather than silently vanishing. `RECOVERY` never expires for the plainest reason of all:
-it is used precisely when a user has been away long enough to forget their password, so any lifetime
-short enough to limit exposure is short enough to destroy the account it exists to save.
+**Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a
+member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in
+progress, `GRANT#` must stay verifiable back to the group creator, and `PIN#` is the signed record a
+key change is checked against. `REQ#` is durable **unlike an invite** because a join request carries
+no signed lifetime — it is resolved by an admin approving or denying it, and a request left pending
+stays visible to its requester rather than silently vanishing. `RECOVERY` never expires for the
+plainest reason of all: it is used precisely when a user has been away long enough to forget their
+password, so any lifetime short enough to limit exposure is short enough to destroy the account it
+exists to save.
 
 **A default-TTL-on-write rule with exceptions is the wrong shape here** — most of this partition
 does not expire.
@@ -657,6 +671,25 @@ they load the group**, and surface a stalled rotation for resumption. This is de
 server-side process can complete a rotation anyway, because the group key exists in plaintext only
 inside a member's browser, so a scheduled Lambda could detect staleness but could do nothing about
 it. Detection therefore lives where the remedy lives.
+
+**`<pid>` is a post's full address, not just its random half:** `<gid>#<YYYY-MM-DD>#<rand>`, the
+group and day and random id joined. Comments and reactions are the only rows keyed under something
+other than `GROUP#<gid>`, and defining `<pid>` this way is what keeps them reachable — three
+separate mechanisms need the group and the day, and neither is recoverable from the random id
+alone:
+
+- **The membership check.** The `GetItem` that gates every group operation is `GROUP#<gid>` /
+  `MEMBER#<uuid>`, and a `POST /api/posts/:pid/comments` request carries only a pid and a session
+  cookie. If the pid did not contain the gid, the server would have to take the group from the
+  client — which is asking the caller to assert the thing being authorized. With it, the server
+  parses the gid out of the address it was given and checks membership against that.
+- **The comment's TTL.** A comment inherits its expiry from the parent post, which means addressing
+  the post, which needs its full sort key.
+- **Notification rendering.** A notification stores a `post_id`; resolving it must be one `GetItem`,
+  and that needs the day as well as the group.
+
+The cost is a longer partition key and a pid that is not opaque — it reveals the group and the day
+to anyone holding a link, both of which that person can see anyway if they can read the post.
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
 depth-first traversal order, one query returns an entire thread already in display order. Depth is
@@ -679,15 +712,35 @@ It is paid for twice, and both costs belong here rather than being discovered la
   reply means first learning that three exist, so two clients replying to the same parent can both
   read three siblings and both write `…0004`, with the second silently overwriting the first —
   a lost comment and no error anywhere. **The write is therefore conditional on
-  `attribute_not_exists(SK)`, retrying with the next ordinal on failure.** This is the only place in
-  the schema where a write races another write.
+  `attribute_not_exists(SK)`, retrying with the next ordinal on failure.** It is the only conditional
+  write whose *retry changes the value written* — the other two, below, are ordinary compare-and-set.
 - **It discloses sequence in plaintext.** `CMT#0003.0001.0002` says third top-level comment, first
   reply beneath it, second beneath that. That is exact intra-thread order, in the clear — not
   wall-clock time, which stays encrypted like any other content, but enough to bound how a
   conversation interleaved when read alongside day prefixes. The trade is judged worth it for the
   structure it buys, and it is worth noting that the same trade is *not* worth it for posts, which
-  would gain no traversal property in exchange. A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a
-reaction on the post itself, so reactions sort alongside the thread they belong to.
+  would gain no traversal property in exchange.
+
+A reaction's `<cmtpath>` is the path of the comment it attaches to, and is empty for a reaction on
+the post itself, so reactions sort alongside the thread they belong to.
+
+**A reaction is keyed by its reactor, not by a fresh id**, which is what makes it removable. Every
+reaction UI toggles — click to react, click again to undo — and undoing needs an addressable
+target. With a random id in the key a client would have to query the whole `RXN#<cmtpath>#` range
+and decrypt each row to find its own, and the server could not authorize the delete at all without
+being told whose it was. Keyed on the reactor, un-reacting is a `DeleteItem` on a key the client
+constructs from what it already knows, and the server authorizes it by comparing the key against
+the session. It also makes a repeat reaction idempotent: a double-fired click, a retried request or
+a second open tab overwrites the same row rather than inflating a count that is tallied client-side
+from a set nothing deduplicates.
+
+The consequence is **one reaction per user per target** — react again with a different emoji and it
+replaces the first, as it does on most platforms. If several emoji per user per target are ever
+wanted, the key extends to `RXN#<cmtpath>#<reactor>#<emoji-hash>`, which keeps addressability while
+allowing a set; that is a schema change and is not in v1. Note that the reactor's uuid is therefore
+plaintext in the sort key, which is what the threat model already states — a dump shows who reacted
+to what, and only the emoji is unreadable.
+
 **A reaction's target is plaintext; the reaction itself is not.** The comment path sits in the sort
 key so the server can order reactions with their thread, but which emoji was chosen is encrypted
 under the group key like any other content. The server therefore knows that a user reacted to a
