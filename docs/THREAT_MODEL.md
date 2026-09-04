@@ -238,6 +238,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
 | Malicious operator fabricates a role grant | Blocked — clients verify the signature chain. |
+| Malicious operator deletes a pin, then substitutes that key | **Possible.** A pin's signature authenticates its contents, not its existence, and nothing binds the pin *set* — so a withheld pin is indistinguishable from genuine first contact and the hard-block never fires. Fingerprint verification is the only control. See the pinning section in [DESIGN.md](DESIGN.md). |
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
 | First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
 | Member forges a post as another member | Blocked — posts are signed with the author's Ed25519 key. |

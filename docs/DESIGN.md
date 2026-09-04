@@ -221,6 +221,24 @@ rather than rediscovering later: since a pin is signed by the pinning user's Ed2
 that keypair invalidates that user's entire pin set**, exactly as it resets the preferences blob.
 Rebuilding it is one more thing a re-invitation event has to do.
 
+**A signature authenticates a pin's contents, not its existence, and that gap is not closed in v1.**
+The operator cannot rewrite a pin, but it can withhold or delete one. If the server serves a
+substituted key for Bob *and* omits Alice's `PIN#<bob>` row, Alice's client finds no pin, concludes
+this is a first sighting, and pins the substituted key — no signature is forged and no check fails,
+because there is no record left to check. The hard-block is conditional on a pin being present, and
+**absence is indistinguishable from genuine first contact**. So pinning protects a connection the
+client can still see; it does not protect the client's knowledge that a connection existed.
+
+Closing it needs a signed record of the pin *set* rather than of each pin — a counter or a digest
+over the pinned usernames, held on the user's own `PROFILE` and checked on load, so a missing row
+becomes a detectable mismatch. That is deferred rather than dismissed, for two reasons worth
+stating: it puts a read-modify-write on the profile item back into every new pin, and it has to
+survive the keypair rotation described above, which invalidates the whole pin set and would
+therefore have to reset the manifest in the same operation without that reset being forgeable.
+Until it exists, **fingerprint verification is the only control that detects a deleted pin**, which
+is the same answer the design already gives for first contact — and that is the honest way to read
+this: pin deletion returns a counterparty to the first-contact case, silently.
+
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
 re-invites them through the same signed handshake, which forces exactly one deliberate check by
@@ -556,7 +574,8 @@ the design should be keyed this way.
 above is one. The second is the login challenge delete, where two requests carrying the same nonce
 race for one delete and exactly one wins — that race is the replay guarantee, not an incidental
 detail. The third is the username claim below. Nothing else in the table has two writers competing
-for one key.
+for one key — which is a separate question from whether a write is *atomic*: signup is not
+contested beyond its claim, but it spans three items and is a transaction for that reason.
 
 **Usernames are unique case-insensitively, and displayed as typed.** The `USERNAME#<lower>` claim
 item decides the first half: `Alice` and `alice` cannot both exist, and **every lookup lowercases**,
@@ -570,6 +589,25 @@ two `PROFILE` items believing they own it, one claim row pointing at one of them
 account reachable by no login at all, since `/auth/challenge` lowercases and resolves through the
 claim. The account would exist, hold keys, and be unreachable — a worse outcome than a lost
 comment, and silent in the same way.
+
+**That condition is necessary and not sufficient: signup writes three items across two partitions,
+so it is one `TransactWriteItems`.** The claim, the `PROFILE` and the `RECOVERY` item cannot be a
+single conditional `PutItem`, and issuing them as separate writes leaves two failure states that an
+interruption — a timeout, a throttle, a client disconnect — reaches without any concurrency at all:
+
+- **Claim written, profile not.** The username is burned permanently. It is held by a `PROFILE`
+  that does not exist, `attribute_not_exists(PK)` rejects every later attempt including the same
+  user retrying, and nothing short of manual table surgery releases it.
+- **Profile written, claim not.** Identical in outcome to the concurrent-signup bug above, reached
+  by a different route: the keys exist and `/auth/challenge` resolves through a claim that is not
+  there.
+
+A transaction subsumes the conditional write rather than replacing it — the same
+`attribute_not_exists(PK)` still does the concurrency work, and atomicity closes the partial-write
+routes to the same unreachable account. It costs double the write capacity for the one operation in
+the system that happens once per account, which is a fair trade. **A `PROFILE` without its
+`RECOVERY` item is the quietest failure of the three**, since nothing is wrong until the recovery
+code is needed, which is exactly when nothing can be done about it.
 Since the claim is case-folded, no two accounts can differ by case alone, so displaying the typed
 form costs nothing in impersonation terms. **Homoglyphs across scripts are a harder version of this
 problem and are not solved here** — fingerprint verification, not the username, is what ultimately
