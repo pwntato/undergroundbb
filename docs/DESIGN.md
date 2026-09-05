@@ -694,8 +694,8 @@ a `Query`, and it is discussed with the notification item below.
 | Post | `GROUP#<gid>` | `POST#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
-| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`, cleared at acceptance |
-| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`, cleared at acceptance |
+| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`; completion deadline once accepted |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; completion deadline once accepted |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
@@ -861,8 +861,8 @@ of a 7-day window expires on day 7 with both rows: the `SENT#` row the inviter's
 found is deleted, so nothing completes, and the invitee — who signed their keys, completed their
 half, and was told it succeeded — never receives a group key and is never told why. The read-time
 check does not catch this; that check correctly refuses an *expired* invite at step 2, and here
-acceptance happened while the invite was valid. So at step 2, **the TTL attribute is removed from
-both rows** (or replaced with a completion deadline measured from acceptance).
+acceptance happened while the invite was valid. So at step 2, **the signed `expires_at` stops
+governing both rows and is replaced by a completion deadline measured from acceptance.**
 
 **That clearing is a `TransactWriteItems`, and it is why `SENT#` is keyed on the iid alone.** The
 two rows are in different partitions — `INVITE#<iid>` and `USER#<inviter>` — so this is a
@@ -884,8 +884,29 @@ write there is the shape the single-slot challenge argument rejects.
 
 The signed `expires_at` keeps its real job of
 bounding how long an *unaccepted* link stays usable, which is the property the signature protects
-and is unaffected. What a dump yields is unchanged in kind — a completed step 3 deletes the `SENT#`
-row regardless, so the residue is still work genuinely outstanding.
+and is unaffected.
+
+**The completion deadline is a deadline and not a removal of the bound, and that distinction is the
+whole point.** Simply clearing the TTL would make an accepted `SENT#` row permanent, because the
+only other thing that deletes it is step 3 — which is client-driven and runs on the inviter's next
+login. An inviter who never comes back would leave a durable record of every person they ever
+approached, which is the disclosure the threat model calls the more sensitive half, and it would
+outlive by an unbounded margin the short-lived invite it points at. Trading a lost-invite bug for a
+permanent-record bug is not a fix.
+
+**This is the same shape as the rotation marker, and it takes the same answer.** Both are work that
+only a client can finish, with no server-side actor able to complete it, and both therefore need
+something that notices when the client never returns. So the deadline is **surfaced, not silently
+enforced**: an invite that passes it is shown to the inviter as an outstanding acceptance they still
+owe, and — because the invitee has already completed their half and been told it succeeded —
+deleting it silently at the deadline would reintroduce the round-22 bug on a longer timescale.
+**The invitee must be able to see the state of their own acceptance**, so a pending completion is
+visible to them rather than resolving into silence. Expiry after the deadline is therefore a
+deliberate, surfaced abandonment rather than a TTL sweep, and the row's lifetime is bounded by the
+deadline rather than by whether one particular person logs in again.
+
+What a dump yields is therefore still **work genuinely outstanding**, bounded by the completion
+deadline — not a history of every approach the user has ever made.
 
 **Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a
 member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in

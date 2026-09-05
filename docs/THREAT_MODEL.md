@@ -63,13 +63,21 @@ that is the pairwise case, the one with the smallest anonymity set and usually t
 away. The pairwise case gets no special treatment, and nobody should assume it does.
 
 **It also includes invitations still outstanding, which is intent rather than association.** The
-inviter's copy of an invite is stored under their own id and timestamped, so a dump shows that a
-user invited someone to a group on a given day even though nobody joined — and the invitee may have
-no account at all. This is deliberately bounded: that row is deleted when the invite completes and
-expires with the invite otherwise, so what a dump yields is **invitations currently outstanding, not
-a history of every approach the user has ever made.** A permanent record of attempted contact would
-outlive the deliberately short-lived invite it points at, which would invert the whole point of
-giving invites a lifetime.
+inviter's copy of an invite is stored under their own id, so a dump shows that a user invited
+someone to a group even though nobody joined — and the invitee may have no account at all.
+
+**The dates are asymmetric, deliberately.** The inviter's row is keyed `SENT#<iid>` and carries **no
+time component at all**, so a dump does not date *inviting*. The invitee's side keeps a day
+(`INVITE#<YYYY-MM-DD, UTC>#<rand>` in GSI1), so a dump does date *being invited*. The half that is
+dated is the half that is association rather than intent, which is the weaker disclosure of the two.
+
+This is also bounded in time: the row is deleted when the invite completes, and until then its
+lifetime is the signed `expires_at` before acceptance and a **completion deadline** after it. So
+what a dump yields is **invitations currently outstanding, not a history of every approach the user
+has ever made.** The deadline is what makes that true. Completion is client-driven and runs on the
+inviter's next login, so without one an inviter who never returned would leave a permanent record of
+attempted contact — outliving by an unbounded margin the deliberately short-lived invite it points
+at, which would invert the whole point of giving invites a lifetime.
 
 The mitigating factor is that UndergroundBB performs **no identity verification**. Accounts are a
 username and an optional encrypted email. The graph therefore links pseudonyms to pseudonyms.
@@ -266,7 +274,7 @@ switches off the only mechanism here that limits past exposure at any group size
 
 | Attack | Outcome |
 |---|---|
-| Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
+| Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined, bounded by the completion deadline rather than kept as history, and undated on the inviter's side — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
 | Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
