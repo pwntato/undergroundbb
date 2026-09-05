@@ -3,6 +3,17 @@ package config
 import "testing"
 
 func TestFromEnvDefaults(t *testing.T) {
+	// FromEnv reads the real process environment, so the defaults can only be
+	// asserted with the inputs pinned. ENVIRONMENT in particular is what the
+	// Terraform Lambda config sets, and an unpinned test goes red for anyone
+	// running the suite in a shell configured for dev or prod.
+	// StringEnvOrDefault treats empty as unset, so this exercises the default
+	// path exactly.
+	t.Setenv("SITE_NAME", "")
+	t.Setenv("DOMAIN", "")
+	t.Setenv("ENVIRONMENT", "")
+	t.Setenv("TABLE_NAME", "")
+
 	cfg := FromEnv()
 	if cfg.SiteName != DefaultSiteName {
 		t.Errorf("SiteName = %q, want %q", cfg.SiteName, DefaultSiteName)
@@ -39,6 +50,7 @@ func TestFromEnvOverrides(t *testing.T) {
 }
 
 func TestInt64EnvOrDefault(t *testing.T) {
+	t.Setenv("UBB_TEST_UNSET", "")
 	if got := Int64EnvOrDefault("UBB_TEST_UNSET", 42); got != 42 {
 		t.Errorf("unset = %d, want 42", got)
 	}

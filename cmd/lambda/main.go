@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -47,7 +48,24 @@ func main() {
 	lambda.Start(lambdaHandler)
 }
 
-func lambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+// lambdaHandler recovers panics itself. net/http's Server does this per
+// connection, so cmd/local is already covered by the stdlib and this path is
+// not; without it a panicking handler fails the invocation, returns an opaque
+// 502, and kills a container that was serving warm requests.
+func lambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (resp events.APIGatewayV2HTTPResponse, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic serving %s %s: %v\n%s",
+				req.RequestContext.HTTP.Method, req.RawPath, r, debug.Stack())
+			resp = events.APIGatewayV2HTTPResponse{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"internal error"}`,
+			}
+			err = nil
+		}
+	}()
+
 	httpReq, err := toHTTPRequest(ctx, req)
 	if err != nil {
 		log.Printf("toHTTPRequest: %v", err)
@@ -87,6 +105,14 @@ func toHTTPRequest(ctx context.Context, req events.APIGatewayV2HTTPRequest) (*ht
 		return nil, err
 	}
 	for k, v := range req.Headers {
+		// Host is authoritative from RequestContext.DomainName, which is what
+		// builds the URL above. Header.Set does not update Request.Host, so
+		// copying a client-supplied host header leaves a spoofed value in the
+		// map for any later code that reads it -- absolute URLs in invite and
+		// password-reset links, and Origin/Referer checks.
+		if http.CanonicalHeaderKey(k) == "Host" {
+			continue
+		}
 		httpReq.Header.Set(k, v)
 	}
 	// The v2 payload delivers request cookies in a dedicated array rather than

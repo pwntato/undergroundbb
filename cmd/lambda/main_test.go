@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -39,8 +40,16 @@ func TestCookieRoundTrip(t *testing.T) {
 		t.Fatalf("lambdaHandler: %v", err)
 	}
 
-	if len(resp.Cookies) != 2 {
-		t.Fatalf("response Cookies = %v, want 2 entries", resp.Cookies)
+	// Assert the full strings, not just the count. The session cookie's
+	// attributes are load-bearing (docs/DESIGN.md: Secure, SameSite=Lax,
+	// httpOnly), and a translation regression that dropped them -- exactly the
+	// silent-failure class this test exists to catch -- passes a length check.
+	want := []string{
+		"session=renewed; HttpOnly",
+		"csrf=token",
+	}
+	if !slices.Equal(resp.Cookies, want) {
+		t.Errorf("Cookies = %q, want %q", resp.Cookies, want)
 	}
 	for _, k := range []string{"Set-Cookie", "set-cookie"} {
 		if v, ok := resp.Headers[k]; ok {
@@ -55,7 +64,7 @@ func TestHealthThroughLambdaPayload(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	handler = mux
 
@@ -113,7 +122,7 @@ func TestQueryStringAndBodyDecoding(t *testing.T) {
 func TestBinaryResponseIsBase64Encoded(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("Content-Type", "application/octet-stream")
-	rec.Write([]byte{0x00, 0x01, 0x02})
+	_, _ = rec.Write([]byte{0x00, 0x01, 0x02})
 
 	resp := toLambdaResponse(rec)
 	if !resp.IsBase64Encoded {
@@ -121,5 +130,59 @@ func TestBinaryResponseIsBase64Encoded(t *testing.T) {
 	}
 	if resp.Body != "AAEC" {
 		t.Errorf("Body = %q, want %q", resp.Body, "AAEC")
+	}
+}
+
+// TestPanicRecovered pins the parity with cmd/local: net/http's Server recovers
+// per-connection panics for the local entrypoint, so this path must recover its
+// own or the two entrypoints behave differently on the same handler bug.
+func TestPanicRecovered(t *testing.T) {
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})
+
+	resp, err := lambdaHandler(context.Background(), events.APIGatewayV2HTTPRequest{
+		RawPath: "/api/health",
+		RequestContext: events.APIGatewayV2HTTPRequestContext{
+			DomainName: "example.invalid",
+			HTTP:       events.APIGatewayV2HTTPRequestContextHTTPDescription{Method: http.MethodGet},
+		},
+	})
+	if err != nil {
+		t.Fatalf("lambdaHandler returned err = %v, want nil", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+	if resp.Body != `{"error":"internal error"}` {
+		t.Errorf("Body = %q", resp.Body)
+	}
+}
+
+// TestHostHeaderNotCopied pins that a client-supplied host header cannot reach
+// the request's header map, where later code building absolute URLs (invite and
+// password-reset links) or checking Origin would trust it.
+func TestHostHeaderNotCopied(t *testing.T) {
+	req := events.APIGatewayV2HTTPRequest{
+		RawPath: "/api/health",
+		Headers: map[string]string{"host": "evil.example", "x-real": "kept"},
+		RequestContext: events.APIGatewayV2HTTPRequestContext{
+			DomainName: "real.example",
+			HTTP:       events.APIGatewayV2HTTPRequestContextHTTPDescription{Method: http.MethodGet},
+		},
+	}
+
+	r, err := toHTTPRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("toHTTPRequest: %v", err)
+	}
+	if got := r.Header.Get("Host"); got != "" {
+		t.Errorf("Header[Host] = %q, want it dropped", got)
+	}
+	if r.Host != "real.example" {
+		t.Errorf("r.Host = %q, want %q", r.Host, "real.example")
+	}
+	if got := r.Header.Get("X-Real"); got != "kept" {
+		t.Errorf("X-Real = %q, want other headers still copied", got)
 	}
 }
