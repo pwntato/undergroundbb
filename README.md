@@ -73,9 +73,9 @@ before you trust this with anything serious.
 
 ## Self-hosting
 
-UndergroundBB is meant to be run by whoever needs it. Site name, domain, registration policy, and
-whether groups may disable message expiration are all runtime configuration — nothing about a
-particular deployment is compiled into the build.
+UndergroundBB is meant to be run by whoever needs it. Site name, domain, registration policy
+(`open` or `closed`), and whether groups may disable message expiration are all runtime
+configuration — nothing about a particular deployment is compiled into the build.
 
 Setup instructions will land with the first deployable release.
 

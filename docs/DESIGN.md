@@ -39,6 +39,59 @@ Groups have a symmetric **group key** (AES-256-GCM) that encrypts every post, co
 and — for private groups — the group's name and description. Each member holds a copy of the group
 key wrapped to their X25519 public key.
 
+**Every GCM encryption uses a fresh random 96-bit IV from a CSPRNG, stored alongside the ciphertext.
+Never a counter, and never derived from the item's identity.** This is not a stylistic preference:
+GCM does not degrade gracefully under IV reuse, it fails completely and in both directions. Two
+messages encrypted under one key and IV give up the XOR of their plaintexts, and — worse — the GHASH
+subkey `H` becomes recoverable, which hands out **forgery**: arbitrary ciphertext bearing a valid tag
+under a key the attacker still does not hold. That is precisely the capability the signature layer
+exists to deny, so a reused IV silently undoes it.
+
+Three things in this design walk into that, and the appealing implementation is wrong in all three:
+
+- **Edit-in-place re-encrypts the same item under the same key.** Deriving the IV from the item's
+  address — deterministic, testable, and the natural partner to the AAD binding below — means an
+  edit reuses the IV with different plaintext. That is a **one-item, one-edit** break, not a
+  statistical one, and it happens the first time anyone edits a post.
+- **The group key is shared by every member**, so no counter scheme can work: two browsers issue
+  counter 1 for two different posts under one key, and this architecture has no coordination that
+  could prevent it. Random IVs are effectively the only safe choice, with the birthday bound
+  (~2³² messages per key) noted so nobody later "optimizes" this into a counter.
+- **Every key wrap is a GCM encryption too** — group keys to X25519, private keys under the
+  Argon2id key, the recovery copy, and the `GENKEY#` chain links. The chain links are the worst
+  case, being written once and read forever by everyone in the group.
+
+The rotation and truncation flows re-encrypt existing plaintext under existing keys — the group
+name at truncation, an edited post under the generation it already records — which is the classic
+setup for accidental reuse. Each of those writes takes a new IV.
+
+**Every ciphertext is additionally bound to its address with AES-GCM's associated data (AAD).**
+Without it, GCM authenticates only that *someone holding the key* produced the ciphertext — and
+every member of a group holds that key, as does anyone who ever did. An attacker with write access
+to the table could then **relocate valid ciphertext between records with every tag still
+verifying**: move a comment under a different parent post and the reply is re-parented; copy a post
+into a different day's sort key and it is redated; swap two `GENKEY#` links and the chain silently
+yields the wrong generation key. The AAD is the item's full address, and it is what makes a
+relocated ciphertext fail loudly:
+
+| Item | AAD binds |
+|---|---|
+| Post | `PK` + `SK` (group, day, rand) + generation number |
+| Comment | `POST#<pid>` + `CMT#<path>` + generation number |
+| Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
+| Generation key | group id + generation number |
+| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) |
+| Group name/description | group id + generation number |
+
+**Posts and comments are signed over their address as well as their content**, for the same reason
+and as the second half of the same binding. The signed payload is the **author uuid, group id, the
+item's own sort key, the generation number, the UTC signing day, and a hash of the ciphertext** —
+so a signature that is genuinely the author's cannot be replayed into a different location either.
+The signing day is redundant for a post, whose sort key already carries it, and **load-bearing for a
+comment, whose sort key does not**: it is what tells a verifier which key interval to check a
+comment's signature against, and covering it by the signature keeps the server from choosing. A signature covering
+only the plaintext body would survive relocation: real author, real content, rewritten context.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
@@ -105,7 +158,9 @@ touches the lockout**: no signature failure is recorded, so the counter stays at
 account is never locked — an operator checking the control the threat model names for account
 denial-of-service finds nothing wrong. And with the nonce in the sort key this attack was
 impossible: the flood cost unbounded storage but could not invalidate anyone's outstanding
-challenge. **A rate control is the only thing bounding it, and the lockout is not that control.**
+challenge. **Nothing in this design actually bounds it** — the lockout is not that control, and the
+WAF rate rules that would be are keyed on source IP while the attack is keyed on username. See the
+rate-limiting discussion under Infrastructure, which works the arithmetic.
 
 **The mechanism can be closed rather than documented, and is deliberately not in v1.** Accepting the
 write only when the existing challenge is absent or already past its TTL — one conditional write —
@@ -186,7 +241,8 @@ scratch. The distinction is that the server holds this state without being trust
 ### Recovery
 
 At signup, a high-entropy recovery code is generated and a **second copy** of the private keys is
-wrapped under it, stored as its own `USER#<uuid>` / `RECOVERY` item and served by no read path. A
+wrapped under it, stored as its own `USER#<uuid>` / `RECOVERY` item and served only by a code-gated
+release endpoint. A
 user who forgets their password can recover with the code. A user who loses both has permanently
 lost access — the server has nothing to reset, by design. The code is a **second full credential**,
 with the exposure that implies — see
@@ -260,7 +316,16 @@ and cannot reproduce anything with it.
 
 So **superseded Ed25519 public keys are retained on the `PROFILE`, each with the interval it was
 current for, and a signature is verified against the key that was current when the item was
-written** — the day in the sort key gives that to the resolution required. A rotation appends to
+written**. For posts and grants the day in the sort key gives that to the resolution required;
+**comments carry no day in their key, so the signing day is part of the signed payload** and the
+verifier reads it before selecting a key. A comment's parent post's day cannot stand in: threads
+routinely outlive the day their post was written, so a comment written on day 20 of a post's life
+would resolve to the interval current on day 1 and, if the author rotated in between, verify against
+the **wrong** superseded key. That fails in the direction that looks like an attack — not
+"unverifiable" but affirmatively invalid, which is the exact confusion the retention exists to
+prevent, and the same symptom as the forgery the threat model claims this machinery blocks. Putting
+the day in the comment sort key would fix it and is **rejected**: lexicographic order there is
+depth-first traversal order, and that property is why the materialized path exists. A rotation appends to
 this history rather than replacing an entry, the `GET /api/users/:id` projection serves the whole
 set, and `PIN#` accordingly pins a key *set* rather than a single key. Without the history a client
 has only bad options: reject unverifiable posts and the user's history vanishes, contradicting the
@@ -326,9 +391,10 @@ rather than rediscovering later: since a pin is signed by the pinning user's Ed2
 that keypair invalidates that user's entire pin set**, exactly as it resets the preferences blob.
 
 **Rotation must therefore re-sign every pin row under the new key, and must do it before the old key
-is discarded.** The superseded-key retention above rescues posts and grants because those carry a
-day in the sort key, which says which key interval to verify against; `PIN#<other-uuid>` carries no
-day and no timestamp, so that rule cannot be applied to it at all. A client loading its own pins
+is discarded.** The superseded-key retention above resolves the key interval from a day — carried in the sort key
+for posts and grants, and in the signed payload for comments. **A pin has neither**: `PIN#<other-uuid>`
+carries no day in its key, and unlike a comment it is not signed over a payload the pinning client
+chose, so there is nothing to read an interval out of. A client loading its own pins
 after a rotation would hold the superseded key set with no way to know which interval any pin
 belongs to, and would be left with the three bad options this section already rejects: drop the
 unverifiable pins and every counterparty silently returns to first contact — reproducing, across the
@@ -373,6 +439,26 @@ Approving the re-invite *is* the trust decision, and it replaces that admin's pi
 members' pins update once that has happened. This delegates verification to whoever re-invited — a
 real trust decision, and the honest limit of what pinning gives you.
 
+**A fingerprint is SHA-256 over both of a user's current public keys — the Ed25519 signing key and
+the X25519 wrapping key — with a domain-separation prefix and a fixed field order, displayed as 60
+decimal digits in twelve groups of five.** Each of those choices closes a specific failure:
+
+- **Both keys, not just the signing key.** The X25519 key is the one the substitution attacks
+  actually target: group keys get wrapped to it, so a fingerprint covering only Ed25519 would let an
+  operator swap the wrapping key while the value two users compared still matched. Verification
+  would pass and the attack would succeed.
+- **Current keys only — superseded Ed25519 keys are excluded.** Including them would change a
+  fingerprint on every rotation and break every verification a counterparty had already done. The
+  cost is that two different key *sets* can share a fingerprint if they share current keys, which is
+  the correct trade: what a person verifies is who they are talking to now.
+- **Decimal groups, not hex.** A 64-character hex string gets compared by eyeballing the first and
+  last few characters, and grinding a key whose fingerprint matches at both ends is cheap. Digits in
+  short groups are what make reading the whole value aloud realistic, which is the only comparison
+  that is actually worth anything.
+- **One-sided, not pairwise.** A user has one fingerprint that anyone can check, rather than a
+  distinct safety number per pair. That keeps it displayable on a profile and embeddable in an
+  invite link, at the cost of two comparisons instead of one when two people verify each other.
+
 Verification stays **available rather than mandatory**: fingerprints are shown on profiles, there is
 an explicit verify affordance, and a badge appears when two users have verified each other. Invite
 links additionally carry the inviter's fingerprint in the URL fragment, which the browser never
@@ -397,6 +483,23 @@ Step 3 happens automatically the next time the inviter's client is online; the g
 plaintext only inside a member's browser, so no server-side process can complete it.
 
 **Two storage details make the ceremony work, and both are easy to get wrong.**
+
+**An invite is single-use, and the write at step 2 is conditional on the invitee field being
+absent.** The `<iid>` is a bearer token — `GET /api/invites/:id` is unauthenticated by design, so
+anyone holding the link can present it — and there is exactly one `INVITE#<iid>` / `META` row for
+the acceptance to land in. Without the condition, last writer wins: a second person who obtained the
+link (a forwarded message, a screenshot) accepts after the intended invitee, the row now names them,
+and the inviter's step 3 wraps the group key to **their** signed X25519 key. The signature verifies
+correctly, because they did sign their own keys — the handshake's guarantee is intact and
+irrelevant, since nobody substituted anything. **The ceremony authenticates *a* key-holder without
+binding *which* one**, and possession of the link is the entire authorization. The wrong person ends
+up in the group while the intended invitee, who was told acceptance succeeded, is silently never
+keyed. A later acceptance therefore fails with an explicit "already accepted" error. Multi-use join
+links are a different object — they would need one row per acceptor — and are not this.
+
+**An invite can also be revoked**, by deleting the `INVITE#` row: before acceptance that is the only
+remedy for a link sent to the wrong address or known to have leaked, since the TTL is otherwise the
+only bound and acceptance replaces it with a completion deadline.
 
 *An invite has no invitee until step 2.* The step 1 payload deliberately contains no invitee
 identity — an invite is a link, handed to someone who may not have an account yet, and
@@ -493,6 +596,23 @@ on its membership item. That is deliberate — one listing query, no special cas
 database dump shows who direct-messages whom exactly as clearly as it shows group membership. See
 [the social graph](THREAT_MODEL.md#the-social-graph).
 
+**The recipient's membership row is written when they first open the conversation, not when the
+sender starts it.** Every other route into a group requires the joiner to act — an invitee signs
+their keys at step 2, a requester signs a join request — and a DM has neither, so writing the
+recipient's row at send time would let any account manufacture a graph edge about any user it can
+name, unsolicited. That matters because of what the threat model says a dump reveals: DM membership
+is the pairwise case, the smallest anonymity set and the most to give away, and a dump cannot
+distinguish "these two corresponded" from "a stranger opened a DM at this person who never replied".
+Anyone reading it draws the first conclusion. It is also a caller-chosen write into another user's
+partition, which is the shape the single-slot challenge argument rejects one section earlier.
+
+Deferring the row costs nothing structurally: the group and the sender's own row exist immediately,
+the message is stored, and delivery works — it is the same membership item written at a different
+moment, so the one-codepath property is untouched. Until then the recipient sees the conversation
+through their notifications rather than their group list. Note this matters more than blocking does,
+because blocking is a UI state with no key consequence: a blocked correspondent's membership row and
+its GSI1 entry would persist, so the graph edge would outlive the remedy.
+
 This is deliberate. A separate one-to-one message path would be a second implementation of the same
 cryptography, and the second implementation is where the bug lives. There is one codepath.
 
@@ -527,6 +647,25 @@ Role changes are **signed by the granting admin**, so a client can verify a chai
 the group's creator without trusting the server. A server that fabricates a role cannot produce the
 signature to back it.
 
+**The chain's anchor is stored, not inferred.** `META` records the **creator's uuid and the Ed25519
+public key that was current at group creation**, and a walk terminates by checking that the root
+grant is self-signed by that key. Without a stored anchor the walk cannot terminate soundly, because
+both available answers are wrong: "no predecessor means this is the creator" lets a malicious
+operator invent a keypair, self-sign a grant making it Admin, and issue a grant to a confederate —
+every signature real, the chain rooted at an identity the attacker chose — while "no predecessor
+means reject" rejects the genuine creator too, since their own grant has no predecessor either.
+Pinning the **key** as well as the uuid matters because of the superseded-key retention above: a
+creator who later rotates has several keys, all served from a projection the server controls, so
+anchoring on the uuid alone would still let the server choose which key was "current" at the root.
+
+**The anchor is signed by the creator at group creation**, and clients verify that signature before
+trusting it. `META` is a server-served item like any other, so an unsigned creator field would move
+the operator's freedom rather than remove it — from nominating a root at verification time to
+rewriting one attribute. That is a real improvement, since members can cache and compare `META`,
+but it is not the property this section claims. A creator-signed anchor is, and it costs one
+signature written once per group. This is the same reasoning `PIN#` gets: a record the server both
+serves and could rewrite protects nothing unless the client checks a signature over it.
+
 **Grants are append-only, and that is what makes the chain walkable.** A chain is
 `creator → Alice → Bob`: verifying Bob's grant means checking it was signed by Alice *while Alice
 held admin*, which means reading Alice's grant, and so on back to the creator. One row per subject
@@ -547,11 +686,13 @@ the right to share it, they are trusted. The chain records who extended trust to
 ### Revocation mode
 
 Removing a member cannot retroactively revoke what they have already seen — they hold the group key.
-Each group therefore chooses a mode **at creation**:
+Each group therefore chooses a mode **at creation, and may later be converted `Rotating` → `Open`
+once and only in that direction**:
 
 - **Rotating** — removal mints a new key generation, wrapped to every remaining member. The removed
   member keeps history but is cut off from new posts. Capped at 1,000 members (matching Signal's
-  Sender Keys limit). Adding member 1,001 **fails with an explicit error** explaining that the group
+  Sender Keys limit; see below for a second, independent reason that number is the right order of
+  magnitude). Adding member 1,001 **fails with an explicit error** explaining that the group
   re-keys on removal and that this is what bounds it. It never silently becomes an `Open` group.
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
@@ -565,9 +706,46 @@ at the 1,000-member cap is about 40 batched round trips, on the order of a few s
 **The chain link must be committed before any membership item points at the new generation.** A
 member who fetches a re-wrapped entry point for generation N while `GENKEY#<N−1>` does not yet exist
 holds a key into a chain with a missing link, and cannot read history at all. A resumed rotation
-must therefore re-use the generation key the interrupted one minted rather than issuing a fresh one,
-and the batch cursor in the marker is a position in the **membership** list, not in anything
-group-wide.
+must therefore re-use the generation key the interrupted one minted rather than issuing a fresh one.
+
+**`BatchWriteItem` is not atomic, and the rotation marker cannot track progress as a position.**
+The call returns `UnprocessedItems` — an arbitrary **subset** of the batch, not a prefix — and the
+caller must retry those with exponential backoff until it is empty. Partial success is the normal
+case rather than an error case, and this design provokes it by construction: a rotation at the
+1,000-member cap drives 1,000 writes into the single `GROUP#<gid>` partition, at the per-partition
+write ceiling, so the highest-volume loop in the system is the one most likely to be throttled,
+exactly when it is under load. A positional cursor encodes "everything before index *k* landed",
+which is precisely what the API does not promise: a cursor at member 500 can sit above members in
+1–499 whose writes silently failed. The rotation then **reports completion** while those members
+still hold an entry point to the previous generation — their client cannot read new content, which
+is indistinguishable from "not yet rotated" on their side and invisible on the admin's.
+
+**So resume is driven by state, not by an index.** The membership item already records which
+generation its wrapped key is for, so a resumed or verifying pass queries the group's members for
+any whose recorded generation is behind the marker's and re-wraps those. That is the same
+information the ordering rule above relies on, used to answer a question a cursor cannot.
+
+The other two batched loops — pin re-signing and bulk mark-read — take the same retry rule. It
+matters more for pins than it looks: an unprocessed write there leaves a pin signed under a key
+about to be discarded, and the interval attribute that lets a later session finish the job only
+helps if the loop knows it did not finish. For mark-read the cost is cosmetic; unread badges
+reappear.
+
+**A group is one partition key, and that is a second bound on its size.** `GROUP#<gid>` holds six of
+the sixteen item classes — `META`, `ROTATION`, every `MEMBER#`, every `GENKEY#`, every `GRANT#`, and
+every `POST#` in the retention window — so essentially all of an active group's traffic lands on one
+key, against DynamoDB's roughly 3,000 RCU and 1,000 WCU sustained per-partition-key ceilings. Those
+apply per key regardless of table capacity, and adaptive capacity rebalances across partitions
+without being able to split a single partition *key*.
+
+This is not a claim the schema is wrong. Collocating a group's items is what makes the membership
+gate one `GetItem` and a day's posts one `Query`, and those are bought deliberately. It is worth
+stating because the cap is otherwise justified purely by the rotation write burst, which invites the
+reading that the cap is removable once rotation moves server-side or becomes incremental. The
+partition ceiling would still be there. If a mitigation is ever wanted, the standard one is sharding
+the *post* partition (`GROUP#<gid>#<shard>` for `POST#` items only, merged on read) while leaving
+`META`, `MEMBER#` and `GENKEY#` collocated — but that trades against the day-boundary pagination
+seam, so recording the constraint is worth more for now than choosing a fix.
 
 That is the sizing the cap is chosen to hold. It is worth seeing what the same arithmetic does
 without one: a 10,000-member group would need roughly 400 round trips over tens of seconds, and the
@@ -591,6 +769,21 @@ else can resume it. Without that, a closed tab silently converts a removal into 
 
 A group can be converted Rotating → Open deliberately. The reverse is not offered: everyone who was
 ever a member already holds the old keys, so "upgrading" would imply a guarantee it cannot deliver.
+
+**Conversion lifts the 1,000-member cap, because the cap is a property of the current mode rather
+than of the group.** The cap exists for the removal re-wrap burst, which an `Open` group never
+performs, so a converted group is uncapped and correctly so — but any code enforcing the cap must
+read the mode **at write time**, not at creation. That does not contradict "it never silently becomes
+an `Open` group": becoming `Open` is a deliberate act, and it is the cap that follows the mode, not
+the mode that follows the member count. Note the capacity argument then rests on the reverse
+conversion being unavailable, and that refusal is made on cryptographic grounds rather than capacity
+ones — worth knowing before anyone relaxes it.
+
+**Conversion also freezes the generation chain.** No further rotations means no further generations,
+while the existing chain stays load-bearing because older content still sits behind it, and
+truncation still applies from the old end. So a converted group keeps a chain it can never extend.
+That is coherent, but an implementer who assumes `Open` groups have exactly one generation will
+write a chain walk that breaks on converted groups.
 
 This is an explicit choice rather than an automatic threshold. A security property should never
 change as a side effect of someone adding one more member.
@@ -709,6 +902,22 @@ the size of the table. The one read whose cost is not bounded by what it returns
 notification count**, a filtered `Query` over a range that grows with retained history; it is still
 a `Query`, and it is discussed with the notification item below.
 
+**Rendering a user's group list is the one hot-path read that fans out**, and it belongs in this
+accounting because it is the most frequent read in the product rather than a slow path like the
+chain walk. It is one GSI1 `Query` returning the user's membership items, plus **one `GetItem` per
+group** — membership items hold the wrapped key, the role and the generation, but not the group's
+name, which lives on that group's `META` in a different partition. For a private group it can be
+more than that: the name is ciphertext under the group key, `META` records the generation it was
+encrypted under, and a member who joined after rotations may need a `GENKEY#` range read to decrypt
+it. So the sidebar is `O(the user's groups)`, not `O(table)` — nothing scans, and the headline claim
+holds — but the bound is the number that actually grows in use.
+
+**Client-side caching of names and unwrapped generation keys is what makes that acceptable**, the
+same answer the chain walk already gets. The tempting alternative is wrong here in a way worth
+naming: denormalizing the name onto each membership item would mean N copies of a ciphertext that
+truncation has to re-encrypt whenever the chain floor advances past its generation. One copy on
+`META` is the right shape, and the fan-out is the price.
+
 | Item | PK | SK | GSI1PK | GSI1SK | TTL |
 |---|---|---|---|---|---|
 | User | `USER#<uuid>` | `PROFILE` | | | never |
@@ -759,8 +968,8 @@ saying so leak" is only half the decision.
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
 plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need
 — including **superseded Ed25519 public keys with the intervals they were current for**, without
-which no signature written before a rotation could ever be verified — the Argon2id salt, and the
-wrapped private keys. It also holds an **encrypted preferences blob** —
+which no signature written before a rotation could ever be verified — the Argon2id salt, **the
+Argon2id parameters that salt was used with**, and the wrapped private keys. It also holds an **encrypted preferences blob** —
 theme and font choices — sealed under a key **derived by HKDF from the user's X25519 private key**,
 so they do not become another identifying signal in a dump. That derivation is deliberate: the
 recovery code restores the same private keys, so preferences survive a password change and a
@@ -771,6 +980,31 @@ present, is encrypted separately under a **server-held** key, because the server
 send mail. Three different protections in one item, and the distinction is the point: only the
 preferences blob is beyond the operator's reach.
 
+**The Argon2id parameters are `m=64 MiB, t=3, p=1`, and they are stored on the item rather than
+compiled into the client.** Naming the numbers matters because "Argon2id" without them is not a
+security claim — Argon2id at `m=8 MiB, t=1` is weaker against GPU cracking than a well-tuned bcrypt,
+and the entire offline-cracking argument in the threat model rests on the cost being high. Running
+in WASM in a browser constrains the tuning from above (mobile Safari's memory ceiling is the real
+limit), which is a reason to write the chosen numbers down, not a reason to leave them open.
+
+**Storing them is the part that cannot be added later.** A client that derives with its own
+constants can never change them: raising the cost as hardware improves would mean every existing
+blob was wrapped under the old parameters while the new client derives a different key — locking out
+every existing user permanently, with the recovery copy equally dead, and with nothing on the server
+that could re-wrap anything. Deriving from **the stored values** makes an increase a lazy re-wrap on
+next successful login, which is the one moment the client already holds the plaintext keys and the
+re-wrap is free. This is why a bcrypt hash carries its cost factor inline. It is unaddable
+retroactively because old blobs would have no field to read.
+
+`RECOVERY` carries its own salt and its own parameters for the same reason, since its derivation is
+independent of the password's.
+
+**The recovery code is 128 bits of CSPRNG output, rendered as 26 characters of Crockford base32 in
+five hyphen-separated groups.** The alphabet excludes `I`, `L`, `O` and `U`, so a transcribed code
+has no ambiguous characters, and the grouping is what makes it copyable by hand. It is the one
+credential the system generates rather than the user, so its entropy is fully within the design's
+control and is stated rather than assumed.
+
 That derivation does have one case it does not survive, and it is worth naming rather than leaving
 to be discovered: a **keypair change resets preferences**. A pinned key change is a re-invitation
 event, and the new X25519 key is a new HKDF input, so the old blob will not open. This is acceptable
@@ -778,7 +1012,7 @@ only because of what the blob holds — a theme and a font, both re-choosable in
 it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
 the design should be keyed this way.
 
-**Four writes in this schema are contested, and all four are conditional.** The comment ordinal
+**Five writes in this schema are contested, and all five are conditional.** The comment ordinal
 above is one. The second is the login challenge delete, where two requests carrying the same nonce
 race for one delete and exactly one wins — that race is the replay guarantee, not an incidental
 detail. The third is the username claim below.
@@ -797,6 +1031,11 @@ when they try to use it, which is the same too-late-to-fix moment that makes the
 above the quietest failure in the flow. **So the transaction is conditional on a credential-version
 attribute** bumped by every re-wrap: the losing writer fails its condition, and the user is told
 their code is stale rather than being left holding one that silently is.
+
+**The fifth is invite acceptance**, and it is the only one contested by *untrusted* parties rather
+than by one user's two tabs or two devices. The `<iid>` is a bearer token on an unauthenticated
+endpoint, so any holder of the link can race any other; the write is conditional on the invitee
+field being absent, so the first acceptance wins and later ones are refused explicitly.
 
 Nothing else in the table has two writers competing for one key — which is a separate question from
 whether a write is *atomic*: signup is not contested beyond its claim, but it spans three items and
@@ -852,11 +1091,29 @@ worth foreclosing here.
 Reads of another user go through a **projection exposing only the username and public keys —
 current and superseded, since verifying an older signature needs the key that was current then** —
 never the salt or the wrapped private keys, which leave the server only via the rate-limited
-challenge endpoint. **The `RECOVERY` item is served by no read path at all.** It is
-offline-cracking material exactly as the password-wrapped blob is — against a higher-entropy secret,
-but with the same consequence if it leaks — and unlike the login blob it has no reason to leave the
-server, since recovery is a write path: the client submits proof it can use the code rather than
-asking for the blob to try codes against.
+challenge endpoint. **The `RECOVERY` item is served only by a code-gated release endpoint**, and the gate is what
+distinguishes it from the login blob. It is offline-cracking material exactly as the
+password-wrapped blob is — against a higher-entropy secret, but with the same consequence if it
+leaks — so it must not be available the way `/auth/challenge`'s material is, on request to anyone
+naming a username.
+
+**It cannot be withheld entirely, though, and an earlier draft of this document claimed it could.**
+Recovery works by unwrapping the private keys with the code, and unwrapping is a read: the client
+needs the blob *and* the recovery salt, and that salt exists nowhere else by construction. A user
+recovering has no session and no password, so no authenticated route could hand it over either.
+"Proving you can use the code" without receiving anything is not a protocol that exists here —
+demonstrating a wrapping key means decrypting something wrapped under it.
+
+So the release is gated on **presenting the code first**. The server holds a **verifier** — an
+Argon2id hash of the recovery code under its own salt and parameters, derived separately from the
+wrapping key so that holding the verifier does not yield the wrapper — checks it, and only then
+returns the blob. That verifier is also what authorizes the recovery reset's write to `PROFILE` and
+`RECOVERY`, which otherwise has nothing stated that permits it.
+
+The result is weaker than "no read path" and meaningfully stronger than the login blob: it is not
+available on request, it is rate-limitable per account against a high-entropy secret rather than a
+user-chosen password, and a failed attempt is **observable server-side** in a way offline cracking
+never is.
 
 **There is no separate display name.** Users are identified everywhere by their username, which is
 plaintext by necessity — login requires looking a user up by name. A display name sealed under a key
@@ -880,8 +1137,15 @@ the membership items instead — a wrapped key per member per generation — is 
 A member reads old content by unwrapping their current generation and then walking `GENKEY#<n−1>`,
 `GENKEY#<n−2>`, and so on, stopping at the oldest surviving generation recorded on the group's `META`
 item. The **walk is cryptographic, not a sequence of round trips**: every `GENKEY#` shares the
-`GROUP#<gid>` partition, so a client fetches the range it needs in **one `Query`** with an SK prefix
-of `GENKEY#` and then unwraps locally, generation by generation. Only the unwrapping is sequential —
+`GROUP#<gid>` partition, so a client fetches the range it needs in **one paginated `Query`** with an SK
+prefix of `GENKEY#` and then unwraps locally, generation by generation. Paginated because a `Query`
+returns at most 1MB per page — roughly four to five thousand `GENKEY#` items — and this document
+sizes the sort key for a million generations and states that a churning group accumulates them
+without bound. **A short page means "more to fetch", never "the chain ends here":** the client
+follows `LastEvaluatedKey` until it reaches the floor recorded on `META`. Getting that wrong is the
+bad kind of failure, because a truncated page looks exactly like reaching the floor, so the client
+concludes the chain is corrupted and older content becomes unreadable when nothing is actually
+wrong. Only the unwrapping is sequential —
 each link decrypts the one below it — and its cost is CPU, not latency.
 
 **The generation number is zero-padded to six digits — `GENKEY#000008`, not `GENKEY#8`.** Sort keys
@@ -1173,7 +1437,7 @@ in M7:
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
   ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
-  and would make a **fifth** contested write, alongside the four named above — and it would put a
+  and would make a **sixth** contested write, alongside the five named above — and it would put a
   second contested attribute on `PROFILE`, which the credential re-wrap already contests.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
@@ -1336,7 +1600,26 @@ Same origin for app and API, so there is no CORS configuration. The Lambda holds
 state it writes is the login challenge item, which lives in DynamoDB with a short TTL and is spent
 by a conditional delete.
 
-Rate limiting is enforced by WAF rate-based rules. Note what it is and is not protecting: Argon2id
+Rate limiting is enforced by WAF rate-based rules, which key on **source IP** over a five-minute
+window. **That granularity is the right one for harvesting and the wrong one for the challenge
+flood, and the difference is not cosmetic.** Harvesting is a per-source activity, so an IP-keyed
+bound reaches it. The challenge flood is keyed on a *username* — an attacker overwriting one named
+user's challenge slot — and nothing here counts challenge requests per username. This document
+already supplies the refutation, in the threat model's argument for keying the lockout on the
+account: a source-scoped counter is trivially defeated by rotating IPs.
+
+The arithmetic is not close either. WAF's rate-based floor is 100 requests per five minutes per IP,
+which still permits a challenge overwrite roughly every three seconds from a **single** IP, against
+a victim who must complete a deliberately slow Argon2id derivation to answer. One IP at the
+strictest setting WAF offers already wins; rotating IPs merely makes it free.
+
+**So the honest statement is that the challenge flood is bounded by nothing in this design**, and
+the threat model says so rather than pointing at a rate limit that cannot reach it. A per-username
+counter is not a WAF feature — it is application state, which on an unauthenticated path means
+exactly the write the single-slot decision was trying not to add. That changes the calculus on the
+deferred conditional write above: it is deferred against an alternative control that does not exist.
+
+Note what rate limiting is and is not protecting: Argon2id
 runs in the **client's** browser, so a login costs the server only a DynamoDB read and, on the second
 leg, one Ed25519 verification. An attacker hammering the endpoint burns their own CPU, not the
 operator's.
@@ -1370,6 +1653,21 @@ Site name, domain, registration policy, and whether "no expiration" is a permitt
 all runtime configuration, served to the SPA from an unauthenticated `/api/config`. Nothing about a
 particular deployment is baked into the bundle.
 
+**Registration policy takes one of two values, `open` or `closed`, and the choice retunes several
+threat-model claims.** `open` means anyone may create an account, which is what the threat model
+assumes throughout: usernames are confirmable one at a time through the signup availability check,
+the lockout and challenge-flood denial paths are available to anyone, and the anonymity-set argument
+depends on pseudonyms being freely mintable. `closed` means the signup endpoint is disabled and
+accounts are provisioned out of band; a deployment choosing it should read the enumeration and
+availability sections as describing a smaller attacker population than they assume.
+
+**There is deliberately no `invite-only` value**, and it is worth saying why rather than leaving it
+as an obvious gap: invites in this design are **group**-scoped objects, and `GET /api/invites/:id`
+is unauthenticated precisely so someone with no account can follow a link. A deployment-level
+registration gate is a different object with no schema item, and it would need a deployment-level
+role, which the role table — entirely group-scoped — has no concept of. Adding it is a real feature,
+not a config value.
+
 ## Testing
 
 Beyond ordinary unit and integration tests, CI verifies the crypto against **fixed test vectors** —
@@ -1379,3 +1677,22 @@ This is not optional. A round-trip test ("encrypt, then decrypt, expect the orig
 when both directions are wrong in the same way. If a refactor silently changes key derivation, every
 existing user is locked out permanently and no recovery is possible, because the server cannot
 re-derive anything. Fixed vectors are the only thing that catches it.
+
+**What the vectors must pin**, because each is a parameter this document now states and a value a
+refactor could silently change:
+
+- **Key derivation** — `(password, salt, m, t, p) → key`, with the parameters read from the stored
+  attributes rather than from client constants, so the vector fails if either the numbers or the
+  read path changes.
+- **Symmetric encryption** — `(key, IV, plaintext, AAD) → ciphertext + tag`, including a negative
+  case where the AAD differs and the tag must fail. The negative case is the one that catches an
+  implementation that quietly stops binding ciphertext to its address.
+- **Signing** — `(private key, canonical payload) → signature` for a post and for a comment, since
+  their payloads differ in whether the signing day is redundant or load-bearing.
+- **Key wrapping** — `(X25519 keypair, group key) → wrapped`, and a `GENKEY#` chain link unwrapping
+  to the generation below it.
+- **Fingerprints** — `(Ed25519 pub, X25519 pub) → displayed string`, since the display encoding is
+  what determines whether a human compares the whole value.
+
+Writing these is what turns the parameters above from prose into numbers, and a vector that cannot
+be written is a sign the parameter it needs is still undecided.

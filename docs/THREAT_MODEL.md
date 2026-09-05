@@ -238,12 +238,16 @@ Three things follow, and none of them is stated anywhere else:
   manager is strong; the same code on a sticky note or in a screenshot is the weakest thing in this
   document. Of every limitation listed here, this is the one an attacker is likeliest to reach
   without any skill at all.
-- **It is not served by any endpoint.** Unlike the password-wrapped blob described in
-  [Login material](#login-material), the recovery-wrapped copy leaves the server through no read
-  path — recovery is a write path, where the client proves it can use the code rather than fetching
-  the blob to try codes against. A database dump still exposes it, like everything else in the
-  table, but it is not available on request the way login material is. That is a deliberate
-  protection and the reason the two blobs are separate items.
+- **It is not available on request.** Unlike the password-wrapped blob described in
+  [Login material](#login-material), which `/auth/challenge` hands to anyone naming a username, the
+  recovery-wrapped copy is released only after the code itself has been **presented and checked
+  against a server-held verifier** — an Argon2id hash of the code, derived separately from the
+  wrapping key so that holding the verifier does not yield the wrapper. Recovery does need the blob:
+  unwrapping the private keys requires it and the recovery salt, and a user recovering has no
+  session and no password, so there is no route that could avoid releasing it. What the gate buys is
+  real, though: the release is against a high-entropy secret rather than a user-chosen password, it
+  is rate-limitable per account, and **a failed attempt is observable server-side** in a way offline
+  cracking never is. A database dump still exposes the blob, like everything else in the table.
 - **A leaked code is neutralized only by changing the password.** There is no "revoke my recovery
   code" operation, because a password change already reissues the code and re-wraps the copy under
   the new one, invalidating the old. A user who believes their code has leaked should change their
@@ -305,11 +309,11 @@ switches off the only mechanism here that limits past exposure at any group size
 
 | Attack | Outcome |
 |---|---|
-| Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined, bounded by the completion deadline rather than kept as history, and undated on the inviter's side — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which a dump is the only way to reach since no endpoint serves it. Encrypted emails are not readable without the server's key. |
+| Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined, bounded by the completion deadline rather than kept as history, and undated on the inviter's side — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which is released online only against a presented recovery code and is otherwise reachable only in a dump. Encrypted emails are not readable without the server's key. |
 | Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
 | Malicious operator swaps a public key at invite time | Blocked — the invitee signs their own keys. |
-| Malicious operator fabricates a role grant | Blocked — clients verify the signature chain, back to the group creator's key that was current when each grant was signed. |
+| Malicious operator fabricates a role grant | Blocked — clients verify the signature chain back to a **stored, creator-signed anchor** on the group's `META` (the creator's uuid and the Ed25519 key current at creation), checking each grant against the key that was current when it was signed. Without a stored anchor the operator could nominate a root of its own, so the anchor is what makes this row true. |
 | Malicious operator deletes a pin, then substitutes that key | **Possible.** A pin's signature authenticates its contents, not its existence, and nothing binds the pin *set* — so a withheld pin is indistinguishable from genuine first contact and the hard-block never fires. Fingerprint verification is the only control. See the pinning section in [DESIGN.md](DESIGN.md). |
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |
 | First DM to a user never contacted before | **Possible.** No handshake counterparty exists to sign their own keys — the sender picks the recipient — so the server supplies that key with nothing to check it against. TOFU pins it and later changes hard-block; fingerprint verification is the only control on the first message. This is a structural gap rather than an attack: it is present whether or not anyone is attacking. |
@@ -321,7 +325,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |
 | Attacker keeps one named account locked out | **Possible.** The lockout is keyed on the account, not the source, and usernames are enumerable, so five bad signatures lock any account and repeating keeps it locked. Deliberate inheritance from the original implementation; a source-scoped counter is defeated by rotating IPs. See [Login material](#login-material). |
-| Attacker floods `/auth/challenge` for one named account | **Possible, and distinct from the row above.** The challenge is a single slot per user that any unauthenticated caller can overwrite, so a sustained flood invalidates the victim's outstanding nonce faster than an Argon2id derivation completes and they cannot finish a login. **Records no signature failure, so the lockout counter stays at zero and the account never shows as locked** — the control an operator would check first says nothing is wrong. Only a rate limit bounds it. A conditional write that refuses to replace an unexpired challenge would close it; deferred in v1, see [DESIGN.md](DESIGN.md). |
+| Attacker floods `/auth/challenge` for one named account | **Possible, and distinct from the row above.** The challenge is a single slot per user that any unauthenticated caller can overwrite, so a sustained flood invalidates the victim's outstanding nonce faster than an Argon2id derivation completes and they cannot finish a login. **Records no signature failure, so the lockout counter stays at zero and the account never shows as locked** — the control an operator would check first says nothing is wrong. **Nothing in this design bounds it:** WAF rate-based rules key on source IP, and the attack is keyed on username, so even a single IP at WAF's strictest floor sustains an overwrite every few seconds. A conditional write that refuses to replace an unexpired challenge would close it; deferred in v1, see [DESIGN.md](DESIGN.md). |
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
 | Removed member reading future posts | **Eventually blocked** in `Rotating` groups — new posts use the old generation until rotation finishes, and a rotation abandoned by its client stays open until an admin notices the stale marker and resumes it. Possible indefinitely in `Open` groups. |
 
@@ -347,6 +351,42 @@ from a curated list or name a locally installed font; lengths must fall within b
 Validated values are applied through the CSSOM as custom properties. **No user-supplied string ever
 reaches the page as CSS syntax**, so the attacks above are structurally impossible rather than
 filtered. A Content-Security-Policy of `style-src 'self'` without `unsafe-inline` backs this up.
+
+**That is one directive of a policy this design needs to state deliberately, and it is not the one
+defending the claim this section opens with.** `style-src` answers the theming threat; script
+execution is the total compromise, and the directive that bounds it was unstated. The full policy,
+served as a response header from CloudFront:
+
+```
+default-src 'none';
+script-src 'self' 'wasm-unsafe-eval';
+style-src 'self';
+img-src 'self' data:;
+connect-src 'self';
+object-src 'none';
+base-uri 'none';
+frame-ancestors 'none';
+```
+
+Four of those are load-bearing in ways worth naming:
+
+- **`'wasm-unsafe-eval'`, and specifically not `'unsafe-eval'`.** Argon2id runs in WebAssembly, and
+  some instantiation paths need an allowance for it. An implementer who hits a WASM CSP error and
+  reaches for `'unsafe-eval'` has quietly removed the protection this section calls total;
+  `'wasm-unsafe-eval'` exists precisely so WASM can be allowed without allowing `eval`.
+- **`connect-src 'self'`** is what bounds where a compromised bundle can exfiltrate to. Limitation 1
+  says subresource integrity narrows the modified-JS gap — SRI only helps if the policy also stops
+  the page loading script from somewhere else, so the two controls are stated a document apart and
+  only work as a pair.
+- **`base-uri 'none'`** closes `<base>` hijacking of relative script URLs, which otherwise routes
+  around `script-src 'self'`.
+- **`frame-ancestors 'none'`** closes clickjacking. This section already worries about an overlay
+  presenting a false fingerprint and shuts the *theme* route to it; framing is the other route to the
+  same outcome, and the fingerprint-verification UI is exactly the confirm-this-value interface those
+  attacks target.
+
+The SPA is static behind CloudFront, so this is response-header configuration in Terraform — cheap
+to specify now, and much harder to retrofit once a bundle depends on a laxer default.
 
 ## Reporting a vulnerability
 
