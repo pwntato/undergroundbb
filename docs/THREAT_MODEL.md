@@ -147,7 +147,14 @@ offline password-cracking attack is available on request.**
 This is precisely why Argon2id is used rather than a fast hash: it makes offline guessing expensive
 rather than impossible. Weak passwords remain weak. The endpoint is rate-limited per IP, and
 accounts lock for five minutes after five failed **signature verifications**, but neither prevents a
-determined attacker from collecting blobs. The lockout counts signature failures rather than wrong
+determined attacker from collecting blobs.
+
+**The lockout in particular does nothing here, by design and not by omission.** It is enforced on
+the verify leg only, so a locked account is still issued challenges and still hands out its salt and
+wrapped keys for the duration of the lock. Locking the challenge leg as well would not change the
+picture — an attacker after blobs collects them before provoking any lock, or from accounts they
+never attack at all — and it would add a third way to deny one named account on top of the two
+below. **Harvesting is bounded by the rate limit and by Argon2id; the lockout is orthogonal to it.** The lockout counts signature failures rather than wrong
 passwords because a wrong password fails inside the browser and never reaches the server — see the
 login sequence in [DESIGN.md](DESIGN.md); it is a control on credential stuffing, not on guessing.
 It is **not** what stops replay either — that is the single-use nonce, since a replayed valid

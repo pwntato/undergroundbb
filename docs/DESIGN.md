@@ -146,6 +146,26 @@ so it needs a rate limit of its own; see Infrastructure. The lock-until value is
 thing in an item class that never expires, so it is a timestamp compared on read rather than a TTL:
 the item must outlive the lock.
 
+**The lock is enforced at step 4 only, and step 2 does not consult it.** That needs saying, because
+the counter's definition does not imply an enforcement point and the two candidates behave
+differently. Checking at step 4 means a locked account can still be issued challenges: `/auth/challenge`
+goes on serving the salt and wrapped keys to anyone naming that username for the whole five minutes.
+That is deliberate and costs nothing the design was relying on — **the lockout and offline harvesting
+are orthogonal controls.** The threat model already says so: challenge material is available on
+request, that is unavoidable because a client needs it to attempt a login, and what makes offline
+guessing expensive is Argon2id rather than any lock. Gating step 2 on the lock would not close
+harvesting either, since an attacker who wants blobs collects them before provoking a lock, or from
+usernames they never attack.
+
+**Checking at step 2 would also make the two unauthenticated legs coordinate through the hottest
+item in the partition**, which is the interaction the single-slot challenge decision was reasoning
+about: the challenge leg would *read* lock state that the verify leg *writes*, both unauthenticated,
+both on `PROFILE`, adding contention on exactly the item every login must already read. And it would
+hand an attacker a third denial path — five bad signatures would suppress challenge issuance as well
+as verification — which the threat model's account of how many independent ways there are to deny
+one named account would then have to grow to include. Enforcing at step 4 keeps that accounting at
+two.
+
 ### Multi-device
 
 **There is no device identity.** No device is registered, distinguishable from another, or
@@ -728,12 +748,29 @@ only because of what the blob holds — a theme and a font, both re-choosable in
 it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
 the design should be keyed this way.
 
-**Three writes in this schema are contested, and all three are conditional.** The comment ordinal
+**Four writes in this schema are contested, and all four are conditional.** The comment ordinal
 above is one. The second is the login challenge delete, where two requests carrying the same nonce
 race for one delete and exactly one wins — that race is the replay guarantee, not an incidental
-detail. The third is the username claim below. Nothing else in the table has two writers competing
-for one key — which is a separate question from whether a write is *atomic*: signup is not
-contested beyond its claim, but it spans three items and is a transaction for that reason.
+detail. The third is the username claim below.
+
+**The fourth is the credential re-wrap** — a password change or a recovery-code reset, which both
+rewrite `PROFILE` and `RECOVERY` together under a new wrapper. Each is a `TransactWriteItems`, and
+it is worth being precise about what that does and does not buy: a transaction is atomic *within
+itself*, but two transactions are not mutually exclusive with each other. Two credential re-wraps
+running concurrently — two tabs, or a retried recovery that appeared to hang — are two writers on
+one key, and last writer wins.
+
+**The failure is quiet and lands on the user in the worst place.** Both flows must make the user
+store the new code before completing, so the user can be shown a recovery code, write it down, and
+have it silently superseded by the transaction that lands second. Nothing tells them; they find out
+when they try to use it, which is the same too-late-to-fix moment that makes the partial-write case
+above the quietest failure in the flow. **So the transaction is conditional on a credential-version
+attribute** bumped by every re-wrap: the losing writer fails its condition, and the user is told
+their code is stale rather than being left holding one that silently is.
+
+Nothing else in the table has two writers competing for one key — which is a separate question from
+whether a write is *atomic*: signup is not contested beyond its claim, but it spans three items and
+is a transaction for that reason.
 
 **Usernames are unique case-insensitively, and displayed as typed.** The `USERNAME#<lower>` claim
 item decides the first half: `Alice` and `alice` cannot both exist, and **every lookup lowercases**,
@@ -1098,7 +1135,8 @@ in M7:
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
   ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
-  and would make a **fourth** contested write, alongside the three named above.
+  and would make a **fifth** contested write, alongside the four named above — and it would put a
+  second contested attribute on `PROFILE`, which the credential re-wrap already contests.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
   the rotation loop, and it should be built with the same expectation that it is interruptible.

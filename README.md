@@ -20,7 +20,10 @@ keys, and the metadata it needs to route requests — nothing else.
 - **Invites use a signed handshake**, so the server cannot substitute its own key to read along.
 - **Posts are signed**, so members cannot forge messages as one another.
 - **Groups expire content** on a schedule — 30 days by default. A deployment may allow groups to turn
-  expiration off; doing so keeps everything forever and gives up the guarantee this bullet describes.
+  expiration off, and a group that does gives up more than retention: expiry is the only
+  forward-secrecy mechanism that works at every group size, so without it a database stolen later
+  exposes everything ever posted, tombstones and notifications become permanent, and the key chain
+  grows without bound. [The threat model covers what that costs](docs/THREAT_MODEL.md).
 - **Themes**, because you should be comfortable in a tool you spend hours in.
 
 ## How it works, briefly
@@ -48,6 +51,10 @@ Worth stating up front, because "encrypted" gets used loosely:
   social graph, usernames, and day-level activity timing do not.
 - **Removing someone does not un-see what they saw.** Rotation cuts off future access; nothing
   recovers the past.
+- **Your recovery code is a second full password.** Anyone holding it can unwrap your keys and read
+  everything you can — it is not a lesser factor, and its strength is entirely wherever you stored
+  it. Guard it like the password, and know that changing your password issues a new one and
+  invalidates the old.
 
 The complete accounting is in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). It is meant to be read
 before you trust this with anything serious.
