@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.go != 'true'
-        run: echo "No go.mod at this commit — nothing to build yet (see #2 / PR #81)."
+        run: 'echo "No go.mod at this commit - nothing to build yet (see issue 2 / PR 81)."'
 
       - if: needs.detect.outputs.go == 'true'
         uses: actions/checkout@v4
@@ -121,7 +121,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.web != 'true'
-        run: echo "No web/package.json at this commit — nothing to build yet (see #3 / PR #82)."
+        run: 'echo "No web/package.json at this commit - nothing to build yet (see issue 3 / PR 82)."'
         working-directory: .
 
       - if: needs.detect.outputs.web == 'true'
@@ -160,7 +160,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.terraform != 'true'
-        run: echo "No terraform/ directory at this commit — nothing to validate yet (see #4-#11)."
+        run: 'echo "No terraform/ directory at this commit - nothing to validate yet (see issues 4-11)."'
 
       - if: needs.detect.outputs.terraform == 'true'
         uses: actions/checkout@v4
@@ -191,7 +191,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.go != 'true'
-        run: echo "No go.mod at this commit — crypto vectors land with M2 (#20 / #24)."
+        run: 'echo "No go.mod at this commit - crypto vectors land with M2 (issues 20 / 24)."'
 
       - if: needs.detect.outputs.go == 'true'
         uses: actions/checkout@v4
