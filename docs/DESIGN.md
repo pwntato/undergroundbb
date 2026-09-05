@@ -84,8 +84,34 @@ not merely storage. Every other unauthenticated write in the system is bounded t
 failure counter is an attribute update on one existing item, so hammering it costs contention but
 not cardinality. Overwriting one slot gives the challenge the same property, and a new challenge
 invalidates any outstanding one. Single use is unaffected — the conditional delete still spends the
-nonce and two racing requests still resolve to one winner. The cost is that a user with two tabs
-mid-login has the first tab's challenge replaced, which fails closed: that tab retries.
+nonce and two racing requests still resolve to one winner.
+
+**The trade this makes is a cardinality problem for a login-availability one, and that is the
+honest way to state it.** The benign cost is small: a user with two tabs mid-login has the first
+tab's challenge replaced, which fails closed — that tab retries, and nothing is racing to overwrite
+it again. The adversarial cost is not small, and it did not exist before this change. **The slot is
+one per user and any unauthenticated caller who knows the username can overwrite it**, so an
+attacker requesting challenges for a named account in a loop invalidates that user's outstanding
+nonce continuously: every time she finishes an Argon2id derivation — deliberately slow, and slowest
+on exactly the phone the TTL is sized for — and returns her signature, the conditional delete finds
+a different nonce and fails. **She cannot complete a login for as long as the flood continues, and
+retrying is what loses**, because each retry re-derives Argon2id and races again. The slower the
+client, the more reliably it loses.
+
+Two things make that worth stating rather than filing under "rate limits handle it". It **never
+touches the lockout**: no signature failure is recorded, so the counter stays at zero and the
+account is never locked — an operator checking the control the threat model names for account
+denial-of-service finds nothing wrong. And with the nonce in the sort key this attack was
+impossible: the flood cost unbounded storage but could not invalidate anyone's outstanding
+challenge. **A rate control is the only thing bounding it, and the lockout is not that control.**
+
+**The mechanism can be closed rather than documented, and is deliberately not in v1.** Accepting the
+write only when the existing challenge is absent or already past its TTL — one conditional write —
+keeps the single-item cardinality bound and makes the flood fail against the attacker instead of
+against the user. It is deferred because it is not free: the slot then belongs to whoever asked
+first for the length of the TTL, so the two-tab case reverses (the second tab is the one that
+waits), and a user whose own abandoned challenge is still live is briefly blocked by it. Both are
+tolerable, and neither is a reason to leave the attack undocumented in the meantime.
 
 **The session cookie authenticates; it decrypts nothing.** It is a short-lived signed token —
 there is no session store, so the server holds nothing to look up — carried in an `HttpOnly`,

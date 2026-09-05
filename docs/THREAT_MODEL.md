@@ -160,16 +160,29 @@ hands out crackable material, an attacker who wants to guess a password does it 
 lockout reaches them. What the lockout still bounds is **online** abuse — credential stuffing
 against a known account. A source-scoped counter would avoid the denial of service but is trivially
 defeated by rotating IPs, which is the harder problem. Naming it plainly: an attacker who wants to
-keep a specific user logged out can do so, and no design in this document prevents that.
+keep a specific user logged out can do so, and no design in this document prevents that. **There are
+two independent ways to do it** — this one, and the challenge-slot flood described below, which
+leaves no trace in the lockout counter at all.
 
 **What that same attacker cannot do is inflate the victim's partition.** The lockout counter and the
 login challenge are both **single items** in `USER#<uuid>` — the counter is an attribute update, and
 the challenge is one slot per user, overwritten on each request rather than one item per nonce. So
-repeated unauthenticated requests against a chosen username cost the operator writes and add
-contention on that partition, which is a rate problem the design treats as the operator's cost, but
-they do not grow storage without bound and they do not accumulate items that a TTL then has to
-remove on an eventual schedule. Cardinality and rate are separate controls here, and only the rate
-one is left open.
+repeated unauthenticated requests against a chosen username do not grow storage without bound and do
+not accumulate items that a TTL then has to remove on an eventual schedule. Cardinality is closed.
+
+**Rate is not, and after the single-slot change what the rate gap costs is no longer only the
+operator's spend.** It is also **login availability for a chosen account**. Because the slot is one
+per user and any unauthenticated caller who knows the username can overwrite it, a sustained flood
+against that username replaces the victim's outstanding challenge faster than they can answer it —
+their signature comes back matching a nonce that is no longer there, and the login fails. Argon2id
+makes this easy for the attacker: the victim's leg is deliberately slow, so retrying loses the race
+again. Usernames are enumerable, so the victim is chosen, exactly as in the paragraph above.
+
+**This is a second and independent way to deny one named account, and it is invisible to the control
+an operator would check first.** No signature failure is recorded, so the lockout counter stays at
+zero and the account is never locked — an operator looking at an unlocked account and a user who
+cannot log in is looking at the wrong mechanism. DESIGN.md states the trade where the single-slot
+decision is made, along with the conditional write that would close it and why that is deferred.
 
 ### The recovery code
 
@@ -268,6 +281,8 @@ switches off the only mechanism here that limits past exposure at any group size
 | Session cookie stolen | Reads ciphertext, membership and metadata; **no plaintext and no keys**, which stay in the browser. Cannot forge posts — those carry an Ed25519 signature the cookie cannot produce. Not revocable: valid until it expires, and unaffected by a password change or lockout. |
 | Offline password cracking from a stolen database | Possible; cost is set by Argon2id parameters and the user's password strength. |
 | Brute-force login over the network | Rate-limited per IP, plus a five-attempt lockout — but an attacker after a password guesses **offline** instead, where neither control reaches. See [Login material](#login-material). |
+| Attacker keeps one named account locked out | **Possible.** The lockout is keyed on the account, not the source, and usernames are enumerable, so five bad signatures lock any account and repeating keeps it locked. Deliberate inheritance from the original implementation; a source-scoped counter is defeated by rotating IPs. See [Login material](#login-material). |
+| Attacker floods `/auth/challenge` for one named account | **Possible, and distinct from the row above.** The challenge is a single slot per user that any unauthenticated caller can overwrite, so a sustained flood invalidates the victim's outstanding nonce faster than an Argon2id derivation completes and they cannot finish a login. **Records no signature failure, so the lockout counter stays at zero and the account never shows as locked** — the control an operator would check first says nothing is wrong. Only a rate limit bounds it. A conditional write that refuses to replace an unexpired challenge would close it; deferred in v1, see [DESIGN.md](DESIGN.md). |
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
 | Removed member reading future posts | **Eventually blocked** in `Rotating` groups — new posts use the old generation until rotation finishes, and a rotation abandoned by its client stays open until an admin notices the stale marker and resumes it. Possible indefinitely in `Open` groups. |
 
