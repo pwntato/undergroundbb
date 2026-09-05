@@ -14,7 +14,9 @@ Reactions are encrypted in their content but not in their existence: a dump show
 reacted to a given post or comment, and only the emoji itself is unreadable — the reactor's id is
 in the sort key, because that is what makes a reaction removable. It does **not** show when: the key
 carries the target and the reactor, with no day prefix and no timestamp, and reactions record no
-creation time at all. They are the one item here that discloses an association without a date.
+creation time. They are the one item here that discloses an association without a date — a property
+that depends on the reaction's TTL being **copied from its parent post** rather than computed when
+the reaction is written, since a computed one would date it in plaintext.
 
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
@@ -66,10 +68,15 @@ away. The pairwise case gets no special treatment, and nobody should assume it d
 inviter's copy of an invite is stored under their own id, so a dump shows that a user invited
 someone to a group even though nobody joined — and the invitee may have no account at all.
 
-**The dates are asymmetric, deliberately.** The inviter's row is keyed `SENT#<iid>` and carries **no
-time component at all**, so a dump does not date *inviting*. The invitee's side keeps a day
-(`INVITE#<YYYY-MM-DD, UTC>#<rand>` in GSI1), so a dump does date *being invited*. The half that is
-dated is the half that is association rather than intent, which is the weaker disclosure of the two.
+**The dates are asymmetric, deliberately, but only to a day on either side.** The inviter's row is
+keyed `SENT#<iid>` and carries no time component in its *key*, so nothing dates *inviting* from the
+key alone. The invitee's side keeps a day (`INVITE#<YYYY-MM-DD, UTC>#<rand>` in GSI1), so a dump does
+date *being invited* — and the half that is dated that way is association rather than intent, the
+weaker disclosure of the two. **Both rows carry a TTL, though**, and after acceptance that TTL is a
+completion deadline measured from acceptance; unrounded it would date the acceptance to the second in
+the inviter's partition, which is the sharper half and would invert the asymmetry entirely. The
+day-rounding rule on stored TTLs is what holds the inviter's side to day granularity, so the key
+shape alone is not what buys this.
 
 This is also bounded in time: the row is deleted when the invite completes, and until then its
 lifetime is the signed `expires_at` before acceptance and a **completion deadline** after it. So
@@ -98,6 +105,15 @@ Precise timestamps exist only inside the encrypted payload, which is why the ids
 **random rather than time-ordered** — a ULID or similar would have put a millisecond timestamp in
 plaintext beside the day prefix and made the day meaningless.
 
+**The sort key is not the only place a time can hide, and the TTL attribute is the other one.** A
+DynamoDB TTL is a Unix epoch in seconds stored as a plaintext number, because DynamoDB reads it
+itself, and five item classes carry one. Left unrounded it would give back everything the random ids
+withhold: a post's TTL minus the group's retention policy — an attribute on the same group's `META`
+item, in the same dump — is the second the post was written. **Stored TTLs are therefore rounded up
+to the end of their UTC day**, which puts the attribute at the same resolution as the key and costs
+at most a day of extra retention. That rule is load-bearing for every claim in this section, and it
+is stated in DESIGN.md beside the schema table that assigns the TTLs.
+
 **Comments are the exception, and they disclose sequence.** A comment's sort key is a materialized
 path of sibling ordinals, so a dump shows the exact order of a thread — third top-level comment,
 first reply beneath it — though not the wall-clock time of any of them. Read alongside day prefixes,
@@ -109,6 +125,14 @@ because it is genuinely more than the day-level granularity everything else expo
 partition. That is a per-user timeline rather than a per-group one, and it spans every group the
 user belongs to, so it is a distinct disclosure from "what day something was posted in this group" —
 which is why it gets the same day-granular, randomly-ordered treatment.
+
+**Their TTL discloses something the key does not, and rounding does not remove it.** A notification
+inherits the retention policy of the group that generated it, so the gap between a notification's day
+and its expiry day is that group's policy — which lets a reader who can decrypt nothing partition a
+user's notifications by originating group, and correlate those buckets against the retention policies
+visible on group `META` items in the same dump. It does not name the group, and in a deployment where
+most groups keep the 30-day default it distinguishes very little. It is a real edge, though, and it
+is the one disclosure in this section that comes from expiry rather than from a key.
 
 What day-level timing still gives an observer is real: activity on a given date, per user, per
 group, and a rough correlation of who was active on the same days, plus thread sequence where

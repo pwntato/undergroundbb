@@ -14,11 +14,13 @@ served as static files. There is no application server holding state, no session
 plaintext content anywhere in the backend. (The one exception is the short-lived login challenge
 item described below, which holds a random number and no key material.)
 
-**This document describes the complete design, not the current state of the code.** The whole
-design is settled and nothing here is speculative, but it is built in milestones: private groups,
-invites, posts and comments come first, while public groups, join requests, notifications and
-custom themes are deliberately sequenced later. Where something is not yet built, it is because of
-ordering, not doubt. Progress is tracked in the repository's issues and milestones.
+**This document describes the complete design, not the current state of the code.** The design is
+settled **except where this document explicitly marks an open question** — there is one, on
+`ephemeral_pubkey` in the invite handshake, and it is resolved before that code is written. Beyond
+that, the work is built in milestones: private groups, invites, posts and comments come first, while
+public groups, join requests, notifications and custom themes are deliberately sequenced later.
+Where something is not yet built, it is because of ordering, not doubt. Progress is tracked in the
+repository's issues and milestones.
 
 ## The cryptographic core
 
@@ -621,8 +623,15 @@ cacheable client-side, so a session walks any given stretch of the chain once.
 Every group has an expiration policy, defaulting to **30 days**. Expired items are deleted by
 DynamoDB TTL.
 
-**Comments and reactions carry their own TTL attribute**, set from the parent post's expiry when
-they are written. DynamoDB deletes items individually and does not cascade, and comments live in a
+**Comments and reactions carry their own TTL attribute**, **copied from the parent post's expiry
+value** — not recomputed as `now + policy` when they are written. The distinction looks like
+pedantry and is not: a comment written three weeks into a 30-day post's life and given `now + 30d`
+outlives its parent by three weeks, and a reaction given the same treatment carries a
+second-resolution record of when it was made, which is precisely the disclosure reactions are
+otherwise free of. **No test catches the wrong version**, because both values expire the item at a
+plausible-looking time. Copy the parent's number; do not derive a new one. The day-rounding rule
+above means a correctly copied value and a correctly recomputed one agree, which is a second reason
+to have it — but the instruction is *copy*, because only copying also gets the lifetime right. DynamoDB deletes items individually and does not cascade, and comments live in a
 different partition from their post (`POST#<pid>` rather than `GROUP#<gid>`), so a TTL on the post
 alone would delete the post and leave its entire thread in the table indefinitely. They cannot
 inherit the expiry lazily either — once the post is gone there is nothing left to inherit from. This
@@ -725,6 +734,27 @@ and drifted every time a row was added — a new row would arrive and the separa
 updated, which is a defect the list's own claim to be exhaustive actively hides. Answering the
 question in the row makes it impossible to add an item without deciding, and the paragraphs below
 explain the reasoning rather than carrying the assignment.
+
+**Every stored TTL value is rounded up to the end of its UTC day, and that rule is not optional.**
+A DynamoDB TTL is a **Unix epoch in seconds held as a plaintext numeric attribute** — it has to be,
+because DynamoDB reads it itself — so an unrounded TTL is a second-resolution timestamp sitting
+beside a sort key that was deliberately built to disclose only a day. The subtraction is trivial for
+anyone holding a dump: a post's TTL minus the group's retention policy, which is an attribute on the
+same group's `META` item in the same dump, is **the second the post was written**. That would undo
+the entire reason ids in this schema are random rather than ULIDs, and it would do it in the adjacent
+attribute rather than in the key.
+
+Rounding to the end of the UTC day restores day granularity by construction, at the same resolution
+the sort keys already commit to. It costs at most 24 hours of extra retention on items whose
+lifetimes are measured in weeks, which is not a meaningful change to what expiration is for. It also
+makes the copy-versus-compute question below stop mattering for comments and reactions: a value
+copied from the parent and a value computed from the same day's policy round to the same number.
+
+**This is the complementary rule to `GENKEY#`'s "no TTL attribute, ever."** That one exists because a
+TTL on a chain link would delete something load-bearing; this one exists because a TTL on anything
+else is a timestamp in the clear. Both belong next to the column that forces the expiry question to
+be answered, because answering "does this item expire" without answering "at what resolution does
+saying so leak" is only half the decision.
 
 **The user item is mixed, not wholly encrypted.** `USER#<uuid>` / `PROFILE` necessarily holds
 plaintext the system reads: the username, the Ed25519 and X25519 **public** keys other members need
@@ -899,7 +929,9 @@ found is deleted, so nothing completes, and the invitee — who signed their key
 half, and was told it succeeded — never receives a group key and is never told why. The read-time
 check does not catch this; that check correctly refuses an *expired* invite at step 2, and here
 acceptance happened while the invite was valid. So at step 2, **the signed `expires_at` stops
-governing both rows and is replaced by a completion deadline measured from acceptance.**
+governing both rows and is replaced by a completion deadline measured from acceptance** — stored,
+like every TTL here, rounded up to the end of its UTC day, so the attribute does not date the
+acceptance to the second.
 
 **That clearing is a `TransactWriteItems`, and it is why `SENT#` is keyed on the iid alone.** The
 two rows are in different partitions — `INVITE#<iid>` and `USER#<inviter>` — so this is a
@@ -1107,12 +1139,18 @@ under the group key like any other content. The server therefore knows that a us
 particular comment, and not what they said by it. The cost is that reaction counts are computed
 client-side after decryption rather than aggregated by the server.
 
-**Reactions carry no time at all**, which is a smaller disclosure than posts make and is deliberate.
-Their sort key holds the target path and the reactor's id — no day prefix — and the item records
-no creation timestamp, encrypted or otherwise. Nothing needs one: reactions are read as a set with
-their thread and counted after decryption, never ordered or filtered by time. So a reaction is the
-one item in this schema that discloses an association without a date, and adding a timestamp later
-would be adding a disclosure, not filling a gap.
+**Reactions carry no creation time**, which is a smaller disclosure than posts make and is
+deliberate. Their sort key holds the target path and the reactor's id — no day prefix — and the item
+records no creation timestamp, encrypted or otherwise. Nothing needs one: reactions are read as a
+set with their thread and counted after decryption, never ordered or filtered by time.
+
+**That property is conditional on the TTL being copied from the parent post rather than computed at
+write time**, and it is worth stating here as well as where the copy rule is given. A reaction's TTL
+is a plaintext epoch attribute like any other; if it is derived from the moment the reaction was
+made, then the item does carry a creation time in the clear, and the claim below is simply false.
+Copied from the parent, the attribute says when the *post* expires and reveals nothing about the
+reaction. Given that, a reaction is the one item in this schema that discloses an association
+without a date, and adding a timestamp later would be adding a disclosure, not filling a gap.
 
 **Notification items hold identifiers, not text.** The server knows thread structure and author
 ids — those are metadata — so it can tell that someone replied to your post without being able to
@@ -1237,10 +1275,14 @@ those two listings, which is the trade posts already accept.
 to address that row at acceptance to clear its TTL, and can construct the key only from the `<iid>`
 in the link they followed — a day and a 128-bit random component would be unreachable to them. It
 loses nothing by dropping them: `SENT#` is queried as pending work rather than in time order, and
-`<iid>` is already unique so there is no collision to close. It also happens to be the strongest
-version of the disclosure property, since the inviter's partition — who they approached, which the
-threat model treats as the more sensitive half, being intent rather than association — now carries
-no timing in the clear at all.
+`<iid>` is already unique so there is no collision to close. The disclosure benefit is narrower than
+it first appears, though, and the earlier phrasing here overstated it: the *sort key* carries no
+timing, but the row carries a TTL, and after acceptance that TTL is a completion deadline measured
+from acceptance. Unrounded, that would date the acceptance to the second in the inviter's own
+partition — a sharper disclosure than the day the invitee's side carries, which would invert the
+asymmetry rather than strengthen it. **The day-rounding rule on stored TTLs is what actually makes
+the inviter's side no worse than day-granular**, and the key shape is what makes it addressable.
+The two do different jobs and only the pair gives the property.
 
 **Role grants live in the group partition but are keyed by subject within it, and are append-only.**
 Verifying a chain is therefore one `begins_with(SK, "GRANT#" + uuid)` per hop — a keyed range read
