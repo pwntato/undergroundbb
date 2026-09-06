@@ -18,6 +18,19 @@ const HKDF_INFO = 'underground-bb:x25519-wrap:v1'
 /** Length in bytes of an X25519 private or public key. */
 export const KEY_LEN = 32
 
+/**
+ * Thrown when a public key byte string cannot be a point on the expected
+ * curve — currently checked by length only. Matches Go's
+ * ErrInvalidPublicKey, kept distinct from DecryptionFailedError so a caller
+ * can tell a malformed wrap apart from one that failed authentication.
+ */
+export class InvalidPublicKeyError extends Error {
+  constructor() {
+    super('crypto: invalid public key')
+    this.name = 'InvalidPublicKeyError'
+  }
+}
+
 export interface WrappingKey {
   readonly privateKey: Uint8Array
   readonly publicKey: Uint8Array
@@ -107,6 +120,10 @@ export async function unwrap(
   w: Wrapped,
   aad: Uint8Array,
 ): Promise<Uint8Array> {
+  if (w.ephemeralPub.length !== KEY_LEN) {
+    throw new InvalidPublicKeyError()
+  }
+
   const recipientPub = x25519.getPublicKey(recipientPriv)
   const sharedSecret = x25519.getSharedSecret(recipientPriv, w.ephemeralPub)
   const wrappingKey = deriveWrappingKey(sharedSecret, w.ephemeralPub, recipientPub)
