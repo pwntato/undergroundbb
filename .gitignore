@@ -3,6 +3,9 @@
 /lambda.zip
 *.test
 vectors.log
+# Root-anchored: ignores a stray compiled binary from
+# `go build ./internal/crypto/testdata/gen`, not the tracked generator
+# source at internal/crypto/testdata/gen/. Do not remove the leading slash.
 /gen
 
 # Node

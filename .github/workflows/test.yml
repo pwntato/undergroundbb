@@ -223,6 +223,14 @@ jobs:
       # checked-in vectors, not that the two implementations agree with each
       # other, which is the actual point of #24.
       #
+      # The vector file and suite are REQUIRED to exist from this commit
+      # onward — this is a required status check on main, and the earlier
+      # "not present yet" escape hatch that made sense before #20 landed
+      # would now be a silent bypass: delete both testdata/vectors.json and
+      # vectors_test.go and that guard used to print a message and exit 0,
+      # turning a required check into a no-op that still reports success.
+      # Missing either file is now a hard failure instead.
+      #
       # The run is recursive (./internal/crypto/...) so a vector suite living in
       # a subpackage (e.g. internal/crypto/kdf) is still exercised and its
       # failures still fail this job. That means a plain "no tests to run" grep
@@ -243,10 +251,9 @@ jobs:
         if: needs.detect.outputs.go == 'true'
         run: |
           set -o pipefail
-          if ! ls internal/crypto/*vector*_test.go >/dev/null 2>&1 && \
-             ! ls internal/crypto/testdata/*.json  >/dev/null 2>&1; then
-            echo "Crypto vector suite not present yet (#24). This check goes live with M2."
-            exit 0
+          if [ ! -f internal/crypto/testdata/vectors.json ]; then
+            echo "::error::internal/crypto/testdata/vectors.json is missing - the vector suite must exist (#20)."
+            exit 1
           fi
           go test ./internal/crypto/... -run 'Vector' -v 2>&1 | tee vectors.log || test_exit=$?
           if [ "${test_exit:-0}" -ne 0 ]; then
