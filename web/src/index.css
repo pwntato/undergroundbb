@@ -1,6 +1,16 @@
 @import 'tailwindcss';
 
 /*
+ * Vendored shadcn/ui components ship `dark:` utilities. Tailwind v4's default
+ * `dark` variant compiles to `@media (prefers-color-scheme: dark)`, which is a
+ * different mechanism than the [data-theme] attribute switch the theming plan
+ * (M5) is built around. Remapping the variant here means every `dark:` class
+ * already vendored, and any that arrives with future components, participates
+ * in the same [data-theme="dark"] switch instead of the OS preference.
+ */
+@custom-variant dark ([data-theme='dark'] &);
+
+/*
  * Theme tokens.
  *
  * Every visual value Tailwind can emit is declared here as a CSS custom
@@ -27,6 +37,8 @@
   --color-primary-foreground: var(--ubb-primary-foreground);
   --color-accent: var(--ubb-accent);
   --color-accent-foreground: var(--ubb-accent-foreground);
+  --color-secondary: var(--ubb-secondary);
+  --color-secondary-foreground: var(--ubb-secondary-foreground);
   --color-destructive: var(--ubb-destructive);
   --color-destructive-foreground: var(--ubb-destructive-foreground);
 
@@ -62,6 +74,8 @@
   --ubb-primary-foreground: oklch(0.16 0.01 260);
   --ubb-accent: oklch(0.72 0.16 320);
   --ubb-accent-foreground: oklch(0.16 0.01 260);
+  --ubb-secondary: oklch(0.24 0.01 260);
+  --ubb-secondary-foreground: oklch(0.93 0.01 260);
   --ubb-destructive: oklch(0.62 0.2 25);
   --ubb-destructive-foreground: oklch(0.98 0 0);
 
