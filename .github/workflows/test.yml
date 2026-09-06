@@ -225,7 +225,10 @@ jobs:
       # requiring at least one `--- PASS: .*Vector` line only trips when a
       # Vector-named test genuinely executed, regardless of what any other
       # package in the tree printed. Fail loudly if that signal is absent,
-      # rather than inferring "it ran" from "it didn't error".
+      # rather than inferring "it ran" from "it didn't error". A genuine test
+      # failure exits on `go test`'s own status before this check, so the
+      # PASS-grep only ever adjudicates a green run: vectors passed, or
+      # nothing matched and there was nothing to pass.
       - name: crypto test vectors
         if: needs.detect.outputs.go == 'true'
         run: |
@@ -236,8 +239,10 @@ jobs:
             exit 0
           fi
           go test ./internal/crypto/... -run 'Vector' -v 2>&1 | tee vectors.log || test_exit=$?
+          if [ "${test_exit:-0}" -ne 0 ]; then
+            exit "$test_exit"
+          fi
           if ! grep -q -- '--- PASS: .*Vector' vectors.log; then
             echo "::error::Vector suite present but no test matched -run 'Vector' - the vectors did not execute."
             exit 1
           fi
-          exit "${test_exit:-0}"
