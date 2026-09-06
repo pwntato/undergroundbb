@@ -213,17 +213,19 @@ jobs:
       # key derivation, AAD binding, signed payloads or fingerprint encoding
       # changed — each of which locks out every existing user irreversibly.
       #
-      # The presence guard below only decides WHETHER to run `go test -run
-      # 'Vector'`; it says nothing about whether that run actually matched a
-      # test. `go test -run` exits 0 and prints "no tests to run" when the
-      # pattern matches nothing, so a vector suite whose test functions are
-      # named e.g. TestArgon2idKAT rather than containing "Vector" -- an
-      # entirely ordinary choice -- would pass this guard (via the testdata
-      # arm or its own filename) and then execute zero vectors, silently and
-      # permanently green. That is the exact failure DESIGN.md's Testing
-      # section describes for a round-trip test, reproduced one level up,
-      # in the check meant to catch it. So: fail loudly if the run matched
-      # nothing, rather than inferring "it ran" from "it didn't error".
+      # The run is recursive (./internal/crypto/...) so a vector suite living in
+      # a subpackage (e.g. internal/crypto/kdf) is still exercised and its
+      # failures still fail this job. That means a plain "no tests to run" grep
+      # can't tell "the vectors didn't match -run 'Vector'" apart from "an
+      # unrelated sibling subpackage has no Vector-named test", and printing
+      # "[no test files]" for a package the guard tripped on via the flat
+      # testdata/ directory alone is a third case the same negative grep can't
+      # see either. So the check gates on a POSITIVE signal instead: `-v` makes
+      # `go test` print "--- PASS: <name>" for every test that actually ran, so
+      # requiring at least one `--- PASS: .*Vector` line only trips when a
+      # Vector-named test genuinely executed, regardless of what any other
+      # package in the tree printed. Fail loudly if that signal is absent,
+      # rather than inferring "it ran" from "it didn't error".
       - name: crypto test vectors
         if: needs.detect.outputs.go == 'true'
         run: |
@@ -233,10 +235,9 @@ jobs:
             echo "Crypto vector suite not present yet (#24). This check goes live with M2."
             exit 0
           fi
-          go test ./internal/crypto -run 'Vector' -v 2>&1 | tee /tmp/vectors.log
-          test_exit=$?
-          if grep -q 'no tests to run' /tmp/vectors.log; then
+          go test ./internal/crypto/... -run 'Vector' -v 2>&1 | tee vectors.log || test_exit=$?
+          if ! grep -q -- '--- PASS: .*Vector' vectors.log; then
             echo "::error::Vector suite present but no test matched -run 'Vector' - the vectors did not execute."
             exit 1
           fi
-          exit "$test_exit"
+          exit "${test_exit:-0}"
