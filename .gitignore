@@ -2,6 +2,7 @@
 /bootstrap
 /lambda.zip
 *.test
+vectors.log
 
 # Node
 node_modules/
