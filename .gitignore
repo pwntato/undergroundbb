@@ -12,6 +12,7 @@ vectors.log
 node_modules/
 dist/
 .vite/
+web/vectors-web.json
 
 # Terraform
 .terraform/

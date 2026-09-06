@@ -157,6 +157,10 @@ jobs:
         if: needs.detect.outputs.web == 'true'
         run: npm run format:check
 
+      - name: test
+        if: needs.detect.outputs.web == 'true'
+        run: npm test
+
       - name: build
         if: needs.detect.outputs.web == 'true'
         run: npm run build
@@ -214,14 +218,12 @@ jobs:
       # derivation, AAD binding, signed payloads or fingerprint encoding
       # changed — each of which locks out every existing user irreversibly.
       #
-      # THE TYPESCRIPT LEG DOES NOT EXIST YET. #24 asks for both
-      # implementations to consume this same JSON file, but the TypeScript
-      # crypto itself (#21 Argon2id/WASM, #22 WebCrypto primitives) hasn't
-      # been written, so there is nothing to run here on that side. Add a
-      # `web` step consuming testdata/vectors.json once #21/#22 land — until
-      # then this job verifies only that the Go implementation matches the
-      # checked-in vectors, not that the two implementations agree with each
-      # other, which is the actual point of #24.
+      # The TypeScript leg (#21 Argon2id/WASM, #22 WebCrypto primitives) now
+      # exists at web/src/lib/crypto and reads this same JSON file directly
+      # (web/src/lib/crypto/vectors.test.ts, no copy) — see the "crypto
+      # test vectors (web)" step below. Together the two steps are #24: both
+      # implementations verified against the same expected outputs, not just
+      # against their own round-trips.
       #
       # The vector file and suite are REQUIRED to exist from this commit
       # onward — this is a required status check on main, and the earlier
@@ -261,5 +263,45 @@ jobs:
           fi
           if ! grep -q -- '--- PASS: .*Vector' vectors.log; then
             echo "::error::Vector suite present but no test matched -run 'Vector' - the vectors did not execute."
+            exit 1
+          fi
+
+      - if: needs.detect.outputs.web != 'true'
+        run: 'echo "No web/package.json at this commit - crypto vectors land with M2 (issues 20 / 24)."'
+
+      - if: needs.detect.outputs.web == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - if: needs.detect.outputs.web == 'true'
+        working-directory: web
+        run: npm ci
+
+      # The TypeScript half of #20/#24: reads the identical
+      # internal/crypto/testdata/vectors.json the Go step above just
+      # checked, so this only passes when both implementations produce the
+      # same bytes from the same inputs. Same positive-signal reasoning as
+      # the Go step: vitest's own JSON reporter is the source of truth for
+      # "did the vector suite's tests actually run", not a grep over pass/fail
+      # text, since a suite that FAILED TO LOAD (a missing vectors.json, a
+      # broken import) can otherwise look identical to "0 tests, nothing to
+      # report" — the same silent-bypass shape #90's round-1 review found in
+      # the Go job's now-removed "not present yet" escape hatch.
+      - name: crypto test vectors (web)
+        if: needs.detect.outputs.web == 'true'
+        working-directory: web
+        run: |
+          set -o pipefail
+          npx vitest run src/lib/crypto/vectors.test.ts --reporter=json --outputFile=vectors-web.json
+          if ! node -e "
+            const r = require('./vectors-web.json');
+            if (!r.numTotalTests || r.numTotalTests < 1) { console.error('no vector tests ran'); process.exit(1); }
+            if (r.numPassedTests !== r.numTotalTests) { console.error('not all vector tests passed'); process.exit(1); }
+            console.log(r.numPassedTests + ' vector tests passed');
+          "; then
+            echo "::error::TypeScript crypto vector suite did not run or did not fully pass."
             exit 1
           fi
