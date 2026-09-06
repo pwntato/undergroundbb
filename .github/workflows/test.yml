@@ -25,7 +25,7 @@ jobs:
   # (branch protection requires a check that always arrives; a job skipped
   # by `if:` reports nothing to satisfy the rule), and no-ops when the code
   # it tests is absent from `main` at this commit. `go` and `crypto-vectors`
-  # went live once #81 merged go.mod; `web` goes live once #82 merges
+  # went live once #81 merged go.mod; `web` went live once #82 merged
   # web/package.json; `terraform` once #4-#11 add terraform/. Every step
   # here activates on its own as that code lands, with no edit to this file.
   detect:
@@ -227,13 +227,16 @@ jobs:
       - name: crypto test vectors
         if: needs.detect.outputs.go == 'true'
         run: |
+          set -o pipefail
           if ! ls internal/crypto/*vector*_test.go >/dev/null 2>&1 && \
              ! ls internal/crypto/testdata/*.json  >/dev/null 2>&1; then
             echo "Crypto vector suite not present yet (#24). This check goes live with M2."
             exit 0
           fi
-          go test ./internal/crypto/... -run 'Vector' -v 2>&1 | tee /tmp/vectors.log
+          go test ./internal/crypto -run 'Vector' -v 2>&1 | tee /tmp/vectors.log
+          test_exit=$?
           if grep -q 'no tests to run' /tmp/vectors.log; then
             echo "::error::Vector suite present but no test matched -run 'Vector' - the vectors did not execute."
             exit 1
           fi
+          exit "$test_exit"
