@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.45.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.2
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.66.0
+	golang.org/x/crypto v0.56.0
 )
 
 require (
