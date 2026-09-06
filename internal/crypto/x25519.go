@@ -49,7 +49,28 @@ func Wrap(recipientPub *ecdh.PublicKey, plaintext, aad []byte) (*Wrapped, error)
 	if err != nil {
 		return nil, err
 	}
+	return WrapWithEphemeral(recipientPub, ephemeralPriv, plaintext, aad)
+}
 
+// WrapWithEphemeral is Wrap with an explicit, caller-supplied ephemeral
+// keypair. It exists ONLY for generating and verifying fixed test vectors
+// under internal/crypto/testdata, where a reproducible wrap requires a fixed
+// ephemeral key. Every other caller MUST go through Wrap, which always
+// generates a fresh ephemeral keypair — reusing one defeats the forward
+// secrecy the ephemeral key exists to provide.
+func WrapWithEphemeral(recipientPub *ecdh.PublicKey, ephemeralPriv *ecdh.PrivateKey, plaintext, aad []byte) (*Wrapped, error) {
+	nonce := make([]byte, NonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return WrapWithEphemeralAndNonce(recipientPub, ephemeralPriv, nonce, plaintext, aad)
+}
+
+// WrapWithEphemeralAndNonce additionally fixes the GCM nonce, for full
+// byte-for-byte reproducibility in generated test vectors. Same misuse
+// warning as WrapWithEphemeral, doubled: this also reuses a nonce, which
+// combined with a real key is the GCM break documented on Encrypt.
+func WrapWithEphemeralAndNonce(recipientPub *ecdh.PublicKey, ephemeralPriv *ecdh.PrivateKey, nonce, plaintext, aad []byte) (*Wrapped, error) {
 	sharedSecret, err := ephemeralPriv.ECDH(recipientPub)
 	if err != nil {
 		return nil, err
@@ -61,7 +82,7 @@ func Wrap(recipientPub *ecdh.PublicKey, plaintext, aad []byte) (*Wrapped, error)
 		return nil, err
 	}
 
-	nonce, ciphertext, err := Encrypt(wrappingKey, plaintext, aad)
+	ciphertext, err := EncryptWithNonce(wrappingKey, nonce, plaintext, aad)
 	if err != nil {
 		return nil, err
 	}

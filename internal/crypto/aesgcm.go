@@ -31,26 +31,43 @@ var ErrInvalidPublicKey = errors.New("crypto: invalid public key")
 // The returned ciphertext has the authentication tag appended, as
 // cipher.AEAD.Seal produces.
 func Encrypt(key, plaintext, aad []byte) (nonce, ciphertext []byte, err error) {
-	if len(key) != KeySize {
-		return nil, nil, errors.New("crypto: key must be 32 bytes")
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	nonce = make([]byte, NonceSize)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, nil, err
 	}
-
-	ciphertext = gcm.Seal(nil, nonce, plaintext, aad)
+	ciphertext, err = EncryptWithNonce(key, nonce, plaintext, aad)
+	if err != nil {
+		return nil, nil, err
+	}
 	return nonce, ciphertext, nil
+}
+
+// EncryptWithNonce is Encrypt with an explicit, caller-supplied nonce. It
+// exists ONLY for generating and verifying fixed test vectors under
+// internal/crypto/testdata, where a reproducible ciphertext requires a fixed
+// nonce. Every other caller in this codebase MUST go through Encrypt, which
+// always generates a fresh one — reusing a nonce with a real key is the GCM
+// break documented on Encrypt and Wrap. This function has no guard against
+// that misuse; it exists to be called only from test-vector code, which is
+// why it is exported from a package with otherwise no reason to expose it.
+func EncryptWithNonce(key, nonce, plaintext, aad []byte) ([]byte, error) {
+	if len(key) != KeySize {
+		return nil, errors.New("crypto: key must be 32 bytes")
+	}
+	if len(nonce) != NonceSize {
+		return nil, errors.New("crypto: nonce must be 12 bytes")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	return gcm.Seal(nil, nonce, plaintext, aad), nil
 }
 
 // Decrypt decrypts ciphertext with AES-256-GCM under key and nonce,
