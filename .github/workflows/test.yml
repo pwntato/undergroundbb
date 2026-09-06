@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - main
+  # A job can go from no-op to live between merges with no PR of its own to
+  # prove it (e.g. #81 merging go.mod). Without this, the first real signal
+  # that a newly-live job works is whichever unrelated PR opens next, and a
+  # failure there reads as that PR's fault. This makes confirming the
+  # transition a button push instead of a throwaway PR or an empty commit.
+  workflow_dispatch:
 
 # A PR that is force-pushed or updated supersedes its own in-flight run.
 concurrency:
@@ -15,12 +21,13 @@ permissions:
   contents: read
 
 jobs:
-  # `main` does not yet contain go.mod or web/ — the Go module (#2) and frontend
-  # (#3) scaffolds are still unmerged. Each job below runs unconditionally so its
-  # name is always reported (branch protection requires a check that always
-  # arrives; a job skipped by `if:` reports nothing to satisfy the rule), and
-  # no-ops when the code it tests is absent. Once both scaffolds land, every step
-  # here becomes live without editing this file.
+  # Each job below runs unconditionally so its name is always reported
+  # (branch protection requires a check that always arrives; a job skipped
+  # by `if:` reports nothing to satisfy the rule), and no-ops when the code
+  # it tests is absent from `main` at this commit. `go` and `crypto-vectors`
+  # went live once #81 merged go.mod; `web` goes live once #82 merges
+  # web/package.json; `terraform` once #4-#11 add terraform/. Every step
+  # here activates on its own as that code lands, with no edit to this file.
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -54,7 +61,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.go != 'true'
-        run: 'echo "No go.mod at this commit - nothing to build yet (see issue 2 / PR 81)."'
+        run: 'echo "No go.mod at this commit - nothing to build yet (see issue 2)."'
 
       - if: needs.detect.outputs.go == 'true'
         uses: actions/checkout@v4
@@ -121,7 +128,7 @@ jobs:
 
     steps:
       - if: needs.detect.outputs.web != 'true'
-        run: 'echo "No web/package.json at this commit - nothing to build yet (see issue 3 / PR 82)."'
+        run: 'echo "No web/package.json at this commit - nothing to build yet (see issue 3)."'
         working-directory: .
 
       - if: needs.detect.outputs.web == 'true'
@@ -205,12 +212,28 @@ jobs:
       # exists this step runs it and nothing else, so a red check here means the
       # key derivation, AAD binding, signed payloads or fingerprint encoding
       # changed — each of which locks out every existing user irreversibly.
+      #
+      # The presence guard below only decides WHETHER to run `go test -run
+      # 'Vector'`; it says nothing about whether that run actually matched a
+      # test. `go test -run` exits 0 and prints "no tests to run" when the
+      # pattern matches nothing, so a vector suite whose test functions are
+      # named e.g. TestArgon2idKAT rather than containing "Vector" -- an
+      # entirely ordinary choice -- would pass this guard (via the testdata
+      # arm or its own filename) and then execute zero vectors, silently and
+      # permanently green. That is the exact failure DESIGN.md's Testing
+      # section describes for a round-trip test, reproduced one level up,
+      # in the check meant to catch it. So: fail loudly if the run matched
+      # nothing, rather than inferring "it ran" from "it didn't error".
       - name: crypto test vectors
         if: needs.detect.outputs.go == 'true'
         run: |
-          if ls internal/crypto/*vector*_test.go >/dev/null 2>&1 || \
-             ls internal/crypto/testdata/*.json  >/dev/null 2>&1; then
-            go test ./internal/crypto/... -run 'Vector' -v
-          else
+          if ! ls internal/crypto/*vector*_test.go >/dev/null 2>&1 && \
+             ! ls internal/crypto/testdata/*.json  >/dev/null 2>&1; then
             echo "Crypto vector suite not present yet (#24). This check goes live with M2."
+            exit 0
+          fi
+          go test ./internal/crypto/... -run 'Vector' -v 2>&1 | tee /tmp/vectors.log
+          if grep -q 'no tests to run' /tmp/vectors.log; then
+            echo "::error::Vector suite present but no test matched -run 'Vector' - the vectors did not execute."
+            exit 1
           fi
