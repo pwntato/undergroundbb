@@ -9,7 +9,10 @@ func TestEd25519RoundTrip(t *testing.T) {
 	}
 	message := []byte("GROUP#g1:POST#2026-09-05#a1b2:gen3")
 
-	sig := Sign(priv, ContextPost, message)
+	sig, err := Sign(priv, ContextPost, message)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !Verify(pub, ContextPost, message, sig) {
 		t.Fatal("Verify: valid signature rejected")
 	}
@@ -22,7 +25,10 @@ func TestEd25519WrongContextFails(t *testing.T) {
 	}
 	message := []byte("shared bytes that could mean two different things")
 
-	sig := Sign(priv, ContextLoginChallenge, message)
+	sig, err := Sign(priv, ContextLoginChallenge, message)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if Verify(pub, ContextPost, message, sig) {
 		t.Fatal("Verify: a login-challenge signature verified as a post signature")
 	}
@@ -36,7 +42,10 @@ func TestEd25519WrongMessageFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig := Sign(priv, ContextPost, []byte("original"))
+	sig, err := Sign(priv, ContextPost, []byte("original"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if Verify(pub, ContextPost, []byte("tampered"), sig) {
 		t.Fatal("Verify: signature over a different message verified")
 	}
@@ -52,9 +61,21 @@ func TestEd25519WrongKeyFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := []byte("message")
-	sig := Sign(priv2, ContextPost, message)
+	sig, err := Sign(priv2, ContextPost, message)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if Verify(pub1, ContextPost, message, sig) {
 		t.Fatal("Verify: signature verified against the wrong public key")
+	}
+}
+
+func TestEd25519SignRejectsMalformedKey(t *testing.T) {
+	if _, err := Sign(nil, ContextPost, []byte("message")); err == nil {
+		t.Fatal("Sign with a nil private key: want error, got nil")
+	}
+	if _, err := Sign(make([]byte, 5), ContextPost, []byte("message")); err == nil {
+		t.Fatal("Sign with a 5-byte private key: want error, got nil")
 	}
 }
 

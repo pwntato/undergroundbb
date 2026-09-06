@@ -90,3 +90,34 @@ func TestX25519EachWrapUsesFreshEphemeralKey(t *testing.T) {
 		t.Fatal("two Wrap calls of the same plaintext produced identical ciphertext")
 	}
 }
+
+// TestX25519WrappingKeyBindsBothPublicKeys is the regression test for the
+// HKDF-binding fix: deriveWrappingKey must not collapse to a function of the
+// shared secret alone, and swapping which key played which role must change
+// the output. Without this, a future refactor could silently revert to the
+// pre-binding derivation and every other test here would still pass.
+func TestX25519WrappingKeyBindsBothPublicKeys(t *testing.T) {
+	sharedSecret := bytes.Repeat([]byte{7}, 32)
+	ephemeralPub := bytes.Repeat([]byte{1}, 32)
+	recipientPub := bytes.Repeat([]byte{2}, 32)
+
+	bound, err := deriveWrappingKey(sharedSecret, ephemeralPub, recipientPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped, err := deriveWrappingKey(sharedSecret, recipientPub, ephemeralPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(bound, swapped) {
+		t.Fatal("wrapping key does not bind the ephemeral/recipient key roles")
+	}
+
+	unbound, err := deriveWrappingKey(sharedSecret, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(bound, unbound) {
+		t.Fatal("wrapping key is derived from the shared secret alone")
+	}
+}

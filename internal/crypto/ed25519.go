@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/ed25519"
+	"errors"
 )
 
 // SigningContext identifies which protocol a signature belongs to. It is
@@ -33,9 +34,14 @@ func GenerateSigningKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 
 // Sign signs message under the given context, binding the signature to that
 // context so it cannot be replayed as a signature over the same bytes in a
-// different protocol.
-func Sign(priv ed25519.PrivateKey, ctx SigningContext, message []byte) []byte {
-	return ed25519.Sign(priv, contextualize(ctx, message))
+// different protocol. It returns an error rather than panicking on a
+// malformed private key, since a corrupt or truncated key-unwrap result
+// should surface as a handled error, not a crash.
+func Sign(priv ed25519.PrivateKey, ctx SigningContext, message []byte) ([]byte, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, errors.New("crypto: private key must be 64 bytes")
+	}
+	return ed25519.Sign(priv, contextualize(ctx, message)), nil
 }
 
 // Verify checks a signature produced by Sign for the same context and

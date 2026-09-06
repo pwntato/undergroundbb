@@ -2,11 +2,9 @@ package crypto
 
 import (
 	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
-	"io"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // hkdfInfo labels HKDF's info parameter with the operation deriving the key,
@@ -112,16 +110,16 @@ type Wrapped struct {
 // key is a pure function of the shared secret and says nothing about which
 // exchange produced it — the ephemeral public key travels in Wrapped
 // otherwise unauthenticated by the KDF itself.
+//
+// The concatenation hkdfInfo || ephemeralPub || recipientPub has no length
+// prefixes or separators, which is unambiguous only because both public keys
+// are always exactly 32 bytes (X25519's fixed width) — there is no encoding
+// under which a byte could migrate between the two fields. This must not be
+// copied to bind variable-length inputs without adding delimiters. This
+// derivation must also never change once real data exists under it: doing so
+// is the permanent-lockout scenario #20 and DESIGN.md describe for a
+// silently changed key derivation.
 func deriveWrappingKey(sharedSecret, ephemeralPub, recipientPub []byte) ([]byte, error) {
-	info := make([]byte, 0, len(hkdfInfo)+len(ephemeralPub)+len(recipientPub))
-	info = append(info, hkdfInfo...)
-	info = append(info, ephemeralPub...)
-	info = append(info, recipientPub...)
-
-	reader := hkdf.New(sha256.New, sharedSecret, nil, info)
-	key := make([]byte, KeySize)
-	if _, err := io.ReadFull(reader, key); err != nil {
-		return nil, err
-	}
-	return key, nil
+	info := string(hkdfInfo) + string(ephemeralPub) + string(recipientPub)
+	return hkdf.Key(sha256.New, sharedSecret, nil, info, KeySize)
 }
