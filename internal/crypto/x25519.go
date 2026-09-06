@@ -29,6 +29,20 @@ func GenerateWrappingKey() (*ecdh.PrivateKey, error) {
 // to its address per the AAD table in docs/DESIGN.md (e.g. group id and
 // generation number).
 //
+// Wrap provides confidentiality only — no sender authentication. recipientPub
+// is a public value by definition (the server stores and serves it), so
+// anyone can construct a Wrapped that Unwrap accepts; nothing here proves the
+// plaintext came from a trusted source. Under this project's threat model,
+// where the server is untrusted and can write to the table, an unauthenticated
+// wrap is forgeable: a malicious server could substitute a GENKEY# chain link
+// or a member's wrapped group key with one it generated itself, and the
+// recipient would unwrap it successfully.
+//
+// Callers MUST authenticate a wrap independently before trusting it — e.g.
+// the invite handshake in docs/DESIGN.md only wraps to an X25519 key that was
+// itself Ed25519-signed in an earlier step. Do not treat Wrap/Unwrap as
+// sufficient on their own for any value an attacker could have chosen.
+//
 // The returned Wrapped value carries the ephemeral public key alongside the
 // nonce and ciphertext — it is everything Unwrap needs and nothing the
 // recipient's private key isn't required to use.
@@ -43,7 +57,8 @@ func Wrap(recipientPub *ecdh.PublicKey, plaintext, aad []byte) (*Wrapped, error)
 		return nil, err
 	}
 
-	wrappingKey, err := deriveWrappingKey(sharedSecret)
+	ephemeralPubBytes := ephemeralPriv.PublicKey().Bytes()
+	wrappingKey, err := deriveWrappingKey(sharedSecret, ephemeralPubBytes, recipientPub.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +69,7 @@ func Wrap(recipientPub *ecdh.PublicKey, plaintext, aad []byte) (*Wrapped, error)
 	}
 
 	return &Wrapped{
-		EphemeralPub: ephemeralPriv.PublicKey().Bytes(),
+		EphemeralPub: ephemeralPubBytes,
 		Nonce:        nonce,
 		Ciphertext:   ciphertext,
 	}, nil
@@ -74,7 +89,7 @@ func Unwrap(recipientPriv *ecdh.PrivateKey, w *Wrapped, aad []byte) ([]byte, err
 		return nil, ErrDecryptionFailed
 	}
 
-	wrappingKey, err := deriveWrappingKey(sharedSecret)
+	wrappingKey, err := deriveWrappingKey(sharedSecret, w.EphemeralPub, recipientPriv.PublicKey().Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +106,19 @@ type Wrapped struct {
 	Ciphertext   []byte
 }
 
-func deriveWrappingKey(sharedSecret []byte) ([]byte, error) {
-	reader := hkdf.New(sha256.New, sharedSecret, nil, []byte(hkdfInfo))
+// deriveWrappingKey derives the AES-256-GCM key HKDF-SHA256 from the ECDH
+// shared secret, binding both public keys involved in the exchange into the
+// info parameter (the pattern HPKE's DHKEM uses). Without this, the derived
+// key is a pure function of the shared secret and says nothing about which
+// exchange produced it — the ephemeral public key travels in Wrapped
+// otherwise unauthenticated by the KDF itself.
+func deriveWrappingKey(sharedSecret, ephemeralPub, recipientPub []byte) ([]byte, error) {
+	info := make([]byte, 0, len(hkdfInfo)+len(ephemeralPub)+len(recipientPub))
+	info = append(info, hkdfInfo...)
+	info = append(info, ephemeralPub...)
+	info = append(info, recipientPub...)
+
+	reader := hkdf.New(sha256.New, sharedSecret, nil, info)
 	key := make([]byte, KeySize)
 	if _, err := io.ReadFull(reader, key); err != nil {
 		return nil, err
