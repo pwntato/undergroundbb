@@ -208,10 +208,20 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Until #24 lands there is no ./internal/crypto vector suite to run. When it
-      # exists this step runs it and nothing else, so a red check here means the
-      # key derivation, AAD binding, signed payloads or fingerprint encoding
+      # This step runs the Go half of the shared vector suite (#20/#24):
+      # internal/crypto/testdata/vectors.json, checked by
+      # internal/crypto/vectors_test.go. A red check here means the key
+      # derivation, AAD binding, signed payloads or fingerprint encoding
       # changed — each of which locks out every existing user irreversibly.
+      #
+      # THE TYPESCRIPT LEG DOES NOT EXIST YET. #24 asks for both
+      # implementations to consume this same JSON file, but the TypeScript
+      # crypto itself (#21 Argon2id/WASM, #22 WebCrypto primitives) hasn't
+      # been written, so there is nothing to run here on that side. Add a
+      # `web` step consuming testdata/vectors.json once #21/#22 land — until
+      # then this job verifies only that the Go implementation matches the
+      # checked-in vectors, not that the two implementations agree with each
+      # other, which is the actual point of #24.
       #
       # The run is recursive (./internal/crypto/...) so a vector suite living in
       # a subpackage (e.g. internal/crypto/kdf) is still exercised and its
