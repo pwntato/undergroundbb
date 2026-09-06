@@ -121,6 +121,13 @@ func toHTTPRequest(ctx context.Context, req events.APIGatewayV2HTTPRequest) (*ht
 	if len(req.Cookies) > 0 {
 		httpReq.Header.Set("Cookie", strings.Join(req.Cookies, "; "))
 	}
+	// net/http's Server populates RemoteAddr from the TCP connection; nothing
+	// does that for cmd/lambda, so handlers get an empty client address unless
+	// it is copied here. SourceIP (not the spoofable client-supplied
+	// X-Forwarded-For) is what CloudFront/API Gateway itself observed.
+	if ip := req.RequestContext.HTTP.SourceIP; ip != "" {
+		httpReq.RemoteAddr = ip
+	}
 	return httpReq, nil
 }
 
@@ -131,10 +138,19 @@ func toLambdaResponse(rec *httptest.ResponseRecorder) events.APIGatewayV2HTTPRes
 	// Set-Cookie must travel in the response's Cookies array. Collapsing
 	// multiple Set-Cookie values into a comma-joined Headers entry yields one
 	// malformed cookie and silently breaks the session.
-	setCookies := resp.Header.Values("Set-Cookie")
+	//
+	// Collect and filter in the same loop, keyed by the same canonicalization,
+	// so the two decisions cannot disagree. A prior two-step version filtered
+	// resp.Header (keyed by http.CanonicalHeaderKey) with resp.Header.Values
+	// (which canonicalizes its argument but not the map keys it looks up) --
+	// a Set-Cookie value stored under a non-canonical map key matched the
+	// filter's skip but was invisible to the collector, and was dropped
+	// silently from both the Cookies array and Headers.
+	var setCookies []string
 	headers := make(map[string]string, len(resp.Header))
 	for k, vs := range resp.Header {
 		if http.CanonicalHeaderKey(k) == "Set-Cookie" {
+			setCookies = append(setCookies, vs...)
 			continue
 		}
 		headers[k] = strings.Join(vs, ", ")

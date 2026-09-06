@@ -186,3 +186,59 @@ func TestHostHeaderNotCopied(t *testing.T) {
 		t.Errorf("X-Real = %q, want other headers still copied", got)
 	}
 }
+
+// TestSourceIPCopiedToRemoteAddr pins the same parity as the panic fix:
+// net/http's Server populates RemoteAddr from the connection for cmd/local,
+// so cmd/lambda must copy it from RequestContext.HTTP.SourceIP by hand or
+// handlers see an empty client address -- including the lockout/rate-limit
+// logging DESIGN.md puts at the application layer specifically because WAF's
+// IP-keyed rules can't express it.
+func TestSourceIPCopiedToRemoteAddr(t *testing.T) {
+	req := events.APIGatewayV2HTTPRequest{
+		RawPath: "/api/health",
+		RequestContext: events.APIGatewayV2HTTPRequestContext{
+			DomainName: "example.invalid",
+			HTTP: events.APIGatewayV2HTTPRequestContextHTTPDescription{
+				Method:   http.MethodGet,
+				SourceIP: "203.0.113.9",
+			},
+		},
+	}
+	r, err := toHTTPRequest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("toHTTPRequest: %v", err)
+	}
+	if r.RemoteAddr != "203.0.113.9" {
+		t.Errorf("RemoteAddr = %q, want %q", r.RemoteAddr, "203.0.113.9")
+	}
+}
+
+// TestSetCookieNonCanonicalKey pins that the response's Set-Cookie collector
+// and its Headers filter cannot disagree about which map entries are cookies.
+// A value stored under a non-canonical key (direct w.Header()[...] write,
+// rather than http.SetCookie or Header.Add/Set) is unusual but must still be
+// collected, not dropped from both Cookies and Headers.
+func TestSetCookieNonCanonicalKey(t *testing.T) {
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header()["set-cookie"] = []string{"sneaky=1"}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	resp, err := lambdaHandler(context.Background(), events.APIGatewayV2HTTPRequest{
+		RawPath: "/api/health",
+		RequestContext: events.APIGatewayV2HTTPRequestContext{
+			DomainName: "example.invalid",
+			HTTP:       events.APIGatewayV2HTTPRequestContextHTTPDescription{Method: http.MethodGet},
+		},
+	})
+	if err != nil {
+		t.Fatalf("lambdaHandler: %v", err)
+	}
+	want := []string{"sneaky=1"}
+	if !slices.Equal(resp.Cookies, want) {
+		t.Errorf("Cookies = %v, want %v", resp.Cookies, want)
+	}
+	if _, ok := resp.Headers["set-cookie"]; ok {
+		t.Errorf("Headers[\"set-cookie\"] present, want cookie collected instead")
+	}
+}
