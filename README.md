@@ -152,8 +152,24 @@ terraform apply -var create_new_state=true
 Every run after that first one — including later runs in that same new account — uses the plain
 `terraform apply` above; the flag is not sticky to the account, only to that one first run.
 
-The main `terraform/` configuration (state bucket, Lambda, CloudFront, dev/prod workspaces —
-#5-#11) lands as those issues close.
+**The main `terraform/` configuration** (Lambda, CloudFront, dev/prod workspaces — #6-#11) lands as
+those issues close. So far it has just the DynamoDB table (#5). Its state lives in the bucket and
+lock table the bootstrap above creates, supplied at init time since their names include the account
+id:
+
+```sh
+cd terraform
+terraform init \
+  -backend-config="bucket=$(terraform -chdir=bootstrap output -raw state_bucket)" \
+  -backend-config="dynamodb_table=$(terraform -chdir=bootstrap output -raw state_lock_table)" \
+  -backend-config="region=us-west-2"
+terraform apply
+```
+
+Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
+value can't point one environment's `apply` at another's table. There's no `dev`/`prod` split yet —
+until #11 creates those workspaces, everything runs in Terraform's `default` workspace, so the table
+is `undergroundbb-default`.
 
 ## Contributing
 
