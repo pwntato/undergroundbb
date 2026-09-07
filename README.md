@@ -161,14 +161,15 @@ id:
 cd "$(git rev-parse --show-toplevel)/terraform"
 STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket 2>/dev/null)
 LOCK_TABLE=$(terraform -chdir=bootstrap output -raw state_lock_table 2>/dev/null)
-[ -n "$STATE_BUCKET" ] && [ -n "$LOCK_TABLE" ] || {
+STATE_REGION=$(terraform -chdir=bootstrap output -raw aws_region 2>/dev/null)
+[ -n "$STATE_BUCKET" ] && [ -n "$LOCK_TABLE" ] && [ -n "$STATE_REGION" ] || {
   echo "No bootstrap state on this machine. Run 'terraform apply' in terraform/bootstrap first (it adopts the existing resources via its import blocks)." >&2
   return 1 2>/dev/null || exit 1
 }
 terraform init \
   -backend-config="bucket=$STATE_BUCKET" \
   -backend-config="dynamodb_table=$LOCK_TABLE" \
-  -backend-config="region=us-west-2"
+  -backend-config="region=$STATE_REGION"
 terraform apply
 ```
 
@@ -176,6 +177,13 @@ terraform apply
 this machine (the state is local and gitignored, same as the note above) — without the check above,
 that empty value flows silently into `-backend-config="bucket="` and Terraform fails on `main.tf`'s
 `backend "s3"` block, which is not where the actual problem is.
+
+The backend region is derived from the bootstrap's own output rather than hardcoded, since the
+bootstrap region is itself overridable (`-var aws_region=...`, above). This `terraform/` config has
+its own, independent `aws_region` variable (`terraform/variables.tf`, same `us-west-2` default) for
+where its resources are created — the backend can't read a Terraform variable, which is why it's a
+separate `-backend-config` flag in the first place, so a non-default region needs `-var
+aws_region=...` on `terraform apply` here too, in addition to matching the bootstrap's region above.
 
 Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
 value can't point one environment's `apply` at another's table. There's no `dev`/`prod` split yet —
