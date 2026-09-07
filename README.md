@@ -158,12 +158,12 @@ lock table the bootstrap above creates, supplied at init time since their names 
 id:
 
 ```sh
-cd terraform
-STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket)
-LOCK_TABLE=$(terraform -chdir=bootstrap output -raw state_lock_table)
+cd "$(git rev-parse --show-toplevel)/terraform"
+STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket 2>/dev/null)
+LOCK_TABLE=$(terraform -chdir=bootstrap output -raw state_lock_table 2>/dev/null)
 [ -n "$STATE_BUCKET" ] && [ -n "$LOCK_TABLE" ] || {
   echo "No bootstrap state on this machine. Run 'terraform apply' in terraform/bootstrap first (it adopts the existing resources via its import blocks)." >&2
-  exit 1
+  return 1 2>/dev/null || exit 1
 }
 terraform init \
   -backend-config="bucket=$STATE_BUCKET" \
