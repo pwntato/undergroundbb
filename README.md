@@ -136,9 +136,16 @@ it exists only on the machine that ran the first apply — running the command a
 (a second maintainer, a new machine, CI) against that same account starts from empty state where the
 resources already exist. `import` blocks in `main.tf` cover all five resources for exactly this
 case: `terraform apply` adopts them into the new local state instead of trying to recreate them, so
-the command is safe and idempotent to re-run from anywhere within `350195739155`. Applying against a
-*different* AWS account is the ordinary path — five real creates, no imports involved, since nothing
-exists there yet.
+the command is safe and idempotent to re-run from anywhere within `350195739155`.
+
+Bootstrapping a **different** AWS account needs one extra flag. The import blocks are unconditional
+— an import whose target doesn't exist is a hard plan-time error, not a fallback to creating it — so
+by default this module assumes `350195739155`'s resources are there to adopt. Pass
+`-var adopt_existing_state=false` to skip the imports and create fresh instead:
+
+```sh
+terraform apply -var adopt_existing_state=false
+```
 
 The main `terraform/` configuration (state bucket, Lambda, CloudFront, dev/prod workspaces —
 #5-#11) lands as those issues close.
