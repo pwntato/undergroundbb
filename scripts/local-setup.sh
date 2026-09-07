@@ -9,6 +9,11 @@
 # already exists.
 set -euo pipefail
 
+if ! command -v aws >/dev/null 2>&1; then
+  echo "the AWS CLI is required (used to create the local table); see the README prerequisites" >&2
+  exit 1
+fi
+
 ENDPOINT="${DYNAMODB_ENDPOINT:-http://127.0.0.1:8000}"
 TABLE="${TABLE_NAME:-undergroundbb}"
 
@@ -29,6 +34,16 @@ if ! aws dynamodb list-tables --endpoint-url "$ENDPOINT" >/dev/null 2>&1; then
 fi
 
 if aws dynamodb describe-table --endpoint-url "$ENDPOINT" --table-name "$TABLE" >/dev/null 2>&1; then
+  # Existence alone isn't enough: a table left over from before a schema
+  # change (GSI1 added, renamed, etc.) would otherwise be silently accepted,
+  # and every query against the missing index would then look like an
+  # application bug rather than a stale table.
+  if ! aws dynamodb describe-table --endpoint-url "$ENDPOINT" --table-name "$TABLE" \
+      --query 'Table.GlobalSecondaryIndexes[?IndexName==`GSI1`]' --output text | grep -q GSI1; then
+    echo "table '$TABLE' exists but is missing GSI1 — it predates the current schema." >&2
+    echo "run 'docker compose down && docker compose up -d', then re-run this script." >&2
+    exit 1
+  fi
   echo "table '$TABLE' already exists, skipping create"
   exit 0
 fi

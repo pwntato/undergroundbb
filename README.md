@@ -83,7 +83,9 @@ Setup instructions will land with the first deployable release.
 
 Prerequisites: [Go](https://go.dev) (version pinned in `go.mod`), [Node](https://nodejs.org)
 (version pinned in `web/.node-version` — `fnm use` or `nvm use` from `web/` picks it up
-automatically), and [Docker](https://www.docker.com) for DynamoDB Local.
+automatically), [Docker](https://www.docker.com) for DynamoDB Local, and the
+[AWS CLI](https://aws.amazon.com/cli/) (`scripts/local-setup.sh` shells out to it to create the
+local table — no real AWS account or credentials needed).
 
 ```sh
 # 1. Start DynamoDB Local and create the table (schema matches docs/DESIGN.md
@@ -105,8 +107,10 @@ to one origin exactly as it will in production behind CloudFront. `cmd/local` (`
 `internal/handlers`) serves the identical handlers as `cmd/lambda`; only the transport differs.
 
 `scripts/local-setup.sh` is idempotent — safe to re-run, it skips table creation if the table
-already exists. To start over with an empty table, `docker compose down` (the container runs
-`-inMemory`, so removing it clears all data) and repeat step 1.
+already exists and matches the current schema. If you have a table from before a schema change
+(GSI1 added or renamed), the script fails instead of accepting it — follow its message: `docker
+compose down && docker compose up -d`, then re-run. The container runs `-inMemory`, so removing it
+also clears all data if you want a clean slate for any other reason.
 
 ## Contributing
 

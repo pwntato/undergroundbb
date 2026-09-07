@@ -5,7 +5,7 @@ services:
     image: amazon/dynamodb-local:latest
     ports:
       - '8000:8000'
-    # -inMemory keeps this disposable: `docker compose down -v` (or just
-    # restarting the container) gives you a clean table, which is what you
-    # want while iterating on the schema.
+    # -inMemory keeps this disposable: `docker compose down` (no volumes are
+    # declared here, so no -v needed) gives you a clean table on the next
+    # `up`, which is what you want while iterating on the schema.
     command: '-jar DynamoDBLocal.jar -inMemory -sharedDb'
