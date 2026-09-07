@@ -191,6 +191,18 @@ jobs:
           terraform validate
         working-directory: terraform
 
+      # terraform/bootstrap is its own root module (local state, run once per
+      # account before terraform/ has anywhere remote to put its state — see
+      # terraform/bootstrap/main.tf), so the validate step above never
+      # descends into it. Without this, a config error here would report
+      # green until someone actually ran it against a real account.
+      - name: validate bootstrap
+        if: needs.detect.outputs.terraform == 'true'
+        run: |
+          terraform init -backend=false
+          terraform validate
+        working-directory: terraform/bootstrap
+
   # The crypto vectors are a separate required check on purpose. They are the one
   # thing a round-trip test cannot substitute for (DESIGN.md "Testing"): encrypt
   # and decrypt can both be wrong in the same way and still agree. Folding them
