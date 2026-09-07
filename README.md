@@ -112,6 +112,36 @@ already exists and matches the current schema. If you have a table from before a
 compose down && docker compose up -d`, then re-run. The container runs `-inMemory`, so removing it
 also clears all data if you want a clean slate for any other reason.
 
+## Deploying
+
+Infrastructure is Terraform (`terraform/`), with remote state in S3 and locking via DynamoDB.
+Bootstrapping that remote state is a one-time, per-AWS-account step — it has to exist before
+`terraform/` has anywhere remote to put its own state, so it keeps its own local state rather than
+depending on the thing it creates:
+
+```sh
+cd terraform/bootstrap
+terraform init
+terraform apply
+```
+
+This creates a versioned, encrypted, non-public S3 bucket (`undergroundbb-tfstate-<account-id>`)
+and a `PAY_PER_REQUEST` DynamoDB table (`undergroundbb-tfstate-lock`) for state locking, both in
+`us-west-2` by default (override with `-var aws_region=...`). The rest of the project's
+infrastructure defaults to this same region — ACM (#9) is the one exception, since CloudFront
+requires its certificate in `us-east-1` regardless.
+
+**Already applied in the project's AWS account (350195739155).** Because this module's state is
+local and gitignored, it exists only on the machine that ran the first apply — running the command
+above elsewhere (a second maintainer, a new machine, CI) starts from empty state against an account
+where the resources already exist. `import` blocks in `main.tf` handle that: `terraform apply`
+adopts the existing bucket and table into the new local state instead of trying to recreate them,
+so the command is safe and idempotent to re-run from anywhere, not just the machine that bootstrapped
+first.
+
+The main `terraform/` configuration (state bucket, Lambda, CloudFront, dev/prod workspaces —
+#5-#11) lands as those issues close.
+
 ## Contributing
 
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one
