@@ -47,36 +47,40 @@ data "aws_caller_identity" "current" {}
 #
 # An import block is unconditional -- if its id doesn't resolve to a real
 # object, plan fails outright ("Cannot import non-existent remote object")
-# rather than falling back to a create. That makes these five hard-coded to
-# adopting var.adopt_existing_state's account, so bootstrapping a genuinely
-# new account needs var.adopt_existing_state=false to skip them and create
-# fresh instead. See the README's "Deploying" section.
+# rather than falling back to a create. The ids follow the caller's own
+# account (four interpolate data.aws_caller_identity.current.account_id; the
+# fifth, a DynamoDB table name, is account-scoped by definition), so these
+# adopt correctly in any account where the resources already exist -- but
+# the very first bootstrap of an account has nothing to import, and needs
+# var.create_new_state=true to skip them and create fresh. Every run after
+# that first one, including later runs in that same account, leaves it at
+# the default. See the README's "Deploying" section.
 import {
-  for_each = var.adopt_existing_state ? toset(["x"]) : toset([])
+  for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket.tf_state
   id       = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 }
 
 import {
-  for_each = var.adopt_existing_state ? toset(["x"]) : toset([])
+  for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket_versioning.tf_state
   id       = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 }
 
 import {
-  for_each = var.adopt_existing_state ? toset(["x"]) : toset([])
+  for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket_server_side_encryption_configuration.tf_state
   id       = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 }
 
 import {
-  for_each = var.adopt_existing_state ? toset(["x"]) : toset([])
+  for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket_public_access_block.tf_state
   id       = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 }
 
 import {
-  for_each = var.adopt_existing_state ? toset(["x"]) : toset([])
+  for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_dynamodb_table.tf_state_lock
   id       = "undergroundbb-tfstate-lock"
 }

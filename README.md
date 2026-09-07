@@ -133,19 +133,24 @@ requires its certificate in `us-east-1` regardless.
 
 **Already applied in account `350195739155`.** Because this module's state is local and gitignored,
 it exists only on the machine that ran the first apply — running the command above from elsewhere
-(a second maintainer, a new machine, CI) against that same account starts from empty state where the
+(a second maintainer, a new machine, CI) against the same account starts from empty state where the
 resources already exist. `import` blocks in `main.tf` cover all five resources for exactly this
-case: `terraform apply` adopts them into the new local state instead of trying to recreate them, so
-the command is safe and idempotent to re-run from anywhere within `350195739155`.
+case: `terraform apply` (the plain command above) adopts them into the new local state instead of
+trying to recreate them, so it's safe and idempotent to re-run from any machine, in any account whose
+resources already exist.
 
-Bootstrapping a **different** AWS account needs one extra flag. The import blocks are unconditional
-— an import whose target doesn't exist is a hard plan-time error, not a fallback to creating it — so
-by default this module assumes `350195739155`'s resources are there to adopt. Pass
-`-var adopt_existing_state=false` to skip the imports and create fresh instead:
+The **first ever** bootstrap of an AWS account needs one extra flag. The import blocks are
+unconditional — an import whose target doesn't exist is a hard plan-time error, not a fallback to
+creating it — so by default this module assumes the state resources already exist in the account
+you're authenticated to. On a brand-new account there's nothing yet to adopt, so pass
+`-var create_new_state=true` to skip the imports and create fresh instead:
 
 ```sh
-terraform apply -var adopt_existing_state=false
+terraform apply -var create_new_state=true
 ```
+
+Every run after that first one — including later runs in that same new account — uses the plain
+`terraform apply` above; the flag is not sticky to the account, only to that one first run.
 
 The main `terraform/` configuration (state bucket, Lambda, CloudFront, dev/prod workspaces —
 #5-#11) lands as those issues close.
