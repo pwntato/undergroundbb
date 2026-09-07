@@ -1,0 +1,11 @@
+# DynamoDB Local for development. Mirrors the `dynamodb` service container in
+# .github/workflows/test.yml so local and CI hit the same engine and port.
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    ports:
+      - '8000:8000'
+    # -inMemory keeps this disposable: `docker compose down` (no volumes are
+    # declared here, so no -v needed) gives you a clean table on the next
+    # `up`, which is what you want while iterating on the schema.
+    command: '-jar DynamoDBLocal.jar -inMemory -sharedDb'

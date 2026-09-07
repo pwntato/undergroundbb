@@ -79,6 +79,39 @@ configuration — nothing about a particular deployment is compiled into the bui
 
 Setup instructions will land with the first deployable release.
 
+## Local development
+
+Prerequisites: [Go](https://go.dev) (version pinned in `go.mod`), [Node](https://nodejs.org)
+(version pinned in `web/.node-version` — `fnm use` or `nvm use` from `web/` picks it up
+automatically), [Docker](https://www.docker.com) for DynamoDB Local, and the
+[AWS CLI](https://aws.amazon.com/cli/) (`scripts/local-setup.sh` shells out to it to create the
+local table — no real AWS account or credentials needed).
+
+```sh
+# 1. Start DynamoDB Local and create the table (schema matches docs/DESIGN.md
+#    and the `dynamodb` service in .github/workflows/test.yml).
+docker compose up -d
+./scripts/local-setup.sh
+
+# 2. Run the API server (in one terminal).
+export AWS_ACCESS_KEY_ID=localuser AWS_SECRET_ACCESS_KEY=localpassword AWS_DEFAULT_REGION=us-west-2
+export DYNAMODB_ENDPOINT=http://127.0.0.1:8000 TABLE_NAME=undergroundbb
+go run ./cmd/local
+
+# 3. Run the frontend (in another terminal).
+cd web && npm install && npm run dev
+```
+
+Open `http://localhost:5173` — Vite proxies `/api` to the Go server on `:3000`, so the app talks
+to one origin exactly as it will in production behind CloudFront. `cmd/local` (`internal/db`,
+`internal/handlers`) serves the identical handlers as `cmd/lambda`; only the transport differs.
+
+`scripts/local-setup.sh` is idempotent — safe to re-run, it skips table creation if the table
+already exists and matches the current schema. If you have a table from before a schema change
+(GSI1 added or renamed), the script fails instead of accepting it — follow its message: `docker
+compose down && docker compose up -d`, then re-run. The container runs `-inMemory`, so removing it
+also clears all data if you want a clean slate for any other reason.
+
 ## Contributing
 
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one
