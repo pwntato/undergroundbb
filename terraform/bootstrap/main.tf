@@ -27,6 +27,25 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
+# This module's state is local and gitignored (see the comment above), so it
+# exists only on whichever machine ran the first apply -- never in the repo.
+# Without these, a second maintainer, a new laptop, or CI starting from an
+# empty state directory would plan to recreate resources that already exist
+# in the account, and apply would fail on BucketAlreadyOwnedByYou /
+# ResourceInUseException instead of converging. `terraform apply` adopts the
+# existing resources into local state on first run instead; once adopted,
+# Terraform drops each import automatically and subsequent applies are a
+# normal no-op plan.
+import {
+  to = aws_s3_bucket.tf_state
+  id = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
+}
+
+import {
+  to = aws_dynamodb_table.tf_state_lock
+  id = "undergroundbb-tfstate-lock"
+}
+
 resource "aws_s3_bucket" "tf_state" {
   bucket = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 

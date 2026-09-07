@@ -131,6 +131,14 @@ and a `PAY_PER_REQUEST` DynamoDB table (`undergroundbb-tfstate-lock`) for state 
 infrastructure defaults to this same region — ACM (#9) is the one exception, since CloudFront
 requires its certificate in `us-east-1` regardless.
 
+**Already applied in the project's AWS account (350195739155).** Because this module's state is
+local and gitignored, it exists only on the machine that ran the first apply — running the command
+above elsewhere (a second maintainer, a new machine, CI) starts from empty state against an account
+where the resources already exist. `import` blocks in `main.tf` handle that: `terraform apply`
+adopts the existing bucket and table into the new local state instead of trying to recreate them,
+so the command is safe and idempotent to re-run from anywhere, not just the machine that bootstrapped
+first.
+
 The main `terraform/` configuration (state bucket, Lambda, CloudFront, dev/prod workspaces —
 #5-#11) lands as those issues close.
 

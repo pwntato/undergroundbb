@@ -193,9 +193,12 @@ jobs:
 
       # terraform/bootstrap is its own root module (local state, run once per
       # account before terraform/ has anywhere remote to put its state — see
-      # terraform/bootstrap/main.tf), so the validate step above never
-      # descends into it. Without this, a config error here would report
-      # green until someone actually ran it against a real account.
+      # terraform/bootstrap/main.tf). `fmt -check -recursive` above already
+      # covers it, but `validate` only runs from terraform/ and does not
+      # descend into a separate root module, so this is the only check that
+      # actually reads terraform/bootstrap's configuration. Without it a
+      # config error there would report green until someone ran it against a
+      # real account.
       - name: validate bootstrap
         if: needs.detect.outputs.terraform == 'true'
         run: |
