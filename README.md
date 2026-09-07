@@ -159,12 +159,23 @@ id:
 
 ```sh
 cd terraform
+STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket)
+LOCK_TABLE=$(terraform -chdir=bootstrap output -raw state_lock_table)
+[ -n "$STATE_BUCKET" ] && [ -n "$LOCK_TABLE" ] || {
+  echo "No bootstrap state on this machine. Run 'terraform apply' in terraform/bootstrap first (it adopts the existing resources via its import blocks)." >&2
+  exit 1
+}
 terraform init \
-  -backend-config="bucket=$(terraform -chdir=bootstrap output -raw state_bucket)" \
-  -backend-config="dynamodb_table=$(terraform -chdir=bootstrap output -raw state_lock_table)" \
+  -backend-config="bucket=$STATE_BUCKET" \
+  -backend-config="dynamodb_table=$LOCK_TABLE" \
   -backend-config="region=us-west-2"
 terraform apply
 ```
+
+`terraform -chdir=bootstrap output` exits `0` and prints nothing when bootstrap has no local state on
+this machine (the state is local and gitignored, same as the note above) — without the check above,
+that empty value flows silently into `-backend-config="bucket="` and Terraform fails on `main.tf`'s
+`backend "s3"` block, which is not where the actual problem is.
 
 Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
 value can't point one environment's `apply` at another's table. There's no `dev`/`prod` split yet —

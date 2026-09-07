@@ -13,6 +13,14 @@ resource "aws_dynamodb_table" "main" {
   hash_key     = "PK"
   range_key    = "SK"
 
+  # Enforced by the service, not just Terraform's plan -- also blocks a
+  # console/CLI delete, and unlike `lifecycle.prevent_destroy` it doesn't
+  # block a legitimate `terraform destroy` of everything else. Matters more
+  # once #11 adds dev/prod workspaces: the table name is then ambient state
+  # (not visible in the destroy command itself), so a `destroy` run against
+  # the wrong selected workspace is a real, easy mistake to make.
+  deletion_protection_enabled = true
+
   attribute {
     name = "PK"
     type = "S"
