@@ -31,13 +31,36 @@ data "aws_caller_identity" "current" {}
 # exists only on whichever machine ran the first apply -- never in the repo.
 # Without these, a second maintainer, a new laptop, or CI starting from an
 # empty state directory would plan to recreate resources that already exist
-# in the account, and apply would fail on BucketAlreadyOwnedByYou /
-# ResourceInUseException instead of converging. `terraform apply` adopts the
-# existing resources into local state on first run instead; once adopted,
-# Terraform drops each import automatically and subsequent applies are a
-# normal no-op plan.
+# in the account, and apply would fail outright for the bucket and table
+# (BucketAlreadyOwnedByYou / ResourceInUseException) or silently overwrite
+# the three S3 sub-resource settings with byte-identical config that merely
+# happens to match today -- if the live bucket ever drifted (someone enabled
+# a KMS key, say), a fresh-clone apply would revert it with no `~` in the
+# plan to show it, because Terraform would think it was creating, not
+# correcting. All five resources need an import, not just the two that fail
+# loudly without one.
+#
+# Once adopted, an import whose target is already in state is a silent
+# no-op on later plans -- Terraform does not remove the block or edit this
+# file. These stay here deliberately: the state is local and per-machine, so
+# the next fresh clone needs the same imports again.
 import {
   to = aws_s3_bucket.tf_state
+  id = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
+}
+
+import {
+  to = aws_s3_bucket_versioning.tf_state
+  id = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
+}
+
+import {
+  to = aws_s3_bucket_server_side_encryption_configuration.tf_state
+  id = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
+}
+
+import {
+  to = aws_s3_bucket_public_access_block.tf_state
   id = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
 }
 
