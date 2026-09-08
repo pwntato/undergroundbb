@@ -83,9 +83,13 @@ resource "aws_lambda_function" "main" {
   depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy.lambda]
 }
 
-# authorization_type = "NONE" per #6 -- CloudFront (#8) is the access control
-# boundary, same split as DESIGN.md's infrastructure diagram (CloudFront +
-# WAF in front, Function URL behind, never called directly by a browser).
+# authorization_type = "NONE" per #6 -- CloudFront (#8) is the intended
+# access control boundary, same split as DESIGN.md's infrastructure diagram
+# (CloudFront + WAF in front, Function URL behind). Not yet enforced, though:
+# #8 landed the distribution, but the Function URL itself remains directly
+# reachable with none of CloudFront's response headers/TLS policy/future WAF
+# applied -- tracked in #103 (shared-secret origin-verify header). Update
+# this comment (or drop it) once #103 actually closes the gap.
 resource "aws_lambda_function_url" "main" {
   function_name      = aws_lambda_function.main.function_name
   authorization_type = "NONE"
@@ -109,7 +113,3 @@ resource "aws_lambda_permission" "function_url_invoke" {
   invoked_via_function_url = true
 }
 
-output "function_url" {
-  value       = aws_lambda_function_url.main.function_url
-  description = "Temporary until #8's CloudFront distribution fronts this."
-}

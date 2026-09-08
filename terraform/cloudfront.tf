@@ -164,13 +164,21 @@ resource "aws_cloudfront_origin_request_policy" "api" {
 #
 # This function only ever touches request.uri, and is associated with the
 # default cache behavior alone (not /api/* or /assets/*), so it can never
-# affect the API origin regardless of what CloudFront does with error
+# affect the API *origin* regardless of what CloudFront does with error
 # responses -- the fix removes the shared distribution-wide mechanism
 # entirely rather than trying to carve API paths out of it. "Extensionless"
 # (no "." in the final path segment) is the SPA-routing heuristic: every
 # client-side route matches, every real static asset in this bucket doesn't
-# (see functions/spa_index_rewrite.js for the one caveat: a future
-# extensionless static file would be misrouted, none exist today).
+# (see functions/spa_index_rewrite.js for two known-and-accepted caveats).
+#
+# Being off /api/*'s behavior is not the same as being out of the API's
+# *path space*, though -- round 2 review found the bare path /api (no
+# trailing slash) doesn't match the "/api/*" pattern, falls through to this
+# default behavior, and got rewritten to /index.html and served from S3.
+# The function itself now guards this explicitly (see its own comment) --
+# belt-and-braces with the behavior-association scoping here, deliberately,
+# since the two controls fail independently and this bug is exactly what
+# happens when only one of them is relied on.
 resource "aws_cloudfront_function" "spa_index_rewrite" {
   name    = "undergroundbb-spa-index-rewrite-${terraform.workspace}"
   runtime = "cloudfront-js-2.0"
@@ -286,6 +294,33 @@ resource "aws_cloudfront_distribution" "main" {
     compress               = true
 
     cache_policy_id            = aws_cloudfront_cache_policy.static_assets.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
+  }
+
+  # Two behaviors, not one, because CloudFront path patterns have no
+  # alternation -- "/api/*" cannot also express the bare path "/api" (no
+  # trailing slash) in a single pattern. Discovered in round 2 review: an
+  # early-return guard was added to spa_index_rewrite.js for "/api", but
+  # that fix alone turned out not to close the gap -- cache-behavior
+  # selection happens *before* any associated function runs, keyed on the
+  # original request path, so a request for the bare "/api" was already
+  # dispatched to the default behavior (and the frontend/S3 origin) before
+  # the function had any chance to act on it. The function guard stops the
+  # request from being silently rewritten into a 200-with-SPA-content; this
+  # second behavior is what actually routes it to the right origin. Both
+  # are kept: the guard is still correct defense for anything that reaches
+  # the function with an /api-prefixed uri, and this behavior is what
+  # prevents /api from reaching the function at all.
+  ordered_cache_behavior {
+    path_pattern           = "/api"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "api"
+    viewer_protocol_policy = "https-only"
+    compress               = true
+
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
   }
 

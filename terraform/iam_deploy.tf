@@ -222,6 +222,21 @@ data "aws_iam_policy_document" "deploy_policy" {
       "cloudfront:CreateResponseHeadersPolicy",
       "cloudfront:UpdateResponseHeadersPolicy",
       "cloudfront:DeleteResponseHeadersPolicy",
+      # Added in round 2 review: aws_cloudfront_function.spa_index_rewrite
+      # (added in round 1's fix commit) was never added to this statement,
+      # so a CI-driven apply of this branch couldn't create it -- the same
+      # gap shape as #97's iam:PassRole and #100's s3:PutBucketPolicy, all
+      # three caught only because live testing exercises the deploy role
+      # directly rather than trusting a clean plan under admin credentials.
+      # publish = true means Terraform calls CreateFunction *and*
+      # PublishFunction; refresh calls DescribeFunction/GetFunction -- all
+      # six needed, not just create.
+      "cloudfront:CreateFunction",
+      "cloudfront:UpdateFunction",
+      "cloudfront:PublishFunction",
+      "cloudfront:DescribeFunction",
+      "cloudfront:GetFunction",
+      "cloudfront:DeleteFunction",
     ]
     resources = ["*"]
   }
