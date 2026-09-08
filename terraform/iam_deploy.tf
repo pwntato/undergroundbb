@@ -147,6 +147,28 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = [aws_lambda_function.main.arn]
   }
 
+  # The frontend bucket itself (#7) -- separate from the state-backend
+  # statements below, which are scoped to var.state_bucket. No object-level
+  # actions here: uploading the built SPA is a separate CI step (#8), not
+  # something this deploy role's own terraform apply does.
+  statement {
+    actions = [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:PutEncryptionConfiguration",
+      "s3:GetEncryptionConfiguration",
+      "s3:PutBucketVersioning",
+      "s3:GetBucketVersioning",
+      "s3:PutLifecycleConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:PutBucketTagging",
+      "s3:GetBucketTagging",
+    ]
+    resources = [aws_s3_bucket.frontend.arn]
+  }
+
   # Terraform state backend (the bucket + lock table terraform/bootstrap/
   # creates). Lock table name is a fixed literal there, not
   # workspace-derived, so it's referenced the same way here.
