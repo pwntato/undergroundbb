@@ -214,9 +214,13 @@ of those gets its own policy statement added as it lands, same incremental appro
 `iam_deploy.tf`'s comment describes.
 
 That role has to exist before CI can use it, which means the **first** deploy is manual — apply the
-commands above by hand once, then set the GitHub environment's `AWS_DEPLOY_ROLE_ARN` secret to the
-`deploy_role_arn` output and `TF_STATE_BUCKET` var to the bootstrap's `state_bucket` output. Every
-push to `main` after that deploys itself.
+commands above by hand once, then create a repo environment named `production` (Settings →
+Environments) and set its `AWS_DEPLOY_ROLE_ARN` secret to the `deploy_role_arn` output and its
+`TF_STATE_BUCKET` variable to the bootstrap's `state_bucket` output. The environment name is not
+cosmetic — the deploy role's trust policy only accepts a token whose `sub` claim is
+`repo:pwntato/undergroundbb:environment:production`, which GitHub only issues for a job running
+under an environment of that exact name; a job without it presents a `ref`-based `sub` instead and
+`sts:AssumeRoleWithWebIdentity` is denied. Every push to `main` after that deploys itself.
 
 The GitHub Actions OIDC provider is per-AWS-account, not per-project — this account already has one
 (created for `notoriousmcp`'s own deploy role), so `iam_deploy.tf` reads it via a data source rather
