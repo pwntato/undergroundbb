@@ -11,8 +11,14 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # >= 6.28.0 for aws_lambda_permission's invoked_via_function_url --
+      # lambda.tf's Function URL policy needs the lambda:InvokedViaFunctionUrl
+      # condition key, which the v5 provider line cannot express at all (the
+      # attribute was added in 6.28.0). Confirmed the v5->v6 breaking changes
+      # (OpsWorks removal, aws_eip's vpc -> domain, SimpleDB removal) don't
+      # touch anything this module manages.
+      version = ">= 6.28.0, < 7.0"
     }
   }
 

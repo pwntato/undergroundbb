@@ -15,8 +15,11 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # Matches terraform/main.tf's constraint (see its comment) -- kept in
+      # sync so this account isn't managed by two different provider majors.
+      # This module's own resources (S3, DynamoDB) are unaffected either way.
+      version = ">= 6.28.0, < 7.0"
     }
   }
 }
