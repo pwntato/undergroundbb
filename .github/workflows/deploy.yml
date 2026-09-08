@@ -33,6 +33,13 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
 
       - name: terraform init
+        # Bucket comes from vars.TF_STATE_BUCKET (bootstrap output), but the
+        # lock table name and region here are hardcoded to match
+        # bootstrap/main.tf's fixed literal and its default region. An
+        # account bootstrapped with a different region would have a working
+        # manual deploy path (which derives from bootstrap outputs) but a
+        # broken CI path that fails here without naming the region as the
+        # cause.
         run: |
           terraform init \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \

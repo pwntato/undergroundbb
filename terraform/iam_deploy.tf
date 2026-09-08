@@ -35,11 +35,16 @@ resource "aws_iam_role" "deploy" {
   assume_role_policy = data.aws_iam_policy_document.deploy_assume_role.json
 }
 
-# Scoped to exactly the resources terraform/ and terraform/bootstrap/ create
-# today (#4-#6) -- not the eventual #7-#11 surface (S3 frontend bucket,
-# CloudFront, ACM, WAF), which get their own statements added as each lands,
-# same incremental approach as notoriousmcp's iam_deploy.tf grew resource by
-# resource rather than pre-granting a wide policy up front.
+# Scoped to exactly what terraform/ creates today (#4-#6), plus read/write
+# access to the state backend terraform/bootstrap/ provisions -- not a
+# blanket policy, and not pre-granted access to #7-#11's future resources,
+# which get their own statements added as each lands, same incremental
+# approach as notoriousmcp's iam_deploy.tf grew resource by resource rather
+# than pre-granting a wide policy up front. Bootstrap itself (creating the
+# state bucket/lock table) stays a manual, human-run step and is
+# deliberately outside this role's reach -- this policy grants no
+# s3:CreateBucket/PutBucketVersioning/PutEncryptionConfiguration/
+# PutBucketPublicAccessBlock or dynamodb:CreateTable on the lock table.
 data "aws_iam_policy_document" "deploy_policy" {
   statement {
     actions = [
@@ -88,6 +93,22 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = [aws_iam_role.deploy.arn, aws_iam_role.lambda.arn]
   }
 
+  # lambda:CreateFunction and lambda:UpdateFunctionConfiguration both require
+  # iam:PassRole on the execution role being attached -- assigning a role to
+  # a function is a privilege delegation AWS gates separately from creating
+  # the role itself. Scoped to the lambda execution role only, and further
+  # restricted to the Lambda service so this role can never hand the
+  # execution role to anything else.
+  statement {
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.lambda.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["lambda.amazonaws.com"]
+    }
+  }
+
   statement {
     actions   = ["logs:DescribeLogGroups", "logs:ListTagsForResource"]
     resources = ["*"]
@@ -130,16 +151,17 @@ data "aws_iam_policy_document" "deploy_policy" {
   # creates). Lock table name is a fixed literal there, not
   # workspace-derived, so it's referenced the same way here.
   statement {
+    actions   = ["s3:ListBucket"]
+    resources = ["arn:aws:s3:::${var.state_bucket}"]
+  }
+
+  statement {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
       "s3:DeleteObject",
-      "s3:ListBucket",
     ]
-    resources = [
-      "arn:aws:s3:::${var.state_bucket}",
-      "arn:aws:s3:::${var.state_bucket}/*",
-    ]
+    resources = ["arn:aws:s3:::${var.state_bucket}/*"]
   }
 
   statement {

@@ -206,10 +206,12 @@ reach the deployed API directly.
 **CI deploys on every push to `main`** (`.github/workflows/deploy.yml`): builds the binary, zips
 it, assumes `AWS_DEPLOY_ROLE_ARN` via GitHub's OIDC provider (no long-lived AWS credentials stored
 in the repo), and runs the same `terraform init`/`apply` as above against the `production`
-environment. That role (`iam_deploy.tf`) is itself created by Terraform, scoped to exactly the
-resources `terraform/` and `terraform/bootstrap/` create — not a blanket policy, and not
-pre-granted access to #7-#11's future resources; each of those gets its own policy statement added
-as it lands, same incremental approach `iam_deploy.tf`'s comment describes.
+environment. That role (`iam_deploy.tf`) is itself created by Terraform, scoped to exactly what
+`terraform/` creates, plus read/write access to the state backend `terraform/bootstrap/`
+provisions — bootstrap itself stays a manual, human-run step and is deliberately outside this
+role's reach. Not a blanket policy, and not pre-granted access to #7-#11's future resources; each
+of those gets its own policy statement added as it lands, same incremental approach
+`iam_deploy.tf`'s comment describes.
 
 That role has to exist before CI can use it, which means the **first** deploy is manual — apply the
 commands above by hand once, then set the GitHub environment's `AWS_DEPLOY_ROLE_ARN` secret to the
