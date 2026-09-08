@@ -311,6 +311,16 @@ resource "aws_cloudfront_distribution" "main" {
   # are kept: the guard is still correct defense for anything that reaches
   # the function with an /api-prefixed uri, and this behavior is what
   # prevents /api from reaching the function at all.
+  # Both API behaviors refuse plaintext (https-only) rather than redirecting
+  # it the way the frontend behaviors above do (redirect-to-https) --
+  # flagged as an undocumented inconsistency in round 3 review, deliberate
+  # but worth writing down so a future reader doesn't "fix" it into
+  # matching the frontend. A session-cookie-bearing request that somehow
+  # ends up on http:// should error immediately rather than being
+  # redirected -- a redirect is one more network hop where the cookie has
+  # already been sent in the clear once. The frontend has no such
+  # credential to protect, so a redirect there is pure convenience with no
+  # cost.
   ordered_cache_behavior {
     path_pattern           = "/api"
     allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
