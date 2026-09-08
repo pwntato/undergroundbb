@@ -170,7 +170,7 @@ terraform init \
   -backend-config="bucket=$STATE_BUCKET" \
   -backend-config="dynamodb_table=$LOCK_TABLE" \
   -backend-config="region=$STATE_REGION"
-terraform apply
+terraform apply -var state_bucket="$STATE_BUCKET"
 ```
 
 `terraform -chdir=bootstrap output` exits `0` and prints nothing when bootstrap has no local state on
@@ -189,6 +189,53 @@ Resource names derive from `terraform.workspace`, never a free-form variable (#1
 value can't point one environment's `apply` at another's table. There's no `dev`/`prod` split yet —
 until #11 creates those workspaces, everything runs in Terraform's `default` workspace, so the table
 is `undergroundbb-default`.
+
+**The Lambda (#6)** needs a real deploy artifact — `terraform apply` reads `lambda.zip` at the
+`terraform/` module's parent directory via `filebase64sha256`, so build it first:
+
+```sh
+GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
+zip lambda.zip bootstrap
+```
+
+`authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
+(#8) is the access-control boundary once it lands, matching `docs/DESIGN.md`'s infrastructure
+diagram. Until #8 exists, `terraform output function_url` is a temporary, unauthenticated way to
+reach the deployed API directly.
+
+**CI deploys on every push to `main`** (`.github/workflows/deploy.yml`): builds the binary, zips
+it, assumes `AWS_DEPLOY_ROLE_ARN` via GitHub's OIDC provider (no long-lived AWS credentials stored
+in the repo), and runs the same `terraform init`/`apply` as above against the `production`
+environment. That role (`iam_deploy.tf`) is itself created by Terraform, scoped to exactly what
+`terraform/` creates, plus read/write access to the state backend `terraform/bootstrap/`
+provisions — bootstrap itself stays a manual, human-run step and is deliberately outside this
+role's reach. Not a blanket policy, and not pre-granted access to #7-#11's future resources; each
+of those gets its own policy statement added as it lands, same incremental approach
+`iam_deploy.tf`'s comment describes.
+
+That role has to exist before CI can use it, which means the **first** deploy is manual — apply the
+commands above by hand once, then create a repo environment named `production` (Settings →
+Environments) and set its `AWS_DEPLOY_ROLE_ARN` secret to the `deploy_role_arn` output and its
+`TF_STATE_BUCKET` variable to the bootstrap's `state_bucket` output. The environment name is not
+cosmetic — the deploy role's trust policy only accepts a token whose `sub` claim is
+`repo:pwntato/undergroundbb:environment:production`, which GitHub only issues for a job running
+under an environment of that exact name; a job without it presents a `ref`-based `sub` instead and
+`sts:AssumeRoleWithWebIdentity` is denied. Every push to `main` after that deploys itself.
+
+The GitHub Actions OIDC provider is per-AWS-account, not per-project — this account already has one
+(created for `notoriousmcp`'s own deploy role), so `iam_deploy.tf` reads it via a data source rather
+than declaring it as a resource, to avoid fighting over ownership of a provider shared with an
+unrelated project's deploy pipeline.
+
+**The AWS provider requires `>= 6.28.0`** (not `~> 5.0`, as it was through #4/#5). A Function URL's
+`NONE` auth type needs two resource-policy statements, `lambda:InvokeFunctionUrl` and
+`lambda:InvokeFunction` (the second gated on the `lambda:InvokedViaFunctionUrl` condition key, per
+[AWS's own docs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html), mandatory since
+October 2025) — creating the URL via the console or SAM gets both automatically, but Terraform's
+`aws_lambda_function_url` only manages the first, and the `invoked_via_function_url` attribute
+needed to express the second on `aws_lambda_permission` didn't exist before provider `6.28.0`.
+Without it, every request 403s (`AccessDeniedException`) regardless of `AuthType`, which is how this
+was found — confirmed against a real deployment, not just read off the changelog.
 
 ## Contributing
 

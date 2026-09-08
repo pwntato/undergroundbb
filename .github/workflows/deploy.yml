@@ -1,0 +1,58 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build
+        run: |
+          GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
+          zip lambda.zip bootstrap
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: terraform init
+        # Bucket comes from vars.TF_STATE_BUCKET (bootstrap output), but the
+        # lock table name and region here are hardcoded to match
+        # bootstrap/main.tf's fixed literal and its default region. An
+        # account bootstrapped with a different region would have a working
+        # manual deploy path (which derives from bootstrap outputs) but a
+        # broken CI path that fails here without naming the region as the
+        # cause.
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=undergroundbb-tfstate-lock" \
+            -backend-config="region=us-west-2"
+        working-directory: terraform
+
+      - name: terraform plan
+        run: terraform plan -out=tfplan
+        working-directory: terraform
+        env:
+          TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+
+      - name: terraform apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: terraform

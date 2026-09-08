@@ -186,7 +186,12 @@ jobs:
 
       - name: validate
         if: needs.detect.outputs.terraform == 'true'
+        # lambda.tf's source_code_hash reads lambda.zip via filebase64sha256,
+        # which validate evaluates even with no real deploy artifact -- a
+        # placeholder is enough since validate only checks that the file
+        # exists and is readable, not that it's a real Lambda package.
         run: |
+          touch ../lambda.zip
           terraform init -backend=false
           terraform validate
         working-directory: terraform
