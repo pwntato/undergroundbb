@@ -179,8 +179,51 @@ data "aws_iam_policy_document" "deploy_policy" {
       "s3:PutLifecycleConfiguration",
       "s3:DeleteLifecycleConfiguration",
       "s3:PutBucketTagging",
+      # #8's OAC bucket policy, added once the distribution ARN existed to
+      # scope its AWS:SourceArn condition to. Flagged as a known gap in
+      # #100's own review rather than caught here -- this statement's
+      # absence would have first broken on #8's initial CI-driven apply,
+      # the same class of gap iam:PassRole was in #97.
+      "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
     ]
     resources = [aws_s3_bucket.frontend.arn]
+  }
+
+  # CloudFront (#8). Distribution/OAC/cache-policy/origin-request-policy/
+  # response-headers-policy actions are all account-scoped, not
+  # resource-scoped -- CloudFront's IAM actions don't support resource-level
+  # permissions for these types (confirmed via `aws iam simulate-principal-policy`
+  # before opening this PR, same check #97/#100's reviews wished had happened
+  # earlier), so "*" here is the actual achievable scope, not a shortcut.
+  statement {
+    actions = [
+      "cloudfront:GetDistribution",
+      "cloudfront:CreateDistribution",
+      "cloudfront:UpdateDistribution",
+      "cloudfront:DeleteDistribution",
+      "cloudfront:TagResource",
+      "cloudfront:UntagResource",
+      "cloudfront:ListTagsForResource",
+      "cloudfront:GetOriginAccessControl",
+      "cloudfront:CreateOriginAccessControl",
+      "cloudfront:UpdateOriginAccessControl",
+      "cloudfront:DeleteOriginAccessControl",
+      "cloudfront:GetCachePolicy",
+      "cloudfront:CreateCachePolicy",
+      "cloudfront:UpdateCachePolicy",
+      "cloudfront:DeleteCachePolicy",
+      "cloudfront:ListCachePolicies",
+      "cloudfront:GetOriginRequestPolicy",
+      "cloudfront:CreateOriginRequestPolicy",
+      "cloudfront:UpdateOriginRequestPolicy",
+      "cloudfront:DeleteOriginRequestPolicy",
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:CreateResponseHeadersPolicy",
+      "cloudfront:UpdateResponseHeadersPolicy",
+      "cloudfront:DeleteResponseHeadersPolicy",
+    ]
+    resources = ["*"]
   }
 
   # Terraform state backend (the bucket + lock table terraform/bootstrap/
