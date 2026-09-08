@@ -152,10 +152,10 @@ terraform apply -var create_new_state=true
 Every run after that first one — including later runs in that same new account — uses the plain
 `terraform apply` above; the flag is not sticky to the account, only to that one first run.
 
-**The main `terraform/` configuration** (Lambda, CloudFront, dev/prod workspaces — #6-#11) lands as
-those issues close. So far it has just the DynamoDB table (#5). Its state lives in the bucket and
-lock table the bootstrap above creates, supplied at init time since their names include the account
-id:
+**The main `terraform/` configuration** (CloudFront, dev/prod workspaces — #8-#11) lands as those
+issues close. So far it has the DynamoDB table (#5), the Lambda function and its IAM role plus the
+CI/CD deploy pipeline (#6), and the S3 frontend bucket (#7). Its state lives in the bucket and lock
+table the bootstrap above creates, supplied at init time since their names include the account id:
 
 ```sh
 cd "$(git rev-parse --show-toplevel)/terraform"

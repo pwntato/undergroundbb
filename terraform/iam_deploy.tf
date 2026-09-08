@@ -35,16 +35,18 @@ resource "aws_iam_role" "deploy" {
   assume_role_policy = data.aws_iam_policy_document.deploy_assume_role.json
 }
 
-# Scoped to exactly what terraform/ creates today (#4-#6), plus read/write
+# Scoped to exactly what terraform/ creates today (#4-#7), plus read/write
 # access to the state backend terraform/bootstrap/ provisions -- not a
-# blanket policy, and not pre-granted access to #7-#11's future resources,
+# blanket policy, and not pre-granted access to #8-#11's future resources,
 # which get their own statements added as each lands, same incremental
 # approach as notoriousmcp's iam_deploy.tf grew resource by resource rather
 # than pre-granting a wide policy up front. Bootstrap itself (creating the
 # state bucket/lock table) stays a manual, human-run step and is
-# deliberately outside this role's reach -- this policy grants no
+# deliberately outside this role's reach -- this policy grants none of
 # s3:CreateBucket/PutBucketVersioning/PutEncryptionConfiguration/
-# PutBucketPublicAccessBlock or dynamodb:CreateTable on the lock table.
+# PutBucketPublicAccessBlock or dynamodb:CreateTable on the state bucket or
+# lock table specifically (it does grant several of those same action names
+# on the #7 frontend bucket below, which this role does manage).
 data "aws_iam_policy_document" "deploy_policy" {
   statement {
     actions = [
@@ -151,20 +153,31 @@ data "aws_iam_policy_document" "deploy_policy" {
   # statements below, which are scoped to var.state_bucket. No object-level
   # actions here: uploading the built SPA is a separate CI step (#8), not
   # something this deploy role's own terraform apply does.
+  #
+  # s3:Get*/s3:List* rather than an enumerated read list: a refresh of
+  # aws_s3_bucket alone calls eleven distinct Get/List/Head operations
+  # (ACL, location, policy, website, CORS, logging, request payment,
+  # acceleration, replication, object-lock config, plus ListBucket), and
+  # enumerating them only buys the ability to miss one -- which is what an
+  # earlier version of this statement did. notoriousmcp's iam_deploy.tf hit
+  # the identical gap and settled on this same fix; matching it here rather
+  # than re-deriving a narrower list this file mirrors deliberately anyway.
+  # DeleteBucketEncryption/DeletePublicAccessBlock are for removing those
+  # configs (e.g. on a destroy, or if a block is ever taken out of config),
+  # not just adding them.
   statement {
     actions = [
       "s3:CreateBucket",
       "s3:DeleteBucket",
+      "s3:Get*",
+      "s3:List*",
       "s3:PutBucketPublicAccessBlock",
-      "s3:GetBucketPublicAccessBlock",
+      "s3:DeletePublicAccessBlock",
       "s3:PutEncryptionConfiguration",
-      "s3:GetEncryptionConfiguration",
+      "s3:DeleteBucketEncryption",
       "s3:PutBucketVersioning",
-      "s3:GetBucketVersioning",
       "s3:PutLifecycleConfiguration",
-      "s3:GetLifecycleConfiguration",
       "s3:PutBucketTagging",
-      "s3:GetBucketTagging",
     ]
     resources = [aws_s3_bucket.frontend.arn]
   }
