@@ -41,7 +41,9 @@ resource "aws_s3_bucket_policy" "frontend" {
 # Long cache for hashed static assets (Vite's build emits content-hashed
 # filenames under /assets/*, e.g. index-DrLDjz1_.css) -- a changed file gets
 # a new URL, so caching it for a year is safe and an edge revalidation on
-# every request is pure waste.
+# every request is pure waste. Attached only to the /assets/* ordered
+# behavior below, not the default one -- see that behavior's comment for why
+# the long-TTL policy has to opt in rather than being the default.
 resource "aws_cloudfront_cache_policy" "static_assets" {
   name        = "undergroundbb-static-assets-${terraform.workspace}"
   default_ttl = 31536000
@@ -67,9 +69,17 @@ resource "aws_cloudfront_cache_policy" "static_assets" {
 # index.html (and any other unhashed file served from bucket root, e.g.
 # favicon.svg) must not get the same long TTL as /assets/* -- it's the one
 # file whose content changes without a URL change on every deploy, and the
-# SPA-fallback behavior below serves it for arbitrary client-side routes.
-# Short TTL rather than zero: still cacheable at the edge, just revalidated
-# often enough that a deploy is visible quickly.
+# SPA-rewrite CloudFront Function below routes every client-side route
+# (/groups/abc, /settings, ...) to it as well. This is the *default* cache
+# behavior's policy, not a narrower one scoped to /index.html specifically
+# (round 1 review on #8 caught that /index.html as a path_pattern barely
+# matches anything real: the SPA rewrite happens at viewer-request, before
+# cache-behavior selection, so a rewritten request is evaluated against
+# whichever behavior the *original* path matched -- almost always this
+# default one, since client-side routes have no extension and don't match
+# /assets/* or /api/*). Making short-TTL HTML the default and requiring
+# /assets/* to opt into the long TTL means any future unhashed root file
+# is safe by default rather than accidentally cached for a year.
 resource "aws_cloudfront_cache_policy" "html" {
   name        = "undergroundbb-html-${terraform.workspace}"
   default_ttl = 60
@@ -143,6 +153,32 @@ resource "aws_cloudfront_origin_request_policy" "api" {
   }
 }
 
+# SPA fallback (#8), rewritten at viewer-request rather than via
+# custom_error_response -- round 1 review found custom_error_response is
+# distribution-wide, not per-behavior, so a 403/404 entry for the SPA
+# fallback also intercepted the API's own 403s/404s and silently served
+# them from the frontend/S3 origin instead of the Lambda (confirmed live:
+# a real Lambda 404 on /api/nope came back as an S3 AccessDenied). That's
+# the same silent-misdirection shape as the Host bug this PR already fixed,
+# just at the error-response layer instead of the request layer.
+#
+# This function only ever touches request.uri, and is associated with the
+# default cache behavior alone (not /api/* or /assets/*), so it can never
+# affect the API origin regardless of what CloudFront does with error
+# responses -- the fix removes the shared distribution-wide mechanism
+# entirely rather than trying to carve API paths out of it. "Extensionless"
+# (no "." in the final path segment) is the SPA-routing heuristic: every
+# client-side route matches, every real static asset in this bucket doesn't
+# (see functions/spa_index_rewrite.js for the one caveat: a future
+# extensionless static file would be misrouted, none exist today).
+resource "aws_cloudfront_function" "spa_index_rewrite" {
+  name    = "undergroundbb-spa-index-rewrite-${terraform.workspace}"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  comment = "Rewrites extensionless paths to /index.html for SPA client-side routing (#8)."
+  code    = file("${path.module}/functions/spa_index_rewrite.js")
+}
+
 # CSP from #8's own issue comment (originally specified in #1 review round
 # 28). Four directives are load-bearing for specific reasons the comment
 # spells out -- see docs/THREAT_MODEL.md, "Why custom themes are JSON, not
@@ -186,6 +222,12 @@ resource "aws_cloudfront_distribution" "main" {
   enabled         = true
   is_ipv6_enabled = true
   comment         = "undergroundbb-${terraform.workspace}"
+  # Round 1 review, confirmed live (DistributionConfig.DefaultRootObject was
+  # "" on the deployed distribution): without this, "/" asked S3 for the
+  # empty key, 403'd, and only rendered the SPA via the custom_error_response
+  # fallback that round 1 also asked to be removed. With it, "/" is a normal
+  # cache hit on the default behavior instead of going through an error path.
+  default_root_object = "index.html"
 
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
@@ -208,6 +250,10 @@ resource "aws_cloudfront_distribution" "main" {
     }
   }
 
+  # Default behavior serves the SPA shell -- short-TTL html cache policy,
+  # and the only behavior the SPA-rewrite function is associated with. Any
+  # request that doesn't match /assets/* or /api/* below lands here,
+  # including every client-side route the function rewrites to /index.html.
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
@@ -215,19 +261,31 @@ resource "aws_cloudfront_distribution" "main" {
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 
-    cache_policy_id            = aws_cloudfront_cache_policy.static_assets.id
+    cache_policy_id            = aws_cloudfront_cache_policy.html.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_index_rewrite.arn
+    }
   }
 
+  # Vite's hashed build output opts into the year-long cache explicitly --
+  # everything else (index.html, favicon.svg, any future unhashed root
+  # file) gets the default behavior's short TTL instead. Inverted from this
+  # PR's original shape (long-TTL default + a near-unreachable /index.html
+  # behavior) per round 1 review: path_pattern matches the request URI as
+  # received, and the SPA rewrite happens before behavior selection, so a
+  # behavior scoped to literally "/index.html" almost never actually fired.
   ordered_cache_behavior {
-    path_pattern           = "/index.html"
+    path_pattern           = "/assets/*"
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]
     target_origin_id       = "frontend"
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 
-    cache_policy_id            = aws_cloudfront_cache_policy.html.id
+    cache_policy_id            = aws_cloudfront_cache_policy.static_assets.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
   }
 
@@ -244,22 +302,14 @@ resource "aws_cloudfront_distribution" "main" {
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
   }
 
-  # SPA fallback (#8): a client-side route like /groups/abc has no matching
-  # S3 key, so S3 returns 403 (OAC callers get 403, not 404, for a missing
-  # key) which CloudFront rewrites to /index.html with a 200 rather than
-  # surfacing the origin's error to the browser. Both codes are handled
-  # since a public/anonymous request path could plausibly hit either.
-  custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-
-  custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
+  # No custom_error_response: SPA fallback is handled entirely by the
+  # viewer-request function rewriting the path before origin selection (see
+  # aws_cloudfront_function.spa_index_rewrite's comment), specifically so
+  # that a distribution-wide error rewrite can never intercept /api/*'s own
+  # 403s/404s the way it did before round 1 review. A genuine missing static
+  # asset under /assets/* (a bad deploy, a stale reference) now surfaces its
+  # real S3 403 instead of being masked as a 200 -- an accurate error rather
+  # than a silently-wrong success.
 
   restrictions {
     geo_restriction {
