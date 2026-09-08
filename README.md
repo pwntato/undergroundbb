@@ -199,9 +199,21 @@ zip lambda.zip bootstrap
 ```
 
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
-(#8) is the access-control boundary once it lands, matching `docs/DESIGN.md`'s infrastructure
-diagram. Until #8 exists, `terraform output function_url` is a temporary, unauthenticated way to
-reach the deployed API directly.
+(#8) is the intended access-control boundary, matching `docs/DESIGN.md`'s infrastructure diagram.
+
+**CloudFront (#8)** fronts both the SPA and the API from one distribution — `/*` to the S3 frontend
+bucket via Origin Access Control, `/api/*` to the Lambda Function URL with caching disabled — so
+there's no CORS to configure. SPA client-side routing (`/groups/abc` and the like) is handled by a
+CloudFront Function on the default behavior that rewrites extensionless paths to `/index.html`
+before origin selection, rather than via `custom_error_response`: an error-response rewrite is
+distribution-wide, not per-behavior, and would silently intercept the API's own 403s/404s the same
+way it once masked a `Host`-header bug in this project's own origin request policy (see
+`terraform/cloudfront.tf`'s comments for both incidents).
+
+The Function URL itself is still directly reachable, bypassing CloudFront's response headers, TLS
+policy, and any future WAF entirely — #8 lands the distribution but doesn't yet enforce that it's
+the *only* way in. Harmless for the read-only `/api/health` endpoint today; tracked as **#103**
+before the auth handlers (whose CSP and session-cookie controls are origin-scoped) make it matter.
 
 **CI deploys on every push to `main`** (`.github/workflows/deploy.yml`): builds the binary, zips
 it, assumes `AWS_DEPLOY_ROLE_ARN` via GitHub's OIDC provider (no long-lived AWS credentials stored
