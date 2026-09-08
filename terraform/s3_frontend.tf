@@ -8,8 +8,17 @@
 # Adding it there (scoped to exactly that one distribution, per #7's own
 # text) keeps this bucket policy-free and inert on its own, same incremental
 # per-resource approach #6's iam_deploy.tf comment describes.
+#
+# Account-id-suffixed, matching bootstrap/main.tf's tfstate bucket -- this is
+# the one resource type in terraform/ whose name is a globally-unique S3
+# namespace rather than an account-scoped one (DynamoDB table, Lambda
+# function, and IAM role names all only have to be unique within this
+# account). Without the suffix, "undergroundbb-frontend-dev"/"-prod" are
+# generic enough for anyone to claim before #11 creates those workspaces;
+# with it, this follows the same pattern bootstrap already uses for exactly
+# that reason.
 resource "aws_s3_bucket" "frontend" {
-  bucket = "undergroundbb-frontend-${terraform.workspace}"
+  bucket = "undergroundbb-frontend-${terraform.workspace}-${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend" {

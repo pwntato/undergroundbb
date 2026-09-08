@@ -177,6 +177,7 @@ data "aws_iam_policy_document" "deploy_policy" {
       "s3:DeleteBucketEncryption",
       "s3:PutBucketVersioning",
       "s3:PutLifecycleConfiguration",
+      "s3:DeleteLifecycleConfiguration",
       "s3:PutBucketTagging",
     ]
     resources = [aws_s3_bucket.frontend.arn]
