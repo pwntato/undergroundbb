@@ -9,6 +9,16 @@ permissions:
   id-token: write
   contents: read
 
+# Terraform's own state lock serializes the apply steps, but it releases
+# before the S3/CloudFront steps below -- two pushes to main close together
+# could otherwise interleave writes and leave the older build's index.html
+# live. Queue rather than cancel: cancelling mid-run could land between the
+# asset sync and the index.html cp, which is the one window the bucket is
+# genuinely inconsistent in.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -56,3 +66,53 @@ jobs:
       - name: terraform apply
         run: terraform apply -auto-approve tfplan
         working-directory: terraform
+
+      - name: terraform output
+        id: tf
+        run: |
+          set -euo pipefail
+          bucket=$(terraform output -raw frontend_bucket_name)
+          dist=$(terraform output -raw cloudfront_distribution_id)
+          if [ -z "$bucket" ] || [ -z "$dist" ]; then
+            echo "terraform output returned an empty value" >&2
+            exit 1
+          fi
+          echo "frontend_bucket=$bucket" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$dist" >> "$GITHUB_OUTPUT"
+        working-directory: terraform
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: web install
+        run: npm ci
+        working-directory: web
+
+      - name: web build
+        run: npm run build
+        working-directory: web
+
+      # Two passes, no --delete: hashed assets land before index.html
+      # references them, and nothing already-live is removed in the same
+      # pass a client could be mid-load against. Orphaned prior-build
+      # assets are left for a separate cleanup pass once no cached shell
+      # can still reference their hashes.
+      - name: frontend deploy
+        run: |
+          set -euo pipefail
+          bucket="${{ steps.tf.outputs.frontend_bucket }}"
+          aws s3 sync web/dist "s3://$bucket" --exclude index.html
+          aws s3 cp web/dist/index.html "s3://$bucket/index.html"
+
+      # #8's cache policy already gives index.html a short TTL specifically
+      # so a deploy is visible quickly without this, but invalidating makes
+      # it immediate rather than waiting out the TTL.
+      - name: cloudfront invalidation
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.tf.outputs.distribution_id }}" \
+            --paths '/*'

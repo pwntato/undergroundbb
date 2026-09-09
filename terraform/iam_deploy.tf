@@ -190,6 +190,35 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = [aws_s3_bucket.frontend.arn]
   }
 
+  # #102: object-level actions for CI's frontend deploy step (`aws s3 sync`
+  # + `aws s3 cp` of index.html), deliberately separate from the
+  # bucket-management statement above per that statement's own comment
+  # ("uploading the built SPA is a separate CI step"). No ListBucket
+  # statement here -- `aws s3 sync` needs it to compute its diff, but the
+  # bucket-management statement above already grants it via its `s3:List*`
+  # on this same bucket ARN, so a second one here would be a no-op that
+  # just invites a comment claiming it's load-bearing when it isn't (round
+  # 4 caught exactly that). DeleteObject is not used by the deploy itself
+  # -- the sync deliberately runs without --delete -- but is retained for
+  # the orphaned-asset cleanup pass deploy.yml's comment defers.
+  statement {
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = ["${aws_s3_bucket.frontend.arn}/*"]
+  }
+
+  # #102: cache invalidation after each frontend deploy. Resource-level
+  # permissions ARE supported for this action (unlike the distribution's
+  # other actions above), so this is scoped to the one distribution rather
+  # than "*".
+  statement {
+    actions   = ["cloudfront:CreateInvalidation"]
+    resources = [aws_cloudfront_distribution.main.arn]
+  }
+
   # CloudFront (#8). Distribution/OAC/cache-policy/origin-request-policy/
   # response-headers-policy actions are all account-scoped, not
   # resource-scoped -- CloudFront's IAM actions don't support resource-level
