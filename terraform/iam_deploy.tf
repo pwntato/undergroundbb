@@ -190,6 +190,34 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = [aws_s3_bucket.frontend.arn]
   }
 
+  # #102: object-level actions for CI's `aws s3 sync web/dist ... --delete`
+  # step, deliberately separate from the bucket-management statement above
+  # per that statement's own comment ("uploading the built SPA is a
+  # separate CI step"). ListBucket is bucket-level (needed for sync's diff)
+  # so it takes the bucket ARN; the object actions take the /* object ARN.
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.frontend.arn]
+  }
+
+  statement {
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = ["${aws_s3_bucket.frontend.arn}/*"]
+  }
+
+  # #102: cache invalidation after each frontend deploy. Resource-level
+  # permissions ARE supported for this action (unlike the distribution's
+  # other actions above), so this is scoped to the one distribution rather
+  # than "*".
+  statement {
+    actions   = ["cloudfront:CreateInvalidation"]
+    resources = [aws_cloudfront_distribution.main.arn]
+  }
+
   # CloudFront (#8). Distribution/OAC/cache-policy/origin-request-policy/
   # response-headers-policy actions are all account-scoped, not
   # resource-scoped -- CloudFront's IAM actions don't support resource-level

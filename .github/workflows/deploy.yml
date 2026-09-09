@@ -56,3 +56,39 @@ jobs:
       - name: terraform apply
         run: terraform apply -auto-approve tfplan
         working-directory: terraform
+
+      - name: terraform output
+        id: tf
+        run: |
+          echo "frontend_bucket=$(terraform output -raw frontend_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+        working-directory: terraform
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: web install
+        run: npm ci
+        working-directory: web
+
+      - name: web build
+        run: npm run build
+        working-directory: web
+
+      # --delete removes objects from a prior deploy no longer in this
+      # build (e.g. renamed hashed assets) so the bucket never accumulates
+      # orphans; #7's versioning still keeps them recoverable.
+      - name: frontend deploy
+        run: aws s3 sync web/dist "s3://${{ steps.tf.outputs.frontend_bucket }}" --delete
+
+      # #8's cache policy already gives index.html a short TTL specifically
+      # so a deploy is visible quickly without this, but invalidating makes
+      # it immediate rather than waiting out the TTL.
+      - name: cloudfront invalidation
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.tf.outputs.distribution_id }}" \
+            --paths '/*'
