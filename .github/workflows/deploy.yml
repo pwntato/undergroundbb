@@ -60,8 +60,15 @@ jobs:
       - name: terraform output
         id: tf
         run: |
-          echo "frontend_bucket=$(terraform output -raw frontend_bucket_name)" >> "$GITHUB_OUTPUT"
-          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          bucket=$(terraform output -raw frontend_bucket_name)
+          dist=$(terraform output -raw cloudfront_distribution_id)
+          if [ -z "$bucket" ] || [ -z "$dist" ]; then
+            echo "terraform output returned an empty value" >&2
+            exit 1
+          fi
+          echo "frontend_bucket=$bucket" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$dist" >> "$GITHUB_OUTPUT"
         working-directory: terraform
 
       - uses: actions/setup-node@v4
@@ -78,11 +85,17 @@ jobs:
         run: npm run build
         working-directory: web
 
-      # --delete removes objects from a prior deploy no longer in this
-      # build (e.g. renamed hashed assets) so the bucket never accumulates
-      # orphans; #7's versioning still keeps them recoverable.
+      # Two passes, no --delete: hashed assets land before index.html
+      # references them, and nothing already-live is removed in the same
+      # pass a client could be mid-load against. Orphaned prior-build
+      # assets are left for a separate cleanup pass once no cached shell
+      # can still reference their hashes.
       - name: frontend deploy
-        run: aws s3 sync web/dist "s3://${{ steps.tf.outputs.frontend_bucket }}" --delete
+        run: |
+          set -euo pipefail
+          bucket="${{ steps.tf.outputs.frontend_bucket }}"
+          aws s3 sync web/dist "s3://$bucket" --exclude index.html
+          aws s3 cp web/dist/index.html "s3://$bucket/index.html"
 
       # #8's cache policy already gives index.html a short TTL specifically
       # so a deploy is visible quickly without this, but invalidating makes

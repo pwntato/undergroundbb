@@ -218,7 +218,10 @@ before the auth handlers (whose CSP and session-cookie controls are origin-scope
 **CI deploys on every push to `main`** (`.github/workflows/deploy.yml`): builds the binary, zips
 it, assumes `AWS_DEPLOY_ROLE_ARN` via GitHub's OIDC provider (no long-lived AWS credentials stored
 in the repo), and runs the same `terraform init`/`apply` as above against the `production`
-environment. That role (`iam_deploy.tf`) is itself created by Terraform, scoped to exactly what
+environment. It then builds the frontend SPA (`npm ci` / `npm run build` in `web/`), syncs
+`web/dist` to the frontend S3 bucket, and invalidates the CloudFront distribution's cache so the
+new build is served immediately — bucket name and distribution ID come from `terraform output`,
+not a separate configured value. That role (`iam_deploy.tf`) is itself created by Terraform, scoped to exactly what
 `terraform/` creates, plus read/write access to the state backend `terraform/bootstrap/`
 provisions — bootstrap itself stays a manual, human-run step and is deliberately outside this
 role's reach. Not a blanket policy, and not pre-granted access to #7-#11's future resources; each
