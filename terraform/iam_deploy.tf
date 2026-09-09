@@ -190,11 +190,14 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = [aws_s3_bucket.frontend.arn]
   }
 
-  # #102: object-level actions for CI's `aws s3 sync web/dist ... --delete`
-  # step, deliberately separate from the bucket-management statement above
-  # per that statement's own comment ("uploading the built SPA is a
-  # separate CI step"). ListBucket is bucket-level (needed for sync's diff)
-  # so it takes the bucket ARN; the object actions take the /* object ARN.
+  # #102: object-level actions for CI's frontend deploy step (`aws s3 sync`
+  # + `aws s3 cp` of index.html), deliberately separate from the
+  # bucket-management statement above per that statement's own comment
+  # ("uploading the built SPA is a separate CI step"). ListBucket is
+  # bucket-level (needed for sync's diff) so it takes the bucket ARN; the
+  # object actions take the /* object ARN. DeleteObject is not used by the
+  # deploy itself -- the sync deliberately runs without --delete -- but is
+  # retained for the orphaned-asset cleanup pass deploy.yml's comment defers.
   statement {
     actions   = ["s3:ListBucket"]
     resources = [aws_s3_bucket.frontend.arn]
