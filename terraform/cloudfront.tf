@@ -356,10 +356,8 @@ resource "aws_cloudfront_distribution" "main" {
   # real S3 403 instead of being masked as a 200 -- an accurate error rather
   # than a silently-wrong success.
 
-  # #9: the custom domain, once acm.tf's certificate + apex alias records
-  # land. Referencing the *_validation resource (not aws_acm_certificate.main
-  # directly) so a plan/apply here can't attach a certificate ACM hasn't
-  # actually finished validating yet.
+  # #9: the custom domain. Must be covered by viewer_certificate's cert
+  # below -- CloudFront rejects an alias the certificate doesn't cover.
   aliases = [var.domain_name]
 
   restrictions {
@@ -368,6 +366,9 @@ resource "aws_cloudfront_distribution" "main" {
     }
   }
 
+  # Referencing the *_validation resource (not aws_acm_certificate.main
+  # directly) so an apply here can't attach a certificate ACM hasn't
+  # actually finished validating yet.
   viewer_certificate {
     acm_certificate_arn      = aws_acm_certificate_validation.main.certificate_arn
     ssl_support_method       = "sni-only"

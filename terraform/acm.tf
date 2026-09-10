@@ -26,6 +26,14 @@ resource "aws_acm_certificate" "main" {
 }
 
 resource "aws_route53_record" "cert_validation" {
+  # Keyed on dvo.domain_name -- collapses to one entry per distinct domain,
+  # correct today (one domain, one SAN, one validation option; verified
+  # against the live cert). Would silently drop an entry the moment a SAN
+  # duplicates the apex (e.g. subject_alternative_names = ["www..."] added
+  # alongside the same domain_name) -- key on resource_record_name instead
+  # if/when that happens, since it's unique per validation record by
+  # construction. Not a problem yet: #9 deliberately scopes out "www" (see
+  # cloudfront.tf's aliases comment), so there's only ever one DVO today.
   for_each = {
     for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
@@ -39,10 +47,10 @@ resource "aws_route53_record" "cert_validation" {
   type    = each.value.type
   records = [each.value.record]
   ttl     = 60
-  # Certificate renewal can add new validation options for the same
-  # domain_name key that already has a live record -- allow_overwrite avoids
-  # a duplicate-record apply failure in that case, matching the risk
-  # ACM's own docs call out for DNS validation via IaC.
+  # Not a renewal concern -- DNS-validated ACM renewal reuses the same CNAME,
+  # which is exactly why it renews hands-off. This guards against the record
+  # already existing in the zone from a prior/manual/tainted create, where
+  # Terraform would otherwise fail the apply instead of adopting it.
   allow_overwrite = true
 }
 

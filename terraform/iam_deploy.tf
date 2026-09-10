@@ -311,14 +311,34 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["*"]
   }
 
+  # route53:ListHostedZones has no resource-level permissions -- it's an
+  # account-level list, so it can't live on the zone-scoped statement below
+  # no matter how that statement's resource is written. acm.tf's
+  # data "aws_route53_zone" looks the zone up by `name`, not `zone_id` --
+  # the provider does not call GetHostedZone to resolve that (names aren't
+  # unique), it lists every zone in the account and filters client-side, so
+  # this is the action the lookup itself actually depends on. Caught in
+  # review, not by the pre-merge simulate pass: that pass only checked the
+  # actions this policy already granted, which by construction can't surface
+  # one nobody thought to grant -- same shape as #97/#100/#108. Confirmed
+  # live: `simulate-principal-policy` for this action came back
+  # `implicitDeny` with zero matched statements, unscoped and zone-scoped
+  # alike, before this statement was added.
+  statement {
+    actions   = ["route53:ListHostedZones"]
+    resources = ["*"]
+  }
+
   # #9: the existing undergroundbb.com hosted zone (looked up, not created --
   # see acm.tf's own comment on why) -- DNS validation records for the
   # certificate above, plus the apex A/AAAA alias records pointing the
   # domain at the distribution. Route 53 record-set actions ARE
   # resource-scopable to one hosted zone, unlike ACM/CloudFront above, so
   # this is scoped to that zone rather than "*". GetHostedZone/ListTagsForResource
-  # back the aws_route53_zone data source's own read; List/ChangeResourceRecordSets
-  # cover the provider computing a diff before writing and the write itself.
+  # are called later in the data source's own read (name servers, tags) --
+  # not for the by-name lookup itself, which is ListHostedZones above --
+  # and List/ChangeResourceRecordSets cover the provider computing a diff
+  # before writing and the write itself.
   statement {
     actions = [
       "route53:GetHostedZone",
