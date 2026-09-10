@@ -25,7 +25,18 @@ data "aws_iam_policy_document" "deploy_assume_role" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:pwntato/undergroundbb:environment:production"]
+      # GitHub switched new repos (created after 2026-07-15) to an
+      # immutable-ID subject claim -- repo:<owner>@<owner_id>/<repo>@<repo_id>
+      # instead of the classic repo:<owner>/<repo> notoriousmcp still gets
+      # (it predates the change). undergroundbb was created after, so this
+      # is the format its tokens actually carry -- confirmed via
+      # `gh api repos/pwntato/undergroundbb/actions/oidc/customization/sub`
+      # and cross-checked against `gh api users/pwntato --jq .id` (844608)
+      # and `gh api repos/pwntato/undergroundbb --jq .id` (1355495158). Every
+      # CI deploy since #97 failed AssumeRoleWithWebIdentity against the old
+      # value -- see #105. Pinned to the real numeric IDs rather than a
+      # wildcard, matching this file's existing preference for exact scoping.
+      values = ["repo:pwntato@844608/undergroundbb@1355495158:environment:production"]
     }
   }
 }
