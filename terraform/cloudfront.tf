@@ -356,9 +356,11 @@ resource "aws_cloudfront_distribution" "main" {
   # real S3 403 instead of being masked as a 200 -- an accurate error rather
   # than a silently-wrong success.
 
-  # #9: the custom domain. Must be covered by viewer_certificate's cert
-  # below -- CloudFront rejects an alias the certificate doesn't cover.
-  aliases = [var.domain_name]
+  # #9/#11: this workspace's custom domain (prod's bare apex, or a
+  # subdomain of it for every other workspace -- see locals.tf). Must be
+  # covered by viewer_certificate's cert below -- CloudFront rejects an
+  # alias the certificate doesn't cover.
+  aliases = [local.domain_name]
 
   restrictions {
     geo_restriction {
@@ -378,7 +380,7 @@ resource "aws_cloudfront_distribution" "main" {
 
 output "cloudfront_domain_name" {
   value       = aws_cloudfront_distribution.main.domain_name
-  description = "The distribution's own *.cloudfront.net domain. Still resolves and serves the app after #9 (acm.tf's apex alias records point var.domain_name at this same distribution) -- kept as an output since it's occasionally useful to hit directly, bypassing DNS."
+  description = "The distribution's own *.cloudfront.net domain. Still resolves and serves the app after #9 (acm.tf's A/AAAA alias records point local.domain_name at this same distribution) -- kept as an output since it's occasionally useful to hit directly, bypassing DNS."
 }
 
 output "cloudfront_distribution_id" {

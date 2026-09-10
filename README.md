@@ -152,12 +152,12 @@ terraform apply -var create_new_state=true
 Every run after that first one — including later runs in that same new account — uses the plain
 `terraform apply` above; the flag is not sticky to the account, only to that one first run.
 
-**The main `terraform/` configuration** (dev/prod workspaces — #10-#11) lands as those issues
-close. So far it has the DynamoDB table (#5), the Lambda function and its IAM role plus the
-CI/CD deploy pipeline (#6), the S3 frontend bucket (#7), the CloudFront distribution (#8), and
-the ACM certificate + Route 53 records serving it at https://undergroundbb.com (#9). Its state
-lives in the bucket and lock table the bootstrap above creates, supplied at init time since their
-names include the account id:
+**The main `terraform/` configuration** (WAF — #10) lands as that issue closes. So far it has the
+DynamoDB table (#5), the Lambda function and its IAM role plus the CI/CD deploy pipeline (#6), the
+S3 frontend bucket (#7), the CloudFront distribution (#8), the ACM certificate + Route 53 records
+serving it at https://undergroundbb.com (#9), and dev/prod Terraform workspaces (#11, below). Its
+state lives in the bucket and lock table the bootstrap above creates, supplied at init time since
+their names include the account id:
 
 ```sh
 cd "$(git rev-parse --show-toplevel)/terraform"
@@ -188,9 +188,43 @@ separate `-backend-config` flag in the first place, so a non-default region need
 aws_region=...` on `terraform apply` here too, in addition to matching the bootstrap's region above.
 
 Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
-value can't point one environment's `apply` at another's table. There's no `dev`/`prod` split yet —
-until #11 creates those workspaces, everything runs in Terraform's `default` workspace, so the table
-is `undergroundbb-default`.
+value can't point one environment's `apply` at another's table. `prod` and `dev` are both real
+workspaces (`prod` is the live account: `undergroundbb-prod`, `undergroundbb.com`; `dev` exists but
+has nothing applied to it yet). Terraform's own built-in `default` workspace also still exists — the
+CLI refuses to delete it outright — and is left empty rather than used for anything: everything that
+had been applied there (from before this project had `dev`/`prod` workspaces at all) was migrated to
+`prod` and destroyed out of `default`, and it's kept empty going forward so an `apply` run with a
+missing or typo'd `select` fails loudly (either "no such workspace" or an empty plan wanting to
+create everything from scratch) instead of silently landing on a workspace that looks legitimate.
+Select the one you mean before planning or applying:
+
+```sh
+terraform workspace select prod   # or: terraform workspace select dev
+```
+
+**Before running any `apply` or `destroy` by hand** — confirm `terraform workspace show` prints the
+workspace you mean, and once you have a plan, confirm the resource names/IDs in it carry the
+expected suffix (`-prod`, not `-default` or `-dev`), rather than trusting the workspace you last
+remember selecting. This project hit a real incident (#11's own PR) where a local
+`terraform workspace show` gave inconsistent answers across consecutive commands in the same
+session with no `select` in between, and an `apply` landed on the wrong workspace as a result —
+re-checking immediately before every write, not just once at the start of a session, is what caught
+and stopped it from recurring.
+
+`deploy.yml` sets `TF_WORKSPACE: prod` at the job level rather than a `terraform workspace select`
+step — every `terraform` invocation (`init`/`plan`/`apply`/`output`) reads it independently, so a
+later step in the job can't drift onto a different workspace even if an earlier step's on-disk
+selection were somehow wrong; it still fails loudly (`terraform init` errors if the named workspace
+doesn't exist in the backend) rather than silently creating one or falling back to `default`. Setting
+`TF_WORKSPACE` locally works the same way, and takes precedence over `workspace select` — a manual
+`select` while `TF_WORKSPACE` is set to a different value fails, on purpose, rather than picking one
+of the two silently.
+
+The domain served depends on which workspace is selected: `local.domain_name`
+(`terraform/locals.tf`) resolves to the bare apex for `prod` and a `dev.`-prefixed subdomain of it
+for every other workspace, both inside the one Route 53 zone `var.root_domain` names — see
+`locals.tf`'s own comment for why a third, unlisted workspace name fails plan loudly rather than
+silently getting an unplanned subdomain.
 
 **The Lambda (#6)** needs a real deploy artifact — `terraform apply` reads `lambda.zip` at the
 `terraform/` module's parent directory via `filebase64sha256`, so build it first:

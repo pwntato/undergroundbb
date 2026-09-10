@@ -1,5 +1,6 @@
 # #9: ACM certificate + DNS for the CloudFront distribution (#8), plus the
-# apex alias record that actually points the domain at it.
+# alias record that actually points local.domain_name at it (#11: the apex
+# for prod, a subdomain of it for every other workspace -- see locals.tf).
 #
 # The hosted zone is looked up, not created: undergroundbb.com was
 # registered directly through Route 53 Registrar on 2026-09-02, outside
@@ -7,9 +8,11 @@
 # domain via aws_route53domains_registered_domain -- that pattern doesn't
 # apply here, this domain already exists in the account). Managing it as a
 # data source rather than an aws_route53_zone resource means a `terraform
-# destroy` here can never delete the zone or de-register the domain.
+# destroy` here can never delete the zone or de-register the domain. Always
+# looked up by var.root_domain, not local.domain_name -- there is exactly
+# one hosted zone in this account regardless of which workspace is applying.
 data "aws_route53_zone" "main" {
-  name = var.domain_name
+  name = var.root_domain
 }
 
 # us-east-1, via main.tf's aliased provider -- CloudFront requires its
@@ -17,7 +20,7 @@ data "aws_route53_zone" "main" {
 # comment, and the README's "Deploying" section).
 resource "aws_acm_certificate" "main" {
   provider          = aws.use1
-  domain_name       = var.domain_name
+  domain_name       = local.domain_name
   validation_method = "DNS"
 
   lifecycle {
@@ -65,12 +68,16 @@ resource "aws_acm_certificate_validation" "main" {
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
-# Points the apex domain at the distribution. www/other subdomains are out
-# of scope for #9 -- only the apex is wired up; a "www" alias (or redirect)
-# is a separate, later decision, not implied by this issue's text.
-resource "aws_route53_record" "apex" {
+# Points local.domain_name at this workspace's own distribution -- the bare
+# apex for prod, a same-named subdomain of it for every other workspace
+# (#11; see locals.tf). Still just one record type per alias regardless of
+# which: an ALIAS-style Route 53 record works identically for an apex A/AAAA
+# and a subdomain A/AAAA. www/other subdomains beyond what local.domain_name
+# already covers are out of scope here -- a "www" alias (or redirect) is a
+# separate, later decision, not implied by #9 or #11's text.
+resource "aws_route53_record" "app" {
   zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.domain_name
+  name    = local.domain_name
   type    = "A"
 
   alias {
@@ -83,9 +90,9 @@ resource "aws_route53_record" "apex" {
 # IPv6 counterpart -- the distribution already has is_ipv6_enabled = true
 # (cloudfront.tf), so an AAAA alias is free to add and keeps IPv6-only
 # resolvers from falling back to a missing record.
-resource "aws_route53_record" "apex_ipv6" {
+resource "aws_route53_record" "app_ipv6" {
   zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.domain_name
+  name    = local.domain_name
   type    = "AAAA"
 
   alias {
@@ -96,6 +103,6 @@ resource "aws_route53_record" "apex_ipv6" {
 }
 
 output "domain_name" {
-  value       = var.domain_name
-  description = "The custom domain the app is served from, via cloudfront.tf's aliases + viewer_certificate and this file's apex A/AAAA alias records."
+  value       = local.domain_name
+  description = "The custom domain this workspace's app is served from, via cloudfront.tf's aliases + viewer_certificate and this file's A/AAAA alias records."
 }

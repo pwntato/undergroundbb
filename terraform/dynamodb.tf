@@ -4,9 +4,10 @@
 # that only matter against the real service: point-in-time recovery and TTL
 # actually running.
 #
-# Name derives from terraform.workspace, not a free-form variable (#11) —
-# there is no dev/prod workspace split yet, so this resolves to
-# "undergroundbb-default" until #11 creates the "dev" and "prod" workspaces.
+# Name derives from terraform.workspace, not a free-form variable (#11) --
+# resolves to "undergroundbb-dev" or "undergroundbb-prod" depending which
+# workspace is selected when this is applied (see the README's "Deploying"
+# section for how to select one).
 resource "aws_dynamodb_table" "main" {
   name         = "undergroundbb-${terraform.workspace}"
   billing_mode = "PAY_PER_REQUEST"
@@ -16,9 +17,9 @@ resource "aws_dynamodb_table" "main" {
   # Enforced by the service, not just Terraform's plan -- also blocks a
   # console/CLI delete, and unlike `lifecycle.prevent_destroy` it doesn't
   # block a legitimate `terraform destroy` of everything else. Matters more
-  # once #11 adds dev/prod workspaces: the table name is then ambient state
-  # (not visible in the destroy command itself), so a `destroy` run against
-  # the wrong selected workspace is a real, easy mistake to make.
+  # with dev/prod workspaces (#11): the table name is ambient state (not
+  # visible in the destroy command itself), so a `destroy` run against the
+  # wrong selected workspace is a real, easy mistake to make.
   deletion_protection_enabled = true
 
   attribute {
