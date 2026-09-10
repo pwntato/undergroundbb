@@ -356,6 +356,12 @@ resource "aws_cloudfront_distribution" "main" {
   # real S3 403 instead of being masked as a 200 -- an accurate error rather
   # than a silently-wrong success.
 
+  # #9: the custom domain, once acm.tf's certificate + apex alias records
+  # land. Referencing the *_validation resource (not aws_acm_certificate.main
+  # directly) so a plan/apply here can't attach a certificate ACM hasn't
+  # actually finished validating yet.
+  aliases = [var.domain_name]
+
   restrictions {
     geo_restriction {
       restriction_type = "none"
@@ -363,13 +369,15 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.main.certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 }
 
 output "cloudfront_domain_name" {
   value       = aws_cloudfront_distribution.main.domain_name
-  description = "The *.cloudfront.net domain serving the app. Temporary until #9's ACM cert + #10's custom domain replace it."
+  description = "The distribution's own *.cloudfront.net domain. Still resolves and serves the app after #9 (acm.tf's apex alias records point var.domain_name at this same distribution) -- kept as an output since it's occasionally useful to hit directly, bypassing DNS."
 }
 
 output "cloudfront_distribution_id" {
