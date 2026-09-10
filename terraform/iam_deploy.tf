@@ -89,6 +89,15 @@ data "aws_iam_policy_document" "deploy_policy" {
       "iam:ListAttachedRolePolicies",
       "iam:ListRolePolicies",
       "iam:GetOpenIDConnectProvider",
+      # data.aws_iam_openid_connect_provider resolves the provider's URL to
+      # an ARN via ListOpenIDConnectProviders before GetOpenIDConnectProvider
+      # can even be called -- missing here, so terraform plan never got past
+      # reading this data source on the first real CI run past #106's OIDC
+      # trust-policy fix (see #105/#107). Like GetOpenIDConnectProvider, this
+      # action has no resource-level permissions in IAM (confirmed by the
+      # live AccessDenied naming "resource: .../oidc-provider/*"), so it's
+      # necessarily on the same "*" statement.
+      "iam:ListOpenIDConnectProviders",
     ]
     resources = ["*"]
   }
