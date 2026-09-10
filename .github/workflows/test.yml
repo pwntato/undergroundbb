@@ -190,10 +190,20 @@ jobs:
         # which validate evaluates even with no real deploy artifact -- a
         # placeholder is enough since validate only checks that the file
         # exists and is readable, not that it's a real Lambda package.
+        #
+        # TF_WORKSPACE=prod (#11): with -backend=false there's no S3 backend
+        # to select a real workspace against (workspaces are backend-tracked
+        # state, not local), so terraform.workspace would otherwise silently
+        # evaluate as the literal "default" -- which locals.tf's domain_name
+        # map deliberately has no key for, so validate would fail here on
+        # every PR forever, not because the config is wrong. TF_WORKSPACE is
+        # honored before backend init, so this needs no real backend or
+        # credentials; picked "prod" arbitrarily since validate only type-
+        # and reference-checks, it doesn't need to represent a real apply.
         run: |
           touch ../lambda.zip
           terraform init -backend=false
-          terraform validate
+          TF_WORKSPACE=prod terraform validate
         working-directory: terraform
 
       # terraform/bootstrap is its own root module (local state, run once per
