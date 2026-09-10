@@ -290,6 +290,74 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["*"]
   }
 
+  # #9: ACM certificate for CloudFront. Like the CloudFront statement above,
+  # acm:* actions don't support resource-level permissions (confirmed via
+  # `aws iam simulate-principal-policy` before opening this PR, same
+  # pre-check as #97/#100/cloudfront's own statement) -- "*" is the real
+  # achievable scope here too, not a shortcut. AddTagsToCertificate/
+  # ListTagsForCertificate cover the provider's own tagging calls on
+  # aws_acm_certificate; the Describe/Request/Delete set covers create,
+  # validation polling (aws_acm_certificate_validation waits on
+  # DescribeCertificate until the domain_validation_options resolve), and
+  # destroy.
+  statement {
+    actions = [
+      "acm:RequestCertificate",
+      "acm:DescribeCertificate",
+      "acm:DeleteCertificate",
+      "acm:AddTagsToCertificate",
+      "acm:ListTagsForCertificate",
+    ]
+    resources = ["*"]
+  }
+
+  # route53:ListHostedZones has no resource-level permissions -- it's an
+  # account-level list, so it can't live on the zone-scoped statement below
+  # no matter how that statement's resource is written. acm.tf's
+  # data "aws_route53_zone" looks the zone up by `name`, not `zone_id` --
+  # the provider does not call GetHostedZone to resolve that (names aren't
+  # unique), it lists every zone in the account and filters client-side, so
+  # this is the action the lookup itself actually depends on. Caught in
+  # review, not by the pre-merge simulate pass: that pass only checked the
+  # actions this policy already granted, which by construction can't surface
+  # one nobody thought to grant -- same shape as #97/#100/#108. Confirmed
+  # live: `simulate-principal-policy` for this action came back
+  # `implicitDeny` with zero matched statements, unscoped and zone-scoped
+  # alike, before this statement was added.
+  statement {
+    actions   = ["route53:ListHostedZones"]
+    resources = ["*"]
+  }
+
+  # #9: the existing undergroundbb.com hosted zone (looked up, not created --
+  # see acm.tf's own comment on why) -- DNS validation records for the
+  # certificate above, plus the apex A/AAAA alias records pointing the
+  # domain at the distribution. Route 53 record-set actions ARE
+  # resource-scopable to one hosted zone, unlike ACM/CloudFront above, so
+  # this is scoped to that zone rather than "*". GetHostedZone/ListTagsForResource
+  # are called later in the data source's own read (name servers, tags) --
+  # not for the by-name lookup itself, which is ListHostedZones above --
+  # and List/ChangeResourceRecordSets cover the provider computing a diff
+  # before writing and the write itself.
+  statement {
+    actions = [
+      "route53:GetHostedZone",
+      "route53:ListTagsForResource",
+      "route53:ListResourceRecordSets",
+      "route53:ChangeResourceRecordSets",
+    ]
+    resources = ["arn:aws:route53:::hostedzone/${data.aws_route53_zone.main.zone_id}"]
+  }
+
+  # route53:GetChange has no resource-level permissions either (its ARNs are
+  # per in-flight change batch, not knowable before the change is submitted)
+  # -- ChangeResourceRecordSets returns a change id the provider then polls
+  # via GetChange to confirm the record propagated before apply returns.
+  statement {
+    actions   = ["route53:GetChange"]
+    resources = ["*"]
+  }
+
   # Terraform state backend (the bucket + lock table terraform/bootstrap/
   # creates). Lock table name is a fixed literal there, not
   # workspace-derived, so it's referenced the same way here.

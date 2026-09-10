@@ -30,3 +30,13 @@ terraform {
 provider "aws" {
   region = var.aws_region
 }
+
+# CloudFront's own certificate must live in us-east-1 regardless of where the
+# rest of this project's infrastructure runs (#9) -- a second provider block,
+# aliased rather than swapping the default region, so every other resource
+# in this module keeps using var.aws_region unchanged. acm.tf is the only
+# file that references this alias.
+provider "aws" {
+  alias  = "use1"
+  region = "us-east-1"
+}
