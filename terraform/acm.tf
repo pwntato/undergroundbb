@@ -97,5 +97,5 @@ resource "aws_route53_record" "apex_ipv6" {
 
 output "domain_name" {
   value       = var.domain_name
-  description = "The custom domain the app is served from, once this and cloudfront.tf's aliases/viewer_certificate land."
+  description = "The custom domain the app is served from, via cloudfront.tf's aliases + viewer_certificate and this file's apex A/AAAA alias records."
 }
