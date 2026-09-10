@@ -16,9 +16,15 @@ variable "state_bucket" {
 # undergroundbb.net sits at Cloudflare instead, which would need either
 # manual DNS-validation records there or delegating that zone into Route 53
 # first; undergroundbb.com needs neither, so validation can be end-to-end
-# Terraform-managed as this file's own #9 issue text originally asked for.
-variable "domain_name" {
+# Terraform-managed.
+#
+# Always the bare apex, never workspace-derived (#11) -- there is exactly
+# one Route 53 hosted zone in this account, and it is what acm.tf's
+# data "aws_route53_zone" looks up regardless of which workspace is applying.
+# local.domain_name below is the thing that varies per workspace; this is
+# the zone the per-workspace record lives inside.
+variable "root_domain" {
   type        = string
   default     = "undergroundbb.com"
-  description = "Apex domain CloudFront is fronted by (#9). Single workspace today (#11 hasn't landed), so no per-workspace subdomain split yet."
+  description = "The Route 53 hosted zone's own apex name -- always this, never a per-workspace value. See local.domain_name for the name actually served."
 }

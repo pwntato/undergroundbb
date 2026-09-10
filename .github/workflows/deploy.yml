@@ -57,6 +57,18 @@ jobs:
             -backend-config="region=us-west-2"
         working-directory: terraform
 
+      - name: terraform workspace
+        # #11: every fresh checkout (CI always starts from one) selects the
+        # workspace literally named "default" until told otherwise -- this
+        # job would silently apply to that empty workspace, not "prod",
+        # without this step. `select` rather than `new` deliberately: the
+        # prod workspace is created once, by a human, as part of #11's own
+        # migration -- if it's ever missing here, that's a real setup gap to
+        # surface loudly (this errors out) rather than a workflow silently
+        # creating a second one.
+        run: terraform workspace select prod
+        working-directory: terraform
+
       - name: terraform plan
         run: terraform plan -out=tfplan
         working-directory: terraform
