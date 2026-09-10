@@ -202,13 +202,29 @@ Select the one you mean before planning or applying:
 terraform workspace select prod   # or: terraform workspace select dev
 ```
 
-`deploy.yml` does this explicitly (`terraform workspace select prod`) as its own CI step, since a
-fresh checkout — which every CI run is — otherwise starts on `default`; there is no environment
-variable or flag that selects a workspace for you. The domain served depends on which workspace is
-selected: `local.domain_name` (`terraform/locals.tf`) resolves to the bare apex for `prod` and a
-`dev.`-prefixed subdomain of it for every other workspace, both inside the one Route 53 zone
-`var.root_domain` names — see `locals.tf`'s own comment for why a third, unlisted workspace name
-fails plan loudly rather than silently getting an unplanned subdomain.
+**Before running any `apply` or `destroy` by hand** — confirm `terraform workspace show` prints the
+workspace you mean, and once you have a plan, confirm the resource names/IDs in it carry the
+expected suffix (`-prod`, not `-default` or `-dev`), rather than trusting the workspace you last
+remember selecting. This project hit a real incident (#11's own PR) where a local
+`terraform workspace show` gave inconsistent answers across consecutive commands in the same
+session with no `select` in between, and an `apply` landed on the wrong workspace as a result —
+re-checking immediately before every write, not just once at the start of a session, is what caught
+and stopped it from recurring.
+
+`deploy.yml` sets `TF_WORKSPACE: prod` at the job level rather than a `terraform workspace select`
+step — every `terraform` invocation (`init`/`plan`/`apply`/`output`) reads it independently, so a
+later step in the job can't drift onto a different workspace even if an earlier step's on-disk
+selection were somehow wrong; it still fails loudly (`terraform init` errors if the named workspace
+doesn't exist in the backend) rather than silently creating one or falling back to `default`. Setting
+`TF_WORKSPACE` locally works the same way, and takes precedence over `workspace select` — a manual
+`select` while `TF_WORKSPACE` is set to a different value fails, on purpose, rather than picking one
+of the two silently.
+
+The domain served depends on which workspace is selected: `local.domain_name`
+(`terraform/locals.tf`) resolves to the bare apex for `prod` and a `dev.`-prefixed subdomain of it
+for every other workspace, both inside the one Route 53 zone `var.root_domain` names — see
+`locals.tf`'s own comment for why a third, unlisted workspace name fails plan loudly rather than
+silently getting an unplanned subdomain.
 
 **The Lambda (#6)** needs a real deploy artifact — `terraform apply` reads `lambda.zip` at the
 `terraform/` module's parent directory via `filebase64sha256`, so build it first:

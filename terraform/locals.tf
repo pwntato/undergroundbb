@@ -20,3 +20,13 @@ locals {
     dev  = "dev.${var.root_domain}"
   }[terraform.workspace]
 }
+
+# Round 2 PR review suggested a `check` block here to make an unlisted
+# workspace's failure self-describing rather than a bare Terraform-internals
+# "Invalid index" error. Tried it and reverted: `check` blocks run during
+# `plan`, but this map is a `locals` value evaluated eagerly wherever it's
+# referenced -- the raw index error already aborts before a `check` block
+# would ever get a chance to run, so it would have been dead code, not an
+# improvement. The plain map's own error is what a typo'd workspace name
+# actually surfaces; this file's comment above is where the explanation
+# lives instead.

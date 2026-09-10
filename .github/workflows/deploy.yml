@@ -23,6 +23,27 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
+    env:
+      # #11: every fresh checkout (CI always starts from one) has no
+      # workspace selected on disk until told otherwise -- without this,
+      # `init` picks Terraform's own built-in "default" workspace, and this
+      # job would silently plan/apply against that (empty) one instead of
+      # "prod". Set at the job level, not as a `terraform workspace select`
+      # step, so it's read independently by every `terraform` invocation
+      # (init/plan/apply/output all pick it up on their own) rather than
+      # depending on an earlier step's on-disk selection still being correct
+      # by the time a later step runs. Still fails loudly, the property a
+      # `select` step would otherwise be the only thing providing: if "prod"
+      # doesn't exist in the backend, `terraform init` errors ("workspace
+      # ... does not exist") rather than silently creating it or falling
+      # back to "default" -- verified directly before relying on it here.
+      # Added after a local workspace-selection mixup (root cause never
+      # fully confirmed, leading theory was `terraform workspace show`
+      # returning inconsistent answers within one session) briefly took prod
+      # down during this same PR's own migration -- this doesn't depend on
+      # that same on-disk selection state being trustworthy the way a
+      # `select` step alone does.
+      TF_WORKSPACE: prod
     steps:
       - uses: actions/checkout@v4
 
@@ -55,18 +76,6 @@ jobs:
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
             -backend-config="dynamodb_table=undergroundbb-tfstate-lock" \
             -backend-config="region=us-west-2"
-        working-directory: terraform
-
-      - name: terraform workspace
-        # #11: every fresh checkout (CI always starts from one) selects the
-        # workspace literally named "default" until told otherwise -- this
-        # job would silently apply to that empty workspace, not "prod",
-        # without this step. `select` rather than `new` deliberately: the
-        # prod workspace is created once, by a human, as part of #11's own
-        # migration -- if it's ever missing here, that's a real setup gap to
-        # surface loudly (this errors out) rather than a workflow silently
-        # creating a second one.
-        run: terraform workspace select prod
         working-directory: terraform
 
       - name: terraform plan
