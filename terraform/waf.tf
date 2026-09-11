@@ -14,13 +14,13 @@
 # docs/THREAT_MODEL.md ("Attacker floods /auth/challenge for one named
 # account") -- confirmed in #10's own issue comment (PR #1 review round 28).
 # WAF rate-based rules key on source IP over a five-minute window; that
-# attack keys on username, and WAF's own rate-limit floor (100 req/5min per
-# IP) still permits an overwrite roughly every three seconds from a single
-# IP, before any IP rotation. That threat model entry already says nothing
-# in this design bounds it -- this file doesn't change that, and shouldn't
-# be read as though it does. What this rule *does* bound is per-IP bulk
-# harvesting of challenge material, which is the right granularity for that
-# threat.
+# attack keys on username, so no limit value closes it -- a single attacker
+# IP can still overwrite one victim's challenge slot as fast as this rule's
+# window allows, and rotating IPs defeats it for free regardless of how the
+# limit is tuned. That threat model entry already says nothing in this
+# design bounds it -- this file doesn't change that, and shouldn't be read
+# as though it does. What this rule *does* bound is per-IP bulk harvesting
+# of challenge material, which is the right granularity for that threat.
 resource "aws_wafv2_web_acl" "main" {
   provider    = aws.use1
   name        = "undergroundbb-${terraform.workspace}"
@@ -107,12 +107,17 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # /api/auth/* specifically: 100 req/5min per IP is WAF's own minimum for
-  # a rate-based rule (rate_based_statement.limit's documented floor), so
-  # this is already the strictest this control can be made -- see this
-  # file's header comment for why that floor still doesn't close the
-  # username-keyed challenge-flood threat, and why a lower value isn't an
-  # option to reach for instead.
+  # /api/auth/* specifically: 30 req/5min per IP (~6/min) is a deliberate
+  # choice, not a forced floor -- round 1 review corrected an earlier
+  # version of this comment that claimed 100 was WAF's minimum;
+  # rate_based_statement.limit's real minimum is 10 (confirmed live via
+  # `aws wafv2 check-capacity`, which accepts Limit=10 and rejects Limit=0).
+  # This value is generous for a human retrying a forgotten password a
+  # handful of times, while still meaningfully bounding the Argon2id compute
+  # a single IP can burn (see this file's header comment: ~64MB and several
+  # hundred ms per attempt). See the header comment for why no value here
+  # closes the username-keyed challenge-flood threat -- that's a property of
+  # WAF keying on IP, not of this number.
   rule {
     name     = "rate-limit-auth"
     priority = 4
@@ -123,7 +128,7 @@ resource "aws_wafv2_web_acl" "main" {
 
     statement {
       rate_based_statement {
-        limit              = 100
+        limit              = 30
         aggregate_key_type = "IP"
 
         scope_down_statement {
@@ -133,9 +138,30 @@ resource "aws_wafv2_web_acl" "main" {
               uri_path {}
             }
             positional_constraint = "STARTS_WITH"
+            # Round 1 review, verified live: NONE (byte-for-byte match on
+            # the raw URI) let /api/./auth/challenge bypass this rule
+            # entirely and fall through to the 2000/5min default --
+            # confirmed via /api/./health returning the same 200 as
+            # /api/health, i.e. Go's http.ServeMux (and CloudFront's /api/*
+            # behavior ahead of it) already treats the two as identical
+            # requests, so WAF must too. URL_DECODE then NORMALIZE_PATH
+            # (applied in priority order) closes the verified gap; LOWERCASE
+            # is added defensively for the same reason even though
+            # /API/auth/ doesn't reach the Lambda today (it misses the
+            # /api/* cache behavior and lands on the SPA instead) -- it
+            # costs nothing to include and removes a second place this rule
+            # would need revisiting if that ever changes.
             text_transformation {
               priority = 0
-              type     = "NONE"
+              type     = "URL_DECODE"
+            }
+            text_transformation {
+              priority = 1
+              type     = "NORMALIZE_PATH"
+            }
+            text_transformation {
+              priority = 2
+              type     = "LOWERCASE"
             }
           }
         }

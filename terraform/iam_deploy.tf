@@ -381,14 +381,17 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/webacl/undergroundbb-${terraform.workspace}/*"]
   }
 
-  # wafv2:ListWebACLs (used by nothing in this config directly, but AWS
-  # provider calls it as part of some webacl data-source/import paths) and
   # wafv2:CheckCapacity/ListAvailableManagedRuleGroups have no
   # resource-level permissions -- confirmed via the same IAM service
   # reference used above (these actions have no listed resource types),
-  # so "*" is the actual achievable scope, not a shortcut. Kept narrow to
-  # only the read-only listing actions rather than a broader wafv2:* "*"
-  # grant.
+  # so "*" is the actual achievable scope, not a shortcut.
+  # wafv2:ListWebACLs is granted precautionarily rather than because
+  # something in this config calls it today -- there's no aws_wafv2_web_acl
+  # data source or import block here (round 1 review caught this comment
+  # overclaiming an observed call path that doesn't exist). Cheap,
+  # read-only, and avoids a confusing failure if a future import ever needs
+  # it; kept narrow to only these read-only listing actions rather than a
+  # broader wafv2:* "*" grant.
   statement {
     actions = [
       "wafv2:ListWebACLs",
