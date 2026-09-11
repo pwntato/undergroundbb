@@ -73,10 +73,27 @@ resource "aws_lambda_function" "main" {
   timeout          = 10
   memory_size      = 256
 
+  # #113: SITE_NAME/DOMAIN/REGISTRATION_POLICY/ALLOW_GROUP_EXPIRATION_OFF/
+  # DEFAULT_EXPIRATION_DAYS previously had no Terraform variable at all, so a
+  # deployed Lambda could never actually be configured with them -- it always
+  # got internal/config's compiled-in defaults regardless of what an operator
+  # wanted. DOMAIN reads local.domain_name (locals.tf) rather than a variable
+  # of its own, since that's already the per-workspace value CloudFront's own
+  # alias records point at (acm.tf) -- a second, independently-settable DOMAIN
+  # value here could silently disagree with it. The bool and number variables
+  # need tostring(): Lambda environment variables are string-only: string,
+  # true, and 30 all interpolate as their JSON literal here, which is
+  # what internal/config's BoolEnvOrDefault/Int64EnvOrDefault (via
+  # strconv.ParseBool/ParseInt) expect on the read side.
   environment {
     variables = {
-      TABLE_NAME  = aws_dynamodb_table.main.name
-      ENVIRONMENT = terraform.workspace
+      TABLE_NAME                 = aws_dynamodb_table.main.name
+      ENVIRONMENT                = terraform.workspace
+      SITE_NAME                  = var.site_name
+      DOMAIN                     = local.domain_name
+      REGISTRATION_POLICY        = var.registration_policy
+      ALLOW_GROUP_EXPIRATION_OFF = tostring(var.allow_group_expiration_off)
+      DEFAULT_EXPIRATION_DAYS    = tostring(var.default_expiration_days)
     }
   }
 
