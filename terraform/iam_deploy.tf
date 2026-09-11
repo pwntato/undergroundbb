@@ -358,6 +358,52 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["*"]
   }
 
+  # #10: the WAF WebACL protecting the CloudFront distribution.
+  # Create/Get/Update/Delete/Tag/Untag/ListTags all support resource-level
+  # scoping for the webacl resource type (confirmed via AWS's own IAM
+  # service reference, same pre-check this file's other "*" statements
+  # cite -- unlike CloudFront/ACM above, WAFv2 actually does support scoping
+  # here, so this is scoped rather than defaulting to "*"). The web ACL
+  # itself only ever exists in us-east-1 (waf.tf's aws.use1 provider), but
+  # IAM actions aren't region-scoped by the resource ARN's own region
+  # component the way the API call is -- the ARN below still names
+  # us-east-1 explicitly since that's the resource's real location.
+  statement {
+    actions = [
+      "wafv2:GetWebACL",
+      "wafv2:CreateWebACL",
+      "wafv2:UpdateWebACL",
+      "wafv2:DeleteWebACL",
+      "wafv2:TagResource",
+      "wafv2:UntagResource",
+      "wafv2:ListTagsForResource",
+    ]
+    resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/webacl/undergroundbb-${terraform.workspace}/*"]
+  }
+
+  # wafv2:ListWebACLs (used by nothing in this config directly, but AWS
+  # provider calls it as part of some webacl data-source/import paths) and
+  # wafv2:CheckCapacity/ListAvailableManagedRuleGroups have no
+  # resource-level permissions -- confirmed via the same IAM service
+  # reference used above (these actions have no listed resource types),
+  # so "*" is the actual achievable scope, not a shortcut. Kept narrow to
+  # only the read-only listing actions rather than a broader wafv2:* "*"
+  # grant.
+  statement {
+    actions = [
+      "wafv2:ListWebACLs",
+      "wafv2:CheckCapacity",
+      "wafv2:ListAvailableManagedRuleGroups",
+    ]
+    resources = ["*"]
+  }
+
+  # No wafv2:AssociateWebACL/DisassociateWebACL statement: AWS's own WAFv2
+  # API rejects CloudFront distribution ARNs on that call entirely (see
+  # cloudfront.tf's web_acl_id comment) -- CloudFront association/removal
+  # goes through cloudfront:UpdateDistribution instead, already granted
+  # "*" scope by the existing CloudFront statement above.
+
   # Terraform state backend (the bucket + lock table terraform/bootstrap/
   # creates). Lock table name is a fixed literal there, not
   # workspace-derived, so it's referenced the same way here.
