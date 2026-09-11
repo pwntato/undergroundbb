@@ -89,8 +89,12 @@ unauthenticated, from `GET /api/config` — the SPA fetches it on boot.
 | `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
 | `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
 
-Setup instructions will land with the first deployable release. (`TABLE_NAME` and `ENVIRONMENT` are
-already wired into the Lambda's Terraform config; the rest are not yet — see #113.)
+Setup instructions will land with the first deployable release. All seven are wired into the Lambda's
+Terraform config (`terraform/lambda.tf`) — `SITE_NAME`, `REGISTRATION_POLICY`,
+`ALLOW_GROUP_EXPIRATION_OFF`, and `DEFAULT_EXPIRATION_DAYS` as Terraform variables
+(`terraform/variables.tf`, overridable with `-var` or a `.tfvars` file), `DOMAIN` from
+`local.domain_name` so it can't drift from the domain CloudFront is actually configured for, and
+`TABLE_NAME`/`ENVIRONMENT` derived from the deployment itself.
 
 ## Local development
 

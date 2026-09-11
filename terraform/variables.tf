@@ -28,3 +28,45 @@ variable "root_domain" {
   default     = "undergroundbb.com"
   description = "The Route 53 hosted zone's own apex name -- always this, never a per-workspace value. See local.domain_name for the name actually served."
 }
+
+# #113: self-hosting runtime configuration (#15, internal/config), wired into
+# the Lambda's environment so a deployment can actually override the
+# compiled-in defaults instead of always getting them. Each default below
+# matches internal/config.Config's own Default* constant, so an apply with no
+# overrides produces the identical Config a plain `go run ./cmd/local` would.
+# DOMAIN is deliberately not among these -- it's local.domain_name (locals.tf),
+# not a variable, since that value already varies correctly per workspace and
+# a second, independently-settable value here could drift from it.
+variable "site_name" {
+  type        = string
+  default     = "UndergroundBB"
+  description = "Display name of this deployment. See internal/config.DefaultSiteName."
+}
+
+variable "registration_policy" {
+  type        = string
+  default     = "open"
+  description = "\"open\" or \"closed\" -- see internal/config.DefaultRegistrationPolicy and docs/DESIGN.md's registration policy section."
+
+  validation {
+    condition     = contains(["open", "closed"], var.registration_policy)
+    error_message = "registration_policy must be \"open\" or \"closed\"."
+  }
+}
+
+variable "allow_group_expiration_off" {
+  type        = bool
+  default     = true
+  description = "Whether a group in this deployment may turn off message expiration entirely. See internal/config.DefaultAllowGroupExpirationOff."
+}
+
+variable "default_expiration_days" {
+  type        = number
+  default     = 30
+  description = "Expiration policy assigned to a group that doesn't choose one explicitly. See internal/config.DefaultExpirationDays."
+
+  validation {
+    condition     = var.default_expiration_days > 0
+    error_message = "default_expiration_days must be positive."
+  }
+}
