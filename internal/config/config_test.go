@@ -13,6 +13,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("DOMAIN", "")
 	t.Setenv("ENVIRONMENT", "")
 	t.Setenv("TABLE_NAME", "")
+	t.Setenv("REGISTRATION_POLICY", "")
+	t.Setenv("ALLOW_GROUP_EXPIRATION_OFF", "")
+	t.Setenv("DEFAULT_EXPIRATION_DAYS", "")
 
 	cfg := FromEnv()
 	if cfg.SiteName != DefaultSiteName {
@@ -24,6 +27,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.Environment != DefaultEnvironment {
 		t.Errorf("Environment = %q, want %q", cfg.Environment, DefaultEnvironment)
 	}
+	if cfg.RegistrationPolicy != DefaultRegistrationPolicy {
+		t.Errorf("RegistrationPolicy = %q, want %q", cfg.RegistrationPolicy, DefaultRegistrationPolicy)
+	}
+	if cfg.AllowGroupExpirationOff != DefaultAllowGroupExpirationOff {
+		t.Errorf("AllowGroupExpirationOff = %t, want %t", cfg.AllowGroupExpirationOff, DefaultAllowGroupExpirationOff)
+	}
+	if cfg.DefaultExpirationDays != DefaultExpirationDays {
+		t.Errorf("DefaultExpirationDays = %d, want %d", cfg.DefaultExpirationDays, DefaultExpirationDays)
+	}
 }
 
 // TestFromEnvOverrides covers the self-hosting requirement: a deployment must be
@@ -33,6 +45,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("DOMAIN", "example.test")
 	t.Setenv("ENVIRONMENT", "prod")
 	t.Setenv("TABLE_NAME", "ubb-prod")
+	t.Setenv("REGISTRATION_POLICY", "closed")
+	t.Setenv("ALLOW_GROUP_EXPIRATION_OFF", "false")
+	t.Setenv("DEFAULT_EXPIRATION_DAYS", "14")
 
 	cfg := FromEnv()
 	if cfg.SiteName != "Somewhere Else" {
@@ -46,6 +61,83 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.TableName != "ubb-prod" {
 		t.Errorf("TableName = %q", cfg.TableName)
+	}
+	if cfg.RegistrationPolicy != RegistrationClosed {
+		t.Errorf("RegistrationPolicy = %q, want %q", cfg.RegistrationPolicy, RegistrationClosed)
+	}
+	if cfg.AllowGroupExpirationOff != false {
+		t.Errorf("AllowGroupExpirationOff = %t, want false", cfg.AllowGroupExpirationOff)
+	}
+	if cfg.DefaultExpirationDays != 14 {
+		t.Errorf("DefaultExpirationDays = %d, want 14", cfg.DefaultExpirationDays)
+	}
+}
+
+// TestRegistrationPolicyEnvOrDefault covers the reject-and-warn path: an
+// invalid value must fall back to RegistrationClosed rather than propagate or
+// fall open, since RegistrationPolicy gates the signup endpoint and an
+// unrecognized value taking effect -- or silently opening signup -- would
+// both be security-relevant surprises.
+func TestRegistrationPolicyEnvOrDefault(t *testing.T) {
+	t.Setenv("UBB_TEST_UNSET_POLICY", "")
+	if got := registrationPolicyEnvOrDefault("UBB_TEST_UNSET_POLICY", RegistrationOpen); got != RegistrationOpen {
+		t.Errorf("unset = %q, want %q", got, RegistrationOpen)
+	}
+
+	t.Setenv("UBB_TEST_POLICY", RegistrationClosed)
+	if got := registrationPolicyEnvOrDefault("UBB_TEST_POLICY", RegistrationOpen); got != RegistrationClosed {
+		t.Errorf("set = %q, want %q", got, RegistrationClosed)
+	}
+
+	// The fallback is always RegistrationClosed here, not the def passed in
+	// (RegistrationOpen), because an invalid value must fail closed.
+	t.Setenv("UBB_TEST_BAD_POLICY", "invite-only")
+	if got := registrationPolicyEnvOrDefault("UBB_TEST_BAD_POLICY", RegistrationOpen); got != RegistrationClosed {
+		t.Errorf("invalid = %q, want fail-closed %q", got, RegistrationClosed)
+	}
+}
+
+// TestExpirationDaysEnvOrDefault covers the reject-and-warn path for
+// non-positive values: DESIGN.md's "Message expiration" has comments and
+// reactions copy their parent post's TTL, so a non-positive policy would
+// expire content on write rather than express "no expiration", which is a
+// separate setting (AllowGroupExpirationOff).
+func TestExpirationDaysEnvOrDefault(t *testing.T) {
+	t.Setenv("UBB_TEST_DAYS_UNSET", "")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_UNSET", 30); got != 30 {
+		t.Errorf("unset = %d, want 30", got)
+	}
+
+	t.Setenv("UBB_TEST_DAYS_SET", "14")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_SET", 30); got != 14 {
+		t.Errorf("set = %d, want 14", got)
+	}
+
+	t.Setenv("UBB_TEST_DAYS_ZERO", "0")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_ZERO", 30); got != 30 {
+		t.Errorf("zero = %d, want fallback 30", got)
+	}
+
+	t.Setenv("UBB_TEST_DAYS_NEGATIVE", "-1")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_NEGATIVE", 30); got != 30 {
+		t.Errorf("negative = %d, want fallback 30", got)
+	}
+}
+
+func TestBoolEnvOrDefault(t *testing.T) {
+	t.Setenv("UBB_TEST_BOOL_UNSET", "")
+	if got := BoolEnvOrDefault("UBB_TEST_BOOL_UNSET", true); got != true {
+		t.Errorf("unset = %t, want true", got)
+	}
+
+	t.Setenv("UBB_TEST_BOOL_SET", "false")
+	if got := BoolEnvOrDefault("UBB_TEST_BOOL_SET", true); got != false {
+		t.Errorf("set = %t, want false", got)
+	}
+
+	t.Setenv("UBB_TEST_BOOL_BAD", "not-a-bool")
+	if got := BoolEnvOrDefault("UBB_TEST_BOOL_BAD", true); got != true {
+		t.Errorf("unparseable = %t, want fallback true", got)
 	}
 }
 

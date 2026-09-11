@@ -12,6 +12,12 @@ import (
 	"strconv"
 )
 
+// Registration policy values. See Config.RegistrationPolicy.
+const (
+	RegistrationOpen   = "open"
+	RegistrationClosed = "closed"
+)
+
 // Config is the server's runtime configuration.
 type Config struct {
 	// SiteName is the display name of this deployment.
@@ -23,24 +29,77 @@ type Config struct {
 	Environment string
 	// TableName is the DynamoDB table backing every record.
 	TableName string
+	// RegistrationPolicy is RegistrationOpen or RegistrationClosed. Open means
+	// anyone may create an account, which is what THREAT_MODEL.md assumes
+	// throughout (see docs/DESIGN.md, "Registration policy takes one of two
+	// values"). Closed disables the signup endpoint; accounts are provisioned
+	// out of band.
+	RegistrationPolicy string
+	// AllowGroupExpirationOff is whether a group in this deployment may set
+	// "no expiration". Doing so switches off the only forward-secrecy
+	// mechanism that works at any group size (see docs/DESIGN.md, "Message
+	// expiration"), so a deployment may choose to forbid it entirely.
+	AllowGroupExpirationOff bool
+	// DefaultExpirationDays is the expiration policy assigned to a group that
+	// does not choose one explicitly.
+	DefaultExpirationDays int64
 }
 
 // Defaults applied when the corresponding environment variable is unset.
 const (
-	DefaultSiteName    = "UndergroundBB"
-	DefaultDomain      = "localhost:3000"
-	DefaultEnvironment = "dev"
-	DefaultTableName   = "undergroundbb"
+	DefaultSiteName                = "UndergroundBB"
+	DefaultDomain                  = "localhost:3000"
+	DefaultEnvironment             = "dev"
+	DefaultTableName               = "undergroundbb"
+	DefaultRegistrationPolicy      = RegistrationOpen
+	DefaultAllowGroupExpirationOff = true
+	DefaultExpirationDays          = 30
 )
 
 // FromEnv builds a Config from environment variables, falling back to defaults.
 func FromEnv() Config {
 	return Config{
-		SiteName:    StringEnvOrDefault("SITE_NAME", DefaultSiteName),
-		Domain:      StringEnvOrDefault("DOMAIN", DefaultDomain),
-		Environment: StringEnvOrDefault("ENVIRONMENT", DefaultEnvironment),
-		TableName:   StringEnvOrDefault("TABLE_NAME", DefaultTableName),
+		SiteName:                StringEnvOrDefault("SITE_NAME", DefaultSiteName),
+		Domain:                  StringEnvOrDefault("DOMAIN", DefaultDomain),
+		Environment:             StringEnvOrDefault("ENVIRONMENT", DefaultEnvironment),
+		TableName:               StringEnvOrDefault("TABLE_NAME", DefaultTableName),
+		RegistrationPolicy:      registrationPolicyEnvOrDefault("REGISTRATION_POLICY", DefaultRegistrationPolicy),
+		AllowGroupExpirationOff: BoolEnvOrDefault("ALLOW_GROUP_EXPIRATION_OFF", DefaultAllowGroupExpirationOff),
+		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
 	}
+}
+
+// registrationPolicyEnvOrDefault reads REGISTRATION_POLICY. An unset variable
+// falls back to def: the operator expressed no preference, so the deployment
+// default applies. A value that is neither "open" nor "closed" instead fails
+// closed to RegistrationClosed regardless of def, and logs a warning -- the
+// operator tried to express a policy and failed, and silently falling open is
+// the more dangerous failure mode for a security-relevant knob.
+func registrationPolicyEnvOrDefault(key, def string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	if v != RegistrationOpen && v != RegistrationClosed {
+		log.Printf("warning: %s=%q is not %q or %q, failing closed to %q", key, v, RegistrationOpen, RegistrationClosed, RegistrationClosed)
+		return RegistrationClosed
+	}
+	return v
+}
+
+// expirationDaysEnvOrDefault reads DEFAULT_EXPIRATION_DAYS, falling back to
+// def when unset, unparseable, or non-positive. Zero and negatives are
+// rejected rather than passed through: the value becomes a DynamoDB TTL that
+// comments and reactions copy from their parent (DESIGN.md, "Message
+// expiration"), so a non-positive policy expires content on write. "No
+// expiration" is a separate setting, not days <= 0.
+func expirationDaysEnvOrDefault(key string, def int64) int64 {
+	n := Int64EnvOrDefault(key, def)
+	if n <= 0 {
+		log.Printf("warning: %s=%d is not positive, using default %d", key, n, def)
+		return def
+	}
+	return n
 }
 
 // StringEnvOrDefault reads an environment variable, returning def when unset.
@@ -64,4 +123,20 @@ func Int64EnvOrDefault(key string, def int64) int64 {
 		return def
 	}
 	return n
+}
+
+// BoolEnvOrDefault reads an environment variable as a bool (accepting the
+// same forms as strconv.ParseBool). Returns def if the variable is unset or
+// unparseable (logs a warning on parse failure).
+func BoolEnvOrDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Printf("warning: %s=%q is not a valid bool, using default %t", key, v, def)
+		return def
+	}
+	return b
 }
