@@ -374,6 +374,12 @@ data "aws_iam_policy_document" "deploy_policy" {
       "wafv2:CreateWebACL",
       "wafv2:UpdateWebACL",
       "wafv2:DeleteWebACL",
+      # TagResource/UntagResource are shared-namespace WAFv2 actions --
+      # granting them scoped to this webacl ARN only covers this resource.
+      # A future WAF resource (IP set, regex pattern set, rule group) would
+      # need its own statement to be taggable; not a change to make now,
+      # flagged in round 1 review so the next person adding one doesn't
+      # assume this statement already covers it.
       "wafv2:TagResource",
       "wafv2:UntagResource",
       "wafv2:ListTagsForResource",
