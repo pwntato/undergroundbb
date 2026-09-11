@@ -5,10 +5,21 @@
 #
 # Two AWS managed rule groups (common exploit patterns + known-bad-inputs),
 # plus a rate-based rule scoped to /api/auth/* stricter than the site
-# default. The rate rule is a cost control as much as a security one:
-# Argon2id login runs at roughly 64MB and several hundred ms per attempt
-# (see docs/THREAT_MODEL.md), so an unthrottled login/challenge endpoint
-# burns compute budget as fast as an attacker can send requests.
+# default. Round 2 review caught this comment previously justifying that
+# rule as a "cost control" against Argon2id compute -- wrong on both halves:
+# Argon2id runs exclusively in the browser (web/src/lib/crypto/argon2.ts),
+# never on this project's servers, and docs/DESIGN.md says so explicitly
+# ("An attacker hammering the endpoint burns their own CPU, not the
+# operator's"), then names what to size against instead: bulk harvesting of
+# the salt + wrapped private keys POST /api/auth/challenge hands out to
+# anyone naming a username (offline-cracking material), and a second,
+# genuinely operator-side cost -- both /auth/challenge and the verify leg's
+# failure-counter increment are unauthenticated writes against a single
+# user's hottest DynamoDB partition (DESIGN.md: "this cost falls on the
+# operator, in write capacity and in contention against legitimate logins").
+# This rule bounds both: the harvesting rate directly, and the
+# hot-partition write rate as a side effect of the same per-IP limit
+# covering both legs under one prefix.
 #
 # Explicitly NOT a defense against the challenge-slot flood described in
 # docs/THREAT_MODEL.md ("Attacker floods /auth/challenge for one named
@@ -112,12 +123,16 @@ resource "aws_wafv2_web_acl" "main" {
   # version of this comment that claimed 100 was WAF's minimum;
   # rate_based_statement.limit's real minimum is 10 (confirmed live via
   # `aws wafv2 check-capacity`, which accepts Limit=10 and rejects Limit=0).
-  # This value is generous for a human retrying a forgotten password a
-  # handful of times, while still meaningfully bounding the Argon2id compute
-  # a single IP can burn (see this file's header comment: ~64MB and several
-  # hundred ms per attempt). See the header comment for why no value here
-  # closes the username-keyed challenge-flood threat -- that's a property of
-  # WAF keying on IP, not of this number.
+  # Round 2 review caught the value's own justification as wrong too: it had
+  # been picked to tighten "a single IP's compute burn," but there is no
+  # server-side compute this rule bounds (see this file's header comment --
+  # Argon2id never runs here). 30 is sized against this file's header
+  # comment's actual two targets instead: generous enough for a human
+  # retrying a forgotten password a handful of times, while still bounding
+  # both per-IP harvesting of challenge material and the hot-partition write
+  # rate against a single named user's PROFILE item. See the header comment
+  # for why no value here closes the username-keyed challenge-flood threat
+  # -- that's a property of WAF keying on IP, not of this number.
   rule {
     name     = "rate-limit-auth"
     priority = 4
@@ -145,12 +160,21 @@ resource "aws_wafv2_web_acl" "main" {
             # /api/health, i.e. Go's http.ServeMux (and CloudFront's /api/*
             # behavior ahead of it) already treats the two as identical
             # requests, so WAF must too. URL_DECODE then NORMALIZE_PATH
-            # (applied in priority order) closes the verified gap; LOWERCASE
-            # is added defensively for the same reason even though
-            # /API/auth/ doesn't reach the Lambda today (it misses the
-            # /api/* cache behavior and lands on the SPA instead) -- it
-            # costs nothing to include and removes a second place this rule
-            # would need revisiting if that ever changes.
+            # (applied in priority order) closes the verified . case.
+            # Round 2 review found the same class of gap for .. --
+            # /api/foo/../health also reaches the real handler live -- and
+            # flagged that this hadn't been tested end-to-end: AWS documents
+            # NORMALIZE_PATH as resolving .. as well as ., so this chain
+            # should already cover it, but /api/auth/* doesn't exist yet to
+            # drive real traffic through and confirm behaviorally. Verify
+            # this (both . and .. in the same pass) once the auth handlers
+            # land and this rule has a real endpoint to test against.
+            # LOWERCASE is kept for a confirmed reason, not a hypothetical
+            # one -- docs/DESIGN.md: every username lookup lowercases,
+            # including POST /api/auth/challenge, so this endpoint really is
+            # case-insensitive even though /API/auth/ doesn't reach the
+            # Lambda today (it misses the /api/* cache behavior and lands on
+            # the SPA instead).
             text_transformation {
               priority = 0
               type     = "URL_DECODE"

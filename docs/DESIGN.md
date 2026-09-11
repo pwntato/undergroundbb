@@ -1608,10 +1608,11 @@ user's challenge slot — and nothing here counts challenge requests per usernam
 already supplies the refutation, in the threat model's argument for keying the lockout on the
 account: a source-scoped counter is trivially defeated by rotating IPs.
 
-The arithmetic is not close either. WAF's rate-based floor is 100 requests per five minutes per IP,
-which still permits a challenge overwrite roughly every three seconds from a **single** IP, against
-a victim who must complete a deliberately slow Argon2id derivation to answer. One IP at the
-strictest setting WAF offers already wins; rotating IPs merely makes it free.
+The arithmetic is not close either. Even the strictest limit configured for `/api/auth/*` (30
+requests per five minutes per IP -- well above WAF's actual floor of 10) still permits a challenge
+overwrite roughly every ten seconds from a **single** IP, against a victim who must complete a
+deliberately slow Argon2id derivation to answer. One IP already wins; rotating IPs merely makes it
+free.
 
 **So the honest statement is that the challenge flood is bounded by nothing in this design**, and
 the threat model says so rather than pointing at a rate limit that cannot reach it. A per-username
