@@ -21,6 +21,20 @@
 # hot-partition write rate as a side effect of the same per-IP limit
 # covering both legs under one prefix.
 #
+# Round 5 review: this only bounds harvesting for routes actually under
+# /api/auth/*. DESIGN.md names at least one other unauthenticated route
+# with the same harvesting shape that sits outside it -- GET
+# /api/invites/:id hands its bearer token to anyone who asks (DESIGN.md:488,
+# 506) -- so it falls through to rate-limit-default's 2000/5min instead.
+# Not fixed here deliberately, same as round 1 accepted for the similarly
+# out-of-scope recovery endpoint: neither route exists yet
+# (internal/handlers/handlers.go registers only GET /api/health), and an
+# invite <iid> is a UUID, so enumerating it isn't the cheap per-username
+# attack this prefix was drawn around. Recorded here rather than only in a
+# closed review thread so whoever implements /api/invites/:id or the
+# recovery endpoint knows to decide their own rate limit rather than
+# silently inheriting the site default.
+#
 # Explicitly NOT a defense against the challenge-slot flood described in
 # docs/THREAT_MODEL.md ("Attacker floods /auth/challenge for one named
 # account") -- confirmed in #10's own issue comment (PR #1 review round 28).
