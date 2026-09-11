@@ -153,28 +153,32 @@ resource "aws_wafv2_web_acl" "main" {
               uri_path {}
             }
             positional_constraint = "STARTS_WITH"
-            # Round 1 review, verified live: NONE (byte-for-byte match on
-            # the raw URI) let /api/./auth/challenge bypass this rule
-            # entirely and fall through to the 2000/5min default --
-            # confirmed via /api/./health returning the same 200 as
-            # /api/health, i.e. Go's http.ServeMux (and CloudFront's /api/*
-            # behavior ahead of it) already treats the two as identical
-            # requests, so WAF must too. URL_DECODE then NORMALIZE_PATH
-            # (applied in priority order) closes the verified . case.
-            # Round 2 review found the same class of gap for .. --
-            # /api/foo/../health also reaches the real handler live -- and
-            # flagged that this hadn't been tested end-to-end: AWS documents
-            # NORMALIZE_PATH as resolving .. as well as ., so this chain
-            # should already cover it, but /api/auth/* doesn't exist yet to
-            # drive real traffic through and confirm behaviorally. Verify
-            # this (both . and .. in the same pass) once the auth handlers
-            # land and this rule has a real endpoint to test against.
-            # LOWERCASE is kept for a confirmed reason, not a hypothetical
-            # one -- docs/DESIGN.md: every username lookup lowercases,
-            # including POST /api/auth/challenge, so this endpoint really is
-            # case-insensitive even though /API/auth/ doesn't reach the
-            # Lambda today (it misses the /api/* cache behavior and lands on
-            # the SPA instead).
+            # NONE (byte-for-byte match on the raw URI) was tried and
+            # dropped in round 1 review over a suspected /api/./auth/...
+            # bypass -- rounds 1 and 2 both recorded that as a live-verified
+            # 200 identical to /api/health, but round 3 found that was
+            # curl's own client-side path normalization (curl cleans "."
+            # and ".." out of a URL before sending unless --path-as-is is
+            # given), not the server's behavior. Reproduced properly with
+            # --path-as-is: /api/./health is 307 from Go's http.ServeMux
+            # (its own unclean-path redirect, to the clean /api/health --
+            # not a handler hit), and /api/foo/../health is 403 from
+            # CloudFront at the edge, never reaching the origin at all.
+            # Neither is actually a bypass of a NONE-transformation rule;
+            # the request that would do real work (the redirect target, or
+            # a request CloudFront lets through) is a separate, clean
+            # request that a literal match already catches.
+            # Kept URL_DECODE + NORMALIZE_PATH anyway, as defense-in-depth
+            # against CloudFront's or ServeMux's edge/redirect behavior ever
+            # changing, not because a live bypass was ever confirmed --
+            # NONE was never actually broken, this chain is simply more
+            # robust than depending on those two components' current
+            # behavior. LOWERCASE is kept for a confirmed reason, not a
+            # hypothetical one -- docs/DESIGN.md: every username lookup
+            # lowercases, including POST /api/auth/challenge, so this
+            # endpoint really is case-insensitive even though /API/auth/
+            # doesn't reach the Lambda today (it misses the /api/* cache
+            # behavior and lands on the SPA instead).
             text_transformation {
               priority = 0
               type     = "URL_DECODE"
