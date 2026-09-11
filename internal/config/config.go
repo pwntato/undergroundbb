@@ -69,13 +69,12 @@ func FromEnv() Config {
 	}
 }
 
-// registrationPolicyEnvOrDefault reads REGISTRATION_POLICY, falling back to
-// RegistrationClosed when unset or when the value is neither "open" nor
-// "closed" (logging a warning in the latter case so a typo fails loud rather
-// than silently opening or closing signup). The fallback is always
-// RegistrationClosed rather than def: an unrecognized value is fail-closed,
-// since the alternative -- silently falling open -- is the more dangerous
-// failure mode for a security-relevant knob.
+// registrationPolicyEnvOrDefault reads REGISTRATION_POLICY. An unset variable
+// falls back to def: the operator expressed no preference, so the deployment
+// default applies. A value that is neither "open" nor "closed" instead fails
+// closed to RegistrationClosed regardless of def, and logs a warning -- the
+// operator tried to express a policy and failed, and silently falling open is
+// the more dangerous failure mode for a security-relevant knob.
 func registrationPolicyEnvOrDefault(key, def string) string {
 	v := os.Getenv(key)
 	if v == "" {
