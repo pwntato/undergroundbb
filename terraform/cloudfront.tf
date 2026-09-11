@@ -362,6 +362,16 @@ resource "aws_cloudfront_distribution" "main" {
   # alias the certificate doesn't cover.
   aliases = [local.domain_name]
 
+  # #10: wired here rather than via a separate aws_wafv2_web_acl_association
+  # resource -- AWS's WAFV2 AssociateWebACL/DisassociateWebACL API calls
+  # explicitly reject CloudFront distribution ARNs (CloudFront is the one
+  # WAF-supported resource type that isn't managed through that API; a
+  # CLOUDFRONT-scope WebACL is associated exclusively by setting this
+  # argument directly on the distribution, i.e. CloudFront's own
+  # UpdateDistribution call, not a WAF API call). See waf.tf for the WebACL
+  # itself.
+  web_acl_id = aws_wafv2_web_acl.main.arn
+
   restrictions {
     geo_restriction {
       restriction_type = "none"

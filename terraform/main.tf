@@ -34,8 +34,9 @@ provider "aws" {
 # CloudFront's own certificate must live in us-east-1 regardless of where the
 # rest of this project's infrastructure runs (#9) -- a second provider block,
 # aliased rather than swapping the default region, so every other resource
-# in this module keeps using var.aws_region unchanged. acm.tf is the only
-# file that references this alias.
+# in this module keeps using var.aws_region unchanged. acm.tf and waf.tf
+# (#10, a CLOUDFRONT-scope WAF WebACL has the same us-east-1 constraint)
+# reference this alias.
 provider "aws" {
   alias  = "use1"
   region = "us-east-1"
