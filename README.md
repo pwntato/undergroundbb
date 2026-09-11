@@ -75,9 +75,22 @@ before you trust this with anything serious.
 
 UndergroundBB is meant to be run by whoever needs it. Site name, domain, registration policy
 (`open` or `closed`), and whether groups may disable message expiration are all runtime
-configuration — nothing about a particular deployment is compiled into the build.
+configuration — nothing about a particular deployment is compiled into the build. The server reads
+these from environment variables (falling back to the defaults below) and serves the public subset,
+unauthenticated, from `GET /api/config` — the SPA fetches it on boot.
 
-Setup instructions will land with the first deployable release.
+| Variable | Default | Meaning |
+|---|---|---|
+| `SITE_NAME` | `UndergroundBB` | Display name of this deployment. |
+| `DOMAIN` | `localhost:3000` | Public domain this deployment is served from. |
+| `ENVIRONMENT` | `dev` | Deployment environment (`dev` or `prod`); set by Terraform from the workspace. |
+| `TABLE_NAME` | `undergroundbb` | DynamoDB table backing every record. |
+| `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled, accounts provisioned out of band) — see [docs/DESIGN.md](docs/DESIGN.md). An invalid value fails closed. |
+| `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
+| `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
+
+Setup instructions will land with the first deployable release. (`TABLE_NAME` and `ENVIRONMENT` are
+already wired into the Lambda's Terraform config; the rest are not yet — see #113.)
 
 ## Local development
 

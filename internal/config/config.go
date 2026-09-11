@@ -65,24 +65,42 @@ func FromEnv() Config {
 		TableName:               StringEnvOrDefault("TABLE_NAME", DefaultTableName),
 		RegistrationPolicy:      registrationPolicyEnvOrDefault("REGISTRATION_POLICY", DefaultRegistrationPolicy),
 		AllowGroupExpirationOff: BoolEnvOrDefault("ALLOW_GROUP_EXPIRATION_OFF", DefaultAllowGroupExpirationOff),
-		DefaultExpirationDays:   Int64EnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
+		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
 	}
 }
 
 // registrationPolicyEnvOrDefault reads REGISTRATION_POLICY, falling back to
-// def when unset or when the value is neither "open" nor "closed" (logging a
-// warning in the latter case so a typo fails loud rather than silently
-// opening or closing signup).
+// RegistrationClosed when unset or when the value is neither "open" nor
+// "closed" (logging a warning in the latter case so a typo fails loud rather
+// than silently opening or closing signup). The fallback is always
+// RegistrationClosed rather than def: an unrecognized value is fail-closed,
+// since the alternative -- silently falling open -- is the more dangerous
+// failure mode for a security-relevant knob.
 func registrationPolicyEnvOrDefault(key, def string) string {
 	v := os.Getenv(key)
 	if v == "" {
 		return def
 	}
 	if v != RegistrationOpen && v != RegistrationClosed {
-		log.Printf("warning: %s=%q is not %q or %q, using default %q", key, v, RegistrationOpen, RegistrationClosed, def)
-		return def
+		log.Printf("warning: %s=%q is not %q or %q, failing closed to %q", key, v, RegistrationOpen, RegistrationClosed, RegistrationClosed)
+		return RegistrationClosed
 	}
 	return v
+}
+
+// expirationDaysEnvOrDefault reads DEFAULT_EXPIRATION_DAYS, falling back to
+// def when unset, unparseable, or non-positive. Zero and negatives are
+// rejected rather than passed through: the value becomes a DynamoDB TTL that
+// comments and reactions copy from their parent (DESIGN.md, "Message
+// expiration"), so a non-positive policy expires content on write. "No
+// expiration" is a separate setting, not days <= 0.
+func expirationDaysEnvOrDefault(key string, def int64) int64 {
+	n := Int64EnvOrDefault(key, def)
+	if n <= 0 {
+		log.Printf("warning: %s=%d is not positive, using default %d", key, n, def)
+		return def
+	}
+	return n
 }
 
 // StringEnvOrDefault reads an environment variable, returning def when unset.
