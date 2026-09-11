@@ -66,7 +66,11 @@ variable "default_expiration_days" {
   description = "Expiration policy assigned to a group that doesn't choose one explicitly. See internal/config.DefaultExpirationDays."
 
   validation {
-    condition     = var.default_expiration_days > 0
-    error_message = "default_expiration_days must be positive."
+    # type = number alone permits fractions (e.g. 30.5), which pass > 0 and
+    # tostring() to "30.5" -- Int64EnvOrDefault's strconv.ParseInt then
+    # rejects that and silently falls back to the default, so a fraction
+    # must be caught here rather than left to the Go side's parse failure.
+    condition     = var.default_expiration_days > 0 && floor(var.default_expiration_days) == var.default_expiration_days
+    error_message = "default_expiration_days must be a positive whole number of days."
   }
 }
