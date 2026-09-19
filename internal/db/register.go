@@ -104,6 +104,18 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		return err
 	}
 
+	// claimItemIndex is the claim Put's position in TransactItems below --
+	// named so isConditionalCheckFailure checks the cancellation reason at
+	// this specific index rather than scanning all of them. Scanning would
+	// stay correct today (this transaction has exactly one conditional
+	// item) but would silently start mapping the wrong failure to
+	// ErrUsernameTaken if a second conditional item were ever added here --
+	// e.g. the credential-version condition docs/DESIGN.md describes for
+	// the re-wrap path, should that ever be folded into this function. This
+	// way the mapping stays correct by construction instead of depending on
+	// this comment being re-read before such a change.
+	const claimItemIndex = 2
+
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Put: &types.Put{TableName: aws.String(c.table), Item: userItem}},
@@ -115,15 +127,15 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 					ConditionExpression: aws.String("attribute_not_exists(PK)"),
 					// ReturnValuesOnConditionCheckFailure isn't needed here --
 					// the only condition in this transaction is the claim's,
-					// so a TransactionCanceledException always means the
-					// username was taken and there is nothing else to
-					// distinguish it from.
+					// so a ConditionalCheckFailed at claimItemIndex always
+					// means the username was taken and there is nothing else
+					// to distinguish it from.
 				},
 			},
 		},
 	})
 	if err != nil {
-		if isConditionalCheckFailure(err) {
+		if isConditionalCheckFailure(err, claimItemIndex) {
 			return ErrUsernameTaken
 		}
 		return err
@@ -132,19 +144,20 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 }
 
 // isConditionalCheckFailure reports whether err is a TransactWriteItems
-// failure caused by a condition check, as opposed to any other transaction
-// cancellation reason (throttling, validation, a capacity error). This
-// transaction has exactly one conditional Put, so any condition-check
-// cancellation reason means the username claim already existed.
-func isConditionalCheckFailure(err error) bool {
+// failure caused by the condition check on the item at itemIndex, as
+// opposed to any other transaction cancellation reason (throttling,
+// validation, a capacity error, or a condition failure on a *different*
+// item). Checking a specific index rather than scanning every reason keeps
+// this correct even if a second conditional item is later added to the same
+// transaction.
+func isConditionalCheckFailure(err error, itemIndex int) bool {
 	var txErr *types.TransactionCanceledException
 	if !errors.As(err, &txErr) {
 		return false
 	}
-	for _, reason := range txErr.CancellationReasons {
-		if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
-			return true
-		}
+	if itemIndex < 0 || itemIndex >= len(txErr.CancellationReasons) {
+		return false
 	}
-	return false
+	reason := txErr.CancellationReasons[itemIndex]
+	return reason.Code != nil && *reason.Code == "ConditionalCheckFailed"
 }

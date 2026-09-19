@@ -12,8 +12,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // testDB builds a *db.Client against DYNAMODB_ENDPOINT, skipping when unset
@@ -21,19 +28,47 @@ import (
 // real table to exercise the transaction against.
 func testDB(t *testing.T) *db.Client {
 	t.Helper()
-	endpoint := os.Getenv("DYNAMODB_ENDPOINT")
-	if endpoint == "" {
-		t.Skip("DYNAMODB_ENDPOINT not set; run `docker compose up -d && ./scripts/local-setup.sh`")
-	}
-	table := os.Getenv("TABLE_NAME")
-	if table == "" {
-		table = "undergroundbb"
-	}
-	c, err := db.New(context.Background(), table, endpoint)
+	c, err := db.New(context.Background(), testTableName(), testEndpoint(t))
 	if err != nil {
 		t.Fatalf("db.New: %v", err)
 	}
 	return c
+}
+
+// testEndpoint returns DYNAMODB_ENDPOINT, skipping the test when it isn't
+// set.
+func testEndpoint(t *testing.T) string {
+	t.Helper()
+	endpoint := os.Getenv("DYNAMODB_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("DYNAMODB_ENDPOINT not set; run `docker compose up -d && ./scripts/local-setup.sh`")
+	}
+	return endpoint
+}
+
+func testTableName() string {
+	if table := os.Getenv("TABLE_NAME"); table != "" {
+		return table
+	}
+	return "undergroundbb"
+}
+
+// rawDDB builds a plain SDK client against the same DynamoDB Local instance
+// db.Client uses. db.Client deliberately exposes no way to reach its
+// underlying *dynamodb.Client -- it is a data-access layer, not a general
+// escape hatch -- so a test that needs to read back exactly what got stored
+// (bypassing any application-level read path, which doesn't exist yet for
+// PROFILE/CLAIM) builds its own client the same way db.New does internally.
+func rawDDB(t *testing.T) *dynamodb.Client {
+	t.Helper()
+	endpoint := testEndpoint(t)
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background())
+	if err != nil {
+		t.Fatalf("load aws config: %v", err)
+	}
+	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+	})
 }
 
 func b64(n int) string {
@@ -156,6 +191,13 @@ func TestRegisterValidation(t *testing.T) {
 		{"wrong nonce length", func(r *registerRequest) { r.WrappedPrivateKeys.Nonce = b64(4) }},
 		{"missing recovery salt", func(r *registerRequest) { r.RecoverySalt = "" }},
 		{"zero recovery argon2 params", func(r *registerRequest) { r.RecoveryArgon2Params.Parallelism = 0 }},
+		{"argon2 memory below floor", func(r *registerRequest) { r.Argon2Params.MemoryKiB = 1024 }},
+		{"argon2 iterations below floor", func(r *registerRequest) { r.Argon2Params.Iterations = 1 }},
+		{"recovery argon2 below floor", func(r *registerRequest) { r.RecoveryArgon2Params.MemoryKiB = 1024 }},
+		{"salt over max length", func(r *registerRequest) { r.Salt = b64(maxSaltLen + 1) }},
+		{"ciphertext over max length", func(r *registerRequest) {
+			r.WrappedPrivateKeys.Ciphertext = b64(maxCiphertextLen + 1)
+		}},
 	}
 
 	for _, tc := range cases {
@@ -180,4 +222,91 @@ func TestRegisterMalformedBody(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
+}
+
+// TestRegisterBodyTooLarge covers the maxRegisterBodyBytes cap -- a body
+// this oversized couldn't be a legitimate request (the real payload is a
+// handful of ~32-100 byte fields), and without the cap it would previously
+// reach DynamoDB's own 400 KB item-size limit and surface as an
+// unactionable 500 rather than a 400 the caller could act on.
+func TestRegisterBodyTooLarge(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	req := validRegisterRequest(randomUsername(t))
+	req.WrappedPrivateKeys.Ciphertext = b64(maxRegisterBodyBytes + 1024)
+
+	rec := doRegister(t, h, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestRegisterPreservesUsernameCase covers the split docs/DESIGN.md
+// requires: the PROFILE item's Username is stored and displayed as typed,
+// while uniqueness and login lookup go through the lowercased claim.
+// internal/db's TestRegisterWritesAllThreeItems already checks that all
+// three items exist; this checks the handler's actual stored *values* on
+// the success path, since a case-folding bug (e.g. lowercasing before
+// storing on PROFILE too) wouldn't fail any existing assertion.
+func TestRegisterPreservesUsernameCase(t *testing.T) {
+	table := testTableName()
+	ddb := rawDDB(t)
+	h := New(config.FromEnv(), testDB(t))
+
+	mixedCase := "MixedCase" + randomUsername(t)
+	rec := doRegister(t, h, validRegisterRequest(mixedCase))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp registerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+
+	userOut, err := ddb.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + resp.UserID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	var user models.User
+	if err := attributevalue.UnmarshalMap(userOut.Item, &user); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if user.Username != mixedCase {
+		t.Errorf("PROFILE Username = %q, want %q (typed case preserved)", user.Username, mixedCase)
+	}
+
+	claimOut, err := ddb.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USERNAME#" + lowerASCII(mixedCase)},
+			"SK": &types.AttributeValueMemberS{Value: "CLAIM"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("GetItem CLAIM: %v", err)
+	}
+	var claim models.UsernameClaim
+	if err := attributevalue.UnmarshalMap(claimOut.Item, &claim); err != nil {
+		t.Fatalf("unmarshal CLAIM: %v", err)
+	}
+	if claim.UserID != resp.UserID {
+		t.Errorf("CLAIM UserID = %q, want %q", claim.UserID, resp.UserID)
+	}
+}
+
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }

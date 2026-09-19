@@ -27,6 +27,44 @@ import (
 // this restriction, since fingerprint verification is the real defense.
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 
+// Field length bounds for the raw (non-base64) byte length of the
+// unauthenticated fields in registerRequest. These are generous relative to
+// the real payloads -- a salt is on the order of 16 bytes and a wrapped
+// private-key blob on the order of 100 -- but they turn an oversized
+// request into a 400 here instead of a DynamoDB 400 KB item-size error
+// surfacing as an unactionable 500 after the transaction has already been
+// attempted, and they bound how much an unauthenticated caller can make
+// this endpoint write per call.
+const (
+	maxSaltLen       = 256
+	maxCiphertextLen = 4096
+)
+
+// maxRegisterBodyBytes bounds the request body itself, ahead of any
+// per-field check -- nothing else in this handler limits how large a body
+// net/http will read before decoding it.
+const maxRegisterBodyBytes = 64 * 1024
+
+// minArgon2MemoryKiB, minArgon2Iterations and minArgon2Parallelism are a
+// floor below which a stored Argon2id parameter set cannot back the
+// security claim docs/DESIGN.md makes: "Argon2id at m=8 MiB, t=1 is weaker
+// against GPU cracking than a well-tuned bcrypt, and the entire
+// offline-cracking argument in the threat model rests on the cost being
+// high." The server cannot verify these are the parameters actually used to
+// wrap the accompanying blob -- that would require the password -- but it
+// can and does reject a set that is facially below the documented minimum,
+// since POST /api/auth/challenge later hands these same stored parameters
+// (and the wrapped keys) to any caller naming this username, and a future
+// lazy re-wrap reads them as the baseline to raise from. The floor matches
+// DESIGN.md's own chosen parameters (m=64 MiB, t=3, p=1) exactly, rather
+// than a looser value, since this project has one canonical parameter set
+// and no stated reason a client would legitimately register below it.
+const (
+	minArgon2MemoryKiB   = 64 * 1024
+	minArgon2Iterations  = 3
+	minArgon2Parallelism = 1
+)
+
 // registerRequest is the wire shape of POST /api/auth/register. Every
 // key-material field is client-generated and opaque to the server -- see
 // docs/DESIGN.md, "The server never receives the password." Binary fields
@@ -71,10 +109,13 @@ type registerResponse struct {
 
 // register implements POST /api/auth/register -- see docs/DESIGN.md,
 // "signup writes three items across two partitions, so it is one
-// TransactWriteItems" and issue #25. The server validates only structure
-// (presence, encoding, an internally consistent Argon2id parameter set) --
-// it has no way to validate the cryptographic content, since it never sees
-// the password or the private keys.
+// TransactWriteItems" and issue #25. The server cannot validate
+// cryptographic content, since it never sees the password or the private
+// keys -- but it does validate structure (presence, encoding, length
+// bounds) and, for the Argon2id parameters specifically, a floor below
+// this deployment's documented minimum, since those parameters are stored
+// as security-relevant policy, not opaque client state -- see
+// minArgon2MemoryKiB.
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.RegistrationPolicy == config.RegistrationClosed {
 		// See docs/DESIGN.md, "closed means the signup endpoint is
@@ -84,6 +125,8 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "registration is closed on this deployment")
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,18 +139,18 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signingPub, err := decodeBase64Field(req.SigningPublicKey, ed25519.PublicKeySize)
+	signingPub, err := decodeBase64Field(req.SigningPublicKey, ed25519.PublicKeySize, ed25519.PublicKeySize)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "signingPublicKey: "+err.Error())
 		return
 	}
-	wrappingPub, err := decodeBase64Field(req.WrappingPublicKey, x25519PublicKeySize)
+	wrappingPub, err := decodeBase64Field(req.WrappingPublicKey, x25519PublicKeySize, x25519PublicKeySize)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "wrappingPublicKey: "+err.Error())
 		return
 	}
 
-	salt, err := decodeBase64Field(req.Salt, 0)
+	salt, err := decodeBase64Field(req.Salt, 0, maxSaltLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "salt: "+err.Error())
 		return
@@ -122,7 +165,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recoverySalt, err := decodeBase64Field(req.RecoverySalt, 0)
+	recoverySalt, err := decodeBase64Field(req.RecoverySalt, 0, maxSaltLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "recoverySalt: "+err.Error())
 		return
@@ -176,9 +219,12 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 const x25519PublicKeySize = 32
 
 // decodeBase64Field decodes a standard-padded base64 field, rejecting an
-// empty string and, when wantLen is nonzero, any decoded length other than
-// wantLen. wantLen is 0 for fields with no fixed size (salts, ciphertext).
-func decodeBase64Field(s string, wantLen int) ([]byte, error) {
+// empty string, any decoded length over maxLen, and -- when wantLen is
+// nonzero -- any decoded length other than wantLen. wantLen is 0 for fields
+// with no fixed size (salts, ciphertext), which is what makes maxLen do the
+// real bounding work for those: without it, a field with no fixed width had
+// no upper bound at all on an unauthenticated endpoint.
+func decodeBase64Field(s string, wantLen, maxLen int) ([]byte, error) {
 	if s == "" {
 		return nil, errEmptyField
 	}
@@ -189,15 +235,18 @@ func decodeBase64Field(s string, wantLen int) ([]byte, error) {
 	if wantLen != 0 && len(b) != wantLen {
 		return nil, errWrongLength
 	}
+	if len(b) > maxLen {
+		return nil, errFieldTooLong
+	}
 	return b, nil
 }
 
 func decodeWrappedBlob(b wrappedBlob) (models.WrappedBlob, error) {
-	nonce, err := decodeBase64Field(b.Nonce, crypto.NonceSize)
+	nonce, err := decodeBase64Field(b.Nonce, crypto.NonceSize, crypto.NonceSize)
 	if err != nil {
 		return models.WrappedBlob{}, err
 	}
-	ciphertext, err := decodeBase64Field(b.Ciphertext, 0)
+	ciphertext, err := decodeBase64Field(b.Ciphertext, 0, maxCiphertextLen)
 	if err != nil {
 		return models.WrappedBlob{}, err
 	}
@@ -205,14 +254,17 @@ func decodeWrappedBlob(b wrappedBlob) (models.WrappedBlob, error) {
 }
 
 // validateArgon2Params rejects a parameter set that could not have produced
-// a real derivation. It does not, and cannot, verify the parameters are the
-// ones actually used to wrap the accompanying blob -- that would require
-// the password. It exists only to reject obviously-malformed input (a zero
-// or negative field) before it is stored and later read back to drive a
-// real client-side derivation on login.
+// a real derivation, or that falls below this deployment's documented
+// floor. It does not, and cannot, verify the parameters are the ones
+// actually used to wrap the accompanying blob -- that would require the
+// password -- but it does reject a set that is facially too weak, per
+// minArgon2MemoryKiB's own doc comment.
 func validateArgon2Params(p argon2Params) error {
 	if p.MemoryKiB <= 0 || p.Iterations <= 0 || p.Parallelism <= 0 {
 		return errInvalidArgon2Params
+	}
+	if p.MemoryKiB < minArgon2MemoryKiB || p.Iterations < minArgon2Iterations || p.Parallelism < minArgon2Parallelism {
+		return errArgon2ParamsBelowFloor
 	}
 	return nil
 }
@@ -226,10 +278,12 @@ func toModelParams(p argon2Params) models.Argon2Params {
 }
 
 var (
-	errEmptyField          = fieldError("field is required")
-	errNotBase64           = fieldError("must be valid base64")
-	errWrongLength         = fieldError("wrong decoded length")
-	errInvalidArgon2Params = fieldError("memoryKiB, iterations and parallelism must all be positive")
+	errEmptyField             = fieldError("field is required")
+	errNotBase64              = fieldError("must be valid base64")
+	errWrongLength            = fieldError("wrong decoded length")
+	errFieldTooLong           = fieldError("field exceeds the maximum allowed length")
+	errInvalidArgon2Params    = fieldError("memoryKiB, iterations and parallelism must all be positive")
+	errArgon2ParamsBelowFloor = fieldError("memoryKiB, iterations and parallelism must each meet this deployment's minimum (see docs/DESIGN.md)")
 )
 
 // fieldError is a plain string error -- these are user-facing validation
