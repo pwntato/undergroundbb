@@ -81,6 +81,21 @@ func TestUsernameAvailableInvalidCandidates(t *testing.T) {
 	}
 }
 
+// TestUsernameAvailableClosedPolicy covers the gate added in review: a
+// closed deployment must refuse this check the same way it refuses
+// register, since leaving it open would just move the name-confirmation
+// oracle to a second endpoint rather than closing it -- see the handler's
+// own doc comment.
+func TestUsernameAvailableClosedPolicy(t *testing.T) {
+	t.Setenv("REGISTRATION_POLICY", "closed")
+	h := New(config.FromEnv(), testDB(t))
+	rec := doUsernameAvailable(t, h, randomUsername(t))
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
 func TestUsernameAvailableMissingParam(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	mux := http.NewServeMux()
