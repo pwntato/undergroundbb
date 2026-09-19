@@ -88,13 +88,17 @@ unauthenticated, from `GET /api/config` — the SPA fetches it on boot.
 | `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled, accounts provisioned out of band) — see [docs/DESIGN.md](docs/DESIGN.md). An invalid value fails closed. |
 | `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
 | `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
+| `SESSION_SECRET` | *(required, no default)* | Hex-encoded HMAC key for login session cookies — see [`internal/session`](internal/session). There is no safe default; the process refuses to start without it. Generate one with `openssl rand -hex 32`. |
+| `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number. |
 
-Setup instructions will land with the first deployable release. All seven are wired into the Lambda's
+Setup instructions will land with the first deployable release. All nine are wired into the Lambda's
 Terraform config (`terraform/lambda.tf`) — `SITE_NAME`, `REGISTRATION_POLICY`,
-`ALLOW_GROUP_EXPIRATION_OFF`, and `DEFAULT_EXPIRATION_DAYS` as Terraform variables
-(`terraform/variables.tf`, overridable with `-var` or a `.tfvars` file), `DOMAIN` from
-`local.domain_name` so it can't drift from the domain CloudFront is actually configured for, and
-`TABLE_NAME`/`ENVIRONMENT` derived from the deployment itself.
+`ALLOW_GROUP_EXPIRATION_OFF`, `DEFAULT_EXPIRATION_DAYS`, and `SESSION_TTL_HOURS` as Terraform
+variables (`terraform/variables.tf`, overridable with `-var` or a `.tfvars` file), `DOMAIN` from
+`local.domain_name` so it can't drift from the domain CloudFront is actually configured for,
+`TABLE_NAME`/`ENVIRONMENT` derived from the deployment itself, and `SESSION_SECRET` generated once
+per workspace by Terraform itself (`random_id.session_secret`) rather than supplied — dev and prod
+get independent secrets, and a session issued by one must never verify against the other.
 
 ## Local development
 
@@ -113,6 +117,7 @@ docker compose up -d
 # 2. Run the API server (in one terminal).
 export AWS_ACCESS_KEY_ID=localuser AWS_SECRET_ACCESS_KEY=localpassword AWS_DEFAULT_REGION=us-west-2
 export DYNAMODB_ENDPOINT=http://127.0.0.1:8000 TABLE_NAME=undergroundbb
+export SESSION_SECRET=$(openssl rand -hex 32)
 go run ./cmd/local
 
 # 3. Run the frontend (in another terminal).

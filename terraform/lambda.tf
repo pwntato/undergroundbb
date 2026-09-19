@@ -62,6 +62,35 @@ resource "aws_cloudwatch_log_group" "lambda" {
   retention_in_days = 14
 }
 
+# SESSION_SECRET -- see internal/config.Config.SessionSecret and
+# internal/session's own package doc. Generated once per workspace (dev and
+# prod get independent, unrelated secrets, which is correct: a session
+# issued by one must never verify against the other) and stored directly in
+# the Lambda's environment, the same mechanism as every other config value
+# in this file. That means it is visible in Terraform state and the Lambda
+# console -- the standard tradeoff for an env-var secret, accepted here
+# rather than adding Secrets Manager (a new resource, a new IAM grant, and a
+# fetch-at-cold-start code path) for a single value with no rotation
+# requirement beyond "generate a new one," which `terraform taint
+# random_id.session_secret && terraform apply` already does.
+#
+# byte_length = 32 matches internal/session's HMAC-SHA256 key size
+# expectations (any length works for HMAC, but 32 bytes is the natural
+# choice alongside AES-256/Ed25519 elsewhere in this project). hex, not
+# base64: internal/config.sessionSecretFromEnv decodes with
+# encoding/hex specifically, so the two must agree.
+resource "random_id" "session_secret" {
+  byte_length = 32
+
+  # Changing byte_length would force recreation regardless; keepers is
+  # otherwise unused; here only so a future intentional rotation has an
+  # obvious, discoverable lever (bump keepers.rotation to force a new value)
+  # rather than needing `terraform taint` looked up separately.
+  keepers = {
+    rotation = "1"
+  }
+}
+
 resource "aws_lambda_function" "main" {
   function_name    = "undergroundbb-${terraform.workspace}"
   role             = aws_iam_role.lambda.arn
@@ -94,6 +123,8 @@ resource "aws_lambda_function" "main" {
       REGISTRATION_POLICY        = var.registration_policy
       ALLOW_GROUP_EXPIRATION_OFF = tostring(var.allow_group_expiration_off)
       DEFAULT_EXPIRATION_DAYS    = tostring(var.default_expiration_days)
+      SESSION_SECRET             = random_id.session_secret.hex
+      SESSION_TTL_HOURS          = tostring(var.session_ttl_hours)
     }
   }
 

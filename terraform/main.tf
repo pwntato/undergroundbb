@@ -20,6 +20,13 @@ terraform {
       # touch anything this module manages.
       version = ">= 6.28.0, < 7.0"
     }
+    # Generates SESSION_SECRET (lambda.tf) -- a Terraform-local value with no
+    # AWS API calls of its own, so no separate provider configuration block
+    # is needed the way aws's is.
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6, < 4.0"
+    }
   }
 
   backend "s3" {

@@ -4,10 +4,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 )
+
+// TestMain sets a fixed, valid SESSION_SECRET for every test in this
+// package before any of them run. config.FromEnv now requires it (there is
+// no safe default -- see its own doc comment), and almost none of this
+// package's tests are about sessions, so setting it once here keeps that
+// requirement from becoming per-test boilerplate. A test that specifically
+// exercises a missing/invalid SESSION_SECRET overrides it with t.Setenv,
+// same as any other env var this package's tests already override.
+func TestMain(m *testing.M) {
+	if err := os.Setenv("SESSION_SECRET", "14fb35fb361374c4ddf7aa98640ce2a75c0aa49cac4a7a93fe6d1ea90a6b2777"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
 
 func TestHealth(t *testing.T) {
 	mux := http.NewServeMux()
