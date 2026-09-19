@@ -9,6 +9,7 @@ package config
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -110,12 +111,28 @@ func FromEnv() Config {
 	}
 }
 
-// errSessionSecretUnset and errSessionSecretNotHex are sessionSecretFromEnv's
-// two failure modes, exported as sentinel values so a test can assert which
-// one occurred with errors.Is rather than matching on message text.
+// minSessionSecretBytes is the minimum decoded length FromEnv accepts for
+// SESSION_SECRET. hex.DecodeString alone accepts any even-length hex string
+// -- including a 1-byte value -- and HMAC-SHA256 technically accepts a key
+// of any length without erroring, so nothing would fail loudly on a short
+// secret; it would just silently become brute-forceable, which is exactly
+// the "anyone holding it can mint a valid session for any user id" outcome
+// Config.SessionSecret's own doc comment warns about. This matches what
+// terraform/lambda.tf's random_id.session_secret generates (byte_length =
+// 32) and what the error message below already recommends
+// (`openssl rand -hex 32`) -- a self-hoster who follows that advice can't
+// fail this check, and one who substitutes something shorter is told why,
+// not left with a quietly weaker deployment.
+const minSessionSecretBytes = 32
+
+// errSessionSecretUnset, errSessionSecretNotHex, and errSessionSecretTooShort
+// are sessionSecretFromEnv's failure modes, exported as sentinel values so a
+// test can assert which one occurred with errors.Is rather than matching on
+// message text.
 var (
-	errSessionSecretUnset  = errors.New("config: SESSION_SECRET is required and was not set -- generate one with e.g. `openssl rand -hex 32`; there is no safe default (a shared compiled-in secret would let anyone forge a session, and a silently auto-generated one would differ across Lambda instances and break sessions randomly)")
-	errSessionSecretNotHex = errors.New("config: SESSION_SECRET is not valid hex")
+	errSessionSecretUnset    = errors.New("config: SESSION_SECRET is required and was not set -- generate one with e.g. `openssl rand -hex 32`; there is no safe default (a shared compiled-in secret would let anyone forge a session, and a silently auto-generated one would differ across Lambda instances and break sessions randomly)")
+	errSessionSecretNotHex   = errors.New("config: SESSION_SECRET is not valid hex")
+	errSessionSecretTooShort = fmt.Errorf("config: SESSION_SECRET must decode to at least %d bytes (generate one with `openssl rand -hex 32`)", minSessionSecretBytes)
 )
 
 // sessionSecretFromEnv reads and decodes key, factored out of FromEnv so the
@@ -129,6 +146,9 @@ func sessionSecretFromEnv(key string) ([]byte, error) {
 	b, err := hex.DecodeString(v)
 	if err != nil {
 		return nil, errSessionSecretNotHex
+	}
+	if len(b) < minSessionSecretBytes {
+		return nil, errSessionSecretTooShort
 	}
 	return b, nil
 }

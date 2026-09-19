@@ -12,7 +12,7 @@ import (
 // SESSION_SECRET, used everywhere this file needs FromEnv to succeed
 // without testing the secret itself -- that path has its own dedicated
 // tests below.
-const testSessionSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
+const testSessionSecret = "14fb35fb361374c4ddf7aa98640ce2a75c0aa49cac4a7a93fe6d1ea90a6b2777"
 
 func TestFromEnvDefaults(t *testing.T) {
 	// FromEnv reads the real process environment, so the defaults can only be
@@ -163,6 +163,14 @@ func TestSessionSecretFromEnv(t *testing.T) {
 	t.Setenv("UBB_TEST_SECRET_BAD_HEX", "not-hex-zz")
 	if _, err := sessionSecretFromEnv("UBB_TEST_SECRET_BAD_HEX"); !errors.Is(err, errSessionSecretNotHex) {
 		t.Errorf("bad hex: err = %v, want errSessionSecretNotHex", err)
+	}
+
+	// Valid hex, but decodes to fewer than minSessionSecretBytes -- "ab" is
+	// 1 byte, well under the floor. Review finding: this previously
+	// succeeded silently.
+	t.Setenv("UBB_TEST_SECRET_SHORT", "ab")
+	if _, err := sessionSecretFromEnv("UBB_TEST_SECRET_SHORT"); !errors.Is(err, errSessionSecretTooShort) {
+		t.Errorf("short secret: err = %v, want errSessionSecretTooShort", err)
 	}
 
 	t.Setenv("UBB_TEST_SECRET_OK", testSessionSecret)

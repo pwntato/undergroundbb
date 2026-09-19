@@ -156,52 +156,87 @@ func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []by
 // (see that method's own doc comment) and never a wrong password (which
 // fails inside the browser and never reaches the server at all).
 //
-// windowStart resets the counter rather than incrementing it when the
-// existing FailedVerifyCount's last update falls outside the window -- but
-// since this schema stores no "last failure" timestamp separate from
-// LockUntil, and re-adding one would be a second contested attribute on the
-// hottest item in the partition (docs/DESIGN.md already reasons about this
-// exact tradeoff for the credential-version case), this implementation
-// takes the simpler, explicitly-accepted-scope reading: the counter is
-// cleared on every SUCCESSFUL verification (see ClearFailedVerify) and
-// otherwise only ever increments, with lockUntil itself being what actually
-// bounds the attacker -- once locked, five minutes must pass before verify
-// is attempted again at all, which is what resets the practical window.
+// The rolling window is implemented without a second contested attribute
+// (no separate "window start" timestamp, which would add write contention
+// to the hottest item in the partition -- the same tradeoff docs/DESIGN.md
+// already reasons about for the credential-version case): LockUntil is
+// itself the window marker. A failure observed while an existing LockUntil
+// is in the past resets FailedVerifyCount to 1 instead of incrementing it
+// -- the expired lock is exactly the signal that a fresh five-attempt
+// budget should start. Implemented as an attempted conditional reset first
+// (condition: LockUntil exists and is before now), falling back to a plain
+// increment when that condition fails -- which it does both for "never
+// locked" (LockUntil absent) and "currently locked" (LockUntil in the
+// future), the two cases where incrementing is the right behavior.
+//
+// PR #117 round-1 review found the earlier version of this function was a
+// one-strike latch, not a rolling window: FailedVerifyCount only ever
+// incremented and was cleared only by a successful verify, which was
+// itself gated behind the lock -- so once a user reached the threshold,
+// every single subsequent failure re-locked them for a full lockDuration,
+// indefinitely, reproduced live against DynamoDB Local. This is the fix.
 func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThreshold int64, lockDuration time.Duration) error {
-	out, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(c.table),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
-			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-		},
-		UpdateExpression: aws.String("SET FailedVerifyCount = if_not_exists(FailedVerifyCount, :zero) + :one"),
+	key := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+		"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	resetOut, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(c.table),
+		Key:                 key,
+		UpdateExpression:    aws.String("SET FailedVerifyCount = :one REMOVE LockUntil"),
+		ConditionExpression: aws.String("attribute_exists(LockUntil) AND LockUntil < :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":zero": &types.AttributeValueMemberN{Value: "0"},
-			":one":  &types.AttributeValueMemberN{Value: "1"},
+			":one": &types.AttributeValueMemberN{Value: "1"},
+			":now": &types.AttributeValueMemberS{Value: now},
 		},
 		ReturnValues: types.ReturnValueUpdatedNew,
 	})
-	if err != nil {
-		return fmt.Errorf("db: record failed verify: %w", err)
-	}
 
 	var updated struct {
 		FailedVerifyCount int64 `dynamodbav:"FailedVerifyCount"`
 	}
-	if err := attributevalue.UnmarshalMap(out.Attributes, &updated); err != nil {
-		return fmt.Errorf("db: unmarshal updated failed-verify count: %w", err)
-	}
-	if updated.FailedVerifyCount < lockThreshold {
-		return nil
+	switch {
+	case err == nil:
+		// The expired-lock reset applied: this failure starts a fresh
+		// budget at 1, well under lockThreshold (which is > 1 in every
+		// real configuration), so there's nothing further to do.
+		if uErr := attributevalue.UnmarshalMap(resetOut.Attributes, &updated); uErr != nil {
+			return fmt.Errorf("db: unmarshal reset failed-verify count: %w", uErr)
+		}
+		if updated.FailedVerifyCount < lockThreshold {
+			return nil
+		}
+	case isUpdateConditionFailure(err):
+		// No lock, or a lock still in effect -- normal increment path.
+		incOut, incErr := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:        aws.String(c.table),
+			Key:              key,
+			UpdateExpression: aws.String("SET FailedVerifyCount = if_not_exists(FailedVerifyCount, :zero) + :one"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":zero": &types.AttributeValueMemberN{Value: "0"},
+				":one":  &types.AttributeValueMemberN{Value: "1"},
+			},
+			ReturnValues: types.ReturnValueUpdatedNew,
+		})
+		if incErr != nil {
+			return fmt.Errorf("db: record failed verify: %w", incErr)
+		}
+		if uErr := attributevalue.UnmarshalMap(incOut.Attributes, &updated); uErr != nil {
+			return fmt.Errorf("db: unmarshal updated failed-verify count: %w", uErr)
+		}
+		if updated.FailedVerifyCount < lockThreshold {
+			return nil
+		}
+	default:
+		return fmt.Errorf("db: record failed verify: %w", err)
 	}
 
 	lockUntil := time.Now().Add(lockDuration).UTC().Format(time.RFC3339)
 	_, err = c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(c.table),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
-			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-		},
+		TableName:        aws.String(c.table),
+		Key:              key,
 		UpdateExpression: aws.String("SET LockUntil = :lockUntil"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":lockUntil": &types.AttributeValueMemberS{Value: lockUntil},
@@ -211,6 +246,16 @@ func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThre
 		return fmt.Errorf("db: set lock until: %w", err)
 	}
 	return nil
+}
+
+// isUpdateConditionFailure reports whether err is a plain UpdateItem's
+// ConditionalCheckFailedException -- the single-item equivalent of
+// isConditionalCheckFailure in register.go, which instead unwraps a
+// TransactWriteItems TransactionCanceledException. The two error shapes are
+// unrelated types in the SDK, so a single helper can't cover both.
+func isUpdateConditionFailure(err error) bool {
+	var condErr *types.ConditionalCheckFailedException
+	return errors.As(err, &condErr)
 }
 
 // ClearFailedVerify resets userID's FailedVerifyCount and LockUntil after a

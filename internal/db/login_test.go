@@ -168,6 +168,100 @@ func TestRecordFailedVerifyIncrementsAndLocks(t *testing.T) {
 	}
 }
 
+// TestRecordFailedVerifyResetsAfterLockExpiry is the fix for PR #117 round-1
+// review's blocking finding: the lockout counter previously only ever
+// incremented, so a single failure after an expired lock re-locked the
+// account for a full lockDuration, indefinitely -- reproduced live by the
+// reviewer against DynamoDB Local. This pins that a failure observed AFTER
+// an expired lock resets to a fresh budget (count = 1, no re-lock) rather
+// than treating the stale FailedVerifyCount as still current.
+func TestRecordFailedVerifyResetsAfterLockExpiry(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	username := "resetexpiry-" + randomSuffix(t)
+	in := testRegisterInput("test-resetexpiry-"+randomSuffix(t), username)
+	if err := c.Register(ctx, in); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	const threshold = 3
+	// LockUntil is stored as RFC3339 (second resolution, no fractional
+	// seconds -- see models.User.LockUntil), so the lockDuration here has to
+	// be negative by at least a couple of whole seconds to reliably compare
+	// as "before now" in the SET .. REMOVE LockUntil condition -- a
+	// millisecond-scale duration can round into the same second as the
+	// comparison and the condition would never observably differ from "not
+	// yet expired." Setting it a few seconds in the PAST directly is both
+	// simpler and avoids any real sleep in this test.
+	const alreadyExpiredLockDuration = -3 * time.Second
+
+	for range threshold {
+		if err := c.RecordFailedVerify(ctx, in.UserID, threshold, alreadyExpiredLockDuration); err != nil {
+			t.Fatalf("RecordFailedVerify: %v", err)
+		}
+	}
+	user, err := c.LookupUserByUsername(ctx, username)
+	if err != nil {
+		t.Fatalf("LookupUserByUsername: %v", err)
+	}
+	if user.LockUntil == "" {
+		t.Fatal("test setup: expected to be locked after reaching the threshold")
+	}
+	firstLockUntil := user.LockUntil
+
+	// One failure against an already-past LockUntil must reset to a fresh
+	// budget, not re-lock immediately -- this is exactly the bug: the old
+	// implementation set FailedVerifyCount to threshold+1 here (still >=
+	// threshold) and re-locked for another full lockDuration.
+	if err := c.RecordFailedVerify(ctx, in.UserID, threshold, alreadyExpiredLockDuration); err != nil {
+		t.Fatalf("RecordFailedVerify (post-expiry): %v", err)
+	}
+	user, err = c.LookupUserByUsername(ctx, username)
+	if err != nil {
+		t.Fatalf("LookupUserByUsername: %v", err)
+	}
+	if user.FailedVerifyCount != 1 {
+		t.Errorf("FailedVerifyCount after one post-expiry failure = %d, want 1 (fresh budget)", user.FailedVerifyCount)
+	}
+	if user.LockUntil != "" {
+		t.Errorf("LockUntil = %q after a single post-expiry failure (threshold %d), want empty -- re-locked on one attempt", user.LockUntil, threshold)
+	}
+	if user.LockUntil == firstLockUntil {
+		t.Error("LockUntil unchanged -- reset did not actually run")
+	}
+
+	// Confirm the fresh budget really does take threshold-many failures to
+	// re-lock, not just one. The reset above already left the count at 1, so
+	// threshold-2 more calls stay strictly below threshold (1 + (threshold-2)
+	// = threshold-1), and one further call after that reaches it exactly.
+	for i := 0; i < threshold-2; i++ {
+		if err := c.RecordFailedVerify(ctx, in.UserID, threshold, time.Minute); err != nil {
+			t.Fatalf("RecordFailedVerify (rebuild %d): %v", i, err)
+		}
+	}
+	user, err = c.LookupUserByUsername(ctx, username)
+	if err != nil {
+		t.Fatalf("LookupUserByUsername: %v", err)
+	}
+	if user.FailedVerifyCount != threshold-1 {
+		t.Fatalf("FailedVerifyCount = %d, want %d (one below threshold)", user.FailedVerifyCount, threshold-1)
+	}
+	if user.LockUntil != "" {
+		t.Fatalf("LockUntil = %q before reaching the fresh threshold again, want empty", user.LockUntil)
+	}
+	if err := c.RecordFailedVerify(ctx, in.UserID, threshold, time.Minute); err != nil {
+		t.Fatalf("RecordFailedVerify (rebuild threshold): %v", err)
+	}
+	user, err = c.LookupUserByUsername(ctx, username)
+	if err != nil {
+		t.Fatalf("LookupUserByUsername: %v", err)
+	}
+	if user.LockUntil == "" {
+		t.Error("LockUntil is empty after rebuilding to the threshold again, want locked")
+	}
+}
+
 func TestClearFailedVerify(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
