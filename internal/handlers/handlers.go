@@ -29,6 +29,7 @@ func New(cfg config.Config, dbClient *db.Client) *Handler {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/config", h.getConfig)
+	mux.HandleFunc("POST /api/auth/register", h.register)
 }
 
 // health reports that the process is up. It touches no dependencies, so it
