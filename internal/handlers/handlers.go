@@ -12,17 +12,19 @@ import (
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/session"
 )
 
 // Handler serves the API.
 type Handler struct {
-	cfg config.Config
-	db  *db.Client
+	cfg      config.Config
+	db       *db.Client
+	sessions *session.Signer
 }
 
 // New builds a Handler.
 func New(cfg config.Config, dbClient *db.Client) *Handler {
-	return &Handler{cfg: cfg, db: dbClient}
+	return &Handler{cfg: cfg, db: dbClient, sessions: session.NewSigner(cfg.SessionSecret)}
 }
 
 // RegisterRoutes attaches every API route to mux.
@@ -31,6 +33,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", h.getConfig)
 	mux.HandleFunc("POST /api/auth/register", h.register)
 	mux.HandleFunc("GET /api/auth/username-available", h.usernameAvailable)
+	mux.HandleFunc("POST /api/auth/challenge", h.challenge)
+	mux.HandleFunc("POST /api/auth/verify", h.verify)
 }
 
 // health reports that the process is up. It touches no dependencies, so it

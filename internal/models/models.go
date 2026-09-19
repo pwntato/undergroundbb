@@ -74,6 +74,21 @@ type User struct {
 	// condition -- see docs/DESIGN.md, "the fourth [contested write] is the
 	// credential re-wrap." Registration sets it to 1.
 	CredentialVersion int64 `dynamodbav:"CredentialVersion"`
+
+	// FailedVerifyCount counts failed Ed25519 signature verifications at
+	// login step 4 -- NOT wrong passwords, which fail inside the browser at
+	// step 3 and never reach the server. See docs/DESIGN.md, "This means the
+	// server cannot count wrong passwords." Incremented on a failed step 4,
+	// cleared on a successful one. A failed conditional delete on the
+	// CHALLENGE item (replay or a flooded/overwritten nonce) is explicitly
+	// NOT a signature failure and must not touch this field -- see issue
+	// #27's round-24 review comment.
+	FailedVerifyCount int64 `dynamodbav:"FailedVerifyCount,omitempty"`
+	// LockUntil is an RFC 3339 timestamp compared on read, not a TTL --
+	// PROFILE never expires and must outlive the lock. Empty/absent means
+	// not locked. Set after the 5th failure within the counting window: see
+	// docs/DESIGN.md, "five-attempts-in-five-minutes."
+	LockUntil string `dynamodbav:"LockUntil,omitempty"`
 }
 
 // SupersededKey is a prior Ed25519 public key and the interval it was
@@ -125,6 +140,26 @@ type Recovery struct {
 	// together on every credential change, under the same transaction
 	// condition. Registration sets it to 1.
 	CredentialVersion int64 `dynamodbav:"CredentialVersion"`
+}
+
+// Challenge is the USER#<uuid> / CHALLENGE item -- a single slot per user,
+// overwritten on every POST /api/auth/challenge rather than keyed by nonce.
+// See docs/DESIGN.md, "The challenge is a single slot per user," and issue
+// #27's round-22 comment: keying by nonce would let an unauthenticated
+// caller inflate a chosen user's partition without bound, since only a TTL
+// (eventual, not immediate) would ever remove the items.
+//
+// Holds nothing but the nonce -- see docs/DESIGN.md, "The challenge item
+// holds a random number and nothing else: no key material, nothing derived
+// from the password." TTL is the table's actual DynamoDB TTL attribute
+// (terraform/dynamodb.tf: attribute_name = "TTL") -- a short-lived item is
+// exactly what TTL is for here, unlike User.LockUntil, which must outlive
+// its own item and so is a plain compared-on-read timestamp instead.
+type Challenge struct {
+	Record
+
+	Nonce []byte `dynamodbav:"Nonce"`
+	TTL   int64  `dynamodbav:"TTL"`
 }
 
 // UsernameClaim is the USERNAME#<lower> / CLAIM item that makes a username

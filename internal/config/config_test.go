@@ -1,6 +1,18 @@
 package config
 
-import "testing"
+import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"testing"
+	"time"
+)
+
+// testSessionSecret is a fixed, validly-hex-encoded stand-in for
+// SESSION_SECRET, used everywhere this file needs FromEnv to succeed
+// without testing the secret itself -- that path has its own dedicated
+// tests below.
+const testSessionSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd"
 
 func TestFromEnvDefaults(t *testing.T) {
 	// FromEnv reads the real process environment, so the defaults can only be
@@ -16,6 +28,8 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("REGISTRATION_POLICY", "")
 	t.Setenv("ALLOW_GROUP_EXPIRATION_OFF", "")
 	t.Setenv("DEFAULT_EXPIRATION_DAYS", "")
+	t.Setenv("SESSION_SECRET", testSessionSecret)
+	t.Setenv("SESSION_TTL_HOURS", "")
 
 	cfg := FromEnv()
 	if cfg.SiteName != DefaultSiteName {
@@ -36,6 +50,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.DefaultExpirationDays != DefaultExpirationDays {
 		t.Errorf("DefaultExpirationDays = %d, want %d", cfg.DefaultExpirationDays, DefaultExpirationDays)
 	}
+	if cfg.SessionTTL != DefaultSessionTTL {
+		t.Errorf("SessionTTL = %s, want %s", cfg.SessionTTL, DefaultSessionTTL)
+	}
 }
 
 // TestFromEnvOverrides covers the self-hosting requirement: a deployment must be
@@ -48,6 +65,8 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("REGISTRATION_POLICY", "closed")
 	t.Setenv("ALLOW_GROUP_EXPIRATION_OFF", "false")
 	t.Setenv("DEFAULT_EXPIRATION_DAYS", "14")
+	t.Setenv("SESSION_SECRET", testSessionSecret)
+	t.Setenv("SESSION_TTL_HOURS", "2")
 
 	cfg := FromEnv()
 	if cfg.SiteName != "Somewhere Else" {
@@ -70,6 +89,17 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.DefaultExpirationDays != 14 {
 		t.Errorf("DefaultExpirationDays = %d, want 14", cfg.DefaultExpirationDays)
+	}
+	wantTTL := 2 * time.Hour
+	if cfg.SessionTTL != wantTTL {
+		t.Errorf("SessionTTL = %s, want %s", cfg.SessionTTL, wantTTL)
+	}
+	wantSecret, err := hex.DecodeString(testSessionSecret)
+	if err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	if !bytes.Equal(cfg.SessionSecret, wantSecret) {
+		t.Errorf("SessionSecret = %x, want %x", cfg.SessionSecret, wantSecret)
 	}
 }
 
@@ -121,6 +151,50 @@ func TestExpirationDaysEnvOrDefault(t *testing.T) {
 	t.Setenv("UBB_TEST_DAYS_NEGATIVE", "-1")
 	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_NEGATIVE", 30); got != 30 {
 		t.Errorf("negative = %d, want fallback 30", got)
+	}
+}
+
+func TestSessionSecretFromEnv(t *testing.T) {
+	t.Setenv("UBB_TEST_SECRET_UNSET", "")
+	if _, err := sessionSecretFromEnv("UBB_TEST_SECRET_UNSET"); !errors.Is(err, errSessionSecretUnset) {
+		t.Errorf("unset: err = %v, want errSessionSecretUnset", err)
+	}
+
+	t.Setenv("UBB_TEST_SECRET_BAD_HEX", "not-hex-zz")
+	if _, err := sessionSecretFromEnv("UBB_TEST_SECRET_BAD_HEX"); !errors.Is(err, errSessionSecretNotHex) {
+		t.Errorf("bad hex: err = %v, want errSessionSecretNotHex", err)
+	}
+
+	t.Setenv("UBB_TEST_SECRET_OK", testSessionSecret)
+	got, err := sessionSecretFromEnv("UBB_TEST_SECRET_OK")
+	if err != nil {
+		t.Fatalf("valid secret: unexpected error %v", err)
+	}
+	want, _ := hex.DecodeString(testSessionSecret)
+	if !bytes.Equal(got, want) {
+		t.Errorf("got = %x, want %x", got, want)
+	}
+}
+
+func TestDurationEnvOrDefault(t *testing.T) {
+	t.Setenv("UBB_TEST_TTL_UNSET", "")
+	if got := durationEnvOrDefault("UBB_TEST_TTL_UNSET", 24*time.Hour); got != 24*time.Hour {
+		t.Errorf("unset = %s, want 24h", got)
+	}
+
+	t.Setenv("UBB_TEST_TTL_SET", "6")
+	if got := durationEnvOrDefault("UBB_TEST_TTL_SET", 24*time.Hour); got != 6*time.Hour {
+		t.Errorf("set = %s, want 6h", got)
+	}
+
+	t.Setenv("UBB_TEST_TTL_ZERO", "0")
+	if got := durationEnvOrDefault("UBB_TEST_TTL_ZERO", 24*time.Hour); got != 24*time.Hour {
+		t.Errorf("zero = %s, want fallback 24h", got)
+	}
+
+	t.Setenv("UBB_TEST_TTL_NEGATIVE", "-1")
+	if got := durationEnvOrDefault("UBB_TEST_TTL_NEGATIVE", 24*time.Hour); got != 24*time.Hour {
+		t.Errorf("negative = %s, want fallback 24h", got)
 	}
 }
 

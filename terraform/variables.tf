@@ -74,3 +74,14 @@ variable "default_expiration_days" {
     error_message = "default_expiration_days must be a positive whole number of days."
   }
 }
+
+variable "session_ttl_hours" {
+  type        = number
+  default     = 24
+  description = "How long an issued login session cookie remains valid, in hours. See internal/config.DefaultSessionTTL and internal/session's package doc -- docs/DESIGN.md pins no duration, only \"short-lived,\" so this is deployment policy with a documented default."
+
+  validation {
+    condition     = var.session_ttl_hours > 0 && floor(var.session_ttl_hours) == var.session_ttl_hours
+    error_message = "session_ttl_hours must be a positive whole number of hours."
+  }
+}
