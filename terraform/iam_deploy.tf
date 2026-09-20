@@ -387,6 +387,56 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/webacl/undergroundbb-${terraform.workspace}/*"]
   }
 
+  # wafv2:UpdateWebACL against the managedruleset resource type -- found
+  # live, not by inspection: PR #118's terraform apply to prod failed with
+  # AccessDeniedException on exactly this action/resource pair (Lambda code
+  # updated successfully first; the WAF WebACL update failed after).
+  # UpdateWebACL takes managedruleset as one of its own resource types
+  # (per AWS's IAM service reference), so because the WebACL body embeds
+  # two AWS managed rule groups (waf.tf's managed_rule_group_statement
+  # blocks, AWSManagedRulesCommonRuleSet and
+  # AWSManagedRulesKnownBadInputsRuleSet), one UpdateWebACL call is
+  # authorized against several ARNs at once: the webacl ARN above AND each
+  # referenced managedruleset ARN. The statement above only covers the
+  # webacl leg. #10/#111's original apply never hit this because that run
+  # created the WebACL from nothing under broader one-time permissions;
+  # #118 was the first real in-place update the deploy role ever had to
+  # perform against it.
+  #
+  # wafv2:CreateWebACL also takes managedruleset as one of its own resource
+  # types (same service reference, PR #119 round 2 review) -- granted here
+  # too, alongside Update, even though nothing on the current path calls
+  # Create (the WebACL already exists; #10/#111's original apply ran under
+  # broader one-time bootstrap permissions this role no longer has). Left
+  # out, this statement would reproduce the identical failure the moment
+  # the WebACL is ever tainted, replaced, or recreated in a fresh
+  # workspace -- confirmed live via simulate-principal-policy:
+  # wafv2:CreateWebACL against this managedruleset ARN is implicitDeny
+  # under the current (pre-this-PR) policy, the same asymmetry Update had.
+  # PutManagedRuleSetVersions/UpdateManagedRuleSetVersionExpiryDate also
+  # list managedruleset but aren't granted -- nothing in this config calls
+  # either, and adding them speculatively would be scope creep beyond what
+  # CreateWebACL/UpdateWebACL actually need.
+  #
+  # Resource ARN copied verbatim from the live AccessDeniedException
+  # message (`arn:aws:wafv2:us-east-1:350195739155:global/managedruleset/*/*`)
+  # rather than assembled from AWS's documented ARN template
+  # (arn:${Partition}:wafv2:${Region}:${Account}:${Scope}/managedruleset/${Name}/${Id})
+  # by guesswork -- worth noting because the template's account/scope
+  # placement doesn't match what a mechanical reading of "vendor-owned
+  # managed rule set" would suggest: it's this deploying account's own ARN
+  # namespace (350195739155), under global/ (CLOUDFRONT scope, matching
+  # waf.tf's WebACL), not AWS's pseudo-account. Name/Id wildcarded since
+  # any managed rule group this WebACL might reference needs the same
+  # grant, not just today's two. Kept as its own statement rather than
+  # folded into the webacl one above so that statement's tighter action
+  # list (Create/Update/Delete/Tag/etc.) stays intact -- this one grants
+  # only Create/UpdateWebACL against the narrower managedruleset resource.
+  statement {
+    actions   = ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"]
+    resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/managedruleset/*/*"]
+  }
+
   # wafv2:CheckCapacity/ListAvailableManagedRuleGroups have no
   # resource-level permissions -- confirmed via the same IAM service
   # reference used above (these actions have no listed resource types),
