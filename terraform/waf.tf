@@ -324,23 +324,33 @@ resource "aws_wafv2_web_acl" "main" {
     sampled_requests_enabled   = true
   }
 
-  # depends_on aws_iam_role_policy.deploy -- PR #119 found the hard way:
-  # this resource and the deploy role's own policy have no data
-  # dependency between them (nothing here reads an attribute the policy
-  # resource produces), so without this, Terraform is free to apply them
-  # in either order or in parallel. #119's terraform apply hit exactly
-  # that: the plan staged both aws_iam_role_policy.deploy (adding the
-  # wafv2:{Create,Update}WebACL grant on the managedruleset ARN) and this
-  # resource's update in the same apply, but aws_wafv2_web_acl.main ran
-  # (and failed with AccessDeniedException on that same action/resource)
-  # before aws_iam_role_policy.deploy's PutRolePolicy call ever fired --
-  # confirmed via CloudTrail showing no PutRolePolicy event for that
-  # policy at the time of the failed apply, and the role's live policy
-  # still missing the new statement afterward. The deploy role granting
-  # itself a WAF permission and then immediately needing it, in the same
-  # apply, is exactly the ordering this resource can't get right on its
-  # own; this depends_on is the fix, not a workaround for a one-off flake.
-  depends_on = [aws_iam_role_policy.deploy]
+  # depends_on aws_iam_role_policy.deploy_waf_managed_rule_sets (defined in
+  # iam_deploy.tf) -- PR #119 found the hard way that this resource and the
+  # deploy role's WAF permissions have no data dependency between them
+  # (nothing here reads an attribute the policy resource produces), so
+  # without this, Terraform is free to apply them in either order or in
+  # parallel. #119's terraform apply hit exactly that: the plan staged
+  # both the IAM policy update (adding the wafv2:{Create,Update}WebACL
+  # grant on the managedruleset ARN) and this resource's update in the
+  # same apply, but aws_wafv2_web_acl.main ran (and failed with
+  # AccessDeniedException on that same action/resource) before the
+  # policy's PutRolePolicy call ever fired -- confirmed via CloudTrail
+  # showing no PutRolePolicy event at the time of the failed apply, and
+  # the role's live policy still missing the new statement afterward.
+  #
+  # depends_on the entire aws_iam_role_policy.deploy resource (the
+  # deploy role's one big combined policy) instead of this narrower one
+  # was tried first and rejected -- validate caught a real cycle: that
+  # policy also grants cloudfront:UpdateDistribution scoped to
+  # aws_cloudfront_distribution.main's ARN, and this resource's own
+  # web_acl_id is read by that same CloudFront distribution
+  # (cloudfront.tf), so depending on the whole policy pulled in
+  # CloudFront as a transitive dependency and closed the loop:
+  # WAF -> deploy policy -> CloudFront -> WAF. Splitting the
+  # managedruleset grant into its own policy resource with no CloudFront
+  # reference (iam_deploy.tf) breaks that cycle while still forcing the
+  # one grant this resource actually needs to land first.
+  depends_on = [aws_iam_role_policy.deploy_waf_managed_rule_sets]
 }
 
 output "waf_web_acl_arn" {
