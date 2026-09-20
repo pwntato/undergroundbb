@@ -2,16 +2,22 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"golang.org/x/crypto/argon2"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
+	"github.com/pwntato/undergroundbb/internal/idgen"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // deriveTestVerifier computes what a client's WASM Argon2id call would
@@ -304,5 +310,115 @@ func TestRecoveryDoesNotRequireSession(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+// writeLegacyAccount writes a PROFILE + RECOVERY + USERNAME claim directly
+// via a raw DynamoDB client, bypassing register.go entirely -- simulating
+// an account created before this PR (or before register.go's zero-byte
+// decode fix), whose RECOVERY item has no Verifier/VerifierSalt attributes
+// at all. attributevalue.UnmarshalMap leaves those as a nil []byte and a
+// zero-value models.Argon2Params on read, which is exactly the input PR
+// #118 review found crashed crypto.CheckRecoveryVerifier.
+func writeLegacyAccount(t *testing.T, table string, ddb *dynamodb.Client) (username, userID string) {
+	t.Helper()
+	userID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	username = randomUsername(t)
+	usernameLower := lowerASCII(username)
+
+	user := models.User{
+		Record:             models.Record{PK: "USER#" + userID, SK: "PROFILE", Type: "User"},
+		Username:           username,
+		SigningPublicKey:   make([]byte, 32),
+		WrappingPublicKey:  make([]byte, 32),
+		Salt:               []byte("legacy-salt"),
+		Argon2Params:       models.Argon2Params{MemoryKiB: 65536, Iterations: 3, Parallelism: 1},
+		WrappedPrivateKeys: models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("legacy-ciphertext")},
+		CredentialVersion:  1,
+	}
+	// Deliberately NOT setting VerifierSalt/VerifierArgon2Params/Verifier --
+	// that absence is the whole point of this fixture.
+	recovery := models.Recovery{
+		Record:             models.Record{PK: "USER#" + userID, SK: "RECOVERY", Type: "Recovery"},
+		Salt:               []byte("legacy-recovery-salt"),
+		Argon2Params:       models.Argon2Params{MemoryKiB: 65536, Iterations: 3, Parallelism: 1},
+		WrappedPrivateKeys: models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("legacy-recovery-ciphertext")},
+		CredentialVersion:  1,
+	}
+	claim := models.UsernameClaim{
+		Record: models.Record{PK: "USERNAME#" + usernameLower, SK: "CLAIM", Type: "UsernameClaim"},
+		UserID: userID,
+	}
+
+	for _, item := range []any{user, recovery, claim} {
+		av, err := attributevalue.MarshalMap(item)
+		if err != nil {
+			t.Fatalf("MarshalMap: %v", err)
+		}
+		if _, err := ddb.PutItem(context.Background(), &dynamodb.PutItemInput{
+			TableName: aws.String(table),
+			Item:      av,
+		}); err != nil {
+			t.Fatalf("PutItem: %v", err)
+		}
+	}
+	return username, userID
+}
+
+// TestRecoveryReleaseLegacyAccountNoVerifierFails is the direct end-to-end
+// regression test for PR #118's blocking finding: a release attempt
+// against an account with no stored verifier must return 401 with the same
+// errRecoveryCodeInvalid every other failure mode uses, not panic. Before
+// crypto.VerifierLen was pinned, this crashed inside
+// crypto.CheckRecoveryVerifier's argon2.IDKey call (keyLen derived from a
+// nil verifier's zero length) -- cmd/lambda's top-level recover() would
+// have turned that into a 500 rather than a dead container, but a 500 is
+// still not what this endpoint is supposed to return for "no such recovery
+// material," which resolveRecovery's own doc comment already promises a
+// uniform answer for.
+func TestRecoveryReleaseLegacyAccountNoVerifierFails(t *testing.T) {
+	table := testTableName()
+	ddb := rawDDB(t)
+	h := New(config.FromEnv(), testDB(t))
+
+	username, _ := writeLegacyAccount(t, table, ddb)
+
+	rec := doRecoveryRelease(t, h, recoveryReleaseRequest{
+		Username:     username,
+		RecoveryCode: "ANY-CODE-0000-0000-0000-000000",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if body["error"] != errRecoveryCodeInvalid {
+		t.Errorf("error = %q, want %q", body["error"], errRecoveryCodeInvalid)
+	}
+}
+
+// TestRecoveryResetLegacyAccountNoVerifierFails is the reset-path mirror of
+// the release-path regression above -- same legacy fixture, same panic
+// risk (recoveryCodeReset also calls resolveRecovery), different endpoint.
+func TestRecoveryResetLegacyAccountNoVerifierFails(t *testing.T) {
+	table := testTableName()
+	ddb := rawDDB(t)
+	h := New(config.FromEnv(), testDB(t))
+
+	username, _ := writeLegacyAccount(t, table, ddb)
+
+	rec := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  username,
+		RecoveryCode:              "ANY-CODE-0000-0000-0000-000000",
+		ExpectedCredentialVersion: 1,
+		credentialRewrapFields:    validCredentialRewrapFields(),
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }

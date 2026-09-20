@@ -164,6 +164,18 @@ resource "aws_wafv2_web_acl" "main" {
   # a valid session cookie (internal/handlers/session.go's requireSession),
   # so an attacker with no session gets nothing from hammering it, and it
   # falls through to rate-limit-default like any other authenticated route.
+  #
+  # PR #118 review: this rule is IP-keyed (aggregate_key_type = "IP" above),
+  # the same limitation this file's header already names for the
+  # challenge-slot flood -- 30 req/5min bounds one source, not one target
+  # account. A distributed guessing attempt against a single named account's
+  # recovery code, spread across many source IPs, is not bounded by this
+  # rule. For a full-entropy 26-character code (docs/DESIGN.md: 128 bits of
+  # CSPRNG output) that's not a practical attack; it stops being merely
+  # theoretical if a verifier is ever stored at less than full strength,
+  # which is why internal/crypto/recovery.go now rejects any
+  # RecoveryVerifier that isn't exactly VerifierLen bytes rather than
+  # trusting the stored length.
   rule {
     name     = "rate-limit-auth"
     priority = 4

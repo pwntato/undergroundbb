@@ -207,6 +207,16 @@ func TestRegisterValidation(t *testing.T) {
 		{"recovery verifier argon2 below floor", func(r *registerRequest) { r.RecoveryVerifierParams.MemoryKiB = 1024 }},
 		{"missing recovery verifier", func(r *registerRequest) { r.RecoveryVerifier = "" }},
 		{"recovery verifier over max length", func(r *registerRequest) { r.RecoveryVerifier = b64(maxVerifierLen + 1) }},
+		// PR #118 review: "\n" decodes to zero bytes without erroring, so the
+		// s == "" check alone did not catch it -- this is the case that let
+		// a zero-length verifier through registration and later panicked
+		// crypto.CheckRecoveryVerifier. Covered on all three fields
+		// decodeBase64Field guards, not just the verifier, since the fix is
+		// in that shared helper.
+		{"recovery verifier decodes to zero bytes", func(r *registerRequest) { r.RecoveryVerifier = "\n" }},
+		{"recovery verifier salt decodes to zero bytes", func(r *registerRequest) { r.RecoveryVerifierSalt = "\n" }},
+		{"salt decodes to zero bytes", func(r *registerRequest) { r.Salt = "\n" }},
+		{"recovery verifier wrong length", func(r *registerRequest) { r.RecoveryVerifier = b64(16) }},
 	}
 
 	for _, tc := range cases {

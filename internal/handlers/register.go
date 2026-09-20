@@ -38,9 +38,11 @@ var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 const (
 	maxSaltLen       = 256
 	maxCiphertextLen = 4096
-	// maxVerifierLen bounds the recovery verifier -- an Argon2id output, on
-	// the order of 32 bytes in practice, so this is as generous relative to
-	// the real payload as maxSaltLen and maxCiphertextLen are to theirs.
+	// maxVerifierLen is decodeBase64Field's required maxLen argument for the
+	// recovery verifier -- vestigial now that the field is validated against
+	// crypto.VerifierLen as an exact wantLen (PR #118 review), since any
+	// value that passes the exact-length check is already <= this bound, but
+	// kept rather than restructuring the helper's signature for one caller.
 	maxVerifierLen = 256
 )
 
@@ -210,7 +212,12 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "recoveryVerifierParams: "+err.Error())
 		return
 	}
-	recoveryVerifier, err := decodeBase64Field(req.RecoveryVerifier, 0, maxVerifierLen)
+	// wantLen is crypto.VerifierLen, not 0 -- PR #118 review: an exact-length
+	// check here, on top of decodeBase64Field's now-universal
+	// reject-zero-bytes fix, is what makes a wrong-length verifier a 400 at
+	// the point it's submitted rather than a silent CheckRecoveryVerifier
+	// rejection discovered only when someone tries to recover.
+	recoveryVerifier, err := decodeBase64Field(req.RecoveryVerifier, crypto.VerifierLen, maxVerifierLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "recoveryVerifier: "+err.Error())
 		return
@@ -264,6 +271,16 @@ const x25519PublicKeySize = 32
 // with no fixed size (salts, ciphertext), which is what makes maxLen do the
 // real bounding work for those: without it, a field with no fixed width had
 // no upper bound at all on an unauthenticated endpoint.
+//
+// A decoded length of zero is rejected even when wantLen is 0 -- the s == ""
+// check above is not sufficient on its own, since several non-empty strings
+// (e.g. "\n") decode to zero bytes without error. PR #118 review found this
+// let a zero-length RecoveryVerifier through registration: stored, it later
+// drove crypto.CheckRecoveryVerifier's Argon2id call to keyLen=0, a
+// nil-pointer panic inside BLAKE2b rather than a rejected request. No
+// legitimate field this helper validates (salt, ciphertext, a verifier) is
+// ever meaningfully zero bytes, so this check is safe for every caller, not
+// specific to the verifier.
 func decodeBase64Field(s string, wantLen, maxLen int) ([]byte, error) {
 	if s == "" {
 		return nil, errEmptyField
@@ -271,6 +288,9 @@ func decodeBase64Field(s string, wantLen, maxLen int) ([]byte, error) {
 	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		return nil, errNotBase64
+	}
+	if len(b) == 0 {
+		return nil, errEmptyField
 	}
 	if wantLen != 0 && len(b) != wantLen {
 		return nil, errWrongLength

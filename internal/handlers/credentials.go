@@ -1,6 +1,9 @@
 package handlers
 
-import "github.com/pwntato/undergroundbb/internal/models"
+import (
+	"github.com/pwntato/undergroundbb/internal/crypto"
+	"github.com/pwntato/undergroundbb/internal/models"
+)
 
 // credentialRewrapFields is the wire shape shared by changePassword (#30)
 // and recoveryCodeReset (#31) -- both submit a full re-wrap of PROFILE and
@@ -75,7 +78,12 @@ func decodeCredentialRewrapFields(f credentialRewrapFields) (decodedCredentialRe
 	if err := validateArgon2Params(f.RecoveryVerifierParams); err != nil {
 		return decodedCredentialRewrap{}, fieldError("recoveryVerifierParams: " + err.Error())
 	}
-	verifier, err := decodeBase64Field(f.RecoveryVerifier, 0, maxVerifierLen)
+	// wantLen is crypto.VerifierLen, not 0 -- see register.go's identical
+	// check on this same field (PR #118 review): a re-wrap is the second
+	// route to a wrong-length stored verifier, and unlike registration it
+	// can lock out a legitimate user's own next recovery attempt rather than
+	// just the registering caller's.
+	verifier, err := decodeBase64Field(f.RecoveryVerifier, crypto.VerifierLen, maxVerifierLen)
 	if err != nil {
 		return decodedCredentialRewrap{}, fieldError("recoveryVerifier: " + err.Error())
 	}

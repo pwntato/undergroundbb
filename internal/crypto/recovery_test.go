@@ -54,6 +54,67 @@ func TestRecoveryVerifierWrongParamsFails(t *testing.T) {
 	}
 }
 
+// TestRecoveryVerifierNilOrEmptyVerifierFails is the direct regression test
+// for PR #118's blocking finding: a nil verifier is exactly what a legacy
+// RECOVERY item (registered before this field existed, or before
+// register.go's zero-byte-decode fix) unmarshals to, and this must be a
+// clean rejection, not the nil-pointer panic inside BLAKE2b that
+// argon2.IDKey(..., keyLen=0) produced before VerifierLen was pinned.
+func TestRecoveryVerifierNilOrEmptyVerifierFails(t *testing.T) {
+	code := "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV"
+	salt := []byte("0123456789abcdef")
+
+	cases := []struct {
+		name     string
+		verifier []byte
+	}{
+		{"nil verifier (unmarshaled legacy RECOVERY item)", nil},
+		{"zero-length verifier", []byte{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if CheckRecoveryVerifier(code, salt, testVerifierParams, tc.verifier) {
+				t.Fatal("CheckRecoveryVerifier: accepted against a nil/empty verifier")
+			}
+		})
+	}
+}
+
+// TestRecoveryVerifierShortVerifierFails covers the second consequence PR
+// #118 review measured directly: before VerifierLen was pinned, a
+// short-but-nonempty verifier shrank the comparison width, accepting a
+// wrong code at roughly 1/256 for a 1-byte verifier. A wrong-length
+// verifier must now be rejected outright, regardless of what it contains.
+func TestRecoveryVerifierShortVerifierFails(t *testing.T) {
+	code := "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV"
+	salt := []byte("0123456789abcdef")
+	fullVerifier := deriveVerifierForTest(t, code, salt, testVerifierParams)
+
+	if CheckRecoveryVerifier(code, salt, testVerifierParams, fullVerifier[:1]) {
+		t.Fatal("CheckRecoveryVerifier: accepted the right code against a truncated 1-byte verifier")
+	}
+	if CheckRecoveryVerifier(code, salt, testVerifierParams, fullVerifier[:len(fullVerifier)-1]) {
+		t.Fatal("CheckRecoveryVerifier: accepted the right code against a verifier one byte short of VerifierLen")
+	}
+}
+
+// TestRecoveryVerifierEmptySaltFails covers the same "decodes to zero
+// bytes" route on Salt rather than Verifier -- CheckRecoveryVerifier rejects
+// it directly, on top of decodeBase64Field's fix at the field-validation
+// layer, since this function has no way to know its caller validated
+// anything.
+func TestRecoveryVerifierEmptySaltFails(t *testing.T) {
+	code := "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV"
+	verifier := deriveVerifierForTest(t, code, []byte{}, testVerifierParams)
+
+	if CheckRecoveryVerifier(code, []byte{}, testVerifierParams, verifier) {
+		t.Fatal("CheckRecoveryVerifier: accepted against an empty salt")
+	}
+	if CheckRecoveryVerifier(code, nil, testVerifierParams, verifier) {
+		t.Fatal("CheckRecoveryVerifier: accepted against a nil salt")
+	}
+}
+
 // deriveVerifierForTest computes what a client would send as Verifier --
 // its own call to argon2.IDKey, duplicated deliberately rather than
 // calling into CheckRecoveryVerifier's implementation, so a bug in that
