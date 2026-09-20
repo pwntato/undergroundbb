@@ -100,6 +100,10 @@ func validRegisterRequest(username string) registerRequest {
 		RecoverySalt:               b64(16),
 		RecoveryArgon2Params:       params,
 		RecoveryWrappedPrivateKeys: wrappedBlob{Nonce: b64(12), Ciphertext: b64(48)},
+
+		RecoveryVerifierSalt:   b64(16),
+		RecoveryVerifierParams: params,
+		RecoveryVerifier:       b64(32),
 	}
 }
 
@@ -197,6 +201,38 @@ func TestRegisterValidation(t *testing.T) {
 		{"salt over max length", func(r *registerRequest) { r.Salt = b64(maxSaltLen + 1) }},
 		{"ciphertext over max length", func(r *registerRequest) {
 			r.WrappedPrivateKeys.Ciphertext = b64(maxCiphertextLen + 1)
+		}},
+		{"missing recovery verifier salt", func(r *registerRequest) { r.RecoveryVerifierSalt = "" }},
+		{"zero recovery verifier argon2 params", func(r *registerRequest) { r.RecoveryVerifierParams.Iterations = 0 }},
+		{"recovery verifier argon2 below floor", func(r *registerRequest) { r.RecoveryVerifierParams.MemoryKiB = 1024 }},
+		{"missing recovery verifier", func(r *registerRequest) { r.RecoveryVerifier = "" }},
+		{"recovery verifier over max length", func(r *registerRequest) { r.RecoveryVerifier = b64(maxVerifierLen + 1) }},
+		// PR #118 review: "\n" decodes to zero bytes without erroring, so the
+		// s == "" check alone did not catch it -- this is the case that let
+		// a zero-length verifier through registration and later panicked
+		// crypto.CheckRecoveryVerifier. Covered on all three fields
+		// decodeBase64Field guards, not just the verifier, since the fix is
+		// in that shared helper.
+		{"recovery verifier decodes to zero bytes", func(r *registerRequest) { r.RecoveryVerifier = "\n" }},
+		{"recovery verifier salt decodes to zero bytes", func(r *registerRequest) { r.RecoveryVerifierSalt = "\n" }},
+		{"salt decodes to zero bytes", func(r *registerRequest) { r.Salt = "\n" }},
+		{"recovery verifier wrong length", func(r *registerRequest) { r.RecoveryVerifier = b64(16) }},
+		// PR #118 round 2 review: validateArgon2Params had a floor but no
+		// ceiling, so a client could register a RecoveryVerifierParams set
+		// costly enough that the server -- which runs this one Argon2id
+		// derivation itself, unlike every other parameter set in the system
+		// -- pays multiple seconds of compute per unauthenticated recovery
+		// attempt. Covered on all three fields validateArgon2Params guards,
+		// not just the verifier, since the fix is in that shared function.
+		{"argon2 memory above ceiling", func(r *registerRequest) { r.Argon2Params.MemoryKiB = maxArgon2MemoryKiB + 1 }},
+		{"argon2 iterations above ceiling", func(r *registerRequest) { r.Argon2Params.Iterations = maxArgon2Iterations + 1 }},
+		{"argon2 parallelism above ceiling", func(r *registerRequest) { r.Argon2Params.Parallelism = maxArgon2Parallelism + 1 }},
+		{"recovery argon2 memory above ceiling", func(r *registerRequest) { r.RecoveryArgon2Params.MemoryKiB = maxArgon2MemoryKiB + 1 }},
+		{"recovery verifier argon2 memory above ceiling", func(r *registerRequest) {
+			r.RecoveryVerifierParams.MemoryKiB = maxArgon2MemoryKiB + 1
+		}},
+		{"recovery verifier argon2 iterations above ceiling", func(r *registerRequest) {
+			r.RecoveryVerifierParams.Iterations = maxArgon2Iterations + 1
 		}},
 	}
 

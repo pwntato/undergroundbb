@@ -37,6 +37,10 @@ type RegisterInput struct {
 	RecoverySalt               []byte
 	RecoveryArgon2Params       models.Argon2Params
 	RecoveryWrappedPrivateKeys models.WrappedBlob
+
+	RecoveryVerifierSalt   []byte
+	RecoveryVerifierParams models.Argon2Params
+	RecoveryVerifier       []byte
 }
 
 // Register creates a new account: the USER#<uuid>/PROFILE item, the
@@ -76,10 +80,13 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 			Type:      "Recovery",
 			CreatedAt: now,
 		},
-		Salt:               in.RecoverySalt,
-		Argon2Params:       in.RecoveryArgon2Params,
-		WrappedPrivateKeys: in.RecoveryWrappedPrivateKeys,
-		CredentialVersion:  1,
+		Salt:                 in.RecoverySalt,
+		Argon2Params:         in.RecoveryArgon2Params,
+		WrappedPrivateKeys:   in.RecoveryWrappedPrivateKeys,
+		VerifierSalt:         in.RecoveryVerifierSalt,
+		VerifierArgon2Params: in.RecoveryVerifierParams,
+		Verifier:             in.RecoveryVerifier,
+		CredentialVersion:    1,
 	}
 	claim := models.UsernameClaim{
 		Record: models.Record{

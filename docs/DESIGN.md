@@ -1615,9 +1615,22 @@ exactly the write the single-slot decision was trying not to add. That changes t
 deferred conditional write above: it is deferred against an alternative control that does not exist.
 
 Note what rate limiting is and is not protecting: Argon2id
-runs in the **client's** browser, so a login costs the server only a DynamoDB read and, on the second
-leg, one Ed25519 verification. An attacker hammering the endpoint burns their own CPU, not the
-operator's.
+runs in the **client's** browser for login, so a login costs the server only a DynamoDB read and, on
+the second leg, one Ed25519 verification. An attacker hammering the *login* endpoint burns their own
+CPU, not the operator's.
+
+**This stopped being true of every Argon2id derivation in the system once #31's recovery endpoints
+shipped.** `crypto.CheckRecoveryVerifier` recomputes the recovery verifier's Argon2id hash
+server-side, under parameters the registering client chose and the server only reads back, and
+`POST /api/account/recovery-code/release` reaches it with no session and no valid code required —
+the check runs, and fails, on the 401 path exactly as it does on the 200 path. This is the one
+Argon2id derivation in the whole design the *operator* pays for rather than the caller, and it is
+why `validateArgon2Params` (`internal/handlers/register.go`) enforces a ceiling as well as a floor
+on every stored parameter set, not only a floor: a value with no ceiling here is compute the
+registering client can force onto the server at recovery time, for the cost of registering one
+throwaway account. `terraform/waf.tf`'s `rate-limit-auth` rule is the only per-source bound on that
+compute, and — see its own comment — it is IP-keyed, so it does not bound the cost distributed
+across many source IPs against a single named account.
 
 The first thing worth bounding is **bulk harvesting**, not compute. `POST /api/auth/challenge`
 hands out a salt and wrapped private keys to anyone who names a username, which is offline-cracking

@@ -6,20 +6,30 @@
 # Two AWS managed rule groups (common exploit patterns + known-bad-inputs),
 # plus a rate-based rule scoped to /api/auth/* stricter than the site
 # default. Round 2 review caught this comment previously justifying that
-# rule as a "cost control" against Argon2id compute -- wrong on both halves:
-# Argon2id runs exclusively in the browser (web/src/lib/crypto/argon2.ts),
-# never on this project's servers, and docs/DESIGN.md says so explicitly
+# rule as a "cost control" against Argon2id compute -- wrong at the time:
+# Argon2id ran exclusively in the browser (web/src/lib/crypto/argon2.ts),
+# never on this project's servers, and docs/DESIGN.md said so explicitly
 # ("An attacker hammering the endpoint burns their own CPU, not the
-# operator's"), then names what to size against instead: bulk harvesting of
-# the salt + wrapped private keys POST /api/auth/challenge hands out to
-# anyone naming a username (offline-cracking material), and a second,
-# genuinely operator-side cost -- both /auth/challenge and the verify leg's
-# failure-counter increment are unauthenticated writes against a single
-# user's hottest DynamoDB partition (DESIGN.md: "this cost falls on the
-# operator, in write capacity and in contention against legitimate logins").
-# This rule bounds both: the harvesting rate directly, and the
+# operator's"), so round 2 named what to size against instead: bulk
+# harvesting of the salt + wrapped private keys POST /api/auth/challenge
+# hands out to anyone naming a username (offline-cracking material), and a
+# second, genuinely operator-side cost -- both /auth/challenge and the
+# verify leg's failure-counter increment are unauthenticated writes against
+# a single user's hottest DynamoDB partition (DESIGN.md: "this cost falls
+# on the operator, in write capacity and in contention against legitimate
+# logins"). This rule bounds both: the harvesting rate directly, and the
 # hot-partition write rate as a side effect of the same per-IP limit
 # covering both legs under one prefix.
+#
+# PR #118 changed the Argon2id-never-runs-server-side premise round 2's
+# fix rested on: internal/crypto/recovery.go now runs argon2.IDKey
+# server-side to check a recovery verifier, and POST
+# /api/account/recovery-code/release -- one of the routes this rule was
+# extended to cover, below -- reaches it unauthenticated. This rule (and
+# the rate_based_statement.limit comment below) DOES now bound real
+# operator-side compute, and it is the only per-source bound on it.
+# docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
+# same correction; see that document for the update.
 #
 # Round 5 review: this only bounds harvesting for routes actually under
 # /api/auth/*. DESIGN.md names at least one other unauthenticated route
@@ -132,21 +142,64 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # /api/auth/* specifically: 30 req/5min per IP (~6/min) is a deliberate
-  # choice, not a forced floor -- round 1 review corrected an earlier
-  # version of this comment that claimed 100 was WAF's minimum;
-  # rate_based_statement.limit's real minimum is 10 (confirmed live via
-  # `aws wafv2 check-capacity`, which accepts Limit=10 and rejects Limit=0).
-  # Round 2 review caught the value's own justification as wrong too: it had
-  # been picked to tighten "a single IP's compute burn," but there is no
-  # server-side compute this rule bounds (see this file's header comment --
-  # Argon2id never runs here). 30 is sized against this file's header
-  # comment's actual two targets instead: generous enough for a human
-  # retrying a forgotten password a handful of times, while still bounding
-  # both per-IP harvesting of challenge material and the hot-partition write
-  # rate against a single named user's PROFILE item. See the header comment
-  # for why no value here closes the username-keyed challenge-flood threat
-  # -- that's a property of WAF keying on IP, not of this number.
+  # /api/auth/* and /api/account/recovery-code* specifically: 30 req/5min
+  # per IP (~6/min) is a deliberate choice, not a forced floor -- round 1
+  # review corrected an earlier version of this comment that claimed 100
+  # was WAF's minimum; rate_based_statement.limit's real minimum is 10
+  # (confirmed live via `aws wafv2 check-capacity`, which accepts Limit=10
+  # and rejects Limit=0). Round 2 review picked this value against "a
+  # single IP's compute burn," and was corrected: at the time, Argon2id ran
+  # exclusively in the browser, so there was no server-side compute for it
+  # to bound (see this file's header comment). PR #118 changed that:
+  # internal/crypto/recovery.go now runs Argon2id server-side to check a
+  # recovery verifier, and POST /api/account/recovery-code/release --
+  # added by that same PR, below -- reaches it unauthenticated. This rule
+  # DOES now bound real operator-side compute, and it is the only
+  # per-source bound on it (see the internal/crypto/recovery.go doc
+  # comments on maxArgon2MemoryKiB and CheckRecoveryVerifier for the
+  # server-side ceiling that keeps a single such request bounded).
+  # docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
+  # same correction. Independent of that history, 30 is sized against this
+  # file's header comment's actual harvesting/hot-partition targets:
+  # generous enough for a human retrying a forgotten password a handful of
+  # times, while still bounding both per-IP harvesting of
+  # challenge/recovery material and the hot-partition write rate against a
+  # single named user's PROFILE/RECOVERY items. See the header comment for
+  # why no value here closes the username-keyed challenge-flood threat --
+  # that's a property of WAF keying on IP, not of this number.
+  #
+  # Issue #31 added POST /api/account/recovery-code/release and PUT
+  # /api/account/recovery-code -- both unauthenticated, both resolve a
+  # caller-supplied username the same way /auth/challenge does, and a
+  # release attempt is exactly the harvesting/brute-force shape this rule
+  # exists to bound (repeatedly presenting guessed codes against one
+  # account's verifier). This is the "whoever implements... the recovery
+  # endpoint knows to decide their own rate limit" this file's header
+  # comment flagged rather than leaving unaddressed -- folded into this
+  # same rule rather than a separate one, since the target rate and
+  # justification are identical, not just similar.
+  #
+  # PUT /api/account/password is deliberately NOT matched here: it requires
+  # a valid session cookie (internal/handlers/session.go's requireSession),
+  # so an attacker with no session gets nothing from hammering it, and it
+  # falls through to rate-limit-default like any other authenticated route.
+  #
+  # PR #118 review: this rule is IP-keyed (aggregate_key_type = "IP" above),
+  # the same limitation this file's header already names for the
+  # challenge-slot flood -- 30 req/5min bounds one source, not one target
+  # account. A distributed guessing attempt against a single named account's
+  # recovery code, spread across many source IPs, is not bounded by this
+  # rule. For a full-entropy 26-character code (docs/DESIGN.md: 128 bits of
+  # CSPRNG output) that's not a practical attack; it stops being merely
+  # theoretical if a verifier is ever stored at less than full strength,
+  # which is why internal/crypto/recovery.go now rejects any
+  # RecoveryVerifier that isn't exactly VerifierLen bytes rather than
+  # trusting the stored length. Round 2 review found the same rule is also
+  # now the only per-source bound on the server-side Argon2id compute
+  # crypto.CheckRecoveryVerifier runs per attempt (see the header comment
+  # above) -- so an IP-distributed attack against one account is unbounded
+  # on both axes at once: neither the guessing rate nor the compute it
+  # forces the server to spend is capped per-account, only per-source.
   rule {
     name     = "rate-limit-auth"
     priority = 4
@@ -161,59 +214,97 @@ resource "aws_wafv2_web_acl" "main" {
         aggregate_key_type = "IP"
 
         scope_down_statement {
-          byte_match_statement {
-            search_string = "/api/auth/"
-            field_to_match {
-              uri_path {}
+          or_statement {
+            statement {
+              byte_match_statement {
+                search_string = "/api/auth/"
+                field_to_match {
+                  uri_path {}
+                }
+                positional_constraint = "STARTS_WITH"
+                # The three transformations below don't share one rationale
+                # -- each closes a different, separately-verified gap, so
+                # each is justified on its own rather than as one
+                # undifferentiated "hardening" bundle:
+                #
+                # URL_DECODE is load-bearing, not precautionary -- round 4
+                # review found a genuine live bypass NONE could not have
+                # caught. WAF's uri_path with NONE matches the raw,
+                # still-encoded URI, so /%61pi/auth/challenge (%61 = "a")
+                # does not match STARTS_WITH "/api/auth/" and falls
+                # straight through to the 2000/5min default -- confirmed
+                # live: /%61pi/health hits the real Lambda (genuine
+                # x-amzn-trace-id/x-amzn-requestid, "Miss from
+                # cloudfront", real {"status":"ok"} body, not a redirect
+                # or an edge rejection). Unlike the ./.. forms below,
+                # nothing else in the request path normalizes or rejects
+                # this first -- decoding it here is the only thing that
+                # closes it.
+                #
+                # NORMALIZE_PATH is defense-in-depth, not a fix for a
+                # confirmed bypass -- round 1/2 recorded /api/./auth/...
+                # and /api/foo/../auth/... as live-verified bypasses, but
+                # round 3 found that was an artifact of testing with plain
+                # curl, which silently strips "." and ".." from a URL
+                # client-side unless --path-as-is is given. Reproduced
+                # properly with --path-as-is: /api/./health is actually
+                # 307 from Go's http.ServeMux (its own unclean-path
+                # redirect to the clean path, not a handler hit) and
+                # /api/foo/../health is actually 403 from CloudFront at
+                # the edge, never reaching the origin. Kept anyway against
+                # those two components' behavior ever changing, not
+                # because either was ever a real bypass.
+                #
+                # LOWERCASE is kept for a confirmed reason, not a
+                # hypothetical one -- docs/DESIGN.md: every username
+                # lookup lowercases, including POST /api/auth/challenge,
+                # so this endpoint really is case-insensitive even though
+                # /API/auth/ doesn't reach the Lambda today (it misses the
+                # /api/* cache behavior and lands on the SPA instead).
+                text_transformation {
+                  priority = 0
+                  type     = "URL_DECODE"
+                }
+                text_transformation {
+                  priority = 1
+                  type     = "NORMALIZE_PATH"
+                }
+                text_transformation {
+                  priority = 2
+                  type     = "LOWERCASE"
+                }
+              }
             }
-            positional_constraint = "STARTS_WITH"
-            # The three transformations below don't share one rationale --
-            # each closes a different, separately-verified gap, so each is
-            # justified on its own rather than as one undifferentiated
-            # "hardening" bundle:
-            #
-            # URL_DECODE is load-bearing, not precautionary -- round 4
-            # review found a genuine live bypass NONE could not have caught.
-            # WAF's uri_path with NONE matches the raw, still-encoded URI,
-            # so /%61pi/auth/challenge (%61 = "a") does not match
-            # STARTS_WITH "/api/auth/" and falls straight through to the
-            # 2000/5min default -- confirmed live: /%61pi/health hits the
-            # real Lambda (genuine x-amzn-trace-id/x-amzn-requestid, "Miss
-            # from cloudfront", real {"status":"ok"} body, not a redirect or
-            # an edge rejection). Unlike the ./.. forms below, nothing else
-            # in the request path normalizes or rejects this first --
-            # decoding it here is the only thing that closes it.
-            #
-            # NORMALIZE_PATH is defense-in-depth, not a fix for a confirmed
-            # bypass -- round 1/2 recorded /api/./auth/... and
-            # /api/foo/../auth/... as live-verified bypasses, but round 3
-            # found that was an artifact of testing with plain curl, which
-            # silently strips "." and ".." from a URL client-side unless
-            # --path-as-is is given. Reproduced properly with
-            # --path-as-is: /api/./health is actually 307 from Go's
-            # http.ServeMux (its own unclean-path redirect to the clean
-            # path, not a handler hit) and /api/foo/../health is actually
-            # 403 from CloudFront at the edge, never reaching the origin.
-            # Kept anyway against those two components' behavior ever
-            # changing, not because either was ever a real bypass.
-            #
-            # LOWERCASE is kept for a confirmed reason, not a hypothetical
-            # one -- docs/DESIGN.md: every username lookup lowercases,
-            # including POST /api/auth/challenge, so this endpoint really is
-            # case-insensitive even though /API/auth/ doesn't reach the
-            # Lambda today (it misses the /api/* cache behavior and lands on
-            # the SPA instead).
-            text_transformation {
-              priority = 0
-              type     = "URL_DECODE"
-            }
-            text_transformation {
-              priority = 1
-              type     = "NORMALIZE_PATH"
-            }
-            text_transformation {
-              priority = 2
-              type     = "LOWERCASE"
+            statement {
+              byte_match_statement {
+                # Deliberately /api/account/recovery-code, not the broader
+                # /api/account/ -- see this rule's own header comment on
+                # why PUT /api/account/password (the only other route under
+                # that prefix) is excluded rather than swept in.
+                search_string = "/api/account/recovery-code"
+                field_to_match {
+                  uri_path {}
+                }
+                positional_constraint = "STARTS_WITH"
+                # Same three transformations and the same reasons as the
+                # /api/auth/ branch above -- this scope-down statement is
+                # exposed to the identical bypass surface (raw-encoded
+                # paths, ./.. traversal attempts, case variation), and
+                # nothing about this being a different prefix changes any
+                # of that reasoning.
+                text_transformation {
+                  priority = 0
+                  type     = "URL_DECODE"
+                }
+                text_transformation {
+                  priority = 1
+                  type     = "NORMALIZE_PATH"
+                }
+                text_transformation {
+                  priority = 2
+                  type     = "LOWERCASE"
+                }
+              }
             }
           }
         }

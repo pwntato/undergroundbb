@@ -53,6 +53,10 @@ func testRegisterInput(userID, username string) RegisterInput {
 			Nonce:      make([]byte, 12),
 			Ciphertext: []byte("recovery-ciphertext"),
 		},
+
+		RecoveryVerifierSalt:   []byte("recovery-verifier-salt"),
+		RecoveryVerifierParams: models.Argon2Params{MemoryKiB: 19456, Iterations: 2, Parallelism: 1},
+		RecoveryVerifier:       []byte("recovery-verifier"),
 	}
 }
 
@@ -78,7 +82,24 @@ func TestRegisterWritesAllThreeItems(t *testing.T) {
 		t.Fatalf("GetItem RECOVERY: %v", err)
 	}
 	if recovery.Item == nil {
-		t.Error("RECOVERY item was not written")
+		t.Fatal("RECOVERY item was not written")
+	}
+	var recoveryItem models.Recovery
+	if err := unmarshalItem(recovery.Item, &recoveryItem); err != nil {
+		t.Fatalf("unmarshal RECOVERY: %v", err)
+	}
+	// The verifier fields are what #31's recovery-release/reset endpoints
+	// gate on -- distinct from Salt/Argon2Params/WrappedPrivateKeys above,
+	// see models.Recovery's own doc comment on why they're a separate
+	// derivation.
+	if string(recoveryItem.VerifierSalt) != string(in.RecoveryVerifierSalt) {
+		t.Errorf("RECOVERY VerifierSalt = %q, want %q", recoveryItem.VerifierSalt, in.RecoveryVerifierSalt)
+	}
+	if recoveryItem.VerifierArgon2Params != in.RecoveryVerifierParams {
+		t.Errorf("RECOVERY VerifierArgon2Params = %+v, want %+v", recoveryItem.VerifierArgon2Params, in.RecoveryVerifierParams)
+	}
+	if string(recoveryItem.Verifier) != string(in.RecoveryVerifier) {
+		t.Errorf("RECOVERY Verifier = %q, want %q", recoveryItem.Verifier, in.RecoveryVerifier)
 	}
 
 	claim, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USERNAME#"+in.UsernameLower, "CLAIM"))
