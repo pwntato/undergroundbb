@@ -71,6 +71,41 @@ const (
 	minArgon2Parallelism = 1
 )
 
+// maxArgon2MemoryKiB, maxArgon2Iterations and maxArgon2Parallelism are a
+// ceiling above the floor, added by PR #118 round 2 review. Every Argon2id
+// parameter set validated by validateArgon2Params was, until this PR,
+// client-executed -- a value the client's own browser would pay for, so an
+// unbounded ceiling only let a legitimate client choose a slower login for
+// itself. crypto.CheckRecoveryVerifier broke that symmetry: it is executed
+// BY THE SERVER, on an unauthenticated endpoint, against a parameter set
+// (RecoveryVerifierParams) a client picks at registration and the server
+// only reads back. Without a ceiling, registering with e.g. MemoryKiB=8 GiB
+// and Iterations=10 is accepted here (201) and then one unauthenticated
+// POST /api/account/recovery-code/release against that account forces the
+// server to run that Argon2id derivation -- measured at 60s against a
+// Lambda configured for a 10s timeout and 256 MB (terraform/lambda.tf), an
+// OOM kill or timeout that (unlike a panic) is not contained by
+// cmd/lambda/main.go's recover(). The hash runs before the comparison, so a
+// wrong code costs exactly as much as a right one.
+//
+// Applied uniformly to every Argon2id parameter set via validateArgon2Params
+// (Argon2Params and RecoveryArgon2Params too, not only
+// RecoveryVerifierParams) rather than a second, verifier-only validator:
+// simpler, and there's no stated reason a legitimate client needs to wrap
+// its own keys above this ceiling either. MemoryKiB matches the deployed
+// Lambda's own memory_size exactly (terraform/lambda.tf) -- a derivation
+// that would not fit in the function's memory budget on its own is refused
+// before it can ever run there. Iterations and Parallelism are set well
+// above DESIGN.md's chosen baseline (t=3, p=1) to leave room for a future
+// legitimate re-tune without needing a matching Terraform change, while
+// still keeping the worst case bounded and fast relative to the 10s
+// timeout.
+const (
+	maxArgon2MemoryKiB   = 256 * 1024
+	maxArgon2Iterations  = 10
+	maxArgon2Parallelism = 4
+)
+
 // registerRequest is the wire shape of POST /api/auth/register. Every
 // key-material field is client-generated and opaque to the server -- see
 // docs/DESIGN.md, "The server never receives the password." Binary fields
@@ -314,17 +349,24 @@ func decodeWrappedBlob(b wrappedBlob) (models.WrappedBlob, error) {
 }
 
 // validateArgon2Params rejects a parameter set that could not have produced
-// a real derivation, or that falls below this deployment's documented
-// floor. It does not, and cannot, verify the parameters are the ones
-// actually used to wrap the accompanying blob -- that would require the
-// password -- but it does reject a set that is facially too weak, per
-// minArgon2MemoryKiB's own doc comment.
+// a real derivation, that falls below this deployment's documented floor,
+// or that exceeds maxArgon2MemoryKiB's ceiling (PR #118 round 2 review --
+// see that constant's own doc comment for why a ceiling belongs here at
+// all: RecoveryVerifierParams is executed by the server, not the client,
+// so an unbounded value here is a cost the operator pays, not the caller).
+// It does not, and cannot, verify the parameters are the ones actually used
+// to wrap the accompanying blob -- that would require the password -- but
+// it does reject a set that is facially too weak or too costly, per
+// minArgon2MemoryKiB's and maxArgon2MemoryKiB's own doc comments.
 func validateArgon2Params(p argon2Params) error {
 	if p.MemoryKiB <= 0 || p.Iterations <= 0 || p.Parallelism <= 0 {
 		return errInvalidArgon2Params
 	}
 	if p.MemoryKiB < minArgon2MemoryKiB || p.Iterations < minArgon2Iterations || p.Parallelism < minArgon2Parallelism {
 		return errArgon2ParamsBelowFloor
+	}
+	if p.MemoryKiB > maxArgon2MemoryKiB || p.Iterations > maxArgon2Iterations || p.Parallelism > maxArgon2Parallelism {
+		return errArgon2ParamsAboveCeiling
 	}
 	return nil
 }
@@ -338,12 +380,13 @@ func toModelParams(p argon2Params) models.Argon2Params {
 }
 
 var (
-	errEmptyField             = fieldError("field is required")
-	errNotBase64              = fieldError("must be valid base64")
-	errWrongLength            = fieldError("wrong decoded length")
-	errFieldTooLong           = fieldError("field exceeds the maximum allowed length")
-	errInvalidArgon2Params    = fieldError("memoryKiB, iterations and parallelism must all be positive")
-	errArgon2ParamsBelowFloor = fieldError("memoryKiB, iterations and parallelism must each meet this deployment's minimum (see docs/DESIGN.md)")
+	errEmptyField               = fieldError("field is required")
+	errNotBase64                = fieldError("must be valid base64")
+	errWrongLength              = fieldError("wrong decoded length")
+	errFieldTooLong             = fieldError("field exceeds the maximum allowed length")
+	errInvalidArgon2Params      = fieldError("memoryKiB, iterations and parallelism must all be positive")
+	errArgon2ParamsBelowFloor   = fieldError("memoryKiB, iterations and parallelism must each meet this deployment's minimum (see docs/DESIGN.md)")
+	errArgon2ParamsAboveCeiling = fieldError("memoryKiB, iterations and parallelism must each stay within this deployment's maximum")
 )
 
 // fieldError is a plain string error -- these are user-facing validation

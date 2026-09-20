@@ -52,6 +52,22 @@ var errInvalidRecoveryAttempt = errors.New("handlers: invalid username or recove
 // back as the single errInvalidRecoveryAttempt sentinel; only a genuine
 // infrastructure error is returned distinctly, for a 500 rather than a 401
 // at the HTTP layer.
+//
+// Deliberately does not consult or update LockUntil/FailedVerifyCount --
+// PR #118 round 2 review. That counter is scoped to /auth/challenge's
+// signature failures (DESIGN.md:193, "bounding credential stuffing" at
+// step 4 of login), and reusing it here would corrupt its meaning: a wrong
+// recovery code is not the failure it counts. This is a design gap, not a
+// contradiction of one -- DESIGN.md:206 is explicit the lock is step-4
+// only -- but it means the recovery code (THREAT_MODEL.md: "equivalent to
+// the password, not a lesser factor") has no application-side bound on
+// guessing, unlike the password, which never reaches the server to be
+// guessed against at all. terraform/waf.tf's rate-limit-auth rule is the
+// only bound in front of this path, and it's IP-keyed, not account-keyed
+// -- see that rule's own comment for why that doesn't close a distributed
+// attempt against one account. Left as a design gap for #33 rather than
+// fixed here: a full-entropy 26-character code (DESIGN.md: 128 bits of
+// CSPRNG output) is not a practical target for either gap alone today.
 func (h *Handler) resolveRecovery(ctx context.Context, usernameLower, code string) (userID string, recovery *models.Recovery, err error) {
 	user, err := h.db.LookupUserByUsername(ctx, usernameLower)
 	if err != nil {

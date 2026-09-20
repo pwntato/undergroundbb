@@ -217,6 +217,23 @@ func TestRegisterValidation(t *testing.T) {
 		{"recovery verifier salt decodes to zero bytes", func(r *registerRequest) { r.RecoveryVerifierSalt = "\n" }},
 		{"salt decodes to zero bytes", func(r *registerRequest) { r.Salt = "\n" }},
 		{"recovery verifier wrong length", func(r *registerRequest) { r.RecoveryVerifier = b64(16) }},
+		// PR #118 round 2 review: validateArgon2Params had a floor but no
+		// ceiling, so a client could register a RecoveryVerifierParams set
+		// costly enough that the server -- which runs this one Argon2id
+		// derivation itself, unlike every other parameter set in the system
+		// -- pays multiple seconds of compute per unauthenticated recovery
+		// attempt. Covered on all three fields validateArgon2Params guards,
+		// not just the verifier, since the fix is in that shared function.
+		{"argon2 memory above ceiling", func(r *registerRequest) { r.Argon2Params.MemoryKiB = maxArgon2MemoryKiB + 1 }},
+		{"argon2 iterations above ceiling", func(r *registerRequest) { r.Argon2Params.Iterations = maxArgon2Iterations + 1 }},
+		{"argon2 parallelism above ceiling", func(r *registerRequest) { r.Argon2Params.Parallelism = maxArgon2Parallelism + 1 }},
+		{"recovery argon2 memory above ceiling", func(r *registerRequest) { r.RecoveryArgon2Params.MemoryKiB = maxArgon2MemoryKiB + 1 }},
+		{"recovery verifier argon2 memory above ceiling", func(r *registerRequest) {
+			r.RecoveryVerifierParams.MemoryKiB = maxArgon2MemoryKiB + 1
+		}},
+		{"recovery verifier argon2 iterations above ceiling", func(r *registerRequest) {
+			r.RecoveryVerifierParams.Iterations = maxArgon2Iterations + 1
+		}},
 	}
 
 	for _, tc := range cases {

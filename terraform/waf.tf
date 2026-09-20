@@ -6,20 +6,30 @@
 # Two AWS managed rule groups (common exploit patterns + known-bad-inputs),
 # plus a rate-based rule scoped to /api/auth/* stricter than the site
 # default. Round 2 review caught this comment previously justifying that
-# rule as a "cost control" against Argon2id compute -- wrong on both halves:
-# Argon2id runs exclusively in the browser (web/src/lib/crypto/argon2.ts),
-# never on this project's servers, and docs/DESIGN.md says so explicitly
+# rule as a "cost control" against Argon2id compute -- wrong at the time:
+# Argon2id ran exclusively in the browser (web/src/lib/crypto/argon2.ts),
+# never on this project's servers, and docs/DESIGN.md said so explicitly
 # ("An attacker hammering the endpoint burns their own CPU, not the
-# operator's"), then names what to size against instead: bulk harvesting of
-# the salt + wrapped private keys POST /api/auth/challenge hands out to
-# anyone naming a username (offline-cracking material), and a second,
-# genuinely operator-side cost -- both /auth/challenge and the verify leg's
-# failure-counter increment are unauthenticated writes against a single
-# user's hottest DynamoDB partition (DESIGN.md: "this cost falls on the
-# operator, in write capacity and in contention against legitimate logins").
-# This rule bounds both: the harvesting rate directly, and the
+# operator's"), so round 2 named what to size against instead: bulk
+# harvesting of the salt + wrapped private keys POST /api/auth/challenge
+# hands out to anyone naming a username (offline-cracking material), and a
+# second, genuinely operator-side cost -- both /auth/challenge and the
+# verify leg's failure-counter increment are unauthenticated writes against
+# a single user's hottest DynamoDB partition (DESIGN.md: "this cost falls
+# on the operator, in write capacity and in contention against legitimate
+# logins"). This rule bounds both: the harvesting rate directly, and the
 # hot-partition write rate as a side effect of the same per-IP limit
 # covering both legs under one prefix.
+#
+# PR #118 changed the Argon2id-never-runs-server-side premise round 2's
+# fix rested on: internal/crypto/recovery.go now runs argon2.IDKey
+# server-side to check a recovery verifier, and POST
+# /api/account/recovery-code/release -- one of the routes this rule was
+# extended to cover, below -- reaches it unauthenticated. This rule (and
+# the rate_based_statement.limit comment below) DOES now bound real
+# operator-side compute, and it is the only per-source bound on it.
+# docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
+# same correction; see that document for the update.
 #
 # Round 5 review: this only bounds harvesting for routes actually under
 # /api/auth/*. DESIGN.md names at least one other unauthenticated route
@@ -137,13 +147,22 @@ resource "aws_wafv2_web_acl" "main" {
   # review corrected an earlier version of this comment that claimed 100
   # was WAF's minimum; rate_based_statement.limit's real minimum is 10
   # (confirmed live via `aws wafv2 check-capacity`, which accepts Limit=10
-  # and rejects Limit=0). Round 2 review caught the value's own
-  # justification as wrong too: it had been picked to tighten "a single
-  # IP's compute burn," but there is no server-side compute this rule
-  # bounds (see this file's header comment -- Argon2id never runs here). 30
-  # is sized against this file's header comment's actual two targets
-  # instead: generous enough for a human retrying a forgotten password a
-  # handful of times, while still bounding both per-IP harvesting of
+  # and rejects Limit=0). Round 2 review picked this value against "a
+  # single IP's compute burn," and was corrected: at the time, Argon2id ran
+  # exclusively in the browser, so there was no server-side compute for it
+  # to bound (see this file's header comment). PR #118 changed that:
+  # internal/crypto/recovery.go now runs Argon2id server-side to check a
+  # recovery verifier, and POST /api/account/recovery-code/release --
+  # added by that same PR, below -- reaches it unauthenticated. This rule
+  # DOES now bound real operator-side compute, and it is the only
+  # per-source bound on it (see the internal/crypto/recovery.go doc
+  # comments on maxArgon2MemoryKiB and CheckRecoveryVerifier for the
+  # server-side ceiling that keeps a single such request bounded).
+  # docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
+  # same correction. Independent of that history, 30 is sized against this
+  # file's header comment's actual harvesting/hot-partition targets:
+  # generous enough for a human retrying a forgotten password a handful of
+  # times, while still bounding both per-IP harvesting of
   # challenge/recovery material and the hot-partition write rate against a
   # single named user's PROFILE/RECOVERY items. See the header comment for
   # why no value here closes the username-keyed challenge-flood threat --
@@ -175,7 +194,12 @@ resource "aws_wafv2_web_acl" "main" {
   # theoretical if a verifier is ever stored at less than full strength,
   # which is why internal/crypto/recovery.go now rejects any
   # RecoveryVerifier that isn't exactly VerifierLen bytes rather than
-  # trusting the stored length.
+  # trusting the stored length. Round 2 review found the same rule is also
+  # now the only per-source bound on the server-side Argon2id compute
+  # crypto.CheckRecoveryVerifier runs per attempt (see the header comment
+  # above) -- so an IP-distributed attack against one account is unbounded
+  # on both axes at once: neither the guessing rate nor the compute it
+  # forces the server to spend is capped per-account, only per-source.
   rule {
     name     = "rate-limit-auth"
     priority = 4
