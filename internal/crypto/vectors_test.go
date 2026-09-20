@@ -16,15 +16,16 @@ import (
 // here must match internal/crypto/testdata/gen/main.go's output types
 // exactly, since both are the same JSON schema — see testdata/README.md.
 type vectorFile struct {
-	Version       int                   `json:"version"`
-	KDF           []kdfVector           `json:"kdf"`
-	AEAD          []aeadVector          `json:"aead"`
-	AEADNegative  []aeadNegativeVector  `json:"aead_negative"`
-	Signing       []signingVector       `json:"signing"`
-	SignedPayload []signedPayloadVector `json:"signed_payload"`
-	Wrapping      []wrapVector          `json:"wrapping"`
-	GenkeyChain   []genkeyChainVector   `json:"genkey_chain"`
-	Fingerprint   []fingerprintVector   `json:"fingerprint"`
+	Version        int                    `json:"version"`
+	KDF            []kdfVector            `json:"kdf"`
+	AEAD           []aeadVector           `json:"aead"`
+	AEADNegative   []aeadNegativeVector   `json:"aead_negative"`
+	Signing        []signingVector        `json:"signing"`
+	SignedPayload  []signedPayloadVector  `json:"signed_payload"`
+	Wrapping       []wrapVector           `json:"wrapping"`
+	GenkeyChain    []genkeyChainVector    `json:"genkey_chain"`
+	Fingerprint    []fingerprintVector    `json:"fingerprint"`
+	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
 }
 
 type kdfVector struct {
@@ -105,6 +106,17 @@ type fingerprintVector struct {
 	SigningPubHex  string `json:"signing_public_key_hex"`
 	WrappingPubHex string `json:"wrapping_public_key_hex"`
 	Fingerprint    string `json:"fingerprint"`
+}
+
+type credentialWrapVector struct {
+	Name          string `json:"name"`
+	UserID        string `json:"user_id"`
+	Copy          string `json:"copy"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
 }
 
 func loadVectors(t *testing.T) vectorFile {
@@ -344,5 +356,65 @@ func TestVectorFingerprint(t *testing.T) {
 				t.Fatalf("Fingerprint = %q, want %q", got, tc.Fingerprint)
 			}
 		})
+	}
+}
+
+// TestVectorCredentialWrap pins CredentialWrapAAD's exact encoding -- see
+// that function's own doc comment for why this specific AAD, unlike every
+// other one in this package, had no code fixing its byte format before #30
+// needed one. Proves both the encoding itself and, by running the
+// AES-256-GCM round trip through it, that a client unwrapping under the
+// wrong copy's AAD (PROFILE's AAD against RECOVERY's ciphertext or vice
+// versa) fails the way any other address-relocation attempt does.
+func TestVectorCredentialWrap(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.CredentialWrap) < 2 {
+		t.Fatalf("expected at least 2 credential_wrap vectors (profile, recovery), got %d", len(v.CredentialWrap))
+	}
+	for _, tc := range v.CredentialWrap {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := CredentialWrapAAD(tc.UserID, CredentialCopy(tc.Copy))
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("CredentialWrapAAD(%q, %q) = %x, want %x", tc.UserID, tc.Copy, gotAAD, wantAAD)
+			}
+
+			key := mustHex(t, tc.KeyHex)
+			nonce := mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			wantCiphertext := mustHex(t, tc.CiphertextHex)
+
+			gotCiphertext, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotCiphertext, wantCiphertext) {
+				t.Fatalf("EncryptWithNonce = %x, want %x", gotCiphertext, wantCiphertext)
+			}
+
+			decrypted, err := Decrypt(key, nonce, wantCiphertext, gotAAD)
+			if err != nil {
+				t.Fatalf("Decrypt with matching copy's AAD: %v", err)
+			}
+			if !bytes.Equal(decrypted, plaintext) {
+				t.Fatalf("Decrypt = %x, want %x", decrypted, plaintext)
+			}
+		})
+	}
+
+	// Cross-copy negative case: PROFILE's ciphertext must not decrypt under
+	// RECOVERY's AAD for the same user, and vice versa -- the exact
+	// relocation this AAD exists to stop, per docs/DESIGN.md's AAD table.
+	profile := v.CredentialWrap[0]
+	recovery := v.CredentialWrap[1]
+	if profile.Copy != string(CredentialCopyProfile) || recovery.Copy != string(CredentialCopyRecovery) {
+		t.Fatalf("unexpected vector order: [0]=%q [1]=%q, want [PROFILE, RECOVERY]", profile.Copy, recovery.Copy)
+	}
+	key := mustHex(t, profile.KeyHex)
+	nonce := mustHex(t, profile.NonceHex)
+	profileCiphertext := mustHex(t, profile.CiphertextHex)
+	recoveryAAD := mustHex(t, recovery.AADHex)
+	if _, err := Decrypt(key, nonce, profileCiphertext, recoveryAAD); err != ErrDecryptionFailed {
+		t.Fatalf("decrypting PROFILE's ciphertext under RECOVERY's AAD: got err %v, want ErrDecryptionFailed", err)
 	}
 }

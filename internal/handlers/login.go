@@ -265,7 +265,27 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(h.cfg.SessionTTL.Seconds()),
 	})
-	WriteJSON(w, http.StatusOK, map[string]string{"userId": userID})
+	WriteJSON(w, http.StatusOK, verifyResponse{
+		UserID:            userID,
+		CredentialVersion: user.CredentialVersion,
+	})
+}
+
+// verifyResponse is POST /api/auth/verify's response body on success. Beyond
+// confirming identity, it carries CredentialVersion -- otherwise there is no
+// route by which an authenticated client (one that just logged in, as
+// opposed to a recovery, which gets its own copy from
+// recoveryReleaseResponse) ever learns this value, and PUT
+// /api/account/password's ExpectedCredentialVersion has nothing else to read
+// it from. This is the moment the client holds the freshly-unwrapped private
+// keys and is expected to hold this alongside them for the session's
+// lifetime (see issue #32/#33's worker), the same way login already hands
+// back Salt/Argon2Params/WrappedPrivateKeys via challengeResponse -- this
+// just closes the one field that response shape left out because nothing
+// needed it before #30.
+type verifyResponse struct {
+	UserID            string `json:"userId"`
+	CredentialVersion int64  `json:"credentialVersion"`
 }
 
 // toWireParams converts models.Argon2Params to the wire shape -- the

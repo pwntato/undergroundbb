@@ -5,6 +5,7 @@
 
 export * from './aesgcm.js'
 export * from './argon2.js'
+export * from './credential.js'
 export * as ed25519 from './ed25519.js'
 export * from './fingerprint.js'
 export * from './payload.js'

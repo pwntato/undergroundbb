@@ -197,6 +197,39 @@ func TestChangePasswordCannotActOnAnotherAccount(t *testing.T) {
 	}
 }
 
+// TestChangePasswordThenLoginReflectsNewVersion covers the end-to-end
+// contract the change-password UI depends on: verifyResponse.CredentialVersion
+// is the only route by which a client that logs in normally (as opposed to
+// recovering) learns the value to submit as changePasswordRequest's
+// ExpectedCredentialVersion. If a change-password re-wrap bumped the stored
+// version but a subsequent login's verify response did not reflect it, the
+// client's next password change would submit a stale value and fail its
+// condition every time.
+func TestChangePasswordThenLoginReflectsNewVersion(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+
+	changeRec := doChangePassword(t, h, cookie, changePasswordRequest{
+		ExpectedCredentialVersion: 1,
+		credentialRewrapFields:    validCredentialRewrapFields(),
+	})
+	if changeRec.Code != http.StatusOK {
+		t.Fatalf("change status = %d, want %d, body: %s", changeRec.Code, http.StatusOK, changeRec.Body.String())
+	}
+
+	loginRec := completeLogin(t, h, user)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("re-login status = %d, want %d, body: %s", loginRec.Code, http.StatusOK, loginRec.Body.String())
+	}
+	var resp verifyResponse
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding verify response: %v", err)
+	}
+	if resp.CredentialVersion != 2 {
+		t.Errorf("post-change login CredentialVersion = %d, want 2", resp.CredentialVersion)
+	}
+}
+
 func TestChangePasswordValidation(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	_, cookie := loggedInUser(t, h)

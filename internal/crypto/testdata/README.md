@@ -29,6 +29,13 @@ why.
   (generation N encrypted under generation N+1 — see `docs/DESIGN.md:1131`)
   and its negative direction (generation N cannot decrypt it).
 - `fingerprint`: `(Ed25519 pub, X25519 pub) -> fingerprint string`.
+- `credential_wrap`: `(user id, copy) -> AAD`, plus the AES-256-GCM
+  ciphertext that AAD produces under a fixed key/nonce/plaintext — pinning
+  `CredentialWrapAAD`'s exact encoding (`docs/DESIGN.md`'s "Wrapped private
+  keys" AAD row) so the client's own PROFILE and RECOVERY wraps never drift
+  from each other or from a future server-side reader. Two cases, same user
+  id and key material, one per copy — proving the two encode to genuinely
+  different AAD rather than colliding.
 
 ## Regenerating
 
