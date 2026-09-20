@@ -22,6 +22,35 @@ import (
 // other wrong value, rather than being treated specially by its length.
 const VerifierLen = 32
 
+// maxVerifierMemoryKiB, maxVerifierIterations and maxVerifierParallelism
+// mirror internal/handlers' maxArgon2MemoryKiB/maxArgon2Iterations/
+// maxArgon2Parallelism exactly -- PR #118 round 3 review. crypto cannot
+// import handlers to share the constants directly (handlers already
+// imports crypto; the reverse would be the import cycle Argon2IDParams's
+// own doc comment names as the reason this package keeps its own copy of
+// that struct too), so this is a second copy of the same three numbers. If
+// handlers' ceiling ever changes, this one must change with it.
+//
+// This is the defense-in-depth half of round 2's fix that validateArgon2Params
+// alone doesn't cover: that function only ever sees a value at the moment a
+// client submits it, before it's written. This function is the one place
+// that value is read back and executed, at recovery time, from whatever
+// shape the stored item happens to have -- which is exactly the reasoning
+// VerifierLen's own check already applies to the verifier's length one
+// field over. Every write path today does route through
+// validateArgon2Params (round 3 review verified no pre-ceiling row can
+// exist: RecoveryVerifierParams didn't exist on main before this PR, and
+// legacy accounts fail the VerifierLen check before ever reaching this
+// params check), so this guard has no live exploit to close today -- it's
+// here so a future writer that bypasses validateArgon2Params (a direct
+// table write, an import, a backfill) can't reintroduce round 2's
+// unbounded-server-side-Argon2id finding with no second line of defense.
+const (
+	maxVerifierMemoryKiB   = 256 * 1024
+	maxVerifierIterations  = 10
+	maxVerifierParallelism = 4
+)
+
 // CheckRecoveryVerifier reports whether code -- as presented to a recovery
 // endpoint -- hashes to verifier under salt and params. The server never
 // computes a verifier for storage; that happens client-side, the same way
@@ -50,11 +79,22 @@ const VerifierLen = 32
 // Argon2id itself wouldn't panic on it -- there is no legitimate case where
 // a client-generated salt is empty.
 //
+// params is also range-checked before the Argon2id call, against the same
+// ceiling internal/handlers' validateArgon2Params enforces at write time
+// (see maxVerifierMemoryKiB's own doc comment for why this function does
+// not simply trust that check already ran) -- this is the one Argon2id
+// derivation in the server executed under a stored, not freshly-submitted,
+// parameter set, so it is also the one place a future out-of-band write
+// could hand this function an unbounded value to run.
+//
 // Constant-time in the comparison, matching Verify's own reasoning
 // elsewhere in this package -- a presented recovery code is exactly the
 // kind of secret a timing difference should not leak anything about.
 func CheckRecoveryVerifier(code string, salt []byte, params Argon2IDParams, verifier []byte) bool {
 	if len(verifier) != VerifierLen || len(salt) == 0 {
+		return false
+	}
+	if params.MemoryKiB > maxVerifierMemoryKiB || params.Iterations > maxVerifierIterations || params.Parallelism > maxVerifierParallelism {
 		return false
 	}
 	got := argon2.IDKey([]byte(code), salt, uint32(params.Iterations), uint32(params.MemoryKiB), uint8(params.Parallelism), VerifierLen)

@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -112,6 +113,76 @@ func TestRecoveryVerifierEmptySaltFails(t *testing.T) {
 	}
 	if CheckRecoveryVerifier(code, nil, testVerifierParams, verifier) {
 		t.Fatal("CheckRecoveryVerifier: accepted against a nil salt")
+	}
+}
+
+// TestRecoveryVerifierAboveCeilingParamsFails is the regression test for PR
+// #118 round 3's non-blocking finding: CheckRecoveryVerifier must refuse to
+// run Argon2id under a stored parameter set above the same ceiling
+// internal/handlers' validateArgon2Params enforces at write time, rather
+// than trusting that every possible caller already validated it. Uses a
+// fabricated (not actually-derived) verifier deliberately.
+//
+// Checking only the returned bool here would not actually test the fix: a
+// fabricated verifier fails the comparison regardless of whether the
+// params check short-circuits first, since a wrong-value ConstantTimeCompare
+// also returns false -- a mutation test on an earlier draft of this test
+// confirmed it passed even with the range check removed entirely. Asserting
+// on elapsed time is what distinguishes "rejected before hashing" from
+// "hashed at 2 GiB, then rejected on comparison" -- the reviewer measured
+// the latter at 3.57s on this branch pre-fix; this asserts sub-millisecond,
+// which only a short-circuit before argon2.IDKey can produce.
+func TestRecoveryVerifierAboveCeilingParamsFails(t *testing.T) {
+	code := "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV"
+	salt := []byte("0123456789abcdef")
+	fakeVerifier := make([]byte, VerifierLen)
+
+	cases := []struct {
+		name   string
+		params Argon2IDParams
+	}{
+		// MemoryKiB is deliberately large (not the package's usual cheap 64)
+		// in every case, including the two not testing memory itself: the
+		// elapsed-time assertion below can only distinguish "rejected
+		// before hashing" from "hashed, then rejected" if a fall-through to
+		// argon2.IDKey would actually be slow. At MemoryKiB=64 a fall-through
+		// finishes in under a millisecond regardless, so a missing
+		// short-circuit on the iterations/parallelism checks specifically
+		// would pass undetected -- confirmed by mutation-testing this test
+		// itself before settling on this shape.
+		{"memory above ceiling", Argon2IDParams{MemoryKiB: maxVerifierMemoryKiB + 1, Iterations: 3, Parallelism: 1}},
+		{"iterations above ceiling", Argon2IDParams{MemoryKiB: maxVerifierMemoryKiB, Iterations: maxVerifierIterations + 1, Parallelism: 1}},
+		{"parallelism above ceiling", Argon2IDParams{MemoryKiB: maxVerifierMemoryKiB, Iterations: 3, Parallelism: maxVerifierParallelism + 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			ok := CheckRecoveryVerifier(code, salt, tc.params, fakeVerifier)
+			elapsed := time.Since(start)
+
+			if ok {
+				t.Fatal("CheckRecoveryVerifier: accepted a stored parameter set above the ceiling")
+			}
+			if elapsed > 100*time.Millisecond {
+				t.Fatalf("CheckRecoveryVerifier: rejected an above-ceiling parameter set, but took %v -- it ran Argon2id instead of short-circuiting before it", elapsed)
+			}
+		})
+	}
+}
+
+// TestRecoveryVerifierAtCeilingParamsRuns confirms the ceiling check is a
+// strict "above," not "at or above" -- a legitimately-stored parameter set
+// exactly at the ceiling (the most expensive a client could have validly
+// registered under maxArgon2MemoryKiB/Iterations/Parallelism) must still be
+// able to verify a correct code, not be rejected by an off-by-one.
+func TestRecoveryVerifierAtCeilingParamsRuns(t *testing.T) {
+	code := "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV"
+	salt := []byte("0123456789abcdef")
+	atCeiling := Argon2IDParams{MemoryKiB: 64, Iterations: maxVerifierIterations, Parallelism: maxVerifierParallelism}
+	verifier := deriveVerifierForTest(t, code, salt, atCeiling)
+
+	if !CheckRecoveryVerifier(code, salt, atCeiling, verifier) {
+		t.Fatal("CheckRecoveryVerifier: rejected a correct code under params exactly at the ceiling")
 	}
 }
 
