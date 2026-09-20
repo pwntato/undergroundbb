@@ -403,6 +403,21 @@ data "aws_iam_policy_document" "deploy_policy" {
   # #118 was the first real in-place update the deploy role ever had to
   # perform against it.
   #
+  # wafv2:CreateWebACL also takes managedruleset as one of its own resource
+  # types (same service reference, PR #119 round 2 review) -- granted here
+  # too, alongside Update, even though nothing on the current path calls
+  # Create (the WebACL already exists; #10/#111's original apply ran under
+  # broader one-time bootstrap permissions this role no longer has). Left
+  # out, this statement would reproduce the identical failure the moment
+  # the WebACL is ever tainted, replaced, or recreated in a fresh
+  # workspace -- confirmed live via simulate-principal-policy:
+  # wafv2:CreateWebACL against this managedruleset ARN is implicitDeny
+  # under the current (pre-this-PR) policy, the same asymmetry Update had.
+  # PutManagedRuleSetVersions/UpdateManagedRuleSetVersionExpiryDate also
+  # list managedruleset but aren't granted -- nothing in this config calls
+  # either, and adding them speculatively would be scope creep beyond what
+  # CreateWebACL/UpdateWebACL actually need.
+  #
   # Resource ARN copied verbatim from the live AccessDeniedException
   # message (`arn:aws:wafv2:us-east-1:350195739155:global/managedruleset/*/*`)
   # rather than assembled from AWS's documented ARN template
@@ -416,9 +431,9 @@ data "aws_iam_policy_document" "deploy_policy" {
   # grant, not just today's two. Kept as its own statement rather than
   # folded into the webacl one above so that statement's tighter action
   # list (Create/Update/Delete/Tag/etc.) stays intact -- this one grants
-  # only UpdateWebACL against the narrower managedruleset resource.
+  # only Create/UpdateWebACL against the narrower managedruleset resource.
   statement {
-    actions   = ["wafv2:UpdateWebACL"]
+    actions   = ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"]
     resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/managedruleset/*/*"]
   }
 
