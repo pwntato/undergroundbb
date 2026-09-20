@@ -387,6 +387,36 @@ data "aws_iam_policy_document" "deploy_policy" {
     resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/webacl/undergroundbb-${terraform.workspace}/*"]
   }
 
+  # wafv2:GetManagedRuleSet against the managedruleset resource type --
+  # found live, not by inspection: PR #118's terraform apply to prod failed
+  # with AccessDeniedException on exactly this action/resource pair (Lambda
+  # code updated successfully first; the WAF WebACL update failed after),
+  # because this statement didn't exist. The WebACL body embeds two AWS
+  # managed rule groups (waf.tf's managed_rule_group_statement blocks,
+  # AWSManagedRulesCommonRuleSet and AWSManagedRulesKnownBadInputsRuleSet),
+  # and it turns out wafv2:UpdateWebACL needs read access to those groups'
+  # own ARNs on every call that touches the ACL, not only when the managed
+  # rule group blocks themselves change -- #10/#111's original apply never
+  # hit this because that terraform run created the WebACL from nothing
+  # under broader one-time permissions; this was the first real in-place
+  # update the deploy role ever had to perform against it.
+  #
+  # Resource ARN copied verbatim from the live AccessDeniedException
+  # message (`arn:aws:wafv2:us-east-1:350195739155:global/managedruleset/*/*`)
+  # rather than assembled from AWS's documented ARN template
+  # (arn:${Partition}:wafv2:${Region}:${Account}:${Scope}/managedruleset/${Name}/${Id})
+  # by guesswork -- worth noting because the template's account/scope
+  # placement doesn't match what a mechanical reading of "vendor-owned
+  # managed rule set" would suggest: it's this deploying account's own ARN
+  # namespace (350195739155), under global/ (CLOUDFRONT scope, matching
+  # waf.tf's WebACL), not AWS's pseudo-account. Name/Id wildcarded since
+  # any managed rule group this WebACL might reference needs the same read
+  # access, not just today's two.
+  statement {
+    actions   = ["wafv2:GetManagedRuleSet"]
+    resources = ["arn:aws:wafv2:us-east-1:${data.aws_caller_identity.current.account_id}:global/managedruleset/*/*"]
+  }
+
   # wafv2:CheckCapacity/ListAvailableManagedRuleGroups have no
   # resource-level permissions -- confirmed via the same IAM service
   # reference used above (these actions have no listed resource types),
