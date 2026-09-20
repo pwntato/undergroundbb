@@ -323,6 +323,18 @@ resource "aws_wafv2_web_acl" "main" {
     metric_name                = "undergroundbb-${terraform.workspace}"
     sampled_requests_enabled   = true
   }
+
+  # depends_on aws_iam_role_policy.deploy_waf_managed_rule_sets -- this
+  # resource and that policy have no data dependency (nothing here reads
+  # an attribute it produces), so without this Terraform can apply them
+  # in either order, including a genuine prod failure (#118/#119) where
+  # WAF ran before the grant it needs existed. Depending on the whole
+  # combined deploy_policy instead would recreate a cycle through
+  # CloudFront's own web_acl_id reference back to this resource -- see
+  # deploy_waf_managed_rule_sets's own doc comment in iam_deploy.tf for
+  # the full history and why the grant lives in its own narrow policy
+  # rather than folded into deploy_policy.
+  depends_on = [aws_iam_role_policy.deploy_waf_managed_rule_sets]
 }
 
 output "waf_web_acl_arn" {
