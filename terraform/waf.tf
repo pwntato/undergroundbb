@@ -132,21 +132,38 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # /api/auth/* specifically: 30 req/5min per IP (~6/min) is a deliberate
-  # choice, not a forced floor -- round 1 review corrected an earlier
-  # version of this comment that claimed 100 was WAF's minimum;
-  # rate_based_statement.limit's real minimum is 10 (confirmed live via
-  # `aws wafv2 check-capacity`, which accepts Limit=10 and rejects Limit=0).
-  # Round 2 review caught the value's own justification as wrong too: it had
-  # been picked to tighten "a single IP's compute burn," but there is no
-  # server-side compute this rule bounds (see this file's header comment --
-  # Argon2id never runs here). 30 is sized against this file's header
-  # comment's actual two targets instead: generous enough for a human
-  # retrying a forgotten password a handful of times, while still bounding
-  # both per-IP harvesting of challenge material and the hot-partition write
-  # rate against a single named user's PROFILE item. See the header comment
-  # for why no value here closes the username-keyed challenge-flood threat
-  # -- that's a property of WAF keying on IP, not of this number.
+  # /api/auth/* and /api/account/recovery-code* specifically: 30 req/5min
+  # per IP (~6/min) is a deliberate choice, not a forced floor -- round 1
+  # review corrected an earlier version of this comment that claimed 100
+  # was WAF's minimum; rate_based_statement.limit's real minimum is 10
+  # (confirmed live via `aws wafv2 check-capacity`, which accepts Limit=10
+  # and rejects Limit=0). Round 2 review caught the value's own
+  # justification as wrong too: it had been picked to tighten "a single
+  # IP's compute burn," but there is no server-side compute this rule
+  # bounds (see this file's header comment -- Argon2id never runs here). 30
+  # is sized against this file's header comment's actual two targets
+  # instead: generous enough for a human retrying a forgotten password a
+  # handful of times, while still bounding both per-IP harvesting of
+  # challenge/recovery material and the hot-partition write rate against a
+  # single named user's PROFILE/RECOVERY items. See the header comment for
+  # why no value here closes the username-keyed challenge-flood threat --
+  # that's a property of WAF keying on IP, not of this number.
+  #
+  # Issue #31 added POST /api/account/recovery-code/release and PUT
+  # /api/account/recovery-code -- both unauthenticated, both resolve a
+  # caller-supplied username the same way /auth/challenge does, and a
+  # release attempt is exactly the harvesting/brute-force shape this rule
+  # exists to bound (repeatedly presenting guessed codes against one
+  # account's verifier). This is the "whoever implements... the recovery
+  # endpoint knows to decide their own rate limit" this file's header
+  # comment flagged rather than leaving unaddressed -- folded into this
+  # same rule rather than a separate one, since the target rate and
+  # justification are identical, not just similar.
+  #
+  # PUT /api/account/password is deliberately NOT matched here: it requires
+  # a valid session cookie (internal/handlers/session.go's requireSession),
+  # so an attacker with no session gets nothing from hammering it, and it
+  # falls through to rate-limit-default like any other authenticated route.
   rule {
     name     = "rate-limit-auth"
     priority = 4
@@ -161,59 +178,97 @@ resource "aws_wafv2_web_acl" "main" {
         aggregate_key_type = "IP"
 
         scope_down_statement {
-          byte_match_statement {
-            search_string = "/api/auth/"
-            field_to_match {
-              uri_path {}
+          or_statement {
+            statement {
+              byte_match_statement {
+                search_string = "/api/auth/"
+                field_to_match {
+                  uri_path {}
+                }
+                positional_constraint = "STARTS_WITH"
+                # The three transformations below don't share one rationale
+                # -- each closes a different, separately-verified gap, so
+                # each is justified on its own rather than as one
+                # undifferentiated "hardening" bundle:
+                #
+                # URL_DECODE is load-bearing, not precautionary -- round 4
+                # review found a genuine live bypass NONE could not have
+                # caught. WAF's uri_path with NONE matches the raw,
+                # still-encoded URI, so /%61pi/auth/challenge (%61 = "a")
+                # does not match STARTS_WITH "/api/auth/" and falls
+                # straight through to the 2000/5min default -- confirmed
+                # live: /%61pi/health hits the real Lambda (genuine
+                # x-amzn-trace-id/x-amzn-requestid, "Miss from
+                # cloudfront", real {"status":"ok"} body, not a redirect
+                # or an edge rejection). Unlike the ./.. forms below,
+                # nothing else in the request path normalizes or rejects
+                # this first -- decoding it here is the only thing that
+                # closes it.
+                #
+                # NORMALIZE_PATH is defense-in-depth, not a fix for a
+                # confirmed bypass -- round 1/2 recorded /api/./auth/...
+                # and /api/foo/../auth/... as live-verified bypasses, but
+                # round 3 found that was an artifact of testing with plain
+                # curl, which silently strips "." and ".." from a URL
+                # client-side unless --path-as-is is given. Reproduced
+                # properly with --path-as-is: /api/./health is actually
+                # 307 from Go's http.ServeMux (its own unclean-path
+                # redirect to the clean path, not a handler hit) and
+                # /api/foo/../health is actually 403 from CloudFront at
+                # the edge, never reaching the origin. Kept anyway against
+                # those two components' behavior ever changing, not
+                # because either was ever a real bypass.
+                #
+                # LOWERCASE is kept for a confirmed reason, not a
+                # hypothetical one -- docs/DESIGN.md: every username
+                # lookup lowercases, including POST /api/auth/challenge,
+                # so this endpoint really is case-insensitive even though
+                # /API/auth/ doesn't reach the Lambda today (it misses the
+                # /api/* cache behavior and lands on the SPA instead).
+                text_transformation {
+                  priority = 0
+                  type     = "URL_DECODE"
+                }
+                text_transformation {
+                  priority = 1
+                  type     = "NORMALIZE_PATH"
+                }
+                text_transformation {
+                  priority = 2
+                  type     = "LOWERCASE"
+                }
+              }
             }
-            positional_constraint = "STARTS_WITH"
-            # The three transformations below don't share one rationale --
-            # each closes a different, separately-verified gap, so each is
-            # justified on its own rather than as one undifferentiated
-            # "hardening" bundle:
-            #
-            # URL_DECODE is load-bearing, not precautionary -- round 4
-            # review found a genuine live bypass NONE could not have caught.
-            # WAF's uri_path with NONE matches the raw, still-encoded URI,
-            # so /%61pi/auth/challenge (%61 = "a") does not match
-            # STARTS_WITH "/api/auth/" and falls straight through to the
-            # 2000/5min default -- confirmed live: /%61pi/health hits the
-            # real Lambda (genuine x-amzn-trace-id/x-amzn-requestid, "Miss
-            # from cloudfront", real {"status":"ok"} body, not a redirect or
-            # an edge rejection). Unlike the ./.. forms below, nothing else
-            # in the request path normalizes or rejects this first --
-            # decoding it here is the only thing that closes it.
-            #
-            # NORMALIZE_PATH is defense-in-depth, not a fix for a confirmed
-            # bypass -- round 1/2 recorded /api/./auth/... and
-            # /api/foo/../auth/... as live-verified bypasses, but round 3
-            # found that was an artifact of testing with plain curl, which
-            # silently strips "." and ".." from a URL client-side unless
-            # --path-as-is is given. Reproduced properly with
-            # --path-as-is: /api/./health is actually 307 from Go's
-            # http.ServeMux (its own unclean-path redirect to the clean
-            # path, not a handler hit) and /api/foo/../health is actually
-            # 403 from CloudFront at the edge, never reaching the origin.
-            # Kept anyway against those two components' behavior ever
-            # changing, not because either was ever a real bypass.
-            #
-            # LOWERCASE is kept for a confirmed reason, not a hypothetical
-            # one -- docs/DESIGN.md: every username lookup lowercases,
-            # including POST /api/auth/challenge, so this endpoint really is
-            # case-insensitive even though /API/auth/ doesn't reach the
-            # Lambda today (it misses the /api/* cache behavior and lands on
-            # the SPA instead).
-            text_transformation {
-              priority = 0
-              type     = "URL_DECODE"
-            }
-            text_transformation {
-              priority = 1
-              type     = "NORMALIZE_PATH"
-            }
-            text_transformation {
-              priority = 2
-              type     = "LOWERCASE"
+            statement {
+              byte_match_statement {
+                # Deliberately /api/account/recovery-code, not the broader
+                # /api/account/ -- see this rule's own header comment on
+                # why PUT /api/account/password (the only other route under
+                # that prefix) is excluded rather than swept in.
+                search_string = "/api/account/recovery-code"
+                field_to_match {
+                  uri_path {}
+                }
+                positional_constraint = "STARTS_WITH"
+                # Same three transformations and the same reasons as the
+                # /api/auth/ branch above -- this scope-down statement is
+                # exposed to the identical bypass surface (raw-encoded
+                # paths, ./.. traversal attempts, case variation), and
+                # nothing about this being a different prefix changes any
+                # of that reasoning.
+                text_transformation {
+                  priority = 0
+                  type     = "URL_DECODE"
+                }
+                text_transformation {
+                  priority = 1
+                  type     = "NORMALIZE_PATH"
+                }
+                text_transformation {
+                  priority = 2
+                  type     = "LOWERCASE"
+                }
+              }
             }
           }
         }

@@ -38,6 +38,10 @@ var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 const (
 	maxSaltLen       = 256
 	maxCiphertextLen = 4096
+	// maxVerifierLen bounds the recovery verifier -- an Argon2id output, on
+	// the order of 32 bytes in practice, so this is as generous relative to
+	// the real payload as maxSaltLen and maxCiphertextLen are to theirs.
+	maxVerifierLen = 256
 )
 
 // maxRegisterBodyBytes bounds the request body itself, ahead of any
@@ -74,6 +78,14 @@ const (
 // of the same private keys, matching the parallel structure in
 // docs/DESIGN.md: RECOVERY "carries its own salt and its own parameters,
 // since its derivation is independent of the password's."
+//
+// RecoveryVerifierSalt/Params/Verifier are a third, independent Argon2id
+// derivation of the same client-generated recovery code -- not of the
+// wrapping key above -- so that holding the verifier never yields the
+// wrapper. See docs/DESIGN.md, "derived separately from the wrapping key,"
+// and models.Recovery's own doc comment. The server stores these opaquely,
+// exactly like the wrap fields; it never computes a verifier itself, only
+// checks one later (crypto.CheckRecoveryVerifier), at actual recovery time.
 type registerRequest struct {
 	Username string `json:"username"`
 
@@ -87,6 +99,10 @@ type registerRequest struct {
 	RecoverySalt               string       `json:"recoverySalt"`
 	RecoveryArgon2Params       argon2Params `json:"recoveryArgon2Params"`
 	RecoveryWrappedPrivateKeys wrappedBlob  `json:"recoveryWrappedPrivateKeys"`
+
+	RecoveryVerifierSalt   string       `json:"recoveryVerifierSalt"`
+	RecoveryVerifierParams argon2Params `json:"recoveryVerifierParams"`
+	RecoveryVerifier       string       `json:"recoveryVerifier"`
 }
 
 type argon2Params struct {
@@ -180,6 +196,26 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The verifier is a third, independent derivation of the same recovery
+	// code (see registerRequest's doc comment) -- validated the same way as
+	// the wrap fields above (a facially-too-weak Argon2id floor, a decoded
+	// length bound), but under its own field names so a validation error
+	// tells the client which of the three derivations is wrong.
+	recoveryVerifierSalt, err := decodeBase64Field(req.RecoveryVerifierSalt, 0, maxSaltLen)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "recoveryVerifierSalt: "+err.Error())
+		return
+	}
+	if err := validateArgon2Params(req.RecoveryVerifierParams); err != nil {
+		WriteError(w, http.StatusBadRequest, "recoveryVerifierParams: "+err.Error())
+		return
+	}
+	recoveryVerifier, err := decodeBase64Field(req.RecoveryVerifier, 0, maxVerifierLen)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "recoveryVerifier: "+err.Error())
+		return
+	}
+
 	userID, err := idgen.UUID()
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not generate user id")
@@ -200,6 +236,10 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		RecoverySalt:               recoverySalt,
 		RecoveryArgon2Params:       toModelParams(req.RecoveryArgon2Params),
 		RecoveryWrappedPrivateKeys: recoveryWrapped,
+
+		RecoveryVerifierSalt:   recoveryVerifierSalt,
+		RecoveryVerifierParams: toModelParams(req.RecoveryVerifierParams),
+		RecoveryVerifier:       recoveryVerifier,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrUsernameTaken) {

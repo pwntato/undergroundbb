@@ -100,6 +100,10 @@ func validRegisterRequest(username string) registerRequest {
 		RecoverySalt:               b64(16),
 		RecoveryArgon2Params:       params,
 		RecoveryWrappedPrivateKeys: wrappedBlob{Nonce: b64(12), Ciphertext: b64(48)},
+
+		RecoveryVerifierSalt:   b64(16),
+		RecoveryVerifierParams: params,
+		RecoveryVerifier:       b64(32),
 	}
 }
 
@@ -198,6 +202,11 @@ func TestRegisterValidation(t *testing.T) {
 		{"ciphertext over max length", func(r *registerRequest) {
 			r.WrappedPrivateKeys.Ciphertext = b64(maxCiphertextLen + 1)
 		}},
+		{"missing recovery verifier salt", func(r *registerRequest) { r.RecoveryVerifierSalt = "" }},
+		{"zero recovery verifier argon2 params", func(r *registerRequest) { r.RecoveryVerifierParams.Iterations = 0 }},
+		{"recovery verifier argon2 below floor", func(r *registerRequest) { r.RecoveryVerifierParams.MemoryKiB = 1024 }},
+		{"missing recovery verifier", func(r *registerRequest) { r.RecoveryVerifier = "" }},
+		{"recovery verifier over max length", func(r *registerRequest) { r.RecoveryVerifier = b64(maxVerifierLen + 1) }},
 	}
 
 	for _, tc := range cases {

@@ -123,8 +123,8 @@ type WrappedBlob struct {
 
 // Recovery is the USER#<uuid> / RECOVERY item -- a second copy of the
 // private keys, wrapped under a key derived from a recovery code the client
-// generates at signup, independent of the password. See docs/DESIGN.md,
-// "The recovery copy is a separate item, not an attribute of the profile."
+// generates, independent of the password. See docs/DESIGN.md, "The
+// recovery copy is a separate item, not an attribute of the profile."
 //
 // Salt and Argon2Params are this item's own, unrelated to User's -- the
 // recovery derivation has no dependence on the password, which is the whole
@@ -135,6 +135,27 @@ type Recovery struct {
 	Salt               []byte       `dynamodbav:"Salt"`
 	Argon2Params       Argon2Params `dynamodbav:"Argon2Params"`
 	WrappedPrivateKeys WrappedBlob  `dynamodbav:"WrappedPrivateKeys"`
+
+	// VerifierSalt, VerifierArgon2Params and Verifier gate this item's own
+	// release: an Argon2id hash of the recovery code, computed client-side
+	// under its own salt and parameters -- separate from Salt/Argon2Params
+	// above, which wrap the private keys, so that holding the verifier does
+	// not yield the wrapping key. See docs/DESIGN.md, "The server holds a
+	// verifier... derived separately from the wrapping key so that holding
+	// the verifier does not yield the wrapper," and issue #31's round-28
+	// review comment.
+	//
+	// The server never computes a verifier, only checks one
+	// (crypto.CheckRecoveryVerifier) against a plaintext code presented at
+	// recovery time -- consistent with every other credential field on this
+	// item, and with docs/DESIGN.md's "server never sees a password... or
+	// any plaintext," which the recovery code is equivalent to (see
+	// THREAT_MODEL.md, "the recovery code," "equivalent to the password").
+	// Set at registration and replaced, alongside a freshly issued code, by
+	// every credential re-wrap.
+	VerifierSalt         []byte       `dynamodbav:"VerifierSalt"`
+	VerifierArgon2Params Argon2Params `dynamodbav:"VerifierArgon2Params"`
+	Verifier             []byte       `dynamodbav:"Verifier"`
 
 	// CredentialVersion mirrors User.CredentialVersion -- both items rewrite
 	// together on every credential change, under the same transaction
