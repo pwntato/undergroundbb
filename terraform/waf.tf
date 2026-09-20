@@ -324,32 +324,16 @@ resource "aws_wafv2_web_acl" "main" {
     sampled_requests_enabled   = true
   }
 
-  # depends_on aws_iam_role_policy.deploy_waf_managed_rule_sets (defined in
-  # iam_deploy.tf) -- PR #119 found the hard way that this resource and the
-  # deploy role's WAF permissions have no data dependency between them
-  # (nothing here reads an attribute the policy resource produces), so
-  # without this, Terraform is free to apply them in either order or in
-  # parallel. #119's terraform apply hit exactly that: the plan staged
-  # both the IAM policy update (adding the wafv2:{Create,Update}WebACL
-  # grant on the managedruleset ARN) and this resource's update in the
-  # same apply, but aws_wafv2_web_acl.main ran (and failed with
-  # AccessDeniedException on that same action/resource) before the
-  # policy's PutRolePolicy call ever fired -- confirmed via CloudTrail
-  # showing no PutRolePolicy event at the time of the failed apply, and
-  # the role's live policy still missing the new statement afterward.
-  #
-  # depends_on the entire aws_iam_role_policy.deploy resource (the
-  # deploy role's one big combined policy) instead of this narrower one
-  # was tried first and rejected -- validate caught a real cycle: that
-  # policy also grants cloudfront:UpdateDistribution scoped to
-  # aws_cloudfront_distribution.main's ARN, and this resource's own
-  # web_acl_id is read by that same CloudFront distribution
-  # (cloudfront.tf), so depending on the whole policy pulled in
-  # CloudFront as a transitive dependency and closed the loop:
-  # WAF -> deploy policy -> CloudFront -> WAF. Splitting the
-  # managedruleset grant into its own policy resource with no CloudFront
-  # reference (iam_deploy.tf) breaks that cycle while still forcing the
-  # one grant this resource actually needs to land first.
+  # depends_on aws_iam_role_policy.deploy_waf_managed_rule_sets -- this
+  # resource and that policy have no data dependency (nothing here reads
+  # an attribute it produces), so without this Terraform can apply them
+  # in either order, including a genuine prod failure (#118/#119) where
+  # WAF ran before the grant it needs existed. Depending on the whole
+  # combined deploy_policy instead would recreate a cycle through
+  # CloudFront's own web_acl_id reference back to this resource -- see
+  # deploy_waf_managed_rule_sets's own doc comment in iam_deploy.tf for
+  # the full history and why the grant lives in its own narrow policy
+  # rather than folded into deploy_policy.
   depends_on = [aws_iam_role_policy.deploy_waf_managed_rule_sets]
 }
 

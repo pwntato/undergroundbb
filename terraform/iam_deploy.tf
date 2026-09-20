@@ -451,6 +451,22 @@ resource "aws_iam_role_policy" "deploy" {
   name   = "undergroundbb-deploy-policy"
   role   = aws_iam_role.deploy.id
   policy = data.aws_iam_policy_document.deploy_policy.json
+
+  # depends_on aws_iam_role_policy.deploy_waf_managed_rule_sets -- PR #120
+  # round 2 review. This apply does two things to the deploy role's
+  # permissions at once: creates deploy_waf_managed_rule_sets (adding the
+  # wafv2:{Create,Update}WebACL-on-managedruleset grant, below) AND
+  # updates this resource (removing that same grant from THIS combined
+  # policy, where PR #119 originally put it, before #120 split it out).
+  # Without an explicit order, Terraform could run the removal first and
+  # the addition second -- a window where the role holds the grant in
+  # neither policy, reproducing #118/#119's exact failure one more time
+  # (the WAF resource's own depends_on, in waf.tf, only guarantees the
+  # NEW policy exists before WAF needs it; it says nothing about this
+  # resource's own concurrent update). Depending on the narrow policy
+  # here is safe -- it has no CloudFront reference, so it cannot
+  # reintroduce the cycle the split itself was fixing.
+  depends_on = [aws_iam_role_policy.deploy_waf_managed_rule_sets]
 }
 
 # wafv2:{Create,Update}WebACL against the managedruleset resource type --
@@ -503,6 +519,14 @@ resource "aws_iam_role_policy" "deploy" {
 # CloudFront reference at all, so depending on it (waf.tf) breaks the
 # cycle while still forcing the one grant the WAF resource actually needs
 # to land first.
+#
+# Splitting the statement out also means one apply now both creates this
+# policy AND removes the same statement from deploy_policy (where #119
+# put it) -- PR #120 round 2 review caught that those two writes had no
+# ordering between them either, the identical class of race one level up.
+# aws_iam_role_policy.deploy's own depends_on (above) closes that: it
+# waits for this resource specifically, not the other way around, so the
+# grant always exists in at least one policy throughout the apply.
 data "aws_iam_policy_document" "deploy_waf_managed_rule_sets" {
   statement {
     actions   = ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"]
