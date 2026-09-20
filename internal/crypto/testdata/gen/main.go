@@ -123,16 +123,32 @@ type fingerprintVector struct {
 	Fingerprint    string `json:"fingerprint"`
 }
 
+// credentialWrapVector proves CredentialWrapAAD's encoding byte-for-byte,
+// the same way wrapVector proves the GENKEY AAD -- see credential.go's own
+// doc comment for why this one specifically needed pinning down rather than
+// being left to whatever each implementation happened to guess.
+type credentialWrapVector struct {
+	Name          string `json:"name"`
+	UserID        string `json:"user_id"`
+	Copy          string `json:"copy"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
 type vectorFile struct {
-	Version       int                   `json:"version"`
-	KDF           []kdfVector           `json:"kdf"`
-	AEAD          []aeadVector          `json:"aead"`
-	AEADNegative  []aeadNegativeVector  `json:"aead_negative"`
-	Signing       []signingVector       `json:"signing"`
-	SignedPayload []signedPayloadVector `json:"signed_payload"`
-	Wrapping      []wrapVector          `json:"wrapping"`
-	GenkeyChain   []genkeyChainVector   `json:"genkey_chain"`
-	Fingerprint   []fingerprintVector   `json:"fingerprint"`
+	Version        int                    `json:"version"`
+	KDF            []kdfVector            `json:"kdf"`
+	AEAD           []aeadVector           `json:"aead"`
+	AEADNegative   []aeadNegativeVector   `json:"aead_negative"`
+	Signing        []signingVector        `json:"signing"`
+	SignedPayload  []signedPayloadVector  `json:"signed_payload"`
+	Wrapping       []wrapVector           `json:"wrapping"`
+	GenkeyChain    []genkeyChainVector    `json:"genkey_chain"`
+	Fingerprint    []fingerprintVector    `json:"fingerprint"`
+	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
 }
 
 func main() {
@@ -285,6 +301,45 @@ func main() {
 			WrappedNonceHex:   hex.EncodeToString(wrapped.Nonce),
 			WrappedCiphertext: hex.EncodeToString(wrapped.Ciphertext),
 		})
+	}
+
+	// --- Credential wrap AAD (#30) ---
+	// Two vectors under the SAME userID and key material, differing only in
+	// which copy -- proving CredentialWrapAAD produces genuinely different
+	// AAD (and therefore a genuinely different ciphertext) for PROFILE vs.
+	// RECOVERY, not just a string that happens to round-trip through one
+	// path. This is what a relocation between the two items would need to
+	// survive, per docs/DESIGN.md's AAD table.
+	{
+		userID := "11111111-2222-3333-4444-555555555555"
+		key := fixedSeed("credential-wrap-key-1")[:crypto.KeySize]
+		plaintext := fixedSeed("credential-wrap-plaintext-1")
+
+		for _, tc := range []struct {
+			name       string
+			copy       crypto.CredentialCopy
+			nonceLabel string
+		}{
+			{"profile", crypto.CredentialCopyProfile, "credential-wrap-nonce-profile-1"},
+			{"recovery", crypto.CredentialCopyRecovery, "credential-wrap-nonce-recovery-1"},
+		} {
+			aad := crypto.CredentialWrapAAD(userID, tc.copy)
+			nonce := fixedSeed(tc.nonceLabel)[:crypto.NonceSize]
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.CredentialWrap = append(out.CredentialWrap, credentialWrapVector{
+				Name:          tc.name,
+				UserID:        userID,
+				Copy:          string(tc.copy),
+				AADHex:        hex.EncodeToString(aad),
+				KeyHex:        hex.EncodeToString(key),
+				PlaintextHex:  hex.EncodeToString(plaintext),
+				NonceHex:      hex.EncodeToString(nonce),
+				CiphertextHex: hex.EncodeToString(ciphertext),
+			})
+		}
 	}
 
 	// --- GENKEY chain link (the #20-named negative vector) ---

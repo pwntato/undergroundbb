@@ -144,6 +144,22 @@ func TestLoginHappyPath(t *testing.T) {
 	if userID != user.userID {
 		t.Errorf("session names user %q, want %q", userID, user.userID)
 	}
+
+	var resp verifyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding verify response: %v", err)
+	}
+	if resp.UserID != user.userID {
+		t.Errorf("response UserID = %q, want %q", resp.UserID, user.userID)
+	}
+	// A fresh registration sets CredentialVersion to 1 (db.Register) -- this
+	// is the only route by which a logged-in client (as opposed to one
+	// recovering, which gets its own copy from recoveryReleaseResponse) ever
+	// learns it, so PUT /api/account/password's ExpectedCredentialVersion has
+	// something to read.
+	if resp.CredentialVersion != 1 {
+		t.Errorf("response CredentialVersion = %d, want 1", resp.CredentialVersion)
+	}
 }
 
 func TestChallengeUnknownUsername(t *testing.T) {

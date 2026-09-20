@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import { decrypt, DecryptionFailedError, encryptWithNonce } from './aesgcm.js'
 import { deriveKey } from './argon2.js'
+import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
 import { bytesToHex, hexToBytes } from './hex.js'
@@ -96,6 +97,16 @@ interface VectorFile {
     signing_public_key_hex: string
     wrapping_public_key_hex: string
     fingerprint: string
+  }[]
+  credential_wrap: {
+    name: string
+    user_id: string
+    copy: string
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
   }[]
 }
 
@@ -248,4 +259,46 @@ describe('fingerprint vectors', () => {
       expect(fingerprint(signingPub, wrappingPub)).toBe(tc.fingerprint)
     })
   }
+})
+
+// Pins credentialWrapAAD's exact encoding — see that function's own doc
+// comment for why this specific AAD, unlike every other one in this
+// codebase, had no code fixing its byte format before #30 needed one.
+// Proves both the encoding itself and, by running the AES-256-GCM round
+// trip through it, that a client unwrapping under the wrong copy's AAD
+// (PROFILE's AAD against RECOVERY's ciphertext or vice versa) fails the way
+// any other address-relocation attempt does.
+describe('credential wrap vectors', () => {
+  for (const tc of vectors.credential_wrap) {
+    it(tc.name, async () => {
+      const wantAad = hexToBytes(tc.aad_hex)
+      const gotAad = credentialWrapAAD(tc.user_id, tc.copy as CredentialCopy)
+      expect(bytesToHex(gotAad)).toBe(bytesToHex(wantAad))
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const plaintext = hexToBytes(tc.plaintext_hex)
+
+      const ciphertext = await encryptWithNonce(key, nonce, plaintext, gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+
+      const decrypted = await decrypt(key, nonce, ciphertext, gotAad)
+      expect(bytesToHex(decrypted)).toBe(tc.plaintext_hex)
+    })
+  }
+
+  it('cross-copy AAD must fail (PROFILE ciphertext under RECOVERY AAD)', async () => {
+    const profile = vectors.credential_wrap.find((v) => v.copy === 'PROFILE')
+    const recovery = vectors.credential_wrap.find((v) => v.copy === 'RECOVERY')
+    if (!profile || !recovery) throw new Error('expected both PROFILE and RECOVERY vectors')
+
+    const key = hexToBytes(profile.key_hex)
+    const nonce = hexToBytes(profile.nonce_hex)
+    const profileCiphertext = hexToBytes(profile.ciphertext_hex)
+    const recoveryAad = hexToBytes(recovery.aad_hex)
+
+    await expect(decrypt(key, nonce, profileCiphertext, recoveryAad)).rejects.toThrow(
+      DecryptionFailedError,
+    )
+  })
 })
