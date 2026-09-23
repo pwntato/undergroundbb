@@ -83,7 +83,7 @@ relocated ciphertext fail loudly:
 | Comment | `POST#<pid>` + `CMT#<path>` + generation number |
 | Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
 | Generation key | group id + generation number |
-| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned, the only id in this schema that isn't) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. |
+| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. |
 | Group name/description | group id + generation number |
 
 **Posts and comments are signed over their address as well as their content**, for the same reason

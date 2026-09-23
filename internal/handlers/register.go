@@ -314,10 +314,20 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 			// Expected to be vanishingly rare against a well-behaved client
 			// (122 bits of CSPRNG output per idgen.UUID's own doc comment
 			// makes an accidental collision astronomical) -- see
-			// db.ErrUserIDTaken's own doc comment. A 409
-			// here tells a legitimate client to regenerate and retry with a
-			// fresh id, the same recovery a 409 on username already implies.
-			WriteError(w, http.StatusConflict, "userId is taken")
+			// db.ErrUserIDTaken's own doc comment.
+			//
+			// This is NOT the same recovery a username conflict implies (PR
+			// #123 review caught this comment claiming otherwise). A username
+			// conflict just needs a new name resent with the same wrapped
+			// blobs, since the AAD doesn't bind the username. A userId
+			// conflict means generating a new uuid AND re-wrapping both
+			// PROFILE and RECOVERY copies under it, since CredentialWrapAAD
+			// binds the uuid -- resending the old blobs under a new id would
+			// store keys the client can never unwrap again, with nothing on
+			// the server able to catch that. The "code" field is what lets
+			// #33's client (or any caller) branch on which recovery applies
+			// without string-matching the message.
+			WriteErrorWithCode(w, http.StatusConflict, "userId is taken", "user_id_taken")
 			return
 		}
 		WriteError(w, http.StatusInternalServerError, "could not create account")

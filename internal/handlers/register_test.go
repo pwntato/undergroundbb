@@ -196,6 +196,17 @@ func TestRegisterUserIDConflict(t *testing.T) {
 	if secondRec.Code != http.StatusConflict {
 		t.Fatalf("second register status = %d, want %d, body: %s", secondRec.Code, http.StatusConflict, secondRec.Body.String())
 	}
+	// PR #123 review: a userId conflict needs a different client recovery
+	// than a username conflict (regenerate the id and re-wrap both key
+	// copies, vs. just resend under a new name) -- "code" is what lets a
+	// caller branch on that without string-matching "error".
+	var secondBody map[string]string
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &secondBody); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if secondBody["code"] != "user_id_taken" {
+		t.Errorf(`response code = %q, want "user_id_taken"`, secondBody["code"])
+	}
 
 	// The first account's PROFILE must still reflect its own registration,
 	// not anything from the rejected second attempt -- the exact overwrite

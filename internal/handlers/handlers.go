@@ -89,3 +89,17 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg})
 }
+
+// WriteErrorWithCode writes a JSON error response carrying a stable,
+// machine-readable code alongside the free-text message WriteError already
+// sends. Most callers should still use WriteError -- this project has no
+// general convention yet for when an error is worth a code (see PR #123's
+// review, "the same recovery a 409 on username already implies" was wrong:
+// a userId conflict and a username conflict need genuinely different client
+// recovery, and only the former is exposed with a code today). Use this only
+// where a caller genuinely needs to branch on the failure kind rather than
+// just display msg, rather than adding a code to every error as a matter of
+// course.
+func WriteErrorWithCode(w http.ResponseWriter, status int, msg, code string) {
+	WriteJSON(w, status, map[string]string{"error": msg, "code": code})
+}
