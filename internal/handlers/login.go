@@ -12,6 +12,7 @@ import (
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/idgen"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -52,8 +53,17 @@ type challengeRequest struct {
 // offline-crackable material register's client already generated --
 // serving it back is not a new exposure, see docs/THREAT_MODEL.md's "Login
 // material" section, which this endpoint IS the subject of.
+//
+// UserID closes issue #125: the client needs the uuid to build
+// CredentialWrapAAD before it can unwrap WrappedPrivateKeys, and this is the
+// first (and for a fresh device with no prior session, only) response that
+// hands it one -- verifyResponse's copy comes back too late, after the
+// client has already had to sign the challenge. See challenge's own doc
+// comment for why the unknown-username branch returns a decoy uuid here
+// rather than omitting the field.
 type challengeResponse struct {
 	Nonce              string       `json:"nonce"`
+	UserID             string       `json:"userId"`
 	Salt               string       `json:"salt"`
 	Argon2Params       argon2Params `json:"argon2Params"`
 	WrappedPrivateKeys wrappedBlob  `json:"wrappedPrivateKeys"`
@@ -74,7 +84,10 @@ type challengeResponse struct {
 // verifies against nothing real: no CHALLENGE item is ever written for a
 // lookup miss (PutChallenge's key requires a real userID), so a client that
 // somehow reached this branch cannot complete a login with the result no
-// matter what it signs.
+// matter what it signs. The same reasoning applies to UserID (issue #125):
+// a freshly random decoy uuid, not a distinguishable zero value or omitted
+// field, so the unknown-username branch stays shaped exactly like the real
+// one.
 func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 	var req challengeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -108,8 +121,14 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 		_, _ = rand.Read(fakeWrapNonce)
 		fakeCiphertext := make([]byte, 48)
 		_, _ = rand.Read(fakeCiphertext)
+		decoyUserID, err := idgen.UUID()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "could not generate challenge")
+			return
+		}
 		WriteJSON(w, http.StatusOK, challengeResponse{
 			Nonce:        nonceB64,
+			UserID:       decoyUserID,
 			Salt:         base64.StdEncoding.EncodeToString(fakeSalt),
 			Argon2Params: argon2Params{MemoryKiB: minArgon2MemoryKiB, Iterations: minArgon2Iterations, Parallelism: minArgon2Parallelism},
 			WrappedPrivateKeys: wrappedBlob{
@@ -128,6 +147,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusOK, challengeResponse{
 		Nonce:        nonceB64,
+		UserID:       userID,
 		Salt:         base64.StdEncoding.EncodeToString(user.Salt),
 		Argon2Params: toWireParams(user.Argon2Params),
 		WrappedPrivateKeys: wrappedBlob{

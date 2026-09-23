@@ -115,8 +115,18 @@ type recoveryReleaseRequest struct {
 // carries CredentialVersion, so the client's subsequent
 // PUT /api/account/recovery-code can supply ExpectedCredentialVersion
 // without a second read.
+//
+// UserID closes issue #125, the recovery-side twin of challengeResponse's
+// same addition: the client needs the uuid to build CredentialWrapAAD
+// before it can unwrap WrappedPrivateKeys. Unlike challenge, there is no
+// decoy branch to match here -- every failure mode (unknown username, wrong
+// code, missing RECOVERY item) already returns the single uniform
+// errRecoveryCodeInvalid error rather than a fabricated success body, so
+// this field is only ever populated once resolveRecovery has confirmed a
+// real user and a correct code.
 type recoveryReleaseResponse struct {
 	CredentialVersion  int64        `json:"credentialVersion"`
+	UserID             string       `json:"userId"`
 	Salt               string       `json:"salt"`
 	Argon2Params       argon2Params `json:"argon2Params"`
 	WrappedPrivateKeys wrappedBlob  `json:"wrappedPrivateKeys"`
@@ -141,7 +151,7 @@ func (h *Handler) recoveryCodeRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, rec, err := h.resolveRecovery(r.Context(), strings.ToLower(req.Username), req.RecoveryCode)
+	userID, rec, err := h.resolveRecovery(r.Context(), strings.ToLower(req.Username), req.RecoveryCode)
 	if err != nil {
 		if errors.Is(err, errInvalidRecoveryAttempt) {
 			WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
@@ -153,6 +163,7 @@ func (h *Handler) recoveryCodeRelease(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusOK, recoveryReleaseResponse{
 		CredentialVersion: rec.CredentialVersion,
+		UserID:            userID,
 		Salt:              base64.StdEncoding.EncodeToString(rec.Salt),
 		Argon2Params:      toWireParams(rec.Argon2Params),
 		WrappedPrivateKeys: wrappedBlob{

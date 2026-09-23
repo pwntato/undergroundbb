@@ -99,7 +99,11 @@ only the plaintext body would survive relocation: real author, real content, rew
 
 1. Client sends a username to `POST /api/auth/challenge`.
 2. Server generates a random nonce, **stores it** as the `USER#<uuid>` / `CHALLENGE` item with
-   a short TTL, and returns it along with the user's salt and their wrapped private keys.
+   a short TTL, and returns it along with the user's uuid, salt, and wrapped private keys. The uuid
+   is included because the client needs it to build `CredentialWrapAAD` before it can unwrap the
+   keys (see the AAD table above) — for a fresh device with no prior session, this is the only
+   response that hands it one. An unknown username gets a freshly random decoy uuid alongside the
+   rest of the placeholder response, for the same enumeration reasons as the fake salt and blob.
 3. Client derives the key from the password with Argon2id, unwraps the private keys, and signs the
    nonce with the Ed25519 key.
 4. Server **deletes the challenge item with a conditional write** and, only if that delete succeeds,
@@ -245,7 +249,11 @@ scratch. The distinction is that the server holds this state without being trust
 
 At signup, a high-entropy recovery code is generated and a **second copy** of the private keys is
 wrapped under it, stored as its own `USER#<uuid>` / `RECOVERY` item and served only by a code-gated
-release endpoint. A
+release endpoint. The release response includes the uuid alongside the salt and wrapped keys, for
+the same reason login's challenge response does — the client needs it to build `CredentialWrapAAD`
+before unwrapping. Unlike challenge, there is no decoy branch to match: every failure mode here
+already collapses to one uniform error rather than a fabricated success body, so the uuid is only
+ever returned once the code has actually verified. A
 user who forgets their password can recover with the code. A user who loses both has permanently
 lost access — the server has nothing to reset, by design. The code is a **second full credential**,
 with the exposure that implies — see
