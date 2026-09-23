@@ -64,7 +64,7 @@ func TestRegisterWritesAllThreeItems(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 
-	in := testRegisterInput("test-register-alice", "alice-"+randomSuffix(t))
+	in := testRegisterInput("test-register-alice-"+randomSuffix(t), "alice-"+randomSuffix(t))
 	if err := c.Register(ctx, in); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -120,12 +120,12 @@ func TestRegisterUsernameTaken(t *testing.T) {
 	ctx := context.Background()
 
 	username := "bob-" + randomSuffix(t)
-	first := testRegisterInput("test-register-bob-1", username)
+	first := testRegisterInput("test-register-bob-1-"+randomSuffix(t), username)
 	if err := c.Register(ctx, first); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 
-	second := testRegisterInput("test-register-bob-2", username)
+	second := testRegisterInput("test-register-bob-2-"+randomSuffix(t), username)
 	err := c.Register(ctx, second)
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("second Register error = %v, want ErrUsernameTaken", err)
@@ -144,6 +144,58 @@ func TestRegisterUsernameTaken(t *testing.T) {
 	}
 }
 
+// TestRegisterUserIDTaken covers ErrUserIDTaken directly at the db layer:
+// two Register calls with different usernames but the same UserID must have
+// the second rejected, and must not clobber the first registration's
+// PROFILE item. UserID is now caller-supplied rather than always a fresh
+// idgen.UUID() (see RegisterInput's own doc comment), so unlike
+// TestRegisterUsernameTaken above -- which exercises a condition that
+// existed before this change -- this is the new collision surface a
+// client-chosen id introduces.
+func TestRegisterUserIDTaken(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	sharedID := "test-register-dave-shared-" + randomSuffix(t)
+	first := testRegisterInput(sharedID, "dave-"+randomSuffix(t))
+	if err := c.Register(ctx, first); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	second := testRegisterInput(sharedID, "dave-second-"+randomSuffix(t))
+	err := c.Register(ctx, second)
+	if !errors.Is(err, ErrUserIDTaken) {
+		t.Fatalf("second Register error = %v, want ErrUserIDTaken", err)
+	}
+
+	// The first registration's PROFILE must be exactly what it wrote --
+	// the rejected second attempt sharing the same PK must not have landed
+	// any of its own item there, transactionally or otherwise.
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+sharedID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if user.Item == nil {
+		t.Fatal("first registration's PROFILE item is missing")
+	}
+	var userItem models.User
+	if err := unmarshalItem(user.Item, &userItem); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if userItem.Username != first.Username {
+		t.Errorf("PROFILE Username = %q, want %q (first registration's, unclobbered)", userItem.Username, first.Username)
+	}
+
+	// The second (losing) username must remain unclaimed.
+	secondClaim, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USERNAME#"+second.UsernameLower, "CLAIM"))
+	if err != nil {
+		t.Fatalf("GetItem CLAIM: %v", err)
+	}
+	if secondClaim.Item != nil {
+		t.Error("losing Register call's username claim was written despite the userId conflict")
+	}
+}
+
 // TestRegisterUsernameTakenConcurrent is the race this project's CI
 // explicitly calls out signup for (.github/workflows/test.yml: "the design
 // has five contested writes ... whose tests exercise concurrency"). Two
@@ -156,8 +208,8 @@ func TestRegisterUsernameTakenConcurrent(t *testing.T) {
 	ctx := context.Background()
 
 	username := "carol-" + randomSuffix(t)
-	a := testRegisterInput("test-register-carol-a", username)
-	b := testRegisterInput("test-register-carol-b", username)
+	a := testRegisterInput("test-register-carol-a-"+randomSuffix(t), username)
+	b := testRegisterInput("test-register-carol-b-"+randomSuffix(t), username)
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -202,5 +254,64 @@ func TestRegisterUsernameTakenConcurrent(t *testing.T) {
 	}
 	if got.UserID != winnerID {
 		t.Errorf("claim.UserID = %q, want winner %q", got.UserID, winnerID)
+	}
+}
+
+// TestRegisterUserIDTakenConcurrent is TestRegisterUsernameTakenConcurrent's
+// counterpart for the PROFILE write's own condition, now load-bearing
+// because UserID is caller-supplied (see RegisterInput's own doc comment).
+// Two concurrent Register calls sharing one UserID but distinct usernames
+// race for one PROFILE write; exactly one must win.
+func TestRegisterUserIDTakenConcurrent(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	sharedID := "test-register-erin-shared-" + randomSuffix(t)
+	a := testRegisterInput(sharedID, "erin-a-"+randomSuffix(t))
+	b := testRegisterInput(sharedID, "erin-b-"+randomSuffix(t))
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = c.Register(ctx, a) }()
+	go func() { defer wg.Done(); errs[1] = c.Register(ctx, b) }()
+	wg.Wait()
+
+	wins, losses := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrUserIDTaken):
+			losses++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if wins != 1 || losses != 1 {
+		t.Fatalf("wins=%d losses=%d, want exactly one winner and one loser", wins, losses)
+	}
+
+	// The PROFILE item must reflect whichever registration actually won,
+	// not a mix -- e.g. the winner's Username with the loser's other
+	// fields, which an unconditional overwrite outside this transaction
+	// could otherwise produce.
+	winner := a
+	if errs[0] != nil {
+		winner = b
+	}
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+sharedID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if user.Item == nil {
+		t.Fatal("PROFILE item missing after concurrent registration")
+	}
+	var got models.User
+	if err := unmarshalItem(user.Item, &got); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if got.Username != winner.Username {
+		t.Errorf("PROFILE Username = %q, want winner's %q", got.Username, winner.Username)
 	}
 }

@@ -111,6 +111,22 @@ const (
 // docs/DESIGN.md, "The server never receives the password." Binary fields
 // are base64-encoded (standard, padded) since this is a JSON API.
 //
+// UserID is also client-generated, unlike every other id this schema
+// assigns (idgen.UUID() picks those). This is a deliberate exception: the
+// credential-wrap AAD (credentialWrapAAD, internal/crypto/credential.go)
+// binds "user uuid + which copy" into WrappedPrivateKeys/
+// RecoveryWrappedPrivateKeys before this request is ever sent, so the
+// client must already know the real uuid at wrap time -- before the server
+// would otherwise assign one. The alternative (wrap under a placeholder,
+// then re-wrap after register() returns a server-assigned id) was
+// considered and rejected: it adds a second round trip and a window where
+// a real account's stored wrap has to be corrected after the fact, for no
+// benefit over the client simply generating the id up front. See
+// db.RegisterInput's own doc comment for how the server defends its side
+// of this: UserID can no longer be assumed as trustworthy as a value it
+// generated itself, so the PROFILE write's condition
+// (attribute_not_exists(PK)) is now load-bearing rather than incidental.
+//
 // The PROFILE and RECOVERY fields are two full, independent wrapped copies
 // of the same private keys, matching the parallel structure in
 // docs/DESIGN.md: RECOVERY "carries its own salt and its own parameters,
@@ -125,6 +141,7 @@ const (
 // checks one later (crypto.CheckRecoveryVerifier), at actual recovery time.
 type registerRequest struct {
 	Username string `json:"username"`
+	UserID   string `json:"userId"`
 
 	SigningPublicKey  string `json:"signingPublicKey"`
 	WrappingPublicKey string `json:"wrappingPublicKey"`
@@ -189,6 +206,17 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 
 	if !usernamePattern.MatchString(req.Username) {
 		WriteError(w, http.StatusBadRequest, "username must be 3-32 characters: letters, digits, underscore, hyphen")
+		return
+	}
+
+	// See registerRequest's own doc comment for why UserID is client-supplied
+	// rather than server-generated here. idgen.ValidUUID enforces the exact
+	// shape idgen.UUID() itself produces (lowercase, version 4, correct
+	// variant nibble) -- not merely "is a UUID" -- so a client cannot submit
+	// a different UUID version or casing that would make its account look
+	// different from every server-generated id in a table dump.
+	if !idgen.ValidUUID(req.UserID) {
+		WriteError(w, http.StatusBadRequest, "userId: must be a well-formed, lowercase UUIDv4")
 		return
 	}
 
@@ -258,14 +286,8 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := idgen.UUID()
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not generate user id")
-		return
-	}
-
 	err = h.db.Register(r.Context(), db.RegisterInput{
-		UserID:            userID,
+		UserID:            req.UserID,
 		Username:          req.Username,
 		UsernameLower:     strings.ToLower(req.Username),
 		SigningPublicKey:  signingPub,
@@ -285,14 +307,33 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrUsernameTaken) {
-			WriteError(w, http.StatusConflict, "username is taken")
+			WriteErrorWithCode(w, http.StatusConflict, "username is taken", "username_taken")
+			return
+		}
+		if errors.Is(err, db.ErrUserIDTaken) {
+			// Expected to be vanishingly rare against a well-behaved client
+			// (122 bits of CSPRNG output per idgen.UUID's own doc comment
+			// makes an accidental collision astronomical) -- see
+			// db.ErrUserIDTaken's own doc comment.
+			//
+			// This is NOT the same recovery a username conflict implies. A
+			// username conflict just needs a new name resent with the same wrapped
+			// blobs, since the AAD doesn't bind the username. A userId
+			// conflict means generating a new uuid AND re-wrapping both
+			// PROFILE and RECOVERY copies under it, since CredentialWrapAAD
+			// binds the uuid -- resending the old blobs under a new id would
+			// store keys the client can never unwrap again, with nothing on
+			// the server able to catch that. The "code" field is what lets
+			// #33's client (or any caller) branch on which recovery applies
+			// without string-matching the message.
+			WriteErrorWithCode(w, http.StatusConflict, "userId is taken", "user_id_taken")
 			return
 		}
 		WriteError(w, http.StatusInternalServerError, "could not create account")
 		return
 	}
 
-	WriteJSON(w, http.StatusCreated, registerResponse{UserID: userID})
+	WriteJSON(w, http.StatusCreated, registerResponse{UserID: req.UserID})
 }
 
 // x25519PublicKeySize is X25519's fixed public key width. crypto/ecdh has no

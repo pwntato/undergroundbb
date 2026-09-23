@@ -1,18 +1,15 @@
 package idgen
 
 import (
-	"regexp"
 	"testing"
 )
-
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func TestUUIDFormat(t *testing.T) {
 	id, err := UUID()
 	if err != nil {
 		t.Fatalf("UUID: %v", err)
 	}
-	if !uuidPattern.MatchString(id) {
+	if !ValidUUID(id) {
 		t.Errorf("UUID() = %q, does not match RFC 4122 v4 shape", id)
 	}
 }
@@ -33,5 +30,40 @@ func TestUUIDUnique(t *testing.T) {
 			t.Fatalf("duplicate UUID generated: %q", id)
 		}
 		seen[id] = true
+	}
+}
+
+func TestValidUUIDAcceptsGenerated(t *testing.T) {
+	id, err := UUID()
+	if err != nil {
+		t.Fatalf("UUID: %v", err)
+	}
+	if !ValidUUID(id) {
+		t.Errorf("ValidUUID(%q) = false, want true for a freshly generated id", id)
+	}
+}
+
+func TestValidUUIDRejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"uppercase", "F47AC10B-58CC-4372-A567-0E02B2C3D479"},
+		{"wrong version nibble", "f47ac10b-58cc-1372-a567-0e02b2c3d479"},
+		{"wrong variant nibble", "f47ac10b-58cc-4372-1567-0e02b2c3d479"},
+		{"missing hyphens", "f47ac10b58cc4372a5670e02b2c3d479"},
+		{"too short", "f47ac10b-58cc-4372-a567-0e02b2c3d47"},
+		{"too long", "f47ac10b-58cc-4372-a567-0e02b2c3d4799"},
+		{"non-hex characters", "g47ac10b-58cc-4372-a567-0e02b2c3d479"},
+		{"trailing whitespace", "f47ac10b-58cc-4372-a567-0e02b2c3d479 "},
+		{"path traversal attempt", "../../etc/passwd"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if ValidUUID(tc.id) {
+				t.Errorf("ValidUUID(%q) = true, want false", tc.id)
+			}
+		})
 	}
 }

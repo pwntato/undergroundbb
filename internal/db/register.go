@@ -19,10 +19,28 @@ import (
 // attribute_not_exists(PK)."
 var ErrUsernameTaken = errors.New("db: username taken")
 
-// RegisterInput is everything Register needs to create an account. UserID
-// and UsernameLower are derived by the caller (handlers) rather than here,
-// so this package stays a pure data-access layer with no id-generation or
-// case-folding policy of its own.
+// ErrUserIDTaken is returned when the USER#<uuid> PROFILE item already
+// exists. UserID is now client-supplied (see RegisterInput's own doc
+// comment) rather than server-generated, so unlike a UUID idgen.UUID()
+// itself picks, this is a value the caller does not fully control the
+// randomness of -- a client could submit any well-formed UUID, including
+// one that collides with an existing account, whether by the astronomical
+// accident a random 128-bit value implies or by deliberately choosing one.
+// The PROFILE Put's own attribute_not_exists(PK) condition is what turns
+// that into a rejected transaction instead of a silent overwrite of
+// someone else's credentials.
+var ErrUserIDTaken = errors.New("db: user id taken")
+
+// RegisterInput is everything Register needs to create an account.
+// UsernameLower is derived by the caller (handlers) rather than here, so
+// this package stays a pure data-access layer with no case-folding policy of
+// its own. UserID is likewise supplied by the caller -- client-chosen, not
+// server-generated (see internal/handlers/register.go's own doc comment on
+// why: the credential-wrap AAD binds "user uuid + which copy" and the
+// client must know the real uuid before it wraps, which is before the
+// server would otherwise assign one) -- which is exactly why Register's own
+// PROFILE Put is conditional: this package cannot assume UserID is as
+// trustworthy as a value it generated itself.
 type RegisterInput struct {
 	UserID            string
 	Username          string
@@ -52,9 +70,14 @@ type RegisterInput struct {
 // unreachable) that separate writes would leave open to nothing more than
 // an ordinary timeout or retry, with no concurrency required to reach them.
 //
-// The claim write is additionally conditional on attribute_not_exists(PK),
-// which is what makes it a claim rather than an unconditional overwrite --
-// see ErrUsernameTaken.
+// The claim write and the PROFILE write are each additionally conditional on
+// attribute_not_exists(PK) -- the claim's condition is what makes it a claim
+// rather than an unconditional overwrite (see ErrUsernameTaken); the
+// PROFILE write's condition guards against a colliding client-supplied
+// UserID (see ErrUserIDTaken). The RECOVERY write has no condition of its
+// own. The condition is item-scoped (PK+SK), so it only checks PROFILE, but
+// RECOVERY is only ever created in this same transaction and never deleted,
+// so a missing PROFILE implies a missing RECOVERY.
 func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -111,32 +134,36 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		return err
 	}
 
-	// claimItemIndex is the claim Put's position in TransactItems below --
-	// named so isConditionalCheckFailure checks the cancellation reason at
-	// this specific index rather than scanning all of them. Scanning would
-	// stay correct today (this transaction has exactly one conditional
-	// item) but would silently start mapping the wrong failure to
-	// ErrUsernameTaken if a second conditional item were ever added here --
-	// e.g. the credential-version condition docs/DESIGN.md describes for
-	// the re-wrap path, should that ever be folded into this function. This
-	// way the mapping stays correct by construction instead of depending on
-	// this comment being re-read before such a change.
-	const claimItemIndex = 2
+	// userItemIndex and claimItemIndex are the two conditional Puts'
+	// positions in TransactItems below -- named so isConditionalCheckFailure
+	// checks the cancellation reason at a specific index rather than
+	// scanning all of them, so the mapping to ErrUserIDTaken/ErrUsernameTaken
+	// stays correct by construction (tied to position, which the literal
+	// slice below makes obvious) rather than depending on a comment being
+	// re-read before a future item is added or reordered.
+	const (
+		userItemIndex  = 0
+		claimItemIndex = 2
+	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{TableName: aws.String(c.table), Item: userItem}},
+			{
+				Put: &types.Put{
+					TableName:           aws.String(c.table),
+					Item:                userItem,
+					ConditionExpression: aws.String("attribute_not_exists(PK)"),
+					// See ErrUserIDTaken's own doc comment: UserID is now
+					// client-supplied, so this condition is load-bearing in a
+					// way it would not be against a server-generated UUID.
+				},
+			},
 			{Put: &types.Put{TableName: aws.String(c.table), Item: recoveryItem}},
 			{
 				Put: &types.Put{
 					TableName:           aws.String(c.table),
 					Item:                claimItem,
 					ConditionExpression: aws.String("attribute_not_exists(PK)"),
-					// ReturnValuesOnConditionCheckFailure isn't needed here --
-					// the only condition in this transaction is the claim's,
-					// so a ConditionalCheckFailed at claimItemIndex always
-					// means the username was taken and there is nothing else
-					// to distinguish it from.
 				},
 			},
 		},
@@ -144,6 +171,9 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	if err != nil {
 		if isConditionalCheckFailure(err, claimItemIndex) {
 			return ErrUsernameTaken
+		}
+		if isConditionalCheckFailure(err, userItemIndex) {
+			return ErrUserIDTaken
 		}
 		return err
 	}
