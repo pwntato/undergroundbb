@@ -65,11 +65,13 @@ function attachFailureHandlers(
 ): () => void {
   const onError = (event: ErrorEvent): void => {
     cleanup()
+    w.terminate()
     worker = undefined
     reject(new Error(`worker: ${event.message || 'failed to load or threw outside handle()'}`))
   }
   const onMessageError = (): void => {
     cleanup()
+    w.terminate()
     worker = undefined
     reject(new Error('worker: received an unstructured-cloneable-violating message'))
   }

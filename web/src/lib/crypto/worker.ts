@@ -12,7 +12,11 @@ import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
 import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
-import { generateRecoveryCode, normalizeRecoveryCode } from './recovery-code.js'
+import {
+  deriveRecoveryVerifier,
+  deriveRecoveryWrapKey,
+  generateRecoveryCode,
+} from './recovery-code.js'
 import * as ed25519 from './ed25519.js'
 import { generateWrappingKey, KEY_LEN as X25519_KEY_LEN } from './x25519.js'
 import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
@@ -105,28 +109,16 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
   // Step 2 of 3: the recovery-code-derived wrapping key. Independent salt
   // and derivation from the password's, per docs/DESIGN.md.
   //
-  // Derived from normalizeRecoveryCode(recoveryCode) -- the bare, uppercase
-  // form -- not the hyphenated display form generateRecoveryCode returns.
-  // This is the one canonical KDF input for the recovery code, used
-  // identically here and for the verifier below: CheckRecoveryVerifier
-  // (internal/crypto/recovery.go) hashes whatever bytes a recovery endpoint
-  // receives with no normalization of its own, so the client must always
-  // submit -- and always have derived under -- this exact form. Bare
-  // uppercase, not hyphenated, because normalizeRecoveryCode's whole
-  // documented purpose is turning arbitrary user input (any grouping,
-  // whitespace, or misread-character substitution) into one canonical
-  // string; deriving under a different form here would mean the recovery
-  // screen's own normalization could never match what signup actually
-  // hashed. This must never change once a real account's verifier exists.
+  // deriveRecoveryWrapKey normalizes recoveryCode internally -- see its own
+  // doc comment (recovery-code.ts) for why the canonical bare-uppercase
+  // form is load-bearing, not the hyphenated display form generateRecoveryCode
+  // returns: CheckRecoveryVerifier (internal/crypto/recovery.go) hashes
+  // whatever bytes a recovery endpoint receives with no normalization of
+  // its own, so this and the verifier derivation below must always agree
+  // with whatever a future recovery screen derives from the same code.
   const recoveryCode = generateRecoveryCode()
-  const recoveryCodeCanonical = normalizeRecoveryCode(recoveryCode)
   const recoverySalt = randomSalt()
-  const recoveryKey = await deriveKey(
-    recoveryCodeCanonical,
-    recoverySalt,
-    SIGNUP_ARGON2_PARAMS,
-    KEY_SIZE,
-  )
+  const recoveryKey = await deriveRecoveryWrapKey(recoveryCode, recoverySalt, SIGNUP_ARGON2_PARAMS)
   const recoveryNonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE))
   const recoveryCiphertext = await encryptWithNonce(
     recoveryKey,
@@ -145,18 +137,10 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
   // Step 3 of 3: the recovery verifier -- a third, independent derivation of
   // the same recovery code, per registerRequest's own doc comment
   // (internal/handlers/register.go) and crypto.VerifierLen server-side.
-  // Derived from the same recoveryCodeCanonical as the wrap key above --
-  // see that derivation's own comment for why this exact form is load-
-  // bearing: it's what CheckRecoveryVerifier must be handed back at
-  // recovery time for this hash to ever match.
-  const RECOVERY_VERIFIER_LEN = 32
+  // deriveRecoveryVerifier normalizes internally, same as
+  // deriveRecoveryWrapKey above -- see that call's own comment.
   const verifierSalt = randomSalt()
-  const verifier = await deriveKey(
-    recoveryCodeCanonical,
-    verifierSalt,
-    SIGNUP_ARGON2_PARAMS,
-    RECOVERY_VERIFIER_LEN,
-  )
+  const verifier = await deriveRecoveryVerifier(recoveryCode, verifierSalt, SIGNUP_ARGON2_PARAMS)
   post({
     kind: 'signupProgress',
     id: req.id,

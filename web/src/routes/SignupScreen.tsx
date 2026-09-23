@@ -14,6 +14,23 @@
 // in this closure. session.login() is only called once verify actually
 // succeeds -- never on register's response alone, which would put the UI
 // in a logged-in state with no session behind it.
+//
+// register() and the post-register login are two SEPARATE try blocks, not
+// one -- this is load-bearing, not stylistic. Once register() resolves, the
+// account exists server-side with a real recovery code that will never be
+// shown again if anything after this point throws it away (round-2 review:
+// realistic causes include the WAF's 30 req/5min /api/auth/* rule -- signup
+// already spends 3 of those, login spends a 4th -- a 64 MiB Argon2id OOM on
+// a low-memory phone, the exact case worker-client.ts's error/messageerror
+// handling plans for, or ordinary network flakiness between requests). So a
+// failure in challenge/completeLogin/verify must still reach the
+// recoveryCode step with the material register() already produced, never
+// discard it and bounce back to the credentials form (which would also
+// re-submit a now-taken username and 409). If login fails, the user still
+// proceeds through recoveryCode and theme, then lands on /login instead of
+// Home with a note that their account exists and they should log in --
+// they can always retry login themselves with the password they just
+// chose, but nobody can ever retry showing them the code.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -30,9 +47,9 @@ import { ThemePickerStep } from './ThemePickerStep'
 type Step =
   | { readonly name: 'credentials' }
   | { readonly name: 'generating' }
-  | { readonly name: 'loggingIn' }
-  | { readonly name: 'recoveryCode'; readonly material: SignupMaterial }
-  | { readonly name: 'theme' }
+  | { readonly name: 'loggingIn'; readonly material: SignupMaterial }
+  | { readonly name: 'recoveryCode'; readonly material: SignupMaterial; readonly loggedIn: boolean }
+  | { readonly name: 'theme'; readonly loggedIn: boolean }
 
 export function SignupScreen() {
   const [step, setStep] = useState<Step>({ name: 'credentials' })
@@ -44,13 +61,14 @@ export function SignupScreen() {
   // The account is registered (and the recovery code generated) before this
   // screen shows it -- it lives only in component state until the user
   // acknowledges it. A reload, back button, or closed tab during this step
+  // (or loggingIn, which follows the same already-registered account)
   // leaves a real, already-created account whose recovery code nobody will
   // ever see again (the server never stores it in the clear -- only its
   // Argon2id verifier -- and there is no "resend" for something that was
   // never sent). This covers the accidental cases; it can't stop a
   // deliberate close, which no beforeunload prompt can.
   useEffect(() => {
-    if (step.name !== 'recoveryCode') {
+    if (step.name !== 'loggingIn' && step.name !== 'recoveryCode') {
       return
     }
     const handleBeforeUnload = (e: BeforeUnloadEvent): void => {
@@ -68,9 +86,10 @@ export function SignupScreen() {
     setProgress(null)
 
     void (async () => {
+      let material: SignupMaterial
       try {
         const userId = generateUserID()
-        const material = await generateSignupMaterial(password, userId, (event) => {
+        material = await generateSignupMaterial(password, userId, (event) => {
           setProgress(event)
         })
         await register({
@@ -88,8 +107,26 @@ export function SignupScreen() {
           recoveryVerifierParams: material.recoveryVerifierParams,
           recoveryVerifier: material.recoveryVerifier,
         })
+      } catch (err) {
+        // register() itself failed -- no account exists, nothing to
+        // preserve, safe to bounce back to the credentials form exactly
+        // like before.
+        setError(
+          err instanceof ApiError && err.status !== 403
+            ? err.message
+            : 'Could not create your account. Try again.',
+        )
+        setStep({ name: 'credentials' })
+        return
+      }
 
-        setStep({ name: 'loggingIn' })
+      // The account now exists server-side. Everything from here on is a
+      // SEPARATE try: whatever happens, the user must still reach
+      // recoveryCode with this material -- see this file's own header
+      // comment.
+      setStep({ name: 'loggingIn', material })
+      let loggedIn = false
+      try {
         const ch = await challenge(username)
         const signature = await completeLogin({
           password,
@@ -101,14 +138,16 @@ export function SignupScreen() {
         })
         const result = await verify(username, ch.nonce, signature)
         session.login(result.userId)
-
-        setStep({ name: 'recoveryCode', material })
-      } catch (err) {
-        setError(
-          err instanceof ApiError ? err.message : 'Could not create your account. Try again.',
-        )
-        setStep({ name: 'credentials' })
+        loggedIn = true
+      } catch {
+        // Login failed after the account was already created -- the user
+        // can always retry logging in themselves afterward with the
+        // password they just chose. What must not happen is losing the
+        // recovery code over this, so loggedIn stays false and the flow
+        // continues exactly as it would have on success.
       }
+
+      setStep({ name: 'recoveryCode', material, loggedIn })
     })()
   }
 
@@ -124,7 +163,7 @@ export function SignupScreen() {
         <RecoveryCodeStep
           recoveryCode={step.material.recoveryCode}
           onAcknowledged={() => {
-            setStep({ name: 'theme' })
+            setStep({ name: 'theme', loggedIn: step.loggedIn })
           }}
         />
       )
@@ -132,7 +171,15 @@ export function SignupScreen() {
       return (
         <ThemePickerStep
           onDone={() => {
-            navigate('/', { replace: true })
+            if (step.loggedIn) {
+              navigate('/', { replace: true })
+              return
+            }
+            // Login failed earlier despite the account existing -- send
+            // them to log in for real rather than Home, which would show
+            // an unauthenticated user "You're logged in" was never true
+            // for. See this file's own header comment.
+            navigate('/login?accountCreated=1', { replace: true })
           }}
         />
       )

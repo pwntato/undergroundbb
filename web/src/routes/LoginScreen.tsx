@@ -12,7 +12,7 @@
 // enumeration defense.
 
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { ApiError, challenge, verify } from '@/lib/api/auth'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeLogin } from '@/lib/crypto/worker-client'
@@ -31,7 +31,9 @@ const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
  * or verify's 400/401 (bad signature, stale/replayed/missing challenge, or
  * an unknown username mapped to the same response -- see verify's own
  * server-side doc comment). Anything else -- a network failure, a 5xx, or
- * a 429 from the rate limiter -- is NOT a credential failure: showing
+ * a 403 from terraform/waf.tf's /api/auth/* rate-limit rule (a `block {}`
+ * action, which WAF returns as a 403 with an HTML body -- there is no 429
+ * anywhere in this stack) -- is NOT a credential failure: showing
  * CREDENTIAL_ERROR for those would tell someone who typed their password
  * correctly that it was wrong, which risks sending them to recovery over an
  * outage rather than a real mistake.
@@ -53,6 +55,12 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null)
   const session = useSession()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // Set by SignupScreen when the account was created but the automatic
+  // post-signup login failed -- see that file's own header comment. The
+  // account is real and the password the user just chose is correct; only
+  // the session establishment failed, so this is reassurance, not an error.
+  const accountCreated = searchParams.get('accountCreated') === '1'
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -78,8 +86,8 @@ export function LoginScreen() {
         // password (fails inside the worker's decrypt), wrong signature, a
         // stale challenge -- collapses to CREDENTIAL_ERROR. See this file's
         // own header comment for why that's deliberate, not a missed
-        // distinction. Everything else (network failure, 5xx, a 429 from
-        // the rate limiter) gets UNREACHABLE_ERROR instead -- see
+        // distinction. Everything else (network failure, 5xx, a 403 from
+        // the WAF's rate-limit rule) gets UNREACHABLE_ERROR instead -- see
         // isCredentialFailure's own doc comment for why conflating the two
         // is worse than showing a slightly less specific message.
         setError(isCredentialFailure(err) ? CREDENTIAL_ERROR : UNREACHABLE_ERROR)
@@ -94,6 +102,11 @@ export function LoginScreen() {
       <div className="flex flex-col gap-1 text-center">
         <h1 className="text-xl font-semibold">Log in</h1>
       </div>
+      {accountCreated && !error && (
+        <Alert>
+          <AlertDescription>Your account was created. Please log in.</AlertDescription>
+        </Alert>
+      )}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>

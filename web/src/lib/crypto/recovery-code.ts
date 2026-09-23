@@ -12,6 +12,8 @@
 // codes (e.g. "E1AP1-W4KGY-196Y7-QZFWW-RMMFRV") already fix this exact shape,
 // so it is pinned here to match rather than chosen fresh.
 
+import { deriveKey, type Argon2idParams } from './argon2.js'
+
 /**
  * Crockford's base32 alphabet with U additionally excluded, per
  * docs/DESIGN.md. Index in this string is the value encoded by that
@@ -108,4 +110,52 @@ function formatRecoveryCode(raw: string): string {
  */
 export function normalizeRecoveryCode(input: string): string {
   return input.toUpperCase().replace(/[\s-]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0')
+}
+
+/** Argon2id output length for the recovery verifier, matching crypto.VerifierLen server-side. */
+const RECOVERY_VERIFIER_LEN = 32
+
+/**
+ * Derives the recovery-code-derived wrap key from code and salt -- the
+ * Argon2id derivation worker.ts's signup path and any future
+ * recovery-screen path must agree on byte-for-byte. Always normalizes code
+ * first (see normalizeRecoveryCode's own doc comment: this is the one
+ * canonical KDF input, on both sides, forever), so a caller passing the
+ * hyphenated display form or the bare form gets an identical result either
+ * way -- there is deliberately no lower-level function that skips
+ * normalization, so this one can't be called incorrectly.
+ *
+ * A sibling of deriveRecoveryVerifier, kept as two separate functions
+ * rather than one combined call so worker.ts can still post a distinct
+ * signupProgress event as each derivation finishes (issue #33's "honest
+ * progress" -- see worker.ts's own comments on why each step fires only
+ * once its own derivation has actually completed).
+ *
+ * recovery-code-canonical.test.ts calls this directly (not just
+ * normalizeRecoveryCode/deriveKey independently) so a regression in
+ * worker.ts back to deriving from the unnormalized form fails a test here
+ * rather than only in worker.ts's own untested call site.
+ */
+export function deriveRecoveryWrapKey(
+  code: string,
+  salt: Uint8Array,
+  params: Argon2idParams,
+): Promise<Uint8Array> {
+  return deriveKey(normalizeRecoveryCode(code), salt, params)
+}
+
+/**
+ * Derives the recovery verifier from code and salt -- see
+ * deriveRecoveryWrapKey's own doc comment for why this is a separate
+ * function from it (progress granularity) and why normalization here is
+ * non-optional (this is what CheckRecoveryVerifier -- internal/crypto/
+ * recovery.go -- must be handed back, unnormalized, at recovery time for
+ * the hash to ever match).
+ */
+export function deriveRecoveryVerifier(
+  code: string,
+  salt: Uint8Array,
+  params: Argon2idParams,
+): Promise<Uint8Array> {
+  return deriveKey(normalizeRecoveryCode(code), salt, params, RECOVERY_VERIFIER_LEN)
 }
