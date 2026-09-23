@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/idgen"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -88,8 +90,13 @@ func randomUsername(t *testing.T) string {
 
 func validRegisterRequest(username string) registerRequest {
 	params := argon2Params{MemoryKiB: 65536, Iterations: 3, Parallelism: 1}
+	id, err := idgen.UUID()
+	if err != nil {
+		panic(err) // test-only helper; crypto/rand failing here means the environment is broken
+	}
 	return registerRequest{
 		Username:          username,
+		UserID:            id,
 		SigningPublicKey:  b64(32),
 		WrappingPublicKey: b64(32),
 
@@ -164,6 +171,73 @@ func TestRegisterUsernameConflict(t *testing.T) {
 	}
 }
 
+// TestRegisterUserIDConflict covers ErrUserIDTaken's path end to end: two
+// registrations with different usernames but the same client-supplied
+// userId must have the second rejected as a 409, and must not overwrite the
+// first account's stored credentials. UserID is now client-chosen (see
+// registerRequest's own doc comment), so unlike the username conflict test
+// above -- which exercises a condition that existed before this change --
+// this is the new attack surface: a client naming another (or its own
+// already-registered) uuid on a second call.
+func TestRegisterUserIDConflict(t *testing.T) {
+	table := testTableName()
+	ddb := rawDDB(t)
+	h := New(config.FromEnv(), testDB(t))
+
+	first := validRegisterRequest(randomUsername(t))
+	firstRec := doRegister(t, h, first)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("first register status = %d, want %d, body: %s", firstRec.Code, http.StatusCreated, firstRec.Body.String())
+	}
+
+	second := validRegisterRequest(randomUsername(t))
+	second.UserID = first.UserID // deliberately collide
+	secondRec := doRegister(t, h, second)
+	if secondRec.Code != http.StatusConflict {
+		t.Fatalf("second register status = %d, want %d, body: %s", secondRec.Code, http.StatusConflict, secondRec.Body.String())
+	}
+
+	// The first account's PROFILE must still reflect its own registration,
+	// not anything from the rejected second attempt -- the exact overwrite
+	// this condition exists to prevent.
+	userOut, err := ddb.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + first.UserID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	var user models.User
+	if err := attributevalue.UnmarshalMap(userOut.Item, &user); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if user.Username != first.Username {
+		t.Errorf("PROFILE Username = %q, want %q (first registration's, unclobbered)", user.Username, first.Username)
+	}
+
+	// The second (losing) username must remain available -- its claim
+	// write and profile write share one transaction, so the claim must not
+	// have landed either.
+	secondClaim, err := ddb.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USERNAME#" + lowerASCII(second.Username)},
+			"SK": &types.AttributeValueMemberS{Value: "CLAIM"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("GetItem CLAIM: %v", err)
+	}
+	if secondClaim.Item != nil {
+		t.Error("losing registration's username claim was written despite the userId conflict")
+	}
+}
+
 func upperFirst(s string) string {
 	if s == "" {
 		return s
@@ -185,6 +259,12 @@ func TestRegisterValidation(t *testing.T) {
 		{"empty username", func(r *registerRequest) { r.Username = "" }},
 		{"short username", func(r *registerRequest) { r.Username = "ab" }},
 		{"username with spaces", func(r *registerRequest) { r.Username = "has space" }},
+		{"empty userId", func(r *registerRequest) { r.UserID = "" }},
+		{"uppercase userId", func(r *registerRequest) { r.UserID = strings.ToUpper(r.UserID) }},
+		{"non-v4 userId", func(r *registerRequest) {
+			r.UserID = "f47ac10b-58cc-1372-a567-0e02b2c3d479" // version nibble is 1, not 4
+		}},
+		{"malformed userId", func(r *registerRequest) { r.UserID = "not-a-uuid" }},
 		{"missing signing key", func(r *registerRequest) { r.SigningPublicKey = "" }},
 		{"wrong length signing key", func(r *registerRequest) { r.SigningPublicKey = b64(16) }},
 		{"not base64 signing key", func(r *registerRequest) { r.SigningPublicKey = "not-valid-base64!!" }},
