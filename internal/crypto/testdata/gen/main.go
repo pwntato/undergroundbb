@@ -138,6 +138,17 @@ type credentialWrapVector struct {
 	CiphertextHex string `json:"ciphertext_hex"`
 }
 
+// keyBundleVector proves EncodeKeyBundle's exact byte layout -- see
+// keybundle.go's own doc comment for why this specific encoding, like the
+// credential-wrap AAD before it, had no code pinning its format before #33
+// needed one.
+type keyBundleVector struct {
+	Name               string `json:"name"`
+	SigningSeedHex     string `json:"signing_seed_hex"`
+	WrappingPrivKeyHex string `json:"wrapping_private_key_hex"`
+	EncodedHex         string `json:"encoded_hex"`
+}
+
 type vectorFile struct {
 	Version        int                    `json:"version"`
 	KDF            []kdfVector            `json:"kdf"`
@@ -149,6 +160,7 @@ type vectorFile struct {
 	GenkeyChain    []genkeyChainVector    `json:"genkey_chain"`
 	Fingerprint    []fingerprintVector    `json:"fingerprint"`
 	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
+	KeyBundle      []keyBundleVector      `json:"key_bundle"`
 }
 
 func main() {
@@ -340,6 +352,31 @@ func main() {
 				CiphertextHex: hex.EncodeToString(ciphertext),
 			})
 		}
+	}
+
+	// --- Key bundle encoding (#33) ---
+	// Fixed 32-byte fields chosen from fixedEd25519Key/fixedX25519Key rather
+	// than fixedSeed directly, so this vector proves the SAME encoding a real
+	// client would produce from real keys, not just that some 32 bytes
+	// round-trip through the length-prefixed framing.
+	{
+		_, signingPriv := fixedEd25519Key("keybundle-signing-1")
+		wrappingPriv := fixedX25519Key("keybundle-wrapping-1")
+
+		bundle := crypto.KeyBundle{
+			SigningSeed:        signingPriv.Seed(),
+			WrappingPrivateKey: wrappingPriv.Bytes(),
+		}
+		encoded, err := crypto.EncodeKeyBundle(bundle)
+		if err != nil {
+			panic(err)
+		}
+		out.KeyBundle = append(out.KeyBundle, keyBundleVector{
+			Name:               "basic",
+			SigningSeedHex:     hex.EncodeToString(bundle.SigningSeed),
+			WrappingPrivKeyHex: hex.EncodeToString(bundle.WrappingPrivateKey),
+			EncodedHex:         hex.EncodeToString(encoded),
+		})
 	}
 
 	// --- GENKEY chain link (the #20-named negative vector) ---

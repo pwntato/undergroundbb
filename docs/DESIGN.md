@@ -33,7 +33,10 @@ Each user has two keypairs:
 
 Both private keys are encrypted with AES-256-GCM under a key derived from the user's password via
 **Argon2id**, and the resulting blob is stored on the server. The password itself is never
-transmitted, and neither is anything derived from it.
+transmitted, and neither is anything derived from it. The plaintext inside that blob is a versioned,
+length-prefixed encoding of the two private scalars only — see `internal/crypto/keybundle.go`
+(mirrored in `web/src/lib/crypto/keybundle.ts`) and the `key_bundle` test vector; the public keys are
+excluded since they already travel and are stored in plaintext elsewhere.
 
 Groups have a symmetric **group key** (AES-256-GCM) that encrypts every post, comment, and reaction,
 and — for private groups — the group's name and description. Each member holds a copy of the group
@@ -80,7 +83,7 @@ relocated ciphertext fail loudly:
 | Comment | `POST#<pid>` + `CMT#<path>` + generation number |
 | Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
 | Generation key | group id + generation number |
-| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) |
+| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go` |
 | Group name/description | group id + generation number |
 
 **Posts and comments are signed over their address as well as their content**, for the same reason

@@ -17,6 +17,7 @@ import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
 import { bytesToHex, hexToBytes } from './hex.js'
+import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
 
@@ -107,6 +108,12 @@ interface VectorFile {
     plaintext_hex: string
     nonce_hex: string
     ciphertext_hex: string
+  }[]
+  key_bundle: {
+    name: string
+    signing_seed_hex: string
+    wrapping_private_key_hex: string
+    encoded_hex: string
   }[]
 }
 
@@ -301,4 +308,26 @@ describe('credential wrap vectors', () => {
       DecryptionFailedError,
     )
   })
+})
+
+// Pins encodeKeyBundle's exact plaintext layout — see that function's own
+// doc comment for why this, like the credential-wrap AAD before it, needed
+// a fixed cross-implementation vector rather than being left to whatever
+// each side happened to guess.
+describe('key bundle vectors', () => {
+  for (const tc of vectors.key_bundle) {
+    it(tc.name, () => {
+      const bundle = {
+        signingSeed: hexToBytes(tc.signing_seed_hex),
+        wrappingPrivateKey: hexToBytes(tc.wrapping_private_key_hex),
+      }
+
+      const encoded = encodeKeyBundle(bundle)
+      expect(bytesToHex(encoded)).toBe(tc.encoded_hex)
+
+      const decoded = decodeKeyBundle(hexToBytes(tc.encoded_hex))
+      expect(bytesToHex(decoded.signingSeed)).toBe(tc.signing_seed_hex)
+      expect(bytesToHex(decoded.wrappingPrivateKey)).toBe(tc.wrapping_private_key_hex)
+    })
+  }
 })

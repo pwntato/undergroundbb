@@ -26,6 +26,7 @@ type vectorFile struct {
 	GenkeyChain    []genkeyChainVector    `json:"genkey_chain"`
 	Fingerprint    []fingerprintVector    `json:"fingerprint"`
 	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
+	KeyBundle      []keyBundleVector      `json:"key_bundle"`
 }
 
 type kdfVector struct {
@@ -117,6 +118,13 @@ type credentialWrapVector struct {
 	PlaintextHex  string `json:"plaintext_hex"`
 	NonceHex      string `json:"nonce_hex"`
 	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+type keyBundleVector struct {
+	Name               string `json:"name"`
+	SigningSeedHex     string `json:"signing_seed_hex"`
+	WrappingPrivKeyHex string `json:"wrapping_private_key_hex"`
+	EncodedHex         string `json:"encoded_hex"`
 }
 
 func loadVectors(t *testing.T) vectorFile {
@@ -416,5 +424,41 @@ func TestVectorCredentialWrap(t *testing.T) {
 	recoveryAAD := mustHex(t, recovery.AADHex)
 	if _, err := Decrypt(key, nonce, profileCiphertext, recoveryAAD); err != ErrDecryptionFailed {
 		t.Fatalf("decrypting PROFILE's ciphertext under RECOVERY's AAD: got err %v, want ErrDecryptionFailed", err)
+	}
+}
+
+// TestVectorKeyBundle pins EncodeKeyBundle's exact plaintext layout -- see
+// keybundle.go's own doc comment for why this, like the credential-wrap AAD
+// before it, needed a fixed cross-implementation vector rather than being
+// left to whatever each side happened to guess.
+func TestVectorKeyBundle(t *testing.T) {
+	v := loadVectors(t)
+	for _, tc := range v.KeyBundle {
+		t.Run(tc.Name, func(t *testing.T) {
+			bundle := KeyBundle{
+				SigningSeed:        mustHex(t, tc.SigningSeedHex),
+				WrappingPrivateKey: mustHex(t, tc.WrappingPrivKeyHex),
+			}
+			want := mustHex(t, tc.EncodedHex)
+
+			got, err := EncodeKeyBundle(bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("EncodeKeyBundle = %x, want %x", got, want)
+			}
+
+			decoded, err := DecodeKeyBundle(want)
+			if err != nil {
+				t.Fatalf("DecodeKeyBundle: %v", err)
+			}
+			if !bytes.Equal(decoded.SigningSeed, bundle.SigningSeed) {
+				t.Fatalf("decoded SigningSeed = %x, want %x", decoded.SigningSeed, bundle.SigningSeed)
+			}
+			if !bytes.Equal(decoded.WrappingPrivateKey, bundle.WrappingPrivateKey) {
+				t.Fatalf("decoded WrappingPrivateKey = %x, want %x", decoded.WrappingPrivateKey, bundle.WrappingPrivateKey)
+			}
+		})
 	}
 }

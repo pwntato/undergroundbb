@@ -36,6 +36,15 @@ why.
   from each other or from a future server-side reader. Two cases, same user
   id and key material, one per copy — proving the two encode to genuinely
   different AAD rather than colliding.
+- `key_bundle`: `(Ed25519 seed, X25519 private key) -> encoded bytes`,
+  pinning `EncodeKeyBundle`'s plaintext layout for the blob that gets wrapped
+  under `WrappedPrivateKeys`/`RecoveryWrappedPrivateKeys` — a 1-byte version
+  tag followed by each field length-prefixed, big-endian. This is the
+  plaintext *inside* the AEAD, never seen by the server either way, but it
+  is exactly as unaddable-retroactively as the AAD above: an encoding change
+  after a real wrap exists would make every existing user's blob decode to
+  the wrong bytes with nothing able to detect it before the client tried to
+  use them as keys.
 
 ## Regenerating
 
