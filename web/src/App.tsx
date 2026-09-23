@@ -1,20 +1,28 @@
-import { Button } from '@/components/ui/button'
+import { BrowserRouter, Route, Routes } from 'react-router'
+import { Home } from '@/routes/Home'
+import { LoginScreen } from '@/routes/LoginScreen'
+import { SignupScreen } from '@/routes/SignupScreen'
+import { SessionProvider } from '@/lib/session/SessionContext'
 
 /**
- * Application shell.
- *
- * Deliberately minimal: this milestone is a building frontend, not a product.
- * Routing, the crypto worker and real screens arrive with the features that
- * need them. The button exists only to prove the shadcn/ui pipeline and the
- * theme tokens resolve.
+ * Application shell: session state + routing. #33 adds the first real
+ * screens (signup, login) on top of the placeholder scaffold; everything
+ * else this milestone needs (the board views, etc.) arrives with the
+ * features that need them.
  */
 function App() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
-      <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">UndergroundBB</h1>
-      <p className="text-sm text-muted-foreground">Frontend scaffold. Nothing to see yet.</p>
-      <Button variant="outline">Placeholder</Button>
-    </main>
+    <SessionProvider>
+      <BrowserRouter>
+        <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/signup" element={<SignupScreen />} />
+            <Route path="/login" element={<LoginScreen />} />
+          </Routes>
+        </main>
+      </BrowserRouter>
+    </SessionProvider>
   )
 }
 
