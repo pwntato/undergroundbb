@@ -5,9 +5,11 @@
 
 export * from './aesgcm.js'
 export * from './argon2.js'
+export * from './base64.js'
 export * from './credential.js'
 export * as ed25519 from './ed25519.js'
 export * from './fingerprint.js'
 export * from './keybundle.js'
 export * from './payload.js'
+export * from './recovery-code.js'
 export * from './x25519.js'

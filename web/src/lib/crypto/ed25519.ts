@@ -46,7 +46,23 @@ export interface SigningKey {
 
 /** Generates a new Ed25519 keypair. */
 export function generateSigningKey(): SigningKey {
-  const seed = crypto.getRandomValues(new Uint8Array(SEED_SIZE))
+  return signingKeyFromSeed(crypto.getRandomValues(new Uint8Array(SEED_SIZE)))
+}
+
+/**
+ * Reconstructs a SigningKey from a bare 32-byte seed by re-deriving its
+ * public key -- the counterpart to keybundle.ts's decodeKeyBundle, which
+ * carries only the seed (its own doc comment: the public key is "cheaply
+ * re-derivable" and deliberately excluded from what gets wrapped). Unlike
+ * fromGoPrivateKeyBytes, there is no embedded public key to check the
+ * derivation against here; the seed alone is trusted because it only ever
+ * reaches this function after the AEAD tag on its wrap has already
+ * verified.
+ */
+export function signingKeyFromSeed(seed: Uint8Array): SigningKey {
+  if (seed.length !== SEED_SIZE) {
+    throw new Error('crypto: seed must be 32 bytes')
+  }
   const { publicKey } = ed25519.keygen(seed)
   return { seed, publicKey }
 }
