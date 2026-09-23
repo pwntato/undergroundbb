@@ -62,6 +62,13 @@ export async function usernameAvailable(username: string): Promise<boolean> {
 
 export interface RegisterRequest {
   readonly username: string
+  /**
+   * Client-generated (see crypto/uuid.ts), not server-assigned -- issue
+   * #123. The credential-wrap AAD binds this uuid into wrappedPrivateKeys/
+   * recoveryWrappedPrivateKeys before this request is ever sent, so the
+   * client must already know it at wrap time.
+   */
+  readonly userId: string
   readonly signingPublicKey: string
   readonly wrappingPublicKey: string
   readonly salt: string
