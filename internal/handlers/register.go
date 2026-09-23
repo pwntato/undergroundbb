@@ -307,7 +307,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrUsernameTaken) {
-			WriteError(w, http.StatusConflict, "username is taken")
+			WriteErrorWithCode(w, http.StatusConflict, "username is taken", "username_taken")
 			return
 		}
 		if errors.Is(err, db.ErrUserIDTaken) {
@@ -316,9 +316,8 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 			// makes an accidental collision astronomical) -- see
 			// db.ErrUserIDTaken's own doc comment.
 			//
-			// This is NOT the same recovery a username conflict implies (PR
-			// #123 review caught this comment claiming otherwise). A username
-			// conflict just needs a new name resent with the same wrapped
+			// This is NOT the same recovery a username conflict implies. A
+			// username conflict just needs a new name resent with the same wrapped
 			// blobs, since the AAD doesn't bind the username. A userId
 			// conflict means generating a new uuid AND re-wrapping both
 			// PROFILE and RECOVERY copies under it, since CredentialWrapAAD

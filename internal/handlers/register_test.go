@@ -169,6 +169,13 @@ func TestRegisterUsernameConflict(t *testing.T) {
 	if second.Code != http.StatusConflict {
 		t.Errorf("second register status = %d, want %d, body: %s", second.Code, http.StatusConflict, second.Body.String())
 	}
+	var body map[string]string
+	if err := json.Unmarshal(second.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if body["code"] != "username_taken" {
+		t.Errorf(`response code = %q, want "username_taken"`, body["code"])
+	}
 }
 
 // TestRegisterUserIDConflict covers ErrUserIDTaken's path end to end: two
@@ -196,10 +203,10 @@ func TestRegisterUserIDConflict(t *testing.T) {
 	if secondRec.Code != http.StatusConflict {
 		t.Fatalf("second register status = %d, want %d, body: %s", secondRec.Code, http.StatusConflict, secondRec.Body.String())
 	}
-	// PR #123 review: a userId conflict needs a different client recovery
-	// than a username conflict (regenerate the id and re-wrap both key
-	// copies, vs. just resend under a new name) -- "code" is what lets a
-	// caller branch on that without string-matching "error".
+	// A userId conflict needs a different client recovery than a username
+	// conflict (regenerate the id and re-wrap both key copies, vs. just
+	// resend under a new name) -- "code" is what lets a caller branch on
+	// that without string-matching "error".
 	var secondBody map[string]string
 	if err := json.Unmarshal(secondRec.Body.Bytes(), &secondBody); err != nil {
 		t.Fatalf("decoding body: %v", err)

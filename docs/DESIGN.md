@@ -83,7 +83,7 @@ relocated ciphertext fail loudly:
 | Comment | `POST#<pid>` + `CMT#<path>` + generation number |
 | Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
 | Generation key | group id + generation number |
-| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. |
+| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. That guard only holds while `PROFILE` exists for every uuid ever used, though — user uuids are never reused, so account deletion (not yet built) must tombstone `PROFILE` rather than delete it, or a re-registration on a stale uuid could inherit another user's still-live memberships, invites, and other items keyed on it. |
 | Group name/description | group id + generation number |
 
 **Posts and comments are signed over their address as well as their content**, for the same reason

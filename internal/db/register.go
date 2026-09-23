@@ -75,8 +75,9 @@ type RegisterInput struct {
 // rather than an unconditional overwrite (see ErrUsernameTaken); the
 // PROFILE write's condition guards against a colliding client-supplied
 // UserID (see ErrUserIDTaken). The RECOVERY write has no condition of its
-// own: it shares PROFILE's PK, so PROFILE's condition already covers it --
-// a transaction either writes both or neither.
+// own. The condition is item-scoped (PK+SK), so it only checks PROFILE, but
+// RECOVERY is only ever created in this same transaction and never deleted,
+// so a missing PROFILE implies a missing RECOVERY.
 func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
