@@ -189,10 +189,12 @@ func TestChallengeUnknownUsername(t *testing.T) {
 }
 
 // TestChallengeUnknownUsernameDecoyUserIDVaries confirms the decoy uuid is
-// freshly random per call, not a fixed placeholder -- a constant decoy
-// would itself be a (weaker) enumeration channel, distinguishable from a
-// real account's stable uuid by never changing across repeated requests
-// for the same unknown username.
+// freshly random per call rather than one fixed placeholder shared by every
+// unknown username -- a shared constant would be trivially recognizable as
+// the decoy. This is shape-matching, not an enumeration defense: like the
+// decoy salt, a per-request decoy still differs from a real account's stable
+// uuid across repeated requests, which docs/THREAT_MODEL.md's "Usernames"
+// section already accepts (/auth/challenge confirms whether a name exists).
 func TestChallengeUnknownUsernameDecoyUserIDVaries(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	username := randomUsername(t)

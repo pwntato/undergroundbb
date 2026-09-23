@@ -103,7 +103,8 @@ only the plaintext body would survive relocation: real author, real content, rew
    is included because the client needs it to build `CredentialWrapAAD` before it can unwrap the
    keys (see the AAD table above) — for a fresh device with no prior session, this is the only
    response that hands it one. An unknown username gets a freshly random decoy uuid alongside the
-   rest of the placeholder response, for the same enumeration reasons as the fake salt and blob.
+   rest of the placeholder response, so the response has the same shape either way (not a claim
+   that the account's existence stays hidden; see THREAT_MODEL.md, Usernames).
 3. Client derives the key from the password with Argon2id, unwraps the private keys, and signs the
    nonce with the Ed25519 key.
 4. Server **deletes the challenge item with a conditional write** and, only if that delete succeeds,
