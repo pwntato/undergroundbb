@@ -126,6 +126,9 @@ func TestRecoveryReleaseSuccess(t *testing.T) {
 	if resp.CredentialVersion != 1 {
 		t.Errorf("CredentialVersion = %d, want 1", resp.CredentialVersion)
 	}
+	if resp.UserID != fixture.userID {
+		t.Errorf("UserID = %q, want %q", resp.UserID, fixture.userID)
+	}
 	if resp.Salt == "" {
 		t.Error("Salt is empty")
 	}

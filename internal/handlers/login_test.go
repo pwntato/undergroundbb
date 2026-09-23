@@ -17,6 +17,7 @@ import (
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
+	"github.com/pwntato/undergroundbb/internal/idgen"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -181,6 +182,36 @@ func TestChallengeUnknownUsername(t *testing.T) {
 	}
 	if ch.Salt == "" {
 		t.Error("Salt is empty")
+	}
+	if !idgen.ValidUUID(ch.UserID) {
+		t.Errorf("UserID = %q, want a well-formed decoy uuid", ch.UserID)
+	}
+}
+
+// TestChallengeUnknownUsernameDecoyUserIDVaries confirms the decoy uuid is
+// freshly random per call rather than one fixed placeholder shared by every
+// unknown username -- a shared constant would be trivially recognizable as
+// the decoy. This is shape-matching, not an enumeration defense: like the
+// decoy salt, a per-request decoy still differs from a real account's stable
+// uuid across repeated requests, which docs/THREAT_MODEL.md's "Usernames"
+// section already accepts (/auth/challenge confirms whether a name exists).
+func TestChallengeUnknownUsernameDecoyUserIDVaries(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	username := randomUsername(t)
+
+	first := doChallenge(t, h, username)
+	var firstCh challengeResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstCh); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	second := doChallenge(t, h, username)
+	var secondCh challengeResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondCh); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	if firstCh.UserID == secondCh.UserID {
+		t.Errorf("decoy UserID did not vary across requests: got %q both times", firstCh.UserID)
 	}
 }
 
@@ -441,6 +472,9 @@ func TestChallengeReturnsUserSpecificMaterial(t *testing.T) {
 		t.Fatalf("decoding challenge response: %v", err)
 	}
 
+	if ch.UserID != user.userID {
+		t.Errorf("UserID = %q, want %q", ch.UserID, user.userID)
+	}
 	if ch.Salt != base64.StdEncoding.EncodeToString(stored.Salt) {
 		t.Errorf("Salt does not match the stored value")
 	}
