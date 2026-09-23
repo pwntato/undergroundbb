@@ -132,9 +132,11 @@ const RECOVERY_VERIFIER_LEN = 32
  * once its own derivation has actually completed).
  *
  * recovery-code-canonical.test.ts calls this directly (not just
- * normalizeRecoveryCode/deriveKey independently) so a regression in
- * worker.ts back to deriving from the unnormalized form fails a test here
- * rather than only in worker.ts's own untested call site.
+ * normalizeRecoveryCode/deriveKey independently) to pin that normalization
+ * happens here. Because this function always normalizes internally, there
+ * is no lower-level call worker.ts could make that would skip it -- so
+ * worker.ts is protected only because it calls this function, not because
+ * the test observes worker.ts's own call sites.
  */
 export function deriveRecoveryWrapKey(
   code: string,

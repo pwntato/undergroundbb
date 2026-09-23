@@ -110,7 +110,9 @@ export function SignupScreen() {
       } catch (err) {
         // register() itself failed -- no account exists, nothing to
         // preserve, safe to bounce back to the credentials form exactly
-        // like before.
+        // like before. (Unless the response was merely lost after the
+        // write committed -- see #124. That's a distinct, narrower bug:
+        // this catch still can't tell that case apart from a real 4xx.)
         setError(
           err instanceof ApiError && err.status !== 403
             ? err.message

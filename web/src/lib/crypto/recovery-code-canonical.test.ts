@@ -1,12 +1,14 @@
-// Pins the recovery code's canonical KDF input by testing worker.ts's ACTUAL
-// call sites, not just normalizeRecoveryCode/deriveKey in isolation --
+// Pins the recovery code's canonical KDF input by testing
+// deriveRecoveryWrapKey/deriveRecoveryVerifier (recovery-code.ts) directly --
 // round-2 review caught that an earlier version of this file only tested
-// the general shape of the property, and a mutation that reverted
+// normalizeRecoveryCode/deriveKey in isolation, and a mutation that reverted
 // worker.ts to deriving from the unnormalized form still passed all tests.
-// deriveRecoveryWrapKey/deriveRecoveryVerifier (recovery-code.ts) are what
-// worker.ts actually calls, so testing them here means a regression in
-// worker.ts's own call sites -- back to passing the hyphenated form, or to
-// a hand-rolled deriveKey call that skips normalization -- fails a test.
+// These two functions always normalize internally (see their own doc
+// comments), so worker.ts is protected only because it calls them -- there
+// is no lower-level call worker.ts could make that would skip
+// normalization, so this file cannot catch a regression at worker.ts's own
+// call sites directly. Catching that would take a test of
+// generateSignupMaterial itself (worker.ts), with params injectable.
 
 import { describe, expect, it } from 'vitest'
 import { bytesToHex } from './hex.js'
@@ -61,21 +63,17 @@ describe('deriveRecoveryWrapKey / deriveRecoveryVerifier canonical form', () => 
     // wrapper" -- register.go sends distinct RecoverySalt/
     // RecoveryVerifierSalt for exactly this reason, and worker.ts always
     // calls randomSalt() separately for each (never reuses one salt for
-    // both). Argon2id is deterministic and KEY_SIZE/VerifierLen are both
-    // 32 bytes, so the ONLY thing that keeps these two outputs from
-    // colliding in practice is that salt. Confirms that here: same salt
-    // in, same bytes out (both are just deriveKey(canonical, salt, params,
-    // 32) underneath) -- the two functions are not independently secure by
-    // construction, independence is a caller obligation, not a property
-    // this pair enforces.
+    // both). That salt is what keeps the two outputs from colliding in
+    // practice; independence is a caller obligation, not a property this
+    // pair enforces by construction -- so this only asserts the salts
+    // actually diverge the output, not that a shared salt must collide
+    // (a later hardening change, e.g. a context prefix on the verifier,
+    // should be free to make even the shared-salt case diverge).
     const code = 'E1AP1-W4KGY-196Y7-QZFWW-RMMFRV'
     const sharedSalt = new Uint8Array(16).fill(5)
+    const differentSalt = new Uint8Array(16).fill(6)
 
     const wrapKey = await deriveRecoveryWrapKey(code, sharedSalt, TEST_PARAMS)
-    const verifier = await deriveRecoveryVerifier(code, sharedSalt, TEST_PARAMS)
-    expect(bytesToHex(wrapKey)).toBe(bytesToHex(verifier))
-
-    const differentSalt = new Uint8Array(16).fill(6)
     const verifierUnderOwnSalt = await deriveRecoveryVerifier(code, differentSalt, TEST_PARAMS)
     expect(bytesToHex(wrapKey)).not.toBe(bytesToHex(verifierUnderOwnSalt))
   })
