@@ -96,6 +96,15 @@ function formatRecoveryCode(raw: string): string {
  * code that was actually generated. Does not validate shape -- the server is
  * the source of truth for whether a code is correct (CheckRecoveryVerifier),
  * and a too-short or too-long result here simply fails that check.
+ *
+ * This output -- bare, uppercase -- is the exact byte string every Argon2id
+ * derivation of a recovery code must use, on both sides: worker.ts's
+ * recovery-key and verifier derivations at signup, and the recovery
+ * screen's own derivation (and the submission that
+ * CheckRecoveryVerifier -- internal/crypto/recovery.go -- hashes against
+ * with no normalization of its own) at recovery time. It must never change
+ * once a real account's verifier exists under it -- doing so would make
+ * every already-issued recovery code unverifiable.
  */
 export function normalizeRecoveryCode(input: string): string {
   return input.toUpperCase().replace(/[\s-]/g, '').replace(/[IL]/g, '1').replace(/O/g, '0')

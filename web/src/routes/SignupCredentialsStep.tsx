@@ -1,9 +1,13 @@
-// #33's signup flow, step 1: "username and password". No confirm-password
-// field -- the password is never checked against anything server-side (it
-// never leaves the browser, see worker.ts), so a typo here is caught the
-// same way any password typo is, by failing to unwrap at the next login,
-// not by a client-side match check that only proves two fields agree with
-// each other.
+// #33's signup flow, step 1: "username and password". Includes a
+// confirm-password field -- reviewed and reconsidered from an earlier draft
+// that omitted one on the reasoning that the password never leaves the
+// browser, so a typo is caught the same way any typo is, by failing to
+// unwrap at the next login. That reasoning undercounts the actual cost
+// here: this design has no server-side password reset (the server holds no
+// plaintext to check against, by design -- see docs/DESIGN.md), and the
+// recovery-code screen that's the only other way back in doesn't exist yet.
+// A typo at signup currently means permanently locked out, not merely
+// inconvenienced, so the extra field earns its keep until recovery ships.
 
 import { useState, type FormEvent } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -31,6 +35,7 @@ export function SignupCredentialsStep({
 }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [validationError, setValidationError] = useState<string | null>(null)
 
   const handleSubmit = (e: FormEvent) => {
@@ -41,6 +46,10 @@ export function SignupCredentialsStep({
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
       setValidationError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`)
+      return
+    }
+    if (password !== confirmPassword) {
+      setValidationError('Passwords do not match.')
       return
     }
     setValidationError(null)
@@ -80,6 +89,19 @@ export function SignupCredentialsStep({
           value={password}
           onChange={(e) => {
             setPassword(e.target.value)
+          }}
+          required
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="signup-confirm-password">Confirm password</Label>
+        <Input
+          id="signup-confirm-password"
+          type="password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => {
+            setConfirmPassword(e.target.value)
           }}
           required
         />

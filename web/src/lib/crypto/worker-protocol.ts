@@ -86,6 +86,14 @@ export interface WorkerErrorResponse {
   readonly kind: 'error'
   readonly id: string
   readonly message: string
+  /**
+   * The thrown error's `name` (e.g. 'DecryptionFailedError'), so a caller on
+   * the far side of the postMessage boundary -- where the real error class
+   * is lost, only plain data crosses -- can still distinguish "wrong
+   * password" (a GCM auth failure inside completeLogin) from every other
+   * failure. See worker-client.ts's reconstructWorkerError.
+   */
+  readonly errorName: string
 }
 
 export type WorkerRequest = GenerateSignupMaterialRequest | CompleteLoginRequest

@@ -13,7 +13,8 @@
 
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { challenge, verify } from '@/lib/api/auth'
+import { ApiError, challenge, verify } from '@/lib/api/auth'
+import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeLogin } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -21,7 +22,29 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-const GENERIC_LOGIN_ERROR = 'Incorrect username or password.'
+const CREDENTIAL_ERROR = 'Incorrect username or password.'
+const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
+
+/**
+ * Reports whether err is one of login's credential-failure modes: a bad
+ * password (DecryptionFailedError, thrown inside completeLogin's unwrap)
+ * or verify's 400/401 (bad signature, stale/replayed/missing challenge, or
+ * an unknown username mapped to the same response -- see verify's own
+ * server-side doc comment). Anything else -- a network failure, a 5xx, or
+ * a 429 from the rate limiter -- is NOT a credential failure: showing
+ * CREDENTIAL_ERROR for those would tell someone who typed their password
+ * correctly that it was wrong, which risks sending them to recovery over an
+ * outage rather than a real mistake.
+ */
+function isCredentialFailure(err: unknown): boolean {
+  if (err instanceof DecryptionFailedError) {
+    return true
+  }
+  if (err instanceof ApiError) {
+    return err.status === 400 || err.status === 401
+  }
+  return false
+}
 
 export function LoginScreen() {
   const [username, setUsername] = useState('')
@@ -50,13 +73,16 @@ export function LoginScreen() {
         const result = await verify(username, ch.nonce, signature)
         session.login(result.userId)
         navigate('/', { replace: true })
-      } catch {
-        // Every failure mode here -- unknown username, wrong password
-        // (fails inside the worker's decrypt), wrong signature, a stale
-        // challenge -- collapses to the same generic message. See this
-        // file's own header comment for why that's deliberate, not a
-        // missed distinction.
-        setError(GENERIC_LOGIN_ERROR)
+      } catch (err) {
+        // Every real credential-failure mode -- unknown username, wrong
+        // password (fails inside the worker's decrypt), wrong signature, a
+        // stale challenge -- collapses to CREDENTIAL_ERROR. See this file's
+        // own header comment for why that's deliberate, not a missed
+        // distinction. Everything else (network failure, 5xx, a 429 from
+        // the rate limiter) gets UNREACHABLE_ERROR instead -- see
+        // isCredentialFailure's own doc comment for why conflating the two
+        // is worse than showing a slightly less specific message.
+        setError(isCredentialFailure(err) ? CREDENTIAL_ERROR : UNREACHABLE_ERROR)
       } finally {
         setSubmitting(false)
       }

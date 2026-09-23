@@ -7,6 +7,7 @@
 // spinning up hash-wasm's Argon2id module has real cost, and nothing about
 // this app needs more than one crypto call in flight at a time.
 
+import { DecryptionFailedError } from './aesgcm.js'
 import type {
   CompleteLoginRequest,
   CompleteLoginResponse,
@@ -14,8 +15,25 @@ import type {
   GenerateSignupMaterialResponse,
   SignupMaterial,
   SignupProgressEvent,
+  WorkerErrorResponse,
   WorkerResponse,
 } from './worker-protocol.js'
+
+/**
+ * Reconstructs a typed error from a WorkerErrorResponse where possible.
+ * worker.ts's top-level catch can only forward plain data across the
+ * postMessage boundary -- the original error's class is lost -- so this is
+ * how a caller (LoginScreen, distinguishing "wrong password" from every
+ * other login failure) gets a real DecryptionFailedError back rather than
+ * having to string-match msg.message against aesgcm.ts's literal text.
+ * Every other error name falls back to a plain Error carrying the message.
+ */
+function reconstructWorkerError(msg: WorkerErrorResponse): Error {
+  if (msg.errorName === 'DecryptionFailedError') {
+    return new DecryptionFailedError()
+  }
+  return new Error(msg.message)
+}
 
 let worker: Worker | undefined
 
@@ -26,6 +44,43 @@ function getWorker(): Worker {
 
 function nextRequestID(): string {
   return crypto.randomUUID()
+}
+
+/**
+ * Attaches the 'error'/'messageerror' listeners a request/response round
+ * trip needs beyond its own {kind:'error'} message handling: if the worker
+ * module itself fails to load, or something throws outside worker.ts's own
+ * handle() (e.g. a large Argon2id allocation failing on a low-memory mobile
+ * tab), no {kind:'error'} response ever arrives and the caller's promise
+ * would otherwise never settle -- leaving the UI (e.g. SignupProgressStep)
+ * stuck with no way out but a reload. Either failure discards the cached
+ * worker so the next call gets a fresh instance rather than reusing one
+ * that may be in a broken state. Returns a cleanup function the caller must
+ * also invoke once its own message handler settles the promise normally.
+ */
+function attachFailureHandlers(
+  w: Worker,
+  onMessage: (event: MessageEvent<WorkerResponse>) => void,
+  reject: (err: Error) => void,
+): () => void {
+  const onError = (event: ErrorEvent): void => {
+    cleanup()
+    worker = undefined
+    reject(new Error(`worker: ${event.message || 'failed to load or threw outside handle()'}`))
+  }
+  const onMessageError = (): void => {
+    cleanup()
+    worker = undefined
+    reject(new Error('worker: received an unstructured-cloneable-violating message'))
+  }
+  const cleanup = (): void => {
+    w.removeEventListener('message', onMessage)
+    w.removeEventListener('error', onError)
+    w.removeEventListener('messageerror', onMessageError)
+  }
+  w.addEventListener('error', onError)
+  w.addEventListener('messageerror', onMessageError)
+  return cleanup
 }
 
 /** Runs generateSignupMaterial in the crypto worker, reporting each step via onProgress as it completes. */
@@ -43,6 +98,7 @@ export function generateSignupMaterial(
   }
   return new Promise((resolve, reject) => {
     const w = getWorker()
+    let cleanup: () => void
     const onMessage = (event: MessageEvent<WorkerResponse>): void => {
       const msg = event.data
       if (msg.id !== id) {
@@ -52,9 +108,9 @@ export function generateSignupMaterial(
         onProgress(msg)
         return
       }
-      w.removeEventListener('message', onMessage)
+      cleanup()
       if (msg.kind === 'error') {
-        reject(new Error(msg.message))
+        reject(reconstructWorkerError(msg))
         return
       }
       if (msg.kind === 'generateSignupMaterialDone') {
@@ -63,6 +119,7 @@ export function generateSignupMaterial(
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for generateSignupMaterial`))
     }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
     w.postMessage(req)
   })
@@ -74,14 +131,15 @@ export function completeLogin(req: Omit<CompleteLoginRequest, 'kind' | 'id'>): P
   const fullReq: CompleteLoginRequest = { kind: 'completeLogin', id, ...req }
   return new Promise((resolve, reject) => {
     const w = getWorker()
+    let cleanup: () => void
     const onMessage = (event: MessageEvent<WorkerResponse>): void => {
       const msg = event.data
       if (msg.id !== id) {
         return
       }
-      w.removeEventListener('message', onMessage)
+      cleanup()
       if (msg.kind === 'error') {
-        reject(new Error(msg.message))
+        reject(reconstructWorkerError(msg))
         return
       }
       if (msg.kind === 'completeLoginDone') {
@@ -90,6 +148,7 @@ export function completeLogin(req: Omit<CompleteLoginRequest, 'kind' | 'id'>): P
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for completeLogin`))
     }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
     w.postMessage(fullReq)
   })

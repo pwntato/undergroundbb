@@ -9,13 +9,13 @@
 /// <reference lib="webworker" />
 
 import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
-import { bytesToBase64 } from './base64.js'
+import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
-import { encodeKeyBundle } from './keybundle.js'
-import { generateRecoveryCode } from './recovery-code.js'
+import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
+import { generateRecoveryCode, normalizeRecoveryCode } from './recovery-code.js'
 import * as ed25519 from './ed25519.js'
 import { generateWrappingKey, KEY_LEN as X25519_KEY_LEN } from './x25519.js'
-import { encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
+import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
 import type {
   CompleteLoginRequest,
   GenerateSignupMaterialRequest,
@@ -29,7 +29,12 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope
 ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const req = event.data
   void handle(req).catch((err: unknown) => {
-    post({ kind: 'error', id: req.id, message: err instanceof Error ? err.message : String(err) })
+    post({
+      kind: 'error',
+      id: req.id,
+      message: err instanceof Error ? err.message : String(err),
+      errorName: err instanceof Error ? err.name : 'Error',
+    })
   })
 }
 
@@ -94,14 +99,34 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
     id: req.id,
     step: 1,
     totalSteps: 3,
-    label: 'Deriving your password key',
+    label: 'Password key ready',
   })
 
   // Step 2 of 3: the recovery-code-derived wrapping key. Independent salt
   // and derivation from the password's, per docs/DESIGN.md.
+  //
+  // Derived from normalizeRecoveryCode(recoveryCode) -- the bare, uppercase
+  // form -- not the hyphenated display form generateRecoveryCode returns.
+  // This is the one canonical KDF input for the recovery code, used
+  // identically here and for the verifier below: CheckRecoveryVerifier
+  // (internal/crypto/recovery.go) hashes whatever bytes a recovery endpoint
+  // receives with no normalization of its own, so the client must always
+  // submit -- and always have derived under -- this exact form. Bare
+  // uppercase, not hyphenated, because normalizeRecoveryCode's whole
+  // documented purpose is turning arbitrary user input (any grouping,
+  // whitespace, or misread-character substitution) into one canonical
+  // string; deriving under a different form here would mean the recovery
+  // screen's own normalization could never match what signup actually
+  // hashed. This must never change once a real account's verifier exists.
   const recoveryCode = generateRecoveryCode()
+  const recoveryCodeCanonical = normalizeRecoveryCode(recoveryCode)
   const recoverySalt = randomSalt()
-  const recoveryKey = await deriveKey(recoveryCode, recoverySalt, SIGNUP_ARGON2_PARAMS, KEY_SIZE)
+  const recoveryKey = await deriveKey(
+    recoveryCodeCanonical,
+    recoverySalt,
+    SIGNUP_ARGON2_PARAMS,
+    KEY_SIZE,
+  )
   const recoveryNonce = crypto.getRandomValues(new Uint8Array(NONCE_SIZE))
   const recoveryCiphertext = await encryptWithNonce(
     recoveryKey,
@@ -114,16 +139,20 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
     id: req.id,
     step: 2,
     totalSteps: 3,
-    label: 'Deriving your recovery key',
+    label: 'Recovery key ready',
   })
 
   // Step 3 of 3: the recovery verifier -- a third, independent derivation of
   // the same recovery code, per registerRequest's own doc comment
   // (internal/handlers/register.go) and crypto.VerifierLen server-side.
+  // Derived from the same recoveryCodeCanonical as the wrap key above --
+  // see that derivation's own comment for why this exact form is load-
+  // bearing: it's what CheckRecoveryVerifier must be handed back at
+  // recovery time for this hash to ever match.
   const RECOVERY_VERIFIER_LEN = 32
   const verifierSalt = randomSalt()
   const verifier = await deriveKey(
-    recoveryCode,
+    recoveryCodeCanonical,
     verifierSalt,
     SIGNUP_ARGON2_PARAMS,
     RECOVERY_VERIFIER_LEN,
@@ -133,7 +162,7 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
     id: req.id,
     step: 3,
     totalSteps: 3,
-    label: 'Deriving your recovery verifier',
+    label: 'Recovery verifier ready',
   })
 
   const result: SignupMaterial = {
@@ -165,10 +194,6 @@ async function generateSignupMaterial(req: GenerateSignupMaterialRequest): Promi
 }
 
 async function completeLogin(req: CompleteLoginRequest): Promise<void> {
-  const { base64ToBytes } = await import('./base64.js')
-  const { decrypt } = await import('./aesgcm.js')
-  const { decodeKeyBundle } = await import('./keybundle.js')
-
   const salt = base64ToBytes(req.salt)
   const key = await deriveKey(req.password, salt, req.argon2Params, KEY_SIZE)
 

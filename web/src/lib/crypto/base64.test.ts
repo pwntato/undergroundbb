@@ -12,7 +12,7 @@ describe('base64 round trip', () => {
     expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes)
   })
 
-  it('round-trips 32 random bytes at every length modulus', () => {
+  it('round-trips random bytes at every length 0-7 (every base64 padding case)', () => {
     for (let len = 0; len < 8; len++) {
       const bytes = crypto.getRandomValues(new Uint8Array(len))
       expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes)
