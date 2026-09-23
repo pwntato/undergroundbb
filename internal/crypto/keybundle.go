@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/binary"
@@ -61,7 +62,22 @@ type KeyBundle struct {
 // 2, is the unrecoverable mistake -- every existing wrap silently becomes
 // unreadable with nothing on the server (which never sees this plaintext at
 // all) able to detect or repair it.
-func EncodeKeyBundle(b KeyBundle) []byte {
+//
+// Returns ErrMalformedKeyBundle if either field is not the exact length
+// DecodeKeyBundle requires (ed25519.SeedSize, x25519PrivateKeySize) --
+// caught here rather than left to surface as a decode failure at the
+// caller's next login. This is not a hypothetical: ed25519.ts's SigningKey
+// documents that toGoPrivateKeyBytes() (64 bytes, seed||pubkey) is what
+// "cross[es] the wire," and this bundle is the one place that deliberately
+// wants the bare 32-byte seed instead -- a signup implementation that reused
+// the wrong helper would otherwise wrap and register successfully, then fail
+// every subsequent login with no way for the server, which never sees this
+// plaintext, to detect or repair it.
+func EncodeKeyBundle(b KeyBundle) ([]byte, error) {
+	if len(b.SigningSeed) != ed25519.SeedSize || len(b.WrappingPrivateKey) != x25519PrivateKeySize {
+		return nil, ErrMalformedKeyBundle
+	}
+
 	fields := [][]byte{b.SigningSeed, b.WrappingPrivateKey}
 
 	size := 1
@@ -74,7 +90,7 @@ func EncodeKeyBundle(b KeyBundle) []byte {
 	for _, f := range fields {
 		out = appendLengthPrefixed(out, f)
 	}
-	return out
+	return out, nil
 }
 
 // DecodeKeyBundle reverses EncodeKeyBundle, validating the two fixed lengths
@@ -93,6 +109,14 @@ func EncodeKeyBundle(b KeyBundle) []byte {
 // version 2 client reading back a version 1 blob (an account that has not
 // logged in since the format changed) must fall into a defined, named case,
 // not the same bucket as a corrupt one.
+//
+// The returned KeyBundle's fields are copies, not sub-slices of data --
+// matching the TypeScript port, where Uint8Array.slice() always copies, and
+// letting a caller zero data (the ordinary thing to do with an unwrapped
+// plaintext once its keys are extracted) without also wiping the KeyBundle
+// it just decoded. A sub-slice would additionally carry data's capacity
+// into the following bytes, so an append to SigningSeed could silently
+// corrupt WrappingPrivateKey's own length prefix.
 func DecodeKeyBundle(data []byte) (KeyBundle, error) {
 	if len(data) < 1 {
 		return KeyBundle{}, ErrMalformedKeyBundle
@@ -123,7 +147,10 @@ func DecodeKeyBundle(data []byte) (KeyBundle, error) {
 		return KeyBundle{}, ErrMalformedKeyBundle
 	}
 
-	return KeyBundle{SigningSeed: signingSeed, WrappingPrivateKey: wrappingPriv}, nil
+	return KeyBundle{
+		SigningSeed:        bytes.Clone(signingSeed),
+		WrappingPrivateKey: bytes.Clone(wrappingPriv),
+	}, nil
 }
 
 // x25519PrivateKeySize mirrors register.go's x25519PublicKeySize -- crypto

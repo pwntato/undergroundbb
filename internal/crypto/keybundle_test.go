@@ -22,9 +22,21 @@ func fixedTestKeyBundle(t *testing.T) KeyBundle {
 	}
 }
 
+// mustEncode is EncodeKeyBundle for tests that already know b is
+// well-formed and want to fail loudly, rather than via a silent nil slice,
+// if that assumption is ever wrong.
+func mustEncode(t *testing.T, b KeyBundle) []byte {
+	t.Helper()
+	encoded, err := EncodeKeyBundle(b)
+	if err != nil {
+		t.Fatalf("EncodeKeyBundle: %v", err)
+	}
+	return encoded
+}
+
 func TestKeyBundleRoundTrip(t *testing.T) {
 	want := fixedTestKeyBundle(t)
-	encoded := EncodeKeyBundle(want)
+	encoded := mustEncode(t, want)
 
 	got, err := DecodeKeyBundle(encoded)
 	if err != nil {
@@ -40,7 +52,7 @@ func TestKeyBundleRoundTrip(t *testing.T) {
 
 func TestKeyBundleEncodingStartsWithVersion(t *testing.T) {
 	b := fixedTestKeyBundle(t)
-	encoded := EncodeKeyBundle(b)
+	encoded := mustEncode(t, b)
 	if len(encoded) == 0 || encoded[0] != KeyBundleVersion1 {
 		t.Fatalf("encoded[0] = %v, want KeyBundleVersion1 (%d)", encoded[:min(1, len(encoded))], KeyBundleVersion1)
 	}
@@ -67,7 +79,7 @@ func TestKeyBundleReconstructsUsableKeys(t *testing.T) {
 
 func TestDecodeKeyBundleUnsupportedVersion(t *testing.T) {
 	b := fixedTestKeyBundle(t)
-	encoded := EncodeKeyBundle(b)
+	encoded := mustEncode(t, b)
 	encoded[0] = KeyBundleVersion1 + 1 // a version this build does not know
 
 	_, err := DecodeKeyBundle(encoded)
@@ -77,7 +89,7 @@ func TestDecodeKeyBundleUnsupportedVersion(t *testing.T) {
 }
 
 func TestDecodeKeyBundleMalformed(t *testing.T) {
-	valid := EncodeKeyBundle(fixedTestKeyBundle(t))
+	valid := mustEncode(t, fixedTestKeyBundle(t))
 
 	cases := []struct {
 		name string
@@ -109,21 +121,96 @@ func TestDecodeKeyBundleMalformed(t *testing.T) {
 	}
 }
 
-// TestKeyBundleFieldsAreNotSwappable guards the field order itself: encoding
-// with the two fields swapped must fail wrapping-key-size validation, since
-// an Ed25519 seed and an X25519 scalar are both 32 bytes and would otherwise
-// decode "successfully" into the wrong key type silently.
-func TestKeyBundleFieldsAreNotSwappable(t *testing.T) {
+// TestEncodeKeyBundleRejectsWrongSizeFields covers the guard added after
+// review found EncodeKeyBundle would happily accept a SigningSeed of the
+// wrong size -- e.g. Go's own 64-byte ed25519.PrivateKey encoding
+// (seed||pubkey), which ed25519.ts's SigningKey doc comment specifically
+// names as what "cross[es] the wire" elsewhere in this codebase, making it
+// a plausible mistake for whatever signup code eventually calls this.
+// Before this guard, that value would wrap and register successfully and
+// then fail every subsequent login, undetectably, since the server never
+// sees this plaintext to catch the mismatch.
+func TestEncodeKeyBundleRejectsWrongSizeFields(t *testing.T) {
+	valid := fixedTestKeyBundle(t)
+
+	cases := []struct {
+		name string
+		b    KeyBundle
+	}{
+		{
+			"64-byte Go-style signing key instead of the 32-byte seed",
+			KeyBundle{SigningSeed: append(append([]byte(nil), valid.SigningSeed...), valid.SigningSeed...), WrappingPrivateKey: valid.WrappingPrivateKey},
+		},
+		{
+			"empty signing seed",
+			KeyBundle{SigningSeed: nil, WrappingPrivateKey: valid.WrappingPrivateKey},
+		},
+		{
+			"short wrapping key",
+			KeyBundle{SigningSeed: valid.SigningSeed, WrappingPrivateKey: valid.WrappingPrivateKey[:16]},
+		},
+		{
+			"empty wrapping key",
+			KeyBundle{SigningSeed: valid.SigningSeed, WrappingPrivateKey: nil},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := EncodeKeyBundle(tc.b)
+			if err != ErrMalformedKeyBundle {
+				t.Fatalf("err = %v, want ErrMalformedKeyBundle", err)
+			}
+		})
+	}
+}
+
+// TestDecodeKeyBundleReturnsIndependentCopies covers the aliasing bug review
+// found: DecodeKeyBundle used to return sub-slices of its input, so zeroing
+// the input buffer -- the ordinary thing to do with an unwrapped plaintext
+// once its keys are extracted -- silently zeroed the decoded KeyBundle too.
+// Now it returns copies, matching the TypeScript port (Uint8Array.slice()
+// always copies).
+func TestDecodeKeyBundleReturnsIndependentCopies(t *testing.T) {
+	want := fixedTestKeyBundle(t)
+	encoded := mustEncode(t, want)
+
+	decoded, err := DecodeKeyBundle(encoded)
+	if err != nil {
+		t.Fatalf("DecodeKeyBundle: %v", err)
+	}
+
+	// Zero the input buffer, as a caller done with an unwrapped plaintext
+	// would.
+	for i := range encoded {
+		encoded[i] = 0
+	}
+
+	if !bytes.Equal(decoded.SigningSeed, want.SigningSeed) {
+		t.Fatalf("decoded.SigningSeed changed after zeroing the input buffer: got %x, want %x", decoded.SigningSeed, want.SigningSeed)
+	}
+	if !bytes.Equal(decoded.WrappingPrivateKey, want.WrappingPrivateKey) {
+		t.Fatalf("decoded.WrappingPrivateKey changed after zeroing the input buffer: got %x, want %x", decoded.WrappingPrivateKey, want.WrappingPrivateKey)
+	}
+}
+
+// TestKeyBundleSwapIsUndetectableByLength documents a limitation rather than
+// guarding against one: an Ed25519 seed and an X25519 scalar are both 32
+// bytes, so encoding the two KeyBundle fields swapped decodes successfully
+// -- DecodeKeyBundle's length checks cannot tell seed and scalar apart. The
+// real guard belongs at the login/unwrap call site (#33): re-derive both
+// public keys from the decoded scalars and compare them against the
+// account's stored SigningPublicKey/WrappingPublicKey.
+func TestKeyBundleSwapIsUndetectableByLength(t *testing.T) {
 	b := fixedTestKeyBundle(t)
 	swapped := KeyBundle{
 		SigningSeed:        b.WrappingPrivateKey,
 		WrappingPrivateKey: b.SigningSeed,
 	}
-	encoded := EncodeKeyBundle(swapped)
+	encoded := mustEncode(t, swapped)
 	decoded, err := DecodeKeyBundle(encoded)
-	// Both fields are 32 bytes, so this decodes without error -- the
-	// point of this test is documenting that DecodeKeyBundle cannot detect
-	// a swap by length alone, and callers must not rely on it to.
+	// Both fields are 32 bytes, so this decodes without error -- the point
+	// of this test is documenting that DecodeKeyBundle cannot detect a swap
+	// by length alone, and callers must not rely on it to.
 	if err != nil {
 		t.Fatalf("DecodeKeyBundle: %v", err)
 	}

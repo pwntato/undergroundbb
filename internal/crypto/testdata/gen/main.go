@@ -367,7 +367,10 @@ func main() {
 			SigningSeed:        signingPriv.Seed(),
 			WrappingPrivateKey: wrappingPriv.Bytes(),
 		}
-		encoded := crypto.EncodeKeyBundle(bundle)
+		encoded, err := crypto.EncodeKeyBundle(bundle)
+		if err != nil {
+			panic(err)
+		}
 		out.KeyBundle = append(out.KeyBundle, keyBundleVector{
 			Name:               "basic",
 			SigningSeedHex:     hex.EncodeToString(bundle.SigningSeed),

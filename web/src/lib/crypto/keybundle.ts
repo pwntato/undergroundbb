@@ -74,8 +74,26 @@ export interface KeyBundle {
  * than introducing a version 2, is the unrecoverable mistake — every
  * existing wrap silently becomes unreadable with nothing on the server
  * (which never sees this plaintext at all) able to detect or repair it.
+ *
+ * Throws MalformedKeyBundleError if either field is not the exact length
+ * decodeKeyBundle requires (SIGNING_SEED_SIZE, WRAPPING_KEY_SIZE) — caught
+ * here rather than left to surface as a decode failure at the caller's next
+ * login. This is not hypothetical: ed25519.ts's SigningKey doc comment
+ * names toGoPrivateKeyBytes() (64 bytes, seed||pubkey) as what "cross[es]
+ * the wire," and this bundle is the one place that deliberately wants the
+ * bare 32-byte seed instead — signup code that reused the wrong helper
+ * would otherwise wrap and register successfully, then fail every
+ * subsequent login with no way for the server, which never sees this
+ * plaintext, to detect or repair it.
  */
 export function encodeKeyBundle(b: KeyBundle): Uint8Array {
+  if (
+    b.signingSeed.length !== SIGNING_SEED_SIZE ||
+    b.wrappingPrivateKey.length !== WRAPPING_KEY_SIZE
+  ) {
+    throw new MalformedKeyBundleError()
+  }
+
   const fields = [b.signingSeed, b.wrappingPrivateKey]
 
   let size = 1

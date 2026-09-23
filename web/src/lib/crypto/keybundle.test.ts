@@ -75,4 +75,68 @@ describe('encodeKeyBundle / decodeKeyBundle', () => {
       expect(() => decodeKeyBundle(tampered)).toThrow(MalformedKeyBundleError)
     })
   })
+
+  // Covers the guard added after review found encodeKeyBundle would happily
+  // accept a signingSeed of the wrong size -- e.g. Go's own 64-byte
+  // ed25519.PrivateKey encoding (seed||pubkey), which ed25519.ts's
+  // SigningKey doc comment specifically names as what "cross[es] the wire"
+  // elsewhere in this codebase, making it a plausible mistake for whatever
+  // signup code eventually calls this. Before this guard, that value would
+  // wrap and register successfully and then fail every subsequent login,
+  // undetectably, since the server never sees this plaintext to catch the
+  // mismatch.
+  describe('rejects wrong-size fields', () => {
+    const valid = fixedBundle()
+
+    it('64-byte Go-style signing key instead of the 32-byte seed', () => {
+      const oversized = new Uint8Array(64)
+      oversized.set(valid.signingSeed, 0)
+      oversized.set(valid.signingSeed, 32)
+      expect(() =>
+        encodeKeyBundle({ signingSeed: oversized, wrappingPrivateKey: valid.wrappingPrivateKey }),
+      ).toThrow(MalformedKeyBundleError)
+    })
+
+    it('empty signing seed', () => {
+      expect(() =>
+        encodeKeyBundle({
+          signingSeed: new Uint8Array(0),
+          wrappingPrivateKey: valid.wrappingPrivateKey,
+        }),
+      ).toThrow(MalformedKeyBundleError)
+    })
+
+    it('short wrapping key', () => {
+      expect(() =>
+        encodeKeyBundle({
+          signingSeed: valid.signingSeed,
+          wrappingPrivateKey: valid.wrappingPrivateKey.slice(0, 16),
+        }),
+      ).toThrow(MalformedKeyBundleError)
+    })
+
+    it('empty wrapping key', () => {
+      expect(() =>
+        encodeKeyBundle({ signingSeed: valid.signingSeed, wrappingPrivateKey: new Uint8Array(0) }),
+      ).toThrow(MalformedKeyBundleError)
+    })
+  })
+
+  // Documents parity with Go's fix for the aliasing bug review found there:
+  // decodeKeyBundle must return copies, not views over the input buffer, so
+  // zeroing the input after decoding -- the ordinary thing to do with an
+  // unwrapped plaintext once its keys are extracted -- cannot silently zero
+  // the decoded KeyBundle too. TS's Uint8Array.slice() already copies, so
+  // this was true before the Go-side fix; this test makes that guarantee
+  // explicit and durable rather than incidental.
+  it('returns independent copies, not views over the input buffer', () => {
+    const bundle = fixedBundle()
+    const encoded = encodeKeyBundle(bundle)
+    const decoded = decodeKeyBundle(encoded)
+
+    encoded.fill(0)
+
+    expect(decoded.signingSeed).toEqual(bundle.signingSeed)
+    expect(decoded.wrappingPrivateKey).toEqual(bundle.wrappingPrivateKey)
+  })
 })

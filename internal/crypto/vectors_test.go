@@ -441,7 +441,10 @@ func TestVectorKeyBundle(t *testing.T) {
 			}
 			want := mustHex(t, tc.EncodedHex)
 
-			got := EncodeKeyBundle(bundle)
+			got, err := EncodeKeyBundle(bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if !bytes.Equal(got, want) {
 				t.Fatalf("EncodeKeyBundle = %x, want %x", got, want)
 			}
