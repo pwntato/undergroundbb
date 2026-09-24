@@ -128,6 +128,35 @@ export interface CompleteRecoveryResponse {
   readonly result: RecoveryMaterial
 }
 
+/**
+ * #131: change a logged-in user's password. Unwraps PROFILE with
+ * oldPassword (GET /api/account/credentials' current
+ * salt/argon2Params/wrappedPrivateKeys) and re-wraps the same bundle under
+ * newPassword plus a freshly generated recovery code -- the mirror of
+ * CompleteRecoveryRequest, but unwrapping via a password rather than a
+ * recovery code, and with no server round trip in between (unlike recovery,
+ * which unwraps material release() already fetched from the server).
+ */
+export interface CompleteChangePasswordRequest {
+  readonly kind: 'completeChangePassword'
+  readonly id: string
+  readonly oldPassword: string
+  readonly salt: string
+  readonly argon2Params: { memoryKiB: number; iterations: number; parallelism: number }
+  readonly wrappedPrivateKeys: { nonce: string; ciphertext: string }
+  readonly userId: string
+  readonly newPassword: string
+}
+
+/** The result shape is identical to RecoveryMaterial -- no public keys, a freshly issued recovery code. */
+export type ChangePasswordMaterial = RecoveryMaterial
+
+export interface CompleteChangePasswordResponse {
+  readonly kind: 'completeChangePasswordDone'
+  readonly id: string
+  readonly result: ChangePasswordMaterial
+}
+
 export interface WorkerErrorResponse {
   readonly kind: 'error'
   readonly id: string
@@ -143,11 +172,15 @@ export interface WorkerErrorResponse {
 }
 
 export type WorkerRequest =
-  GenerateSignupMaterialRequest | CompleteLoginRequest | CompleteRecoveryRequest
+  | GenerateSignupMaterialRequest
+  | CompleteLoginRequest
+  | CompleteRecoveryRequest
+  | CompleteChangePasswordRequest
 
 export type WorkerResponse =
   | SignupProgressEvent
   | GenerateSignupMaterialResponse
   | CompleteLoginResponse
   | CompleteRecoveryResponse
+  | CompleteChangePasswordResponse
   | WorkerErrorResponse

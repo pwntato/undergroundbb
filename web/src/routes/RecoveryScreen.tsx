@@ -65,14 +65,17 @@ const STALE_VERSION_ERROR =
 // response was lost after the write already committed (see runRecovery's
 // own comment on isDefinitelyUncommitted for why every 4xx it can return is
 // excluded from reaching this message). The write, if it landed, also
-// issued a new recovery code that this message can't hand back. Neither
-// gap has a fix yet -- #130 (idempotent retry for this write) and #131 (a
-// logged-in screen to generate a new recovery code; no such screen exists
-// today, so this message must not promise one) are both open. Round 3
-// caught this message claiming "your account settings" as if #131 already
-// existed and citing #124 (register-only) as the fix for #130's gap.
+// issued a new recovery code that this message can't hand back. #130
+// (idempotent retry for this write) is still open, but #131 (the logged-in
+// change-password/new-recovery-code screen, ChangePasswordScreen.tsx) now
+// exists, so this message can point there for the one thing it can't hand
+// back directly -- round 3 of PR #129's review caught an earlier draft
+// claiming "your account settings" before #131 existed at all, and PR #132
+// review caught this draft still not naming the real entry point (the
+// Change password button on Home) or saying that changing your password,
+// specifically, is how you get a new code.
 const RESET_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does, so you'll need a new one."
+  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does. Once you're in, use Change password to get a new one (you can keep the same password)."
 
 function errorMessageFor(kind: RecoveryErrorKind): string {
   switch (kind) {

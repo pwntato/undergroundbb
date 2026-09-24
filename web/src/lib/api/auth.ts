@@ -189,3 +189,58 @@ export async function recoveryCodeReset(
 ): Promise<RecoveryCodeResetResponse> {
   return sendJSON<RecoveryCodeResetResponse>('PUT', '/api/account/recovery-code', req)
 }
+
+export interface AccountCredentialsResponse {
+  readonly userId: string
+  readonly salt: string
+  readonly argon2Params: WireArgon2Params
+  readonly wrappedPrivateKeys: WireWrappedBlob
+  readonly credentialVersion: number
+}
+
+/**
+ * GET /api/account/credentials -- #131, change-password step 1.
+ * Authenticated by the session cookie; the change-password screen's own
+ * bootstrap, since GET /api/auth/session (the other authenticated
+ * account-state read) only returns userId, not the salt/argon2Params/
+ * wrappedPrivateKeys a client needs to unwrap PROFILE with the old
+ * password. userId is included here too (not just relying on
+ * SessionContext's) since SessionContext's own doc comment says its userId
+ * does not survive a page reload -- this response is this screen's only
+ * reliable source for it. Throws ApiError(401) if there is no valid
+ * session.
+ */
+export async function getAccountCredentials(): Promise<AccountCredentialsResponse> {
+  const res = await fetch('/api/account/credentials', { credentials: 'same-origin' })
+  return handleJSON<AccountCredentialsResponse>(res)
+}
+
+export interface ChangePasswordRequest {
+  readonly expectedCredentialVersion: number
+  readonly salt: string
+  readonly argon2Params: WireArgon2Params
+  readonly wrappedPrivateKeys: WireWrappedBlob
+  readonly recoverySalt: string
+  readonly recoveryArgon2Params: WireArgon2Params
+  readonly recoveryWrappedPrivateKeys: WireWrappedBlob
+  readonly recoveryVerifierSalt: string
+  readonly recoveryVerifierParams: WireArgon2Params
+  readonly recoveryVerifier: string
+}
+
+export interface ChangePasswordResponse {
+  readonly credentialVersion: number
+}
+
+/**
+ * PUT /api/account/password -- #30/#131, change-password step 2.
+ * Authenticated by the session cookie; re-checks nothing about the old
+ * password server-side (password.go's changePassword's own doc comment --
+ * the client proves it by having successfully unwrapped PROFILE, not by
+ * anything this request carries). Throws ApiError(409) if
+ * expectedCredentialVersion is stale -- the same conflict
+ * recoveryCodeReset's own PUT can raise.
+ */
+export async function changePassword(req: ChangePasswordRequest): Promise<ChangePasswordResponse> {
+  return sendJSON<ChangePasswordResponse>('PUT', '/api/account/password', req)
+}

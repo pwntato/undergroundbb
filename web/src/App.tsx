@@ -1,4 +1,5 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
+import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
 import { Home } from '@/routes/Home'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
@@ -8,7 +9,8 @@ import { SessionProvider } from '@/lib/session/SessionContext'
 /**
  * Application shell: session state + routing. #33 adds the first real
  * screens (signup, login) on top of the placeholder scaffold; #128 adds
- * recovery; everything else this milestone needs (the board views, etc.)
+ * recovery; #131 adds the logged-in change-password/new-recovery-code
+ * screen; everything else this milestone needs (the board views, etc.)
  * arrives with the features that need them.
  */
 function App() {
@@ -21,6 +23,7 @@ function App() {
             <Route path="/signup" element={<SignupScreen />} />
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/recovery" element={<RecoveryScreen />} />
+            <Route path="/account/password" element={<ChangePasswordScreen />} />
           </Routes>
         </main>
       </BrowserRouter>

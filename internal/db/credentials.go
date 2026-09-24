@@ -20,6 +20,36 @@ import (
 // silently no longer works.
 var ErrCredentialVersionStale = errors.New("db: credential version is stale; the credentials were changed by another request")
 
+// GetUserByID reads a single user's PROFILE directly by uuid, unlike
+// LookupUserByUsername's two-step claim-then-profile lookup -- issue #131's
+// GET /api/account/credentials calls this from behind requireSession, which
+// has already turned a verified session cookie into a userID with no
+// username involved, so there is no claim to resolve first. Returns
+// ErrUserNotFound if the PROFILE item is missing, the same sentinel
+// LookupUserByUsername uses, since a caller with a valid session pointing at
+// a nonexistent profile is exactly as anomalous as that function's own
+// claim-without-profile case.
+func (c *Client) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
+	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Item == nil {
+		return nil, ErrUserNotFound
+	}
+	var user models.User
+	if err := attributevalue.UnmarshalMap(out.Item, &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // RewrapCredentialsInput is everything RewrapCredentials needs to re-wrap
 // both PROFILE and RECOVERY under a new password and a new recovery code.
 // Shared by #30 (password change, which re-derives Salt/WrappedPrivateKeys

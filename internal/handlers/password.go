@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,10 +19,14 @@ import (
 // code and re-wrap the recovery copy under it, invalidating the old."
 type changePasswordRequest struct {
 	// ExpectedCredentialVersion is the CredentialVersion the client last
-	// read (from its own login, or GET /api/auth/session) before deriving
-	// these wraps -- see db.RewrapCredentialsInput's own doc comment on why
-	// the caller computes this rather than the transaction re-deriving it
-	// blind.
+	// read (from its own login's verifyResponse, or from this package's own
+	// GET /api/account/credentials -- NOT GET /api/auth/session, which
+	// returns only userId) before deriving these wraps -- see
+	// db.RewrapCredentialsInput's own doc comment on why the caller computes
+	// this rather than the transaction re-deriving it blind. PR #132 review
+	// caught this comment still naming /api/auth/session, stale since
+	// GET /api/account/credentials (issue #131) became the real source for
+	// a client that hasn't just logged in.
 	ExpectedCredentialVersion int64 `json:"expectedCredentialVersion"`
 
 	credentialRewrapFields
@@ -111,4 +116,58 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, changePasswordResponse{CredentialVersion: newVersion})
+}
+
+// accountCredentialsResponse is GET /api/account/credentials's response
+// body: everything the change-password screen (#131) needs to unwrap the
+// caller's own PROFILE copy with their current password and derive a new
+// wrap -- the same Salt/Argon2Params/WrappedPrivateKeys shape
+// challengeResponse already hands an unauthenticated login attempt, plus
+// CredentialVersion (which that response omits, since login's step 3
+// doesn't need it -- only verifyResponse and this endpoint do), for this
+// write's own ExpectedCredentialVersion. UserID closes the same gap issue
+// #125 closed for challengeResponse: the client needs it to build
+// credentialWrapAAD before it can unwrap, and SessionContext's own doc
+// comment (SessionContext.tsx) is explicit that its userId does not survive
+// a reload -- this endpoint must not assume the caller already has it from
+// anywhere else.
+type accountCredentialsResponse struct {
+	UserID             string       `json:"userId"`
+	Salt               string       `json:"salt"`
+	Argon2Params       argon2Params `json:"argon2Params"`
+	WrappedPrivateKeys wrappedBlob  `json:"wrappedPrivateKeys"`
+	CredentialVersion  int64        `json:"credentialVersion"`
+}
+
+// getAccountCredentials implements GET /api/account/credentials -- issue
+// #131. Authenticated by requireSession, the same as changePassword; unlike
+// challenge()/recoveryCodeRelease(), there is no enumeration-resistance
+// requirement here (the caller already proved who they are via the session
+// cookie), so a lookup failure is a plain 500, not a uniform filler
+// response.
+func (h *Handler) getAccountCredentials(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		// Unreachable via RegisterRoutes' wiring, same as changePassword's
+		// identical guard above.
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	user, err := h.db.GetUserByID(r.Context(), userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not read account credentials")
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, accountCredentialsResponse{
+		UserID:       userID,
+		Salt:         base64.StdEncoding.EncodeToString(user.Salt),
+		Argon2Params: toWireParams(user.Argon2Params),
+		WrappedPrivateKeys: wrappedBlob{
+			Nonce:      base64.StdEncoding.EncodeToString(user.WrappedPrivateKeys.Nonce),
+			Ciphertext: base64.StdEncoding.EncodeToString(user.WrappedPrivateKeys.Ciphertext),
+		},
+		CredentialVersion: user.CredentialVersion,
+	})
 }

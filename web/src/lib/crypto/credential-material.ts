@@ -264,3 +264,52 @@ export async function completeRecovery(
 
   return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress, 1, TOTAL_STEPS)
 }
+
+/**
+ * #131: changes a logged-in user's password (and, as a side effect, issues
+ * a fresh recovery code -- docs/DESIGN.md, "It does, however, issue a new
+ * recovery code and re-wrap the recovery copy under it, invalidating the
+ * old," same as completeRecovery). Unwraps the PROFILE copy with the OLD
+ * password -- GET /api/account/credentials' current
+ * Salt/Argon2Params/WrappedPrivateKeys, the mirror of completeLogin's own
+ * unwrap but against the caller's already-known userId rather than one
+ * handed back by a challenge -- then re-wraps the same bundle under the NEW
+ * password via the shared wrapNewCredentials, exactly as completeRecovery's
+ * tail does after its own recovery-code unwrap.
+ *
+ * A wrong old password fails inside this unwrap as a DecryptionFailedError,
+ * the same signal completeLogin gives -- there is no separate server-side
+ * check of the old password (password.go's changePassword's own doc
+ * comment: "there is deliberately no server-side check of the old
+ * password"), so this unwrap succeeding is the only proof of it.
+ *
+ * Like completeRecovery's own upfront unwrap, this old-password unwrap is a
+ * real Argon2id derivation in its own right, not free -- so it gets its own
+ * progress step (1 of 4) before handing off to wrapNewCredentials's own 3,
+ * the same TOTAL_STEPS=4/stepOffset=1 shape completeRecovery uses. PR #132
+ * review caught an earlier draft that reported only wrapNewCredentials's 3
+ * steps, leaving this unwrap uncounted and silently changing
+ * SignupProgressStep's total mid-flow -- exactly the PR #129 regression its
+ * own doc comment warns against.
+ */
+export async function completeChangePassword(
+  req: {
+    readonly oldPassword: string
+    readonly salt: string
+    readonly argon2Params: { memoryKiB: number; iterations: number; parallelism: number }
+    readonly wrappedPrivateKeys: { readonly nonce: string; readonly ciphertext: string }
+    readonly userId: string
+    readonly newPassword: string
+  },
+  onProgress: (step: ProgressStep) => void,
+): Promise<RecoveryMaterial> {
+  const TOTAL_STEPS = 4
+
+  const salt = base64ToBytes(req.salt)
+  const oldKey = await deriveKey(req.oldPassword, salt, req.argon2Params, KEY_SIZE)
+  const { bundle } = await unwrapAndValidate(oldKey, req.wrappedPrivateKeys, req.userId, 'PROFILE')
+
+  onProgress({ step: 1, totalSteps: TOTAL_STEPS, label: 'Current password confirmed' })
+
+  return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress, 1, TOTAL_STEPS)
+}

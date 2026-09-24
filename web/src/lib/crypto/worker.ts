@@ -18,11 +18,14 @@
 /// <reference lib="webworker" />
 
 import {
+  completeChangePassword as completeChangePasswordPure,
   completeLogin as completeLoginPure,
   completeRecovery as completeRecoveryPure,
   generateSignupMaterial as generateSignupMaterialPure,
 } from './credential-material.js'
 import type {
+  ChangePasswordMaterial,
+  CompleteChangePasswordRequest,
   CompleteLoginRequest,
   CompleteRecoveryRequest,
   GenerateSignupMaterialRequest,
@@ -57,6 +60,9 @@ async function handle(req: WorkerRequest): Promise<void> {
     case 'completeRecovery':
       await completeRecovery(req)
       return
+    case 'completeChangePassword':
+      await completeChangePassword(req)
+      return
   }
 }
 
@@ -82,4 +88,12 @@ async function completeRecovery(req: CompleteRecoveryRequest): Promise<void> {
   })
   const result: RecoveryMaterial = wrapped
   post({ kind: 'completeRecoveryDone', id: req.id, result })
+}
+
+async function completeChangePassword(req: CompleteChangePasswordRequest): Promise<void> {
+  const wrapped = await completeChangePasswordPure(req, (p) => {
+    post({ kind: 'signupProgress', id: req.id, ...p })
+  })
+  const result: ChangePasswordMaterial = wrapped
+  post({ kind: 'completeChangePasswordDone', id: req.id, result })
 }
