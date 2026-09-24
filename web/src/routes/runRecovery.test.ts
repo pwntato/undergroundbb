@@ -6,10 +6,27 @@
 // way. Only the wire value runRecovery hands to release/reset is at risk,
 // so this test stubs those two and asserts what they were actually called
 // with. No jsdom/RTL needed -- these are plain functions.
+//
+// PR #129 round 3: the error-classifier functions (isCredentialFailure/
+// isStaleVersionConflict/isDefinitelyUncommitted) used to be part of
+// RecoveryDeps, stubbed by every case below -- so the actual status-code
+// mapping was never exercised (changing `< 500` to `< 600` still passed
+// all tests). They're now real exports of runRecovery.ts, and this file
+// table-tests them directly against real ApiError/DecryptionFailedError
+// instances, and the reset()-catch cases below use real instances too
+// rather than stubbed predicates.
 
 import { describe, expect, it, vi } from 'vitest'
-import { runRecovery, type RecoveryDeps } from './runRecovery'
+import { ApiError } from '@/lib/api/auth'
+import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { normalizeRecoveryCode } from '@/lib/crypto/recovery-code'
+import {
+  isCredentialFailure,
+  isDefinitelyUncommitted,
+  isStaleVersionConflict,
+  runRecovery,
+  type RecoveryDeps,
+} from './runRecovery'
 
 const RELEASE_RESPONSE = {
   credentialVersion: 1,
@@ -37,14 +54,68 @@ function makeDeps(overrides: Partial<RecoveryDeps> = {}): RecoveryDeps {
     release: vi.fn().mockResolvedValue(RELEASE_RESPONSE),
     completeRecovery: vi.fn().mockResolvedValue(RECOVERY_MATERIAL),
     reset: vi.fn().mockResolvedValue({ credentialVersion: 2 }),
-    isCredentialFailure: () => false,
-    isStaleVersionConflict: () => false,
-    isDefinitelyUncommitted: () => false,
     onProgress: () => {},
     onStep: () => {},
     ...overrides,
   }
 }
+
+describe('isCredentialFailure / isStaleVersionConflict / isDefinitelyUncommitted', () => {
+  // Table-tested against real instances, per round 3: these decide which of
+  // the four user-facing messages a real failure gets, and a stub can't
+  // pin the actual status-code boundaries (e.g. `< 500` vs. `< 600`, or
+  // exactly 401/409 vs. "anything close").
+  const cases: {
+    readonly err: unknown
+    readonly credential: boolean
+    readonly staleVersion: boolean
+    readonly uncommitted: boolean
+  }[] = [
+    { err: new DecryptionFailedError(), credential: true, staleVersion: false, uncommitted: false },
+    { err: new ApiError(401, 'invalid'), credential: true, staleVersion: false, uncommitted: true },
+    {
+      err: new ApiError(400, 'bad request'),
+      credential: false,
+      staleVersion: false,
+      uncommitted: true,
+    },
+    {
+      err: new ApiError(403, 'rate limited'),
+      credential: false,
+      staleVersion: false,
+      uncommitted: true,
+    },
+    {
+      err: new ApiError(409, 'stale version'),
+      credential: false,
+      staleVersion: true,
+      uncommitted: true,
+    },
+    {
+      err: new ApiError(500, 'internal'),
+      credential: false,
+      staleVersion: false,
+      uncommitted: false,
+    },
+    {
+      err: new ApiError(503, 'unavailable'),
+      credential: false,
+      staleVersion: false,
+      uncommitted: false,
+    },
+    { err: new TypeError('network'), credential: false, staleVersion: false, uncommitted: false },
+    { err: new Error('plain'), credential: false, staleVersion: false, uncommitted: false },
+  ]
+
+  it.each(cases)(
+    '$err.constructor.name $err.message',
+    ({ err, credential, staleVersion, uncommitted }) => {
+      expect(isCredentialFailure(err)).toBe(credential)
+      expect(isStaleVersionConflict(err)).toBe(staleVersion)
+      expect(isDefinitelyUncommitted(err)).toBe(uncommitted)
+    },
+  )
+})
 
 describe('runRecovery', () => {
   it('sends the normalized code to release, completeRecovery, and reset -- never the raw input', async () => {
@@ -72,36 +143,50 @@ describe('runRecovery', () => {
   })
 
   it('classifies a credential failure at release()', async () => {
-    const deps = makeDeps({
-      release: vi.fn().mockRejectedValue(new Error('401')),
-      isCredentialFailure: () => true,
-    })
+    const deps = makeDeps({ release: vi.fn().mockRejectedValue(new ApiError(401, 'invalid')) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')
-    expect(result).toEqual({ ok: false, kind: 'credential', error: expect.any(Error) })
+    expect(result).toEqual({ ok: false, kind: 'credential', error: expect.any(ApiError) })
     expect(deps.completeRecovery).not.toHaveBeenCalled()
   })
 
-  it('classifies a stale-version 409 at reset() as staleVersion, not resetResponseLost', async () => {
-    const err = new Error('409')
+  it('classifies a wrong-code unwrap failure at completeRecovery() as credential', async () => {
     const deps = makeDeps({
-      reset: vi.fn().mockRejectedValue(err),
-      isStaleVersionConflict: (e) => e === err,
+      completeRecovery: vi.fn().mockRejectedValue(new DecryptionFailedError()),
     })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')
-    expect(result).toEqual({ ok: false, kind: 'staleVersion', error: err })
+    expect(result).toEqual({
+      ok: false,
+      kind: 'credential',
+      error: expect.any(DecryptionFailedError),
+    })
+    expect(deps.reset).not.toHaveBeenCalled()
+  })
+
+  it('classifies a stale-version 409 at reset() as staleVersion, not resetResponseLost', async () => {
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(409, 'stale')) })
+    const result = await runRecovery(deps, 'alice', 'code', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'staleVersion', error: expect.any(ApiError) })
   })
 
   it('classifies a provably-uncommitted 4xx at reset() as unreachable, not resetResponseLost', async () => {
-    const err = new Error('400')
-    const deps = makeDeps({
-      reset: vi.fn().mockRejectedValue(err),
-      isDefinitelyUncommitted: (e) => e === err,
-    })
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(400, 'bad request')) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')
-    expect(result).toEqual({ ok: false, kind: 'unreachable', error: err })
+    expect(result).toEqual({ ok: false, kind: 'unreachable', error: expect.any(ApiError) })
   })
 
-  it('classifies a lost response (network failure or 5xx) at reset() as resetResponseLost', async () => {
+  it('classifies a WAF 403 at reset() as unreachable, not resetResponseLost', async () => {
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(403, 'rate limited')) })
+    const result = await runRecovery(deps, 'alice', 'code', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'unreachable', error: expect.any(ApiError) })
+  })
+
+  it('classifies a 503 at reset() as resetResponseLost -- genuinely ambiguous, not provably safe', async () => {
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(503, 'unavailable')) })
+    const result = await runRecovery(deps, 'alice', 'code', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'resetResponseLost', error: expect.any(ApiError) })
+  })
+
+  it('classifies a network failure at reset() as resetResponseLost', async () => {
     const err = new TypeError('network')
     const deps = makeDeps({ reset: vi.fn().mockRejectedValue(err) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')

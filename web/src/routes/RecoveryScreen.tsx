@@ -3,23 +3,25 @@
 // secrets in the worker (with a fresh recovery code) -> reset() to submit
 // the new material and invalidate the redeemed code -> show the new
 // recovery code -> done. The flow itself (normalizing the code, calling
-// release/completeRecovery/reset in order, and classifying what each
-// failure means) lives in runRecovery.ts, split out so it can be unit
-// tested without jsdom (PR #129 round 2) -- this file wires that function
-// to the real API/worker calls, owns the step-machine UI, and picks the
+// release/completeRecovery/reset in order) and the error classifiers
+// (isCredentialFailure/isStaleVersionConflict/isDefinitelyUncommitted) both
+// live in runRecovery.ts, split out so they can be unit tested without
+// jsdom and against real ApiError/DecryptionFailedError instances rather
+// than stubs (PR #129 rounds 2 and 3) -- this file wires that function to
+// the real API/worker calls, owns the step-machine UI, and picks the
 // user-facing copy for each error kind.
 //
 // Every failure mode release()/reset() can return for an unknown username
 // or wrong code comes back as resolveRecovery's single uniform "invalid
 // username or recovery code" message (recovery.go's own doc comment: this
 // endpoint has the same enumeration-resistance requirement /auth/challenge
-// does for login). This screen collapses those the same way
-// LoginScreen.isCredentialFailure already does, and shows a distinct
-// message for anything that is not a credential failure -- a network error
-// or a 403 from the WAF's rate-limit rule must not tell someone who typed
-// the right code that it was wrong. reset()'s stale-credential-version case
-// is NOT one of these uniform failures -- it's a distinct 409
-// (errCredentialVersionStale, password.go), handled on its own below.
+// does for login). runRecovery.ts's isCredentialFailure collapses those the
+// same way LoginScreen's own does, and this screen shows a distinct message
+// for anything that is not a credential failure -- a network error or a 403
+// from the WAF's rate-limit rule must not tell someone who typed the right
+// code that it was wrong. reset()'s stale-credential-version case is NOT
+// one of these uniform failures -- it's a distinct 409
+// (errCredentialVersionStale, password.go), classified on its own.
 //
 // Once release() resolves, a new recovery code has NOT yet been issued --
 // that only happens when reset() commits. So unlike SignupScreen (where the
@@ -39,12 +41,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
-  ApiError,
   recoveryCodeRelease,
   recoveryCodeReset,
   type RecoveryCodeReleaseResponse,
 } from '@/lib/api/auth'
-import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeRecovery } from '@/lib/crypto/worker-client'
 import type { RecoveryMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
@@ -65,50 +65,14 @@ const STALE_VERSION_ERROR =
 // response was lost after the write already committed (see runRecovery's
 // own comment on isDefinitelyUncommitted for why every 4xx it can return is
 // excluded from reaching this message). The write, if it landed, also
-// issued a new recovery code that this message can't hand back -- #124
-// (lost-response retry idempotency) is the real fix; until then this at
-// least tells the user their old code is gone and they need a new one.
+// issued a new recovery code that this message can't hand back. Neither
+// gap has a fix yet -- #130 (idempotent retry for this write) and #131 (a
+// logged-in screen to generate a new recovery code; no such screen exists
+// today, so this message must not promise one) are both open. Round 3
+// caught this message claiming "your account settings" as if #131 already
+// existed and citing #124 (register-only) as the fix for #130's gap.
 const RESET_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it worked, your recovery code was also reset -- generate a new one from your account settings once you're in."
-
-/**
- * Mirrors LoginScreen's isCredentialFailure: a wrong code fails inside the
- * worker's unwrap (DecryptionFailedError) or at release()/reset() as a 401
- * (recovery.go's uniform errRecoveryCodeInvalid). Everything else --
- * network failure, 5xx, or the WAF's 403 rate-limit response -- must not
- * collapse into "wrong code," for the same reason LoginScreen's own comment
- * gives: it risks telling someone who typed it correctly that their only
- * way back into their account doesn't work. Does NOT cover reset()'s own
- * 409 -- that's a distinct, real conflict, handled separately below.
- */
-function isCredentialFailure(err: unknown): boolean {
-  if (err instanceof DecryptionFailedError) {
-    return true
-  }
-  if (err instanceof ApiError) {
-    return err.status === 401
-  }
-  return false
-}
-
-/** reset()'s stale-credential-version conflict -- see STALE_VERSION_ERROR's own comment. */
-function isStaleVersionConflict(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409
-}
-
-/**
- * Whether err is an ApiError whose status recoveryCodeReset's own handler
- * (internal/handlers/recovery.go) proves happened before its write: every
- * 4xx there (400 validation, 401, 409) is returned before RewrapCredentials
- * ever runs, so those -- and the WAF's 403 -- definitely did not commit.
- * Only a non-ApiError (network failure, a lost response) or a 5xx (e.g. a
- * Lambda timeout surfacing after the write) is genuinely ambiguous. PR #129
- * round 2: RESET_RESPONSE_LOST_ERROR was reaching every non-401/409
- * failure, including ones like this that provably didn't commit.
- */
-function isDefinitelyUncommitted(err: unknown): boolean {
-  return err instanceof ApiError && err.status < 500
-}
+  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does, so you'll need a new one."
 
 function errorMessageFor(kind: RecoveryErrorKind): string {
   switch (kind) {
@@ -166,9 +130,6 @@ export function RecoveryScreen() {
           release: recoveryCodeRelease,
           completeRecovery,
           reset: recoveryCodeReset,
-          isCredentialFailure,
-          isStaleVersionConflict,
-          isDefinitelyUncommitted,
           onProgress: (event) => {
             setProgress(event)
           },

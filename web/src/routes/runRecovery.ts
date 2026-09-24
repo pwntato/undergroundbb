@@ -1,5 +1,5 @@
 // The async body of RecoveryScreen's handleCredentials, pulled out to a
-// plain function that takes its three network/worker calls as arguments --
+// plain function that takes its two network/worker calls as arguments --
 // PR #129 round 2: the round-trip test in credential-material.test.ts
 // cannot pin the bug that actually shipped (an unnormalized recoveryCode on
 // the wire to CheckRecoveryVerifier), because deriveRecoveryWrapKey/
@@ -9,10 +9,59 @@
 // release/reset and asserts what they were called with is what actually
 // pins it. Needs no jsdom/RTL: these are plain functions, not fetch calls
 // through RecoveryScreen's own imports.
+//
+// The three error-classifier functions below are real exports, not part of
+// RecoveryDeps -- round 2 had them injected so RecoveryScreen owned the
+// wording decisions, but round 3 caught that meant every runRecovery.test.ts
+// case stubbed them, so the actual status-code mapping (e.g. `< 500` vs.
+// `< 600`) was never exercised by any test. They're pure and have nothing
+// screen-specific about them, so they live here and runRecovery.test.ts
+// table-tests them directly against real ApiError/DecryptionFailedError
+// instances.
 
+import { ApiError } from '@/lib/api/auth'
+import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { normalizeRecoveryCode } from '@/lib/crypto/recovery-code'
 import type { RecoveryCodeReleaseResponse } from '@/lib/api/auth'
 import type { RecoveryMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
+
+/**
+ * Mirrors LoginScreen's isCredentialFailure: a wrong code fails inside the
+ * worker's unwrap (DecryptionFailedError) or at release()/reset() as a 401
+ * (recovery.go's uniform errRecoveryCodeInvalid). Everything else --
+ * network failure, 5xx, or the WAF's 403 rate-limit response -- must not
+ * collapse into "wrong code," for the same reason LoginScreen's own comment
+ * gives: it risks telling someone who typed it correctly that their only
+ * way back into their account doesn't work. Does NOT cover reset()'s own
+ * 409 -- that's a distinct, real conflict, handled separately below.
+ */
+export function isCredentialFailure(err: unknown): boolean {
+  if (err instanceof DecryptionFailedError) {
+    return true
+  }
+  if (err instanceof ApiError) {
+    return err.status === 401
+  }
+  return false
+}
+
+/** reset()'s stale-credential-version conflict (password.go's errCredentialVersionStale). */
+export function isStaleVersionConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409
+}
+
+/**
+ * Whether err is an ApiError whose status recoveryCodeReset's own handler
+ * (internal/handlers/recovery.go) proves happened before its write: every
+ * 4xx there -- validation, the 401, and the 409 -- is returned before
+ * RewrapCredentials ever runs, so those (and the WAF's 403) definitely did
+ * not commit. Only a non-ApiError (network failure, a lost response) or a
+ * 5xx (e.g. a Lambda timeout surfacing after the write) is genuinely
+ * ambiguous about whether the write landed. PR #129 round 2.
+ */
+export function isDefinitelyUncommitted(err: unknown): boolean {
+  return err instanceof ApiError && err.status < 500
+}
 
 export type RecoveryErrorKind = 'credential' | 'staleVersion' | 'resetResponseLost' | 'unreachable'
 
@@ -51,16 +100,6 @@ export interface RecoveryDeps {
     readonly recoveryVerifierParams: { memoryKiB: number; iterations: number; parallelism: number }
     readonly recoveryVerifier: string
   }) => Promise<unknown>
-  readonly isCredentialFailure: (err: unknown) => boolean
-  readonly isStaleVersionConflict: (err: unknown) => boolean
-  /**
-   * Whether err is an ApiError with a status that recoveryCodeReset's own
-   * handler (recovery.go) proves cannot have committed a write: every 4xx
-   * there -- validation, the 401, and the 409 -- is returned before
-   * RewrapCredentials ever runs. Only a network-level throw or a 5xx is
-   * genuinely ambiguous about whether the write landed. PR #129 round 2.
-   */
-  readonly isDefinitelyUncommitted: (err: unknown) => boolean
   readonly onProgress: (event: SignupProgressEvent) => void
   /**
    * Called for the two step transitions that happen mid-flow, after
@@ -98,7 +137,7 @@ export async function runRecovery(
   } catch (err) {
     return {
       ok: false,
-      kind: deps.isCredentialFailure(err) ? 'credential' : 'unreachable',
+      kind: isCredentialFailure(err) ? 'credential' : 'unreachable',
       error: err,
     }
   }
@@ -125,7 +164,7 @@ export async function runRecovery(
     // safe to go all the way back to credentials.
     return {
       ok: false,
-      kind: deps.isCredentialFailure(err) ? 'credential' : 'unreachable',
+      kind: isCredentialFailure(err) ? 'credential' : 'unreachable',
       error: err,
     }
   }
@@ -165,15 +204,17 @@ export async function runRecovery(
     //    unlike SignupScreen's register(), which is safe to treat as
     //    "never happened" on any failure, this PUT is NOT, because it's
     //    the write that actually changes the account's live password and
-    //    invalidates the old recovery code. #124 (lost-response retry
-    //    idempotency) is the real fix; no equivalent exists here yet.
-    if (deps.isCredentialFailure(err)) {
+    //    invalidates the old recovery code. #124 is register-only and
+    //    doesn't cover this; #130 (idempotent retry for this write) and
+    //    #131 (a logged-in screen to get a new recovery code) are the real
+    //    fixes, and neither exists yet. PR #129 round 3.
+    if (isCredentialFailure(err)) {
       return { ok: false, kind: 'credential', error: err }
     }
-    if (deps.isStaleVersionConflict(err)) {
+    if (isStaleVersionConflict(err)) {
       return { ok: false, kind: 'staleVersion', error: err }
     }
-    if (deps.isDefinitelyUncommitted(err)) {
+    if (isDefinitelyUncommitted(err)) {
       return { ok: false, kind: 'unreachable', error: err }
     }
     return { ok: false, kind: 'resetResponseLost', error: err }
