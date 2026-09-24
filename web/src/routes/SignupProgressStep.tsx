@@ -14,7 +14,7 @@ import { Progress } from '@/components/ui/progress'
 import type { SignupProgressEvent } from '@/lib/crypto/worker-protocol'
 
 /**
- * `leadingStep`/`trailingStep` each add one step around the worker's 3
+ * `leadingStep`/`trailingStep` each add one step around the worker's own
  * signupProgress events, for a network call the worker can't report
  * progress on itself but which is real, honest work the user is waiting on
  * -- it deserves its own step rather than a blank screen or a premature
@@ -22,34 +22,51 @@ import type { SignupProgressEvent } from '@/lib/crypto/worker-protocol'
  * (register() only creates the account; only POST /api/auth/verify sets
  * the session cookie). RecoveryScreen (#128) uses both: `leadingStep` for
  * POST /api/account/recovery-code/release (the code check happens before
- * the worker can even start unwrapping), and `trailingStep` for
+ * the worker can even start), and `trailingStep` for
  * PUT /api/account/recovery-code (reset() -- the write that actually
- * invalidates the redeemed code; completeRecovery's 3 worker steps only
+ * invalidates the redeemed code; completeRecovery's worker steps only
  * compute the new material, they don't submit it).
  *
- * `currentStep` names which numbered step is active while a leading or
- * trailing network call is in flight (1 for leading, 5 for trailing, with
- * `leadingStep` present); it's meaningless -- and ignored -- while a
- * `progress` event is what's driving the display, since that carries its
- * own step number already.
+ * Every caller must pass the same `leadingStep`/`trailingStep` props on
+ * every phase of its flow (only `currentStep` varies) -- PR #129 review
+ * caught that a caller only passing `trailingStep` on its final phase made
+ * `totalSteps` change mid-flow (a premature 100% on the phase before, then
+ * a bigger denominator appearing on the next one). `heading` lets each
+ * caller supply its own top-level copy without forking this component.
  *
- * `heading` lets each caller supply its own top-level copy without forking
- * this component.
+ * `totalSteps` comes from `progress.totalSteps` -- the worker's own call
+ * knows its real step count (3 for generateSignupMaterial, 4 for
+ * completeRecovery's extra upfront unwrap) -- plus one for each of
+ * `leadingStep`/`trailingStep` present. Before the first `progress` event
+ * arrives, `progress` is null and there is no authoritative count yet;
+ * `initialTotalSteps` (the worker call's step count once it starts) fills
+ * that gap so the denominator doesn't visibly change once the first event
+ * does land.
+ *
+ * `currentStep` names which numbered step is active while a leading or
+ * trailing network call is in flight (1 for leading, `totalSteps` for
+ * trailing); it's meaningless -- and ignored -- while a `progress` event is
+ * what's driving the display, since that carries its own step number
+ * already.
  */
 export function SignupProgressStep({
   progress,
+  initialTotalSteps = 3,
   leadingStep,
   trailingStep,
   currentStep,
   heading = 'Setting up your account',
 }: {
   progress: SignupProgressEvent | null
+  initialTotalSteps?: number
   leadingStep?: string
   trailingStep?: string
   currentStep?: 'leading' | 'trailing'
   heading?: string
 }) {
-  const totalSteps = 3 + (leadingStep === undefined ? 0 : 1) + (trailingStep === undefined ? 0 : 1)
+  const extraSteps = (leadingStep === undefined ? 0 : 1) + (trailingStep === undefined ? 0 : 1)
+  const workerTotalSteps = progress?.totalSteps ?? initialTotalSteps
+  const totalSteps = workerTotalSteps + extraSteps
   const workerStepOffset = leadingStep === undefined ? 0 : 1
 
   let step: number

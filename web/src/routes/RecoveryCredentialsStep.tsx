@@ -12,11 +12,22 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { normalizeRecoveryCode } from '@/lib/crypto/recovery-code'
 
 // Not a strength meter, same reasoning as SignupCredentialsStep's identical
 // constant: this only stops an accidental empty/near-empty submit that
 // Argon2id would otherwise spend real time deriving a key for.
 const MIN_PASSWORD_LENGTH = 8
+
+// generateRecoveryCode always produces exactly 26 base32 characters
+// (recovery-code.ts's own CODE_LENGTH) once normalized. Checking this here
+// -- against the normalized form, not the raw input -- catches a typo'd or
+// truncated code (or an input like "-----" that normalizes to empty)
+// before it costs a round trip: RecoveryScreen normalizes the same way
+// before ever calling release(), so an input that fails this check would
+// otherwise reach the server as an empty or wrong-length string and come
+// back as an uninformative 400. See PR #129 review.
+const RECOVERY_CODE_LENGTH = 26
 
 export function RecoveryCredentialsStep({
   onSubmit,
@@ -33,8 +44,8 @@ export function RecoveryCredentialsStep({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    if (recoveryCode.trim().length === 0) {
-      setValidationError('Enter your recovery code.')
+    if (normalizeRecoveryCode(recoveryCode).length !== RECOVERY_CODE_LENGTH) {
+      setValidationError(`Recovery codes are ${RECOVERY_CODE_LENGTH} characters.`)
       return
     }
     if (newPassword.length < MIN_PASSWORD_LENGTH) {

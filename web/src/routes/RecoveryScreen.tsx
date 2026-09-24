@@ -4,24 +4,29 @@
 // the new material and invalidate the redeemed code -> show the new
 // recovery code -> done.
 //
-// Every failure mode release()/reset() can return -- unknown username,
-// wrong code, or (reset only) a stale credential version -- comes back as
-// resolveRecovery's single uniform "invalid username or recovery code"
-// message (recovery.go's own doc comment: this endpoint has the same
-// enumeration-resistance requirement /auth/challenge does for login). This
-// screen collapses those the same way LoginScreen.isCredentialFailure
-// already does, and shows a distinct message for anything that is not a
-// credential failure -- a network error or a 403 from the WAF's rate-limit
-// rule must not tell someone who typed the right code that it was wrong.
+// Every failure mode release()/reset() can return for an unknown username
+// or wrong code comes back as resolveRecovery's single uniform "invalid
+// username or recovery code" message (recovery.go's own doc comment: this
+// endpoint has the same enumeration-resistance requirement /auth/challenge
+// does for login). This screen collapses those the same way
+// LoginScreen.isCredentialFailure already does, and shows a distinct
+// message for anything that is not a credential failure -- a network error
+// or a 403 from the WAF's rate-limit rule must not tell someone who typed
+// the right code that it was wrong. reset()'s stale-credential-version case
+// is NOT one of these uniform failures -- it's a distinct 409
+// (errCredentialVersionStale, password.go), handled on its own below.
 //
 // Once release() resolves, a new recovery code has NOT yet been issued --
 // that only happens when reset() commits. So unlike SignupScreen (where the
 // account already exists and the shown code must survive at all costs
-// after register() succeeds), a failure between release() and a successful
-// reset() is safe to send back to the credentials step: the OLD recovery
-// code the user typed in is still valid until reset() actually replaces it,
-// so nothing is lost by retrying from the top. The one moment that must not
-// be interrupted is after reset() succeeds and before the new code is
+// after register() succeeds), a failure release()/reset() actually RETURNS
+// is safe to send back to the credentials step: the OLD recovery code the
+// user typed in is still valid until reset() actually replaces it, so
+// nothing is lost by retrying from the top. That does NOT cover reset()'s
+// response being lost after the write already committed (network drop,
+// Lambda timeout) -- see the reset() catch below, which handles that case
+// distinctly rather than claiming the same safety. The one moment that must
+// not be interrupted is after reset() succeeds and before the new code is
 // acknowledged -- exactly parallel to SignupScreen's recoveryCode step, and
 // guarded the same way (beforeunload).
 
@@ -43,6 +48,19 @@ import { SignupProgressStep } from './SignupProgressStep'
 
 const CREDENTIAL_ERROR = 'Incorrect username or recovery code.'
 const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
+// reset()'s own 409 (password.go's errCredentialVersionStale): the server
+// WAS reached and the code WAS correct -- something else changed the
+// account's credentials in the meantime (a concurrent recovery in another
+// tab, or a password change on a still-logged-in device). A plain retry
+// from the top will succeed, since release() re-reads the current version.
+const STALE_VERSION_ERROR =
+  "Your account's credentials changed while this was in progress. Please try again."
+// The one case a plain retry from the top is NOT safe for: reset()'s
+// response was lost after the write already committed (see the reset()
+// catch below for why this can't be told apart from an ambiguous network
+// failure at that specific step).
+const RESET_RESPONSE_LOST_ERROR =
+  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery."
 
 /**
  * Mirrors LoginScreen's isCredentialFailure: a wrong code fails inside the
@@ -51,7 +69,8 @@ const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
  * network failure, 5xx, or the WAF's 403 rate-limit response -- must not
  * collapse into "wrong code," for the same reason LoginScreen's own comment
  * gives: it risks telling someone who typed it correctly that their only
- * way back into their account doesn't work.
+ * way back into their account doesn't work. Does NOT cover reset()'s own
+ * 409 -- that's a distinct, real conflict, handled separately below.
  */
 function isCredentialFailure(err: unknown): boolean {
   if (err instanceof DecryptionFailedError) {
@@ -61,6 +80,11 @@ function isCredentialFailure(err: unknown): boolean {
     return err.status === 401
   }
   return false
+}
+
+/** reset()'s stale-credential-version conflict -- see STALE_VERSION_ERROR's own comment. */
+function isStaleVersionConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409
 }
 
 type Step =
@@ -164,16 +188,35 @@ export function RecoveryScreen() {
           recoveryVerifier: material.recoveryVerifier,
         })
       } catch (err) {
-        // Nothing has been committed server-side on any failure here
-        // (including a 409 stale-version conflict, e.g. a concurrent
-        // change-password) -- the OLD code the user entered is still the
-        // valid one, so it's safe to retry from the top. This is the one
-        // place recovery's failure handling is actually simpler than
-        // SignupScreen's own: there, register() commits before the
-        // recovery code is shown, so a later failure must not discard it
-        // (that file's own header comment). Here, nothing commits until
-        // reset() itself succeeds.
-        setError(isCredentialFailure(err) ? CREDENTIAL_ERROR : UNREACHABLE_ERROR)
+        // Three distinct cases here, per PR #129 review:
+        //
+        // 1. A genuine 401/DecryptionFailedError-shaped failure: can't
+        //    actually happen at reset() (the code already unwrapped
+        //    successfully above), but isCredentialFailure is checked first
+        //    for consistency with the other two catches.
+        // 2. A real 409 (isStaleVersionConflict): the server WAS reached,
+        //    nothing here committed, and the OLD code is still valid --
+        //    safe to retry from the top, per STALE_VERSION_ERROR's own
+        //    comment.
+        // 3. Everything else (network failure, timeout, 5xx): reset()'s
+        //    write may have committed even though this response was lost --
+        //    unlike SignupScreen's register(), which is safe to treat as
+        //    "never happened" on any failure, this PUT is NOT, because it's
+        //    the write that actually changes the account's live password
+        //    and invalidates the old recovery code. #124 (lost-response
+        //    retry idempotency) is the real fix for register(); no
+        //    equivalent exists here yet. Telling the user their code was
+        //    wrong (UNREACHABLE_ERROR/CREDENTIAL_ERROR) would send them
+        //    straight back to a form that's about to fail with "invalid
+        //    username or recovery code" on the now-dead old code, so this
+        //    case gets its own message instead.
+        if (isCredentialFailure(err)) {
+          setError(CREDENTIAL_ERROR)
+        } else if (isStaleVersionConflict(err)) {
+          setError(STALE_VERSION_ERROR)
+        } else {
+          setError(RESET_RESPONSE_LOST_ERROR)
+        }
         setStep({ name: 'credentials' })
         return
       }
@@ -189,7 +232,9 @@ export function RecoveryScreen() {
       return (
         <SignupProgressStep
           progress={null}
+          initialTotalSteps={4}
           leadingStep="Confirming your code…"
+          trailingStep="Saving your new credentials…"
           currentStep="leading"
           heading="Recovering your account"
         />
@@ -198,7 +243,9 @@ export function RecoveryScreen() {
       return (
         <SignupProgressStep
           progress={progress}
+          initialTotalSteps={4}
           leadingStep="Confirming your code…"
+          trailingStep="Saving your new credentials…"
           heading="Recovering your account"
         />
       )
@@ -206,6 +253,7 @@ export function RecoveryScreen() {
       return (
         <SignupProgressStep
           progress={progress}
+          initialTotalSteps={4}
           leadingStep="Confirming your code…"
           trailingStep="Saving your new credentials…"
           currentStep="trailing"

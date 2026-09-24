@@ -26,16 +26,24 @@ export interface GenerateSignupMaterialRequest {
 }
 
 /**
- * One step of signup's three independent Argon2id derivations, reported as
+ * One step of a worker call's independent Argon2id derivations, reported as
  * it completes -- see recovery-code.ts's neighbor, argon2.ts, and #33's own
  * requirement for "honest progress": each step fires only once that step's
  * derivation has actually finished, never on a timer.
+ *
+ * `step`/`totalSteps` are plain numbers, not a literal `1 | 2 | 3` / `3` --
+ * generateSignupMaterial posts 3 (wrapNewCredentials's own three
+ * derivations), but completeRecovery (#128) posts a 4th, for its own
+ * upfront unwrap of the RECOVERY blob (also a full Argon2id call) before it
+ * delegates to that same wrapNewCredentials. A literal type would force
+ * every caller to agree on one fixed count; the real count is a property of
+ * which worker call is running, not of this event shape.
  */
 export interface SignupProgressEvent {
   readonly kind: 'signupProgress'
   readonly id: string
-  readonly step: 1 | 2 | 3
-  readonly totalSteps: 3
+  readonly step: number
+  readonly totalSteps: number
   readonly label: string
 }
 
