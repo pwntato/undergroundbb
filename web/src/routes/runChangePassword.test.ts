@@ -133,13 +133,37 @@ describe('runChangePassword', () => {
     )
   })
 
-  it('classifies a getCredentials() failure as unreachable, never credential', async () => {
+  it('classifies a non-401 getCredentials() failure as unreachable, never credential', async () => {
     const deps = makeDeps({
-      getCredentials: vi.fn().mockRejectedValue(new ApiError(401, 'no session')),
+      getCredentials: vi.fn().mockRejectedValue(new ApiError(500, 'internal')),
     })
     const result = await runChangePassword(deps, 'old-password', 'new-password')
     expect(result).toEqual({ ok: false, kind: 'unreachable', error: expect.any(ApiError) })
     expect(deps.completeChangePassword).not.toHaveBeenCalled()
+  })
+
+  // PR #132 round 2: a 401 from getCredentials() means the session expired
+  // between page load and submit (requireSession guards this endpoint), not
+  // an outage -- collapsing it into 'unreachable' showed "Couldn't reach
+  // the server" for a case ChangePasswordScreen's own bootstrap effect
+  // already handles correctly by redirecting to /login.
+  it('classifies a 401 getCredentials() failure as authRequired, not unreachable', async () => {
+    const deps = makeDeps({
+      getCredentials: vi.fn().mockRejectedValue(new ApiError(401, 'no session')),
+    })
+    const result = await runChangePassword(deps, 'old-password', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'authRequired', error: expect.any(ApiError) })
+    expect(deps.completeChangePassword).not.toHaveBeenCalled()
+  })
+
+  // Same reasoning, but for a session that expires between the GET and the
+  // PUT rather than before the GET.
+  it('classifies a 401 at changePassword() as authRequired, not unreachable', async () => {
+    const deps = makeDeps({
+      changePassword: vi.fn().mockRejectedValue(new ApiError(401, 'no session')),
+    })
+    const result = await runChangePassword(deps, 'old-password', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'authRequired', error: expect.any(ApiError) })
   })
 
   it('classifies a wrong-old-password unwrap failure at completeChangePassword() as credential', async () => {

@@ -44,17 +44,25 @@ const STALE_VERSION_ERROR =
 // Mirrors RecoveryScreen's RESET_RESPONSE_LOST_ERROR, but for a caller who
 // is (and remains) logged in: unlike recovery, there is no separate
 // "use Change password" fallback to point at -- this IS that screen -- so
-// the only safe advice is to come back and retry. PR #132 review caught an
+// the only safe advice is to come back and retry. PR #132 round 1 caught an
 // earlier draft that didn't say WHICH password to retry with: if the first
 // attempt's write actually landed, the account's current password is now
 // the NEW one, not the one just typed into "Current password" -- a retry
 // with the old one would fail here with CREDENTIAL_ERROR, which is
 // confusing without this context (the account is fine; the field just
-// needs the other password).
+// needs the other password). Round 2 caught that fix putting a "--" back
+// into user-facing text -- the same thing round 1 had just removed from
+// RESET_RESPONSE_LOST_ERROR.
 const CHANGE_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it in another tab before retrying. If it works, your old recovery code no longer does -- retry here using your NEW password as the current one, to get a new code."
+  "We couldn't confirm whether your new password was saved. Try logging in with it in another tab before retrying. If it works, your old recovery code no longer does. Retry here using your NEW password as the current one, to get a new code."
 
-function errorMessageFor(kind: ChangePasswordErrorKind): string {
+// Takes every ChangePasswordErrorKind except 'authRequired' -- that one is
+// intercepted in handleCredentials before this is ever called (it routes to
+// the 'authRequired' step instead of a text error), so excluding it here
+// makes that a type-level guarantee: a future kind added to the real union
+// without a matching case fails this switch's exhaustiveness check, but
+// 'authRequired' itself can never reach here to begin with.
+function errorMessageFor(kind: Exclude<ChangePasswordErrorKind, 'authRequired'>): string {
   switch (kind) {
     case 'credential':
       return CREDENTIAL_ERROR
@@ -71,6 +79,7 @@ type Step =
   | { readonly name: 'loadingCredentials' }
   | { readonly name: 'authRequired' }
   | { readonly name: 'credentials' }
+  | { readonly name: 'submitting' }
   | { readonly name: 'changing'; readonly credentials: AccountCredentialsResponse }
   | { readonly name: 'committing'; readonly material: ChangePasswordMaterial }
   | { readonly name: 'recoveryCode'; readonly recoveryCode: string }
@@ -137,9 +146,22 @@ export function ChangePasswordScreen() {
     }
   }, [step.name])
 
+  // Sets 'submitting' synchronously, before anything async -- PR #132 round
+  // 2 caught that this screen stayed on the 'credentials' step (form still
+  // mounted, Continue never disabled) until runChangePassword's first
+  // await resolved, so a double Enter/click started two full runs. Both
+  // read the same credentialVersion, both PUTs went out, the first
+  // committed and the second's 409 arrived last, overwriting the
+  // recoveryCode step with STALE_VERSION_ERROR -- the committed code was
+  // never shown, and the error's "try again" advice made it worse (the old
+  // password no longer works either). This can't reuse 'loadingCredentials'
+  // -- that step's own effect would re-fire and its setStep({name:
+  // 'credentials'}) would override this flow partway through -- so it gets
+  // its own step, rendered the same way.
   const handleCredentials = (oldPassword: string, newPassword: string) => {
     setError(null)
     setProgress(null)
+    setStep({ name: 'submitting' })
 
     void (async () => {
       const result = await runChangePassword(
@@ -157,6 +179,17 @@ export function ChangePasswordScreen() {
       )
 
       if (!result.ok) {
+        // authRequired routes through the same 'authRequired' step (and the
+        // same redirect-to-/login effect) as the bootstrap check, rather
+        // than a text error on the credentials step -- PR #132 round 2: a
+        // session that expired mid-submit deserves the same handling as
+        // one that was already gone when the screen loaded, not
+        // UNREACHABLE_ERROR's "couldn't reach the server," which is both
+        // wrong and a dead end (retrying keeps failing the same way).
+        if (result.kind === 'authRequired') {
+          setStep({ name: 'authRequired' })
+          return
+        }
         setError(errorMessageFor(result.kind))
         setStep({ name: 'credentials' })
         return
@@ -184,6 +217,20 @@ export function ChangePasswordScreen() {
       )
     case 'credentials':
       return <ChangePasswordCredentialsStep onSubmit={handleCredentials} error={error} />
+    case 'submitting':
+      // Rendered for the one tick between the Continue click and
+      // runChangePassword's own first onStep -- same shape as
+      // 'loadingCredentials', so there's no visible flicker between them.
+      return (
+        <SignupProgressStep
+          progress={null}
+          initialTotalSteps={4}
+          leadingStep="Confirming your session…"
+          trailingStep="Saving your new password…"
+          currentStep="leading"
+          heading="Changing your password"
+        />
+      )
     case 'changing':
       return (
         <SignupProgressStep

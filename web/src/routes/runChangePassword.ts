@@ -57,7 +57,7 @@ export function isDefinitelyUncommitted(err: unknown): boolean {
 }
 
 export type ChangePasswordErrorKind =
-  'credential' | 'staleVersion' | 'changeResponseLost' | 'unreachable'
+  'credential' | 'staleVersion' | 'changeResponseLost' | 'unreachable' | 'authRequired'
 
 export type ChangePasswordResult =
   | { readonly ok: true; readonly material: ChangePasswordMaterial }
@@ -92,7 +92,9 @@ export interface ChangePasswordDeps {
   /**
    * Called for the two step transitions that happen mid-flow, after
    * getCredentials() and after the worker's re-wrap -- the caller is
-   * assumed to already be in its 'loadingCredentials' step before calling
+   * assumed to already be in its own 'submitting' step (set synchronously,
+   * before calling runChangePassword -- see ChangePasswordScreen's own
+   * comment on handleCredentials, PR #132 round 2) before calling
    * runChangePassword, so that transition isn't reported here. Mirrors
    * runRecovery's onStep exactly.
    */
@@ -119,8 +121,18 @@ export async function runChangePassword(
     credentials = await deps.getCredentials()
   } catch (err) {
     // Nothing has touched the worker or the write endpoint yet -- a failure
-    // here is never a credential failure (there is no password check this
-    // early), always network/server-shaped.
+    // here is never a 'credential' failure (there is no password check this
+    // early), but a 401 IS distinguishable from every other network/
+    // server-shaped failure: the bootstrap call is authenticated
+    // (requireSession), so a 401 specifically means the session expired
+    // between page load and submit (a tab left open), not an outage. PR
+    // #132 round 2 caught that this used to collapse into 'unreachable',
+    // showing "Couldn't reach the server" for a case ChangePasswordScreen's
+    // own bootstrap effect already handles correctly by redirecting to
+    // /login -- this classification lets the screen do the same here.
+    if (err instanceof ApiError && err.status === 401) {
+      return { ok: false, kind: 'authRequired', error: err }
+    }
     return { ok: false, kind: 'unreachable', error: err }
   }
 
@@ -173,6 +185,14 @@ export async function runChangePassword(
     }
     if (isStaleVersionConflict(err)) {
       return { ok: false, kind: 'staleVersion', error: err }
+    }
+    // A 401 here specifically means the session expired between the GET
+    // and this PUT (requireSession guards both) -- checked before
+    // isDefinitelyUncommitted (which would otherwise classify it as a plain
+    // 'unreachable', since 401 < 500) for the same reason as the
+    // getCredentials() catch above: PR #132 round 2.
+    if (err instanceof ApiError && err.status === 401) {
+      return { ok: false, kind: 'authRequired', error: err }
     }
     if (isDefinitelyUncommitted(err)) {
       return { ok: false, kind: 'unreachable', error: err }
