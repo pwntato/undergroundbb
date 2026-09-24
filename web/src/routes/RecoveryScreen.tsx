@@ -2,7 +2,12 @@
 // release() to fetch the wrapped private keys -> unwrap + re-wrap under new
 // secrets in the worker (with a fresh recovery code) -> reset() to submit
 // the new material and invalidate the redeemed code -> show the new
-// recovery code -> done.
+// recovery code -> done. The flow itself (normalizing the code, calling
+// release/completeRecovery/reset in order, and classifying what each
+// failure means) lives in runRecovery.ts, split out so it can be unit
+// tested without jsdom (PR #129 round 2) -- this file wires that function
+// to the real API/worker calls, owns the step-machine UI, and picks the
+// user-facing copy for each error kind.
 //
 // Every failure mode release()/reset() can return for an unknown username
 // or wrong code comes back as resolveRecovery's single uniform "invalid
@@ -23,12 +28,13 @@
 // is safe to send back to the credentials step: the OLD recovery code the
 // user typed in is still valid until reset() actually replaces it, so
 // nothing is lost by retrying from the top. That does NOT cover reset()'s
-// response being lost after the write already committed (network drop,
-// Lambda timeout) -- see the reset() catch below, which handles that case
-// distinctly rather than claiming the same safety. The one moment that must
-// not be interrupted is after reset() succeeds and before the new code is
-// acknowledged -- exactly parallel to SignupScreen's recoveryCode step, and
-// guarded the same way (beforeunload).
+// response being lost after its write already committed (network drop,
+// Lambda timeout) -- runRecovery's isDefinitelyUncommitted is what tells
+// that case apart from every other reset() failure, which really is safe
+// to retry from the top. The one moment that must not be interrupted is
+// after reset() succeeds and before the new code is acknowledged --
+// exactly parallel to SignupScreen's recoveryCode step, and guarded the
+// same way (beforeunload).
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -39,11 +45,11 @@ import {
   type RecoveryCodeReleaseResponse,
 } from '@/lib/api/auth'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
-import { normalizeRecoveryCode } from '@/lib/crypto/recovery-code'
 import { completeRecovery } from '@/lib/crypto/worker-client'
 import type { RecoveryMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { RecoveryCredentialsStep } from './RecoveryCredentialsStep'
+import { runRecovery, type RecoveryErrorKind } from './runRecovery'
 import { SignupProgressStep } from './SignupProgressStep'
 
 const CREDENTIAL_ERROR = 'Incorrect username or recovery code.'
@@ -56,11 +62,14 @@ const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
 const STALE_VERSION_ERROR =
   "Your account's credentials changed while this was in progress. Please try again."
 // The one case a plain retry from the top is NOT safe for: reset()'s
-// response was lost after the write already committed (see the reset()
-// catch below for why this can't be told apart from an ambiguous network
-// failure at that specific step).
+// response was lost after the write already committed (see runRecovery's
+// own comment on isDefinitelyUncommitted for why every 4xx it can return is
+// excluded from reaching this message). The write, if it landed, also
+// issued a new recovery code that this message can't hand back -- #124
+// (lost-response retry idempotency) is the real fix; until then this at
+// least tells the user their old code is gone and they need a new one.
 const RESET_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery."
+  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it worked, your recovery code was also reset -- generate a new one from your account settings once you're in."
 
 /**
  * Mirrors LoginScreen's isCredentialFailure: a wrong code fails inside the
@@ -87,15 +96,41 @@ function isStaleVersionConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409
 }
 
+/**
+ * Whether err is an ApiError whose status recoveryCodeReset's own handler
+ * (internal/handlers/recovery.go) proves happened before its write: every
+ * 4xx there (400 validation, 401, 409) is returned before RewrapCredentials
+ * ever runs, so those -- and the WAF's 403 -- definitely did not commit.
+ * Only a non-ApiError (network failure, a lost response) or a 5xx (e.g. a
+ * Lambda timeout surfacing after the write) is genuinely ambiguous. PR #129
+ * round 2: RESET_RESPONSE_LOST_ERROR was reaching every non-401/409
+ * failure, including ones like this that provably didn't commit.
+ */
+function isDefinitelyUncommitted(err: unknown): boolean {
+  return err instanceof ApiError && err.status < 500
+}
+
+function errorMessageFor(kind: RecoveryErrorKind): string {
+  switch (kind) {
+    case 'credential':
+      return CREDENTIAL_ERROR
+    case 'staleVersion':
+      return STALE_VERSION_ERROR
+    case 'resetResponseLost':
+      return RESET_RESPONSE_LOST_ERROR
+    case 'unreachable':
+      return UNREACHABLE_ERROR
+  }
+}
+
 type Step =
   | { readonly name: 'credentials' }
   | { readonly name: 'releasing' }
   | {
       readonly name: 'recovering'
       readonly release: RecoveryCodeReleaseResponse
-      readonly username: string
     }
-  | { readonly name: 'resetting'; readonly material: RecoveryMaterial; readonly username: string }
+  | { readonly name: 'resetting'; readonly material: RecoveryMaterial }
   | { readonly name: 'recoveryCode'; readonly recoveryCode: string }
 
 export function RecoveryScreen() {
@@ -125,103 +160,32 @@ export function RecoveryScreen() {
     setStep({ name: 'releasing' })
     setProgress(null)
 
-    // Normalized exactly once, here, at the point of collection --
-    // recovery-code.ts's own doc comment on normalizeRecoveryCode: this is
-    // the one canonical KDF input, on both sides, and CheckRecoveryVerifier
-    // (internal/crypto/recovery.go) hashes whatever bytes it's handed with
-    // no normalization of its own. Every use below (release, the worker's
-    // unwrap, reset) uses this same normalized value, never the raw
-    // hyphenated string the user typed.
-    const recoveryCode = normalizeRecoveryCode(enteredCode)
-
     void (async () => {
-      let release: RecoveryCodeReleaseResponse
-      try {
-        release = await recoveryCodeRelease(username, recoveryCode)
-      } catch (err) {
-        setError(isCredentialFailure(err) ? CREDENTIAL_ERROR : UNREACHABLE_ERROR)
-        setStep({ name: 'credentials' })
-        return
-      }
-
-      setStep({ name: 'recovering', release, username })
-      let material: RecoveryMaterial
-      try {
-        material = await completeRecovery(
-          {
-            recoveryCode,
-            recoverySalt: release.salt,
-            recoveryArgon2Params: release.argon2Params,
-            recoveryWrappedPrivateKeys: release.wrappedPrivateKeys,
-            userId: release.userId,
-            newPassword,
-          },
-          (event) => {
+      const result = await runRecovery(
+        {
+          release: recoveryCodeRelease,
+          completeRecovery,
+          reset: recoveryCodeReset,
+          isCredentialFailure,
+          isStaleVersionConflict,
+          isDefinitelyUncommitted,
+          onProgress: (event) => {
             setProgress(event)
           },
-        )
-      } catch (err) {
-        // A wrong code surfaces here too (DecryptionFailedError, GCM tag
-        // mismatch), not only at release() -- release only checks the
-        // Argon2id verifier, unwrapping is a separate, independent check
-        // against the same code. Nothing has been submitted to the server
-        // yet, so it's safe to go all the way back to credentials.
-        setError(isCredentialFailure(err) ? CREDENTIAL_ERROR : UNREACHABLE_ERROR)
+          onStep: setStep,
+        },
+        username,
+        enteredCode,
+        newPassword,
+      )
+
+      if (!result.ok) {
+        setError(errorMessageFor(result.kind))
         setStep({ name: 'credentials' })
         return
       }
 
-      setStep({ name: 'resetting', material, username })
-      try {
-        await recoveryCodeReset({
-          username,
-          recoveryCode,
-          expectedCredentialVersion: release.credentialVersion,
-          salt: material.salt,
-          argon2Params: material.argon2Params,
-          wrappedPrivateKeys: material.wrappedPrivateKeys,
-          recoverySalt: material.recoverySalt,
-          recoveryArgon2Params: material.recoveryArgon2Params,
-          recoveryWrappedPrivateKeys: material.recoveryWrappedPrivateKeys,
-          recoveryVerifierSalt: material.recoveryVerifierSalt,
-          recoveryVerifierParams: material.recoveryVerifierParams,
-          recoveryVerifier: material.recoveryVerifier,
-        })
-      } catch (err) {
-        // Three distinct cases here, per PR #129 review:
-        //
-        // 1. A genuine 401/DecryptionFailedError-shaped failure: can't
-        //    actually happen at reset() (the code already unwrapped
-        //    successfully above), but isCredentialFailure is checked first
-        //    for consistency with the other two catches.
-        // 2. A real 409 (isStaleVersionConflict): the server WAS reached,
-        //    nothing here committed, and the OLD code is still valid --
-        //    safe to retry from the top, per STALE_VERSION_ERROR's own
-        //    comment.
-        // 3. Everything else (network failure, timeout, 5xx): reset()'s
-        //    write may have committed even though this response was lost --
-        //    unlike SignupScreen's register(), which is safe to treat as
-        //    "never happened" on any failure, this PUT is NOT, because it's
-        //    the write that actually changes the account's live password
-        //    and invalidates the old recovery code. #124 (lost-response
-        //    retry idempotency) is the real fix for register(); no
-        //    equivalent exists here yet. Telling the user their code was
-        //    wrong (UNREACHABLE_ERROR/CREDENTIAL_ERROR) would send them
-        //    straight back to a form that's about to fail with "invalid
-        //    username or recovery code" on the now-dead old code, so this
-        //    case gets its own message instead.
-        if (isCredentialFailure(err)) {
-          setError(CREDENTIAL_ERROR)
-        } else if (isStaleVersionConflict(err)) {
-          setError(STALE_VERSION_ERROR)
-        } else {
-          setError(RESET_RESPONSE_LOST_ERROR)
-        }
-        setStep({ name: 'credentials' })
-        return
-      }
-
-      setStep({ name: 'recoveryCode', recoveryCode: material.recoveryCode })
+      setStep({ name: 'recoveryCode', recoveryCode: result.material.recoveryCode })
     })()
   }
 
@@ -247,6 +211,7 @@ export function RecoveryScreen() {
           leadingStep="Confirming your code…"
           trailingStep="Saving your new credentials…"
           heading="Recovering your account"
+          pendingLabel="Checking your recovery code…"
         />
       )
     case 'resetting':

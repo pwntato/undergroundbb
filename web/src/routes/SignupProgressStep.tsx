@@ -48,6 +48,16 @@ import type { SignupProgressEvent } from '@/lib/crypto/worker-protocol'
  * trailing); it's meaningless -- and ignored -- while a `progress` event is
  * what's driving the display, since that carries its own step number
  * already.
+ *
+ * Between `currentStep` no longer being `'leading'`/`'trailing'` and the
+ * worker's first `progress` event landing, the display must hold at
+ * `workerStepOffset` (not drop to 0) and show `pendingLabel` -- PR #129
+ * round 2 caught that recovery's bar and label briefly reverted to
+ * signup's own ("Generating your keys…") right after `releasing` handed
+ * off to `recovering`, even though the leading step had already put the
+ * bar at position 1 and real work (the upfront unwrap) was already
+ * running. Signup has no leading step, so `workerStepOffset` is 0 there
+ * and this only matters for callers like RecoveryScreen that have one.
  */
 export function SignupProgressStep({
   progress,
@@ -56,6 +66,7 @@ export function SignupProgressStep({
   trailingStep,
   currentStep,
   heading = 'Setting up your account',
+  pendingLabel = 'Generating your keys…',
 }: {
   progress: SignupProgressEvent | null
   initialTotalSteps?: number
@@ -63,6 +74,14 @@ export function SignupProgressStep({
   trailingStep?: string
   currentStep?: 'leading' | 'trailing'
   heading?: string
+  /**
+   * Shown (alongside the leading step's own position on the bar, if any)
+   * while the worker's own call is running but hasn't posted its first
+   * event yet -- e.g. recovery's upfront unwrap, a real Argon2id derivation
+   * with no step of its own. Defaults to signup's copy, since signup has no
+   * leading step and this label is only reachable there for an instant.
+   */
+  pendingLabel?: string
 }) {
   const extraSteps = (leadingStep === undefined ? 0 : 1) + (trailingStep === undefined ? 0 : 1)
   const workerTotalSteps = progress?.totalSteps ?? initialTotalSteps
@@ -78,8 +97,14 @@ export function SignupProgressStep({
     step = totalSteps
     label = trailingStep
   } else {
-    step = progress === null ? 0 : progress.step + workerStepOffset
-    label = progress?.label ?? 'Generating your keys…'
+    // Before the worker's first event, step must still reflect
+    // workerStepOffset -- a leading step (recovery) has already claimed
+    // position 1, so the bar must hold there, not drop to 0, while the
+    // worker's own first derivation (uncounted work with no event of its
+    // own) is in flight. PR #129 round 2 caught that recovery's bar and
+    // label briefly reverted to signup's between releasing -> recovering.
+    step = (progress?.step ?? 0) + workerStepOffset
+    label = progress?.label ?? pendingLabel
   }
 
   return (

@@ -114,23 +114,13 @@ export interface CompleteRecoveryRequest {
   readonly newPassword: string
 }
 
-/** The mirror of SignupMaterial for a recovery reset: no public keys, since #128 doesn't rotate them. */
-export interface RecoveryMaterial {
-  readonly salt: string
-  readonly argon2Params: { memoryKiB: number; iterations: number; parallelism: number }
-  readonly wrappedPrivateKeys: { nonce: string; ciphertext: string }
-
-  readonly recoverySalt: string
-  readonly recoveryArgon2Params: { memoryKiB: number; iterations: number; parallelism: number }
-  readonly recoveryWrappedPrivateKeys: { nonce: string; ciphertext: string }
-
-  readonly recoveryVerifierSalt: string
-  readonly recoveryVerifierParams: { memoryKiB: number; iterations: number; parallelism: number }
-  readonly recoveryVerifier: string
-
-  /** Shown to the user once, on the recovery-code screen. Never sent to the server. */
-  readonly recoveryCode: string
-}
+/**
+ * The mirror of SignupMaterial for a recovery reset: no public keys, since
+ * #128 doesn't rotate them. Defined as the Omit rather than repeated field
+ * by field, so it can't drift from what wrapNewCredentials/completeRecovery
+ * (credential-material.ts) actually return -- PR #129 round 2.
+ */
+export type RecoveryMaterial = Omit<SignupMaterial, 'signingPublicKey' | 'wrappingPublicKey'>
 
 export interface CompleteRecoveryResponse {
   readonly kind: 'completeRecoveryDone'

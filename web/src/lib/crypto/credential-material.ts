@@ -20,7 +20,7 @@ import {
 import * as ed25519 from './ed25519.js'
 import { generateWrappingKey, KEY_LEN as X25519_KEY_LEN } from './x25519.js'
 import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
-import type { SignupMaterial } from './worker-protocol.js'
+import type { RecoveryMaterial, SignupMaterial } from './worker-protocol.js'
 
 /** One step of a call's progress, reported via the onProgress callback as it completes. */
 export interface ProgressStep {
@@ -64,7 +64,7 @@ export async function wrapNewCredentials(
   onProgress: (step: ProgressStep) => void,
   stepOffset = 0,
   totalSteps = 3,
-): Promise<Omit<SignupMaterial, 'signingPublicKey' | 'wrappingPublicKey'>> {
+): Promise<RecoveryMaterial> {
   // Step 1 of 3 (offset by the caller, if any): the password-derived key.
   const salt = randomSalt()
   const passwordKey = await deriveKey(password, salt, SIGNUP_ARGON2_PARAMS, KEY_SIZE)
@@ -244,7 +244,7 @@ export async function completeRecovery(
     readonly newPassword: string
   },
   onProgress: (step: ProgressStep) => void,
-): Promise<Omit<SignupMaterial, 'signingPublicKey' | 'wrappingPublicKey'>> {
+): Promise<RecoveryMaterial> {
   const TOTAL_STEPS = 4
 
   const recoverySalt = base64ToBytes(req.recoverySalt)
