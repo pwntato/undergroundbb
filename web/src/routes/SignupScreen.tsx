@@ -157,9 +157,15 @@ export function SignupScreen() {
     case 'credentials':
       return <SignupCredentialsStep onSubmit={handleCredentials} error={error} />
     case 'generating':
-      return <SignupProgressStep progress={progress} />
+      return <SignupProgressStep progress={progress} trailingStep="Logging you in…" />
     case 'loggingIn':
-      return <SignupProgressStep progress={progress} loggingIn />
+      return (
+        <SignupProgressStep
+          progress={progress}
+          trailingStep="Logging you in…"
+          currentStep="trailing"
+        />
+      )
     case 'recoveryCode':
       return (
         <RecoveryCodeStep

@@ -26,16 +26,24 @@ export interface GenerateSignupMaterialRequest {
 }
 
 /**
- * One step of signup's three independent Argon2id derivations, reported as
+ * One step of a worker call's independent Argon2id derivations, reported as
  * it completes -- see recovery-code.ts's neighbor, argon2.ts, and #33's own
  * requirement for "honest progress": each step fires only once that step's
  * derivation has actually finished, never on a timer.
+ *
+ * `step`/`totalSteps` are plain numbers, not a literal `1 | 2 | 3` / `3` --
+ * generateSignupMaterial posts 3 (wrapNewCredentials's own three
+ * derivations), but completeRecovery (#128) posts a 4th, for its own
+ * upfront unwrap of the RECOVERY blob (also a full Argon2id call) before it
+ * delegates to that same wrapNewCredentials. A literal type would force
+ * every caller to agree on one fixed count; the real count is a property of
+ * which worker call is running, not of this event shape.
  */
 export interface SignupProgressEvent {
   readonly kind: 'signupProgress'
   readonly id: string
-  readonly step: 1 | 2 | 3
-  readonly totalSteps: 3
+  readonly step: number
+  readonly totalSteps: number
   readonly label: string
 }
 
@@ -82,6 +90,44 @@ export interface CompleteLoginResponse {
   readonly signature: string
 }
 
+/**
+ * Redeems a recovery code and issues a brand-new full credential set --
+ * #128, the recovery-screen counterpart of generateSignupMaterial. Unwraps
+ * RecoveryWrappedPrivateKeys (release's response, POST
+ * /api/account/recovery-code/release) with the recovery-code-derived key to
+ * recover the same signing/wrapping keypair signup generated, per
+ * docs/DESIGN.md: recovery re-wraps existing keys under new secrets, it
+ * does not rotate them (that is #62, key rotation, a separate feature). The
+ * result re-wraps that same bundle under a new password-derived key and a
+ * freshly generated recovery code/verifier -- PUT /api/account/recovery-code
+ * per docs/DESIGN.md, "It also issues a new recovery code," so the redeemed
+ * code cannot be reused.
+ */
+export interface CompleteRecoveryRequest {
+  readonly kind: 'completeRecovery'
+  readonly id: string
+  readonly recoveryCode: string
+  readonly recoverySalt: string
+  readonly recoveryArgon2Params: { memoryKiB: number; iterations: number; parallelism: number }
+  readonly recoveryWrappedPrivateKeys: { nonce: string; ciphertext: string }
+  readonly userId: string
+  readonly newPassword: string
+}
+
+/**
+ * The mirror of SignupMaterial for a recovery reset: no public keys, since
+ * #128 doesn't rotate them. Defined as the Omit rather than repeated field
+ * by field, so it can't drift from what wrapNewCredentials/completeRecovery
+ * (credential-material.ts) actually return -- PR #129 round 2.
+ */
+export type RecoveryMaterial = Omit<SignupMaterial, 'signingPublicKey' | 'wrappingPublicKey'>
+
+export interface CompleteRecoveryResponse {
+  readonly kind: 'completeRecoveryDone'
+  readonly id: string
+  readonly result: RecoveryMaterial
+}
+
 export interface WorkerErrorResponse {
   readonly kind: 'error'
   readonly id: string
@@ -96,7 +142,12 @@ export interface WorkerErrorResponse {
   readonly errorName: string
 }
 
-export type WorkerRequest = GenerateSignupMaterialRequest | CompleteLoginRequest
+export type WorkerRequest =
+  GenerateSignupMaterialRequest | CompleteLoginRequest | CompleteRecoveryRequest
 
 export type WorkerResponse =
-  SignupProgressEvent | GenerateSignupMaterialResponse | CompleteLoginResponse | WorkerErrorResponse
+  | SignupProgressEvent
+  | GenerateSignupMaterialResponse
+  | CompleteLoginResponse
+  | CompleteRecoveryResponse
+  | WorkerErrorResponse
