@@ -12,7 +12,7 @@
 // enumeration defense.
 
 import { useState, type FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ApiError, challenge, verify } from '@/lib/api/auth'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeLogin } from '@/lib/crypto/worker-client'
@@ -61,6 +61,10 @@ export function LoginScreen() {
   // account is real and the password the user just chose is correct; only
   // the session establishment failed, so this is reassurance, not an error.
   const accountCreated = searchParams.get('accountCreated') === '1'
+  // Set by RecoveryScreen (#128) once its own recoveryCode step is
+  // acknowledged -- the account now has a new password and a new recovery
+  // code; this is reassurance, same as accountCreated above.
+  const recoveryComplete = searchParams.get('recoveryComplete') === '1'
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -107,6 +111,13 @@ export function LoginScreen() {
           <AlertDescription>Your account was created. Please log in.</AlertDescription>
         </Alert>
       )}
+      {recoveryComplete && !error && (
+        <Alert>
+          <AlertDescription>
+            Your account was recovered. Please log in with your new password.
+          </AlertDescription>
+        </Alert>
+      )}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -140,6 +151,9 @@ export function LoginScreen() {
       <Button type="submit" disabled={submitting}>
         {submitting ? 'Logging in…' : 'Log in'}
       </Button>
+      <Link to="/recovery" className="text-center text-sm text-muted-foreground underline">
+        Forgot your password?
+      </Link>
     </form>
   )
 }

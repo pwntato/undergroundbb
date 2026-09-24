@@ -24,14 +24,18 @@ export class ApiError extends Error {
   }
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+async function sendJSON<T>(method: 'POST' | 'PUT', path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
     body: JSON.stringify(body),
   })
   return handleJSON<T>(res)
+}
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  return sendJSON<T>('POST', path, body)
 }
 
 async function handleJSON<T>(res: Response): Promise<T> {
@@ -124,4 +128,64 @@ export async function verify(
   signature: string,
 ): Promise<VerifyResponse> {
   return postJSON<VerifyResponse>('/api/auth/verify', { username, nonce, signature })
+}
+
+export interface RecoveryCodeReleaseResponse {
+  readonly credentialVersion: number
+  readonly userId: string
+  readonly salt: string
+  readonly argon2Params: WireArgon2Params
+  readonly wrappedPrivateKeys: WireWrappedBlob
+}
+
+/**
+ * POST /api/account/recovery-code/release -- #31/#128, recovery step 1.
+ * Unauthenticated: a user recovering has no session. Always fails the same
+ * way (ApiError 401, "invalid username or recovery code") for an unknown
+ * username, a wrong code, or a user with no RECOVERY item at all -- see
+ * internal/handlers/recovery.go's resolveRecovery, the same
+ * enumeration-resistance reasoning challenge() already relies on for login.
+ */
+export async function recoveryCodeRelease(
+  username: string,
+  recoveryCode: string,
+): Promise<RecoveryCodeReleaseResponse> {
+  return postJSON<RecoveryCodeReleaseResponse>('/api/account/recovery-code/release', {
+    username,
+    recoveryCode,
+  })
+}
+
+export interface RecoveryCodeResetRequest {
+  readonly username: string
+  readonly recoveryCode: string
+  readonly expectedCredentialVersion: number
+  readonly salt: string
+  readonly argon2Params: WireArgon2Params
+  readonly wrappedPrivateKeys: WireWrappedBlob
+  readonly recoverySalt: string
+  readonly recoveryArgon2Params: WireArgon2Params
+  readonly recoveryWrappedPrivateKeys: WireWrappedBlob
+  readonly recoveryVerifierSalt: string
+  readonly recoveryVerifierParams: WireArgon2Params
+  readonly recoveryVerifier: string
+}
+
+export interface RecoveryCodeResetResponse {
+  readonly credentialVersion: number
+}
+
+/**
+ * PUT /api/account/recovery-code -- #31/#128, recovery step 2. Re-checks
+ * username + recoveryCode against the verifier itself (independent of the
+ * earlier release() call, per recovery.go's own doc comment: the verifier
+ * is what authorizes this write, not a token minted by release). Throws
+ * ApiError(409) if expectedCredentialVersion is stale -- e.g. a concurrent
+ * change-password or a second recovery attempt from another tab -- the
+ * same conflict changePassword's own PUT would raise.
+ */
+export async function recoveryCodeReset(
+  req: RecoveryCodeResetRequest,
+): Promise<RecoveryCodeResetResponse> {
+  return sendJSON<RecoveryCodeResetResponse>('PUT', '/api/account/recovery-code', req)
 }

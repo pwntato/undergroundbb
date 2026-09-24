@@ -159,7 +159,13 @@ export function SignupScreen() {
     case 'generating':
       return <SignupProgressStep progress={progress} />
     case 'loggingIn':
-      return <SignupProgressStep progress={progress} loggingIn />
+      return (
+        <SignupProgressStep
+          progress={progress}
+          trailingStep="Logging you in…"
+          currentStep="trailing"
+        />
+      )
     case 'recoveryCode':
       return (
         <RecoveryCodeStep

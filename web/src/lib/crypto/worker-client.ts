@@ -11,8 +11,11 @@ import { DecryptionFailedError } from './aesgcm.js'
 import type {
   CompleteLoginRequest,
   CompleteLoginResponse,
+  CompleteRecoveryRequest,
+  CompleteRecoveryResponse,
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
+  RecoveryMaterial,
   SignupMaterial,
   SignupProgressEvent,
   WorkerErrorResponse,
@@ -149,6 +152,50 @@ export function completeLogin(req: Omit<CompleteLoginRequest, 'kind' | 'id'>): P
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for completeLogin`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Runs completeRecovery in the crypto worker: redeems a recovery code and
+ * issues a brand-new full credential set under a new password, reporting
+ * each step via onProgress as it completes (same "honest progress"
+ * requirement generateSignupMaterial's caller relies on). A wrong username
+ * or recovery code fails inside the worker's unwrap as a
+ * DecryptionFailedError, the same signal completeLogin gives for a wrong
+ * password -- see aesgcm.ts.
+ */
+export function completeRecovery(
+  req: Omit<CompleteRecoveryRequest, 'kind' | 'id'>,
+  onProgress: (event: SignupProgressEvent) => void,
+): Promise<RecoveryMaterial> {
+  const id = nextRequestID()
+  const fullReq: CompleteRecoveryRequest = { kind: 'completeRecovery', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      if (msg.kind === 'signupProgress') {
+        onProgress(msg)
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'completeRecoveryDone') {
+        resolve((msg as CompleteRecoveryResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for completeRecovery`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
