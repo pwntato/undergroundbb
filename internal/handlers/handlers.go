@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/challenge", h.challenge)
 	mux.HandleFunc("POST /api/auth/verify", h.verify)
 	mux.HandleFunc("GET /api/auth/session", h.getSession)
+	mux.HandleFunc("GET /api/account/credentials", h.requireSession(h.getAccountCredentials))
 	mux.HandleFunc("PUT /api/account/password", h.requireSession(h.changePassword))
 	mux.HandleFunc("POST /api/account/recovery-code/release", h.recoveryCodeRelease)
 	mux.HandleFunc("PUT /api/account/recovery-code", h.recoveryCodeReset)

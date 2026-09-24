@@ -230,6 +230,131 @@ func TestChangePasswordThenLoginReflectsNewVersion(t *testing.T) {
 	}
 }
 
+func doGetAccountCredentials(t *testing.T, h *Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodGet, "/api/account/credentials", nil)
+	if cookie != nil {
+		httpReq.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rec, httpReq)
+	return rec
+}
+
+// TestGetAccountCredentialsSuccess covers #131's bootstrap endpoint: a
+// logged-in caller reading back exactly the Salt/Argon2Params/
+// WrappedPrivateKeys/CredentialVersion register() wrote, the same shape
+// challengeResponse hands an unauthenticated login attempt plus the
+// CredentialVersion field that response omits. Compares Salt against a
+// fresh doChallenge call for the same username -- both read the identical
+// PROFILE item, so they must agree, and challengeResponse is already the
+// established way these tests pin a registered user's stored salt.
+func TestGetAccountCredentialsSuccess(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+
+	rec := doGetAccountCredentials(t, h, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp accountCredentialsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.CredentialVersion != 1 {
+		t.Errorf("CredentialVersion = %d, want 1", resp.CredentialVersion)
+	}
+	if resp.UserID != user.userID {
+		t.Errorf("UserID = %q, want %q", resp.UserID, user.userID)
+	}
+
+	challengeRec := doChallenge(t, h, user.username)
+	var challengeResp challengeResponse
+	if err := json.Unmarshal(challengeRec.Body.Bytes(), &challengeResp); err != nil {
+		t.Fatalf("decoding challenge response: %v", err)
+	}
+	if resp.Salt != challengeResp.Salt {
+		t.Errorf("Salt = %q, want %q (from challenge for the same user)", resp.Salt, challengeResp.Salt)
+	}
+}
+
+// TestGetAccountCredentialsReflectsChangedVersion confirms a caller who
+// changes their password and then re-reads this endpoint sees the bumped
+// CredentialVersion and new Salt -- the property a change-password screen
+// that re-opens after a successful change (or a second device) depends on.
+func TestGetAccountCredentialsReflectsChangedVersion(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	_, cookie := loggedInUser(t, h)
+
+	fields := validCredentialRewrapFields()
+	changeRec := doChangePassword(t, h, cookie, changePasswordRequest{
+		ExpectedCredentialVersion: 1,
+		credentialRewrapFields:    fields,
+	})
+	if changeRec.Code != http.StatusOK {
+		t.Fatalf("change status = %d, want %d, body: %s", changeRec.Code, http.StatusOK, changeRec.Body.String())
+	}
+
+	rec := doGetAccountCredentials(t, h, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp accountCredentialsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.CredentialVersion != 2 {
+		t.Errorf("CredentialVersion = %d, want 2", resp.CredentialVersion)
+	}
+	if resp.Salt != fields.Salt {
+		t.Errorf("Salt = %q, want %q (the salt just written by change-password)", resp.Salt, fields.Salt)
+	}
+}
+
+func TestGetAccountCredentialsRequiresSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+
+	rec := doGetAccountCredentials(t, h, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+// TestGetAccountCredentialsCannotReadAnotherAccount confirms the session
+// cookie is what decides whose credentials come back -- there is no userId
+// query param or body field at all, but this pins the property the same way
+// TestChangePasswordCannotActOnAnotherAccount pins it for the write side.
+// Compares against the victim's real salt via doChallenge, the established
+// way these tests read back a registered user's stored salt.
+func TestGetAccountCredentialsCannotReadAnotherAccount(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	victim := registerTestUser(t, h)
+	_, attackerCookie := loggedInUser(t, h)
+
+	victimChallengeRec := doChallenge(t, h, victim.username)
+	var victimChallengeResp challengeResponse
+	if err := json.Unmarshal(victimChallengeRec.Body.Bytes(), &victimChallengeResp); err != nil {
+		t.Fatalf("decoding victim challenge response: %v", err)
+	}
+
+	rec := doGetAccountCredentials(t, h, attackerCookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp accountCredentialsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Salt == victimChallengeResp.Salt {
+		t.Error("attacker's own GET /api/account/credentials returned the victim's salt")
+	}
+	if resp.UserID == victim.userID {
+		t.Error("attacker's own GET /api/account/credentials returned the victim's userId")
+	}
+}
+
 func TestChangePasswordValidation(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	_, cookie := loggedInUser(t, h)

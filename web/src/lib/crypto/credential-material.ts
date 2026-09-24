@@ -264,3 +264,43 @@ export async function completeRecovery(
 
   return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress, 1, TOTAL_STEPS)
 }
+
+/**
+ * #131: changes a logged-in user's password (and, as a side effect, issues
+ * a fresh recovery code -- docs/DESIGN.md, "It does, however, issue a new
+ * recovery code and re-wrap the recovery copy under it, invalidating the
+ * old," same as completeRecovery). Unwraps the PROFILE copy with the OLD
+ * password -- GET /api/account/credentials' current
+ * Salt/Argon2Params/WrappedPrivateKeys, the mirror of completeLogin's own
+ * unwrap but against the caller's already-known userId rather than one
+ * handed back by a challenge -- then re-wraps the same bundle under the NEW
+ * password via the shared wrapNewCredentials, exactly as completeRecovery's
+ * tail does after its own recovery-code unwrap.
+ *
+ * A wrong old password fails inside this unwrap as a DecryptionFailedError,
+ * the same signal completeLogin gives -- there is no separate server-side
+ * check of the old password (password.go's changePassword's own doc
+ * comment: "there is deliberately no server-side check of the old
+ * password"), so this unwrap succeeding is the only proof of it.
+ *
+ * Unlike completeRecovery, there is no recovery-code-derived unwrap first,
+ * so this reports the same 3 steps wrapNewCredentials always reports (no
+ * stepOffset), not 4.
+ */
+export async function completeChangePassword(
+  req: {
+    readonly oldPassword: string
+    readonly salt: string
+    readonly argon2Params: { memoryKiB: number; iterations: number; parallelism: number }
+    readonly wrappedPrivateKeys: { readonly nonce: string; readonly ciphertext: string }
+    readonly userId: string
+    readonly newPassword: string
+  },
+  onProgress: (step: ProgressStep) => void,
+): Promise<RecoveryMaterial> {
+  const salt = base64ToBytes(req.salt)
+  const oldKey = await deriveKey(req.oldPassword, salt, req.argon2Params, KEY_SIZE)
+  const { bundle } = await unwrapAndValidate(oldKey, req.wrappedPrivateKeys, req.userId, 'PROFILE')
+
+  return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress)
+}

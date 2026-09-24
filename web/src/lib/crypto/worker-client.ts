@@ -9,6 +9,9 @@
 
 import { DecryptionFailedError } from './aesgcm.js'
 import type {
+  ChangePasswordMaterial,
+  CompleteChangePasswordRequest,
+  CompleteChangePasswordResponse,
   CompleteLoginRequest,
   CompleteLoginResponse,
   CompleteRecoveryRequest,
@@ -196,6 +199,50 @@ export function completeRecovery(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for completeRecovery`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Runs completeChangePassword in the crypto worker: unwraps the caller's
+ * PROFILE copy with their old password and re-wraps it under a new
+ * password plus a freshly issued recovery code, reporting each step via
+ * onProgress as it completes (same "honest progress" requirement
+ * generateSignupMaterial/completeRecovery's callers rely on). A wrong old
+ * password fails inside the worker's unwrap as a DecryptionFailedError, the
+ * same signal completeLogin gives for a wrong password.
+ */
+export function completeChangePassword(
+  req: Omit<CompleteChangePasswordRequest, 'kind' | 'id'>,
+  onProgress: (event: SignupProgressEvent) => void,
+): Promise<ChangePasswordMaterial> {
+  const id = nextRequestID()
+  const fullReq: CompleteChangePasswordRequest = { kind: 'completeChangePassword', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      if (msg.kind === 'signupProgress') {
+        onProgress(msg)
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'completeChangePasswordDone') {
+        resolve((msg as CompleteChangePasswordResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for completeChangePassword`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

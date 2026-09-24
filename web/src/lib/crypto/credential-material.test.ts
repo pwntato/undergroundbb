@@ -12,7 +12,11 @@ import { decrypt, KEY_SIZE } from './aesgcm.js'
 import { deriveKey, type Argon2idParams } from './argon2.js'
 import { base64ToBytes } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
-import { completeRecovery, generateSignupMaterial } from './credential-material.js'
+import {
+  completeChangePassword,
+  completeRecovery,
+  generateSignupMaterial,
+} from './credential-material.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 
@@ -142,6 +146,110 @@ describe('recovery round trip', () => {
       { step: 2, totalSteps: 4 },
       { step: 3, totalSteps: 4 },
       { step: 4, totalSteps: 4 },
+    ])
+  })
+})
+
+// #131's round trip, mirroring the recovery describe block above exactly:
+// signup material -> completeChangePassword with the real old password ->
+// unwrap the new PROFILE blob with the new password -> same signing/
+// wrapping keys as the original signup. The one structural difference from
+// completeRecovery: the unwrap here is keyed by the OLD PASSWORD against
+// PROFILE's own salt/argon2Params/wrappedPrivateKeys (what GET
+// /api/account/credentials returns), not a recovery code against a separate
+// RECOVERY copy -- so there is no analogous "does the old wrap still
+// redeem" case to pin; the old PROFILE wrap is simply overwritten, not left
+// live under a stale key the way the RECOVERY copy's old code is.
+describe('change-password round trip', () => {
+  it('unwraps with the old password and the new PROFILE wrap opens with the new password', async () => {
+    const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
+
+    const changed = await completeChangePassword(
+      {
+        oldPassword: 'original-password',
+        salt: signup.salt,
+        argon2Params: signup.argon2Params,
+        wrappedPrivateKeys: signup.wrappedPrivateKeys,
+        userId: USER_ID,
+        newPassword: 'new-password',
+      },
+      () => {},
+    )
+
+    const originalKeys = await unwrapProfile('original-password', signup)
+    const newKeys = await unwrapProfile('new-password', changed)
+
+    // Same keypair as the original signup -- change-password re-wraps, it
+    // does not rotate (#62 is the separate feature that would), same as
+    // completeRecovery.
+    expect(Array.from(newKeys.signingSeed)).toEqual(Array.from(originalKeys.signingSeed))
+    expect(Array.from(newKeys.wrappingPrivateKey)).toEqual(
+      Array.from(originalKeys.wrappingPrivateKey),
+    )
+
+    // A fresh recovery code was issued, distinct from signup's -- same
+    // docs/DESIGN.md requirement completeRecovery's own round trip pins.
+    expect(changed.recoveryCode).not.toBe(signup.recoveryCode)
+
+    // The NEW recovery code redeems the NEW recovery wrap this call issued.
+    const recovered = await completeRecovery(
+      {
+        recoveryCode: changed.recoveryCode,
+        recoverySalt: changed.recoverySalt,
+        recoveryArgon2Params: changed.recoveryArgon2Params,
+        recoveryWrappedPrivateKeys: changed.recoveryWrappedPrivateKeys,
+        userId: USER_ID,
+        newPassword: 'yet-another-password',
+      },
+      () => {},
+    )
+    const recoveredKeys = await unwrapProfile('yet-another-password', recovered)
+    expect(Array.from(recoveredKeys.signingSeed)).toEqual(Array.from(originalKeys.signingSeed))
+  })
+
+  it('fails when the old password is wrong', async () => {
+    const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
+
+    await expect(
+      completeChangePassword(
+        {
+          oldPassword: 'wrong-password',
+          salt: signup.salt,
+          argon2Params: signup.argon2Params,
+          wrappedPrivateKeys: signup.wrappedPrivateKeys,
+          userId: USER_ID,
+          newPassword: 'new-password',
+        },
+        () => {},
+      ),
+    ).rejects.toThrow()
+  })
+
+  it('reports 3 progress steps -- wrapNewCredentials own, with no extra upfront unwrap step', async () => {
+    const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
+
+    const steps: { step: number; totalSteps: number }[] = []
+    await completeChangePassword(
+      {
+        oldPassword: 'original-password',
+        salt: signup.salt,
+        argon2Params: signup.argon2Params,
+        wrappedPrivateKeys: signup.wrappedPrivateKeys,
+        userId: USER_ID,
+        newPassword: 'new-password',
+      },
+      (event) => {
+        steps.push({ step: event.step, totalSteps: event.totalSteps })
+      },
+    )
+
+    // Unlike completeRecovery's 4 (its own upfront unwrap plus
+    // wrapNewCredentials's 3), this unwrap isn't reported as a step at all
+    // -- see completeChangePassword's own doc comment.
+    expect(steps).toEqual([
+      { step: 1, totalSteps: 3 },
+      { step: 2, totalSteps: 3 },
+      { step: 3, totalSteps: 3 },
     ])
   })
 })
