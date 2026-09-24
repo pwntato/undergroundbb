@@ -19,10 +19,14 @@ import (
 // code and re-wrap the recovery copy under it, invalidating the old."
 type changePasswordRequest struct {
 	// ExpectedCredentialVersion is the CredentialVersion the client last
-	// read (from its own login, or GET /api/auth/session) before deriving
-	// these wraps -- see db.RewrapCredentialsInput's own doc comment on why
-	// the caller computes this rather than the transaction re-deriving it
-	// blind.
+	// read (from its own login's verifyResponse, or from this package's own
+	// GET /api/account/credentials -- NOT GET /api/auth/session, which
+	// returns only userId) before deriving these wraps -- see
+	// db.RewrapCredentialsInput's own doc comment on why the caller computes
+	// this rather than the transaction re-deriving it blind. PR #132 review
+	// caught this comment still naming /api/auth/session, stale since
+	// GET /api/account/credentials (issue #131) became the real source for
+	// a client that hasn't just logged in.
 	ExpectedCredentialVersion int64 `json:"expectedCredentialVersion"`
 
 	credentialRewrapFields

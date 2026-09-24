@@ -1,9 +1,10 @@
 // #131: the logged-in change-password / new-recovery-code screen. Closes
 // the gap RecoveryScreen's own RESET_RESPONSE_LOST_ERROR copy points at
-// ("generate a new [recovery code] from your account settings once you're
-// in") -- that page didn't exist before this file. It's also the natural
-// place for routine credential rotation generally, independent of that
-// lost-response edge case (see issue #131's own body).
+// ("use Change password to get a new one") -- that page didn't exist before
+// this file, and "Change password" is this screen's own entry point on
+// Home. It's also the natural place for routine credential rotation
+// generally, independent of that lost-response edge case (see issue #131's
+// own body).
 //
 // Shaped closely after RecoveryScreen: a credentials step, a progress step
 // reusing SignupProgressStep, and the same RecoveryCodeStep for the newly
@@ -42,10 +43,16 @@ const STALE_VERSION_ERROR =
   "Your account's credentials changed while this was in progress. Please try again."
 // Mirrors RecoveryScreen's RESET_RESPONSE_LOST_ERROR, but for a caller who
 // is (and remains) logged in: unlike recovery, there is no separate
-// "generate a new code from your account settings" fallback to point at --
-// this IS that screen -- so the only safe advice is to come back and retry.
+// "use Change password" fallback to point at -- this IS that screen -- so
+// the only safe advice is to come back and retry. PR #132 review caught an
+// earlier draft that didn't say WHICH password to retry with: if the first
+// attempt's write actually landed, the account's current password is now
+// the NEW one, not the one just typed into "Current password" -- a retry
+// with the old one would fail here with CREDENTIAL_ERROR, which is
+// confusing without this context (the account is fine; the field just
+// needs the other password).
 const CHANGE_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it in another tab before retrying. If it works, your old recovery code no longer does, so retry here to get a new one."
+  "We couldn't confirm whether your new password was saved. Try logging in with it in another tab before retrying. If it works, your old recovery code no longer does -- retry here using your NEW password as the current one, to get a new code."
 
 function errorMessageFor(kind: ChangePasswordErrorKind): string {
   switch (kind) {

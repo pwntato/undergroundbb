@@ -283,9 +283,14 @@ export async function completeRecovery(
  * comment: "there is deliberately no server-side check of the old
  * password"), so this unwrap succeeding is the only proof of it.
  *
- * Unlike completeRecovery, there is no recovery-code-derived unwrap first,
- * so this reports the same 3 steps wrapNewCredentials always reports (no
- * stepOffset), not 4.
+ * Like completeRecovery's own upfront unwrap, this old-password unwrap is a
+ * real Argon2id derivation in its own right, not free -- so it gets its own
+ * progress step (1 of 4) before handing off to wrapNewCredentials's own 3,
+ * the same TOTAL_STEPS=4/stepOffset=1 shape completeRecovery uses. PR #132
+ * review caught an earlier draft that reported only wrapNewCredentials's 3
+ * steps, leaving this unwrap uncounted and silently changing
+ * SignupProgressStep's total mid-flow -- exactly the PR #129 regression its
+ * own doc comment warns against.
  */
 export async function completeChangePassword(
   req: {
@@ -298,9 +303,13 @@ export async function completeChangePassword(
   },
   onProgress: (step: ProgressStep) => void,
 ): Promise<RecoveryMaterial> {
+  const TOTAL_STEPS = 4
+
   const salt = base64ToBytes(req.salt)
   const oldKey = await deriveKey(req.oldPassword, salt, req.argon2Params, KEY_SIZE)
   const { bundle } = await unwrapAndValidate(oldKey, req.wrappedPrivateKeys, req.userId, 'PROFILE')
 
-  return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress)
+  onProgress({ step: 1, totalSteps: TOTAL_STEPS, label: 'Current password confirmed' })
+
+  return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress, 1, TOTAL_STEPS)
 }

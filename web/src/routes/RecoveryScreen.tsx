@@ -70,9 +70,12 @@ const STALE_VERSION_ERROR =
 // change-password/new-recovery-code screen, ChangePasswordScreen.tsx) now
 // exists, so this message can point there for the one thing it can't hand
 // back directly -- round 3 of PR #129's review caught an earlier draft
-// claiming "your account settings" before #131 existed at all.
+// claiming "your account settings" before #131 existed at all, and PR #132
+// review caught this draft still not naming the real entry point (the
+// Change password button on Home) or saying that changing your password,
+// specifically, is how you get a new code.
 const RESET_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does -- generate a new one from your account settings once you're in."
+  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does. Once you're in, use Change password to get a new one (you can keep the same password)."
 
 function errorMessageFor(kind: RecoveryErrorKind): string {
   switch (kind) {

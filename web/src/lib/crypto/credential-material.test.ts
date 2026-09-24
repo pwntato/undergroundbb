@@ -225,7 +225,7 @@ describe('change-password round trip', () => {
     ).rejects.toThrow()
   })
 
-  it('reports 3 progress steps -- wrapNewCredentials own, with no extra upfront unwrap step', async () => {
+  it('reports 4 progress steps: the old-password unwrap, then wrapNewCredentials’s own 3', async () => {
     const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
 
     const steps: { step: number; totalSteps: number }[] = []
@@ -243,13 +243,16 @@ describe('change-password round trip', () => {
       },
     )
 
-    // Unlike completeRecovery's 4 (its own upfront unwrap plus
-    // wrapNewCredentials's 3), this unwrap isn't reported as a step at all
-    // -- see completeChangePassword's own doc comment.
+    // Same shape as completeRecovery's 4 (its own upfront unwrap plus
+    // wrapNewCredentials's 3) -- PR #132 review caught an earlier draft
+    // that left this unwrap uncounted at 3, which silently changed
+    // SignupProgressStep's total mid-flow (the exact PR #129 regression its
+    // own doc comment warns against).
     expect(steps).toEqual([
-      { step: 1, totalSteps: 3 },
-      { step: 2, totalSteps: 3 },
-      { step: 3, totalSteps: 3 },
+      { step: 1, totalSteps: 4 },
+      { step: 2, totalSteps: 4 },
+      { step: 3, totalSteps: 4 },
+      { step: 4, totalSteps: 4 },
     ])
   })
 })
