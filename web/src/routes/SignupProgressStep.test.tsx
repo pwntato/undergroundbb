@@ -14,18 +14,20 @@ import { SignupProgressStep } from './SignupProgressStep'
 /** The indicator's fill, as the percentage in its `translateX(-N%)` inline style. */
 function fillPercent(html: string): number {
   const match = /transform:translateX\(-([\d.]+)%\)/.exec(html)
-  if (match === null) {
+  const fill = match?.[1]
+  if (fill === undefined) {
     throw new Error(`no translateX found in: ${html}`)
   }
-  return 100 - Number(match[1])
+  return 100 - Number(fill)
 }
 
 function labelText(html: string): string {
   const match = /<p class="text-sm text-muted-foreground">([^<]*)<\/p>/.exec(html)
-  if (match === null) {
+  const label = match?.[1]
+  if (label === undefined) {
     throw new Error(`no label paragraph found in: ${html}`)
   }
-  return match[1]
+  return label
 }
 
 describe('SignupProgressStep', () => {
@@ -75,11 +77,12 @@ describe('SignupProgressStep', () => {
     )
 
     const fills = [releasing, recoveringPending, recoveringUnwrapped, resetting].map(fillPercent)
-    for (let i = 1; i < fills.length; i++) {
-      expect(
-        fills[i],
-        `fill dropped between phase ${i - 1} and ${i}: ${fills.join(' -> ')}`,
-      ).toBeGreaterThanOrEqual(fills[i - 1])
+    let previous = -Infinity
+    for (const [i, fill] of fills.entries()) {
+      expect(fill, `fill dropped at phase ${i}: ${fills.join(' -> ')}`).toBeGreaterThanOrEqual(
+        previous,
+      )
+      previous = fill
     }
 
     // The bar must hold at the leading step's own position (1 of 6 total:
@@ -126,8 +129,10 @@ describe('SignupProgressStep', () => {
     )
 
     const fills = [generatingPending, generatingDone, loggingIn].map(fillPercent)
-    for (let i = 1; i < fills.length; i++) {
-      expect(fills[i]).toBeGreaterThanOrEqual(fills[i - 1])
+    let previous = -Infinity
+    for (const fill of fills) {
+      expect(fill).toBeGreaterThanOrEqual(previous)
+      previous = fill
     }
     // generatingDone must not already read 100%: #33's honest-progress
     // requirement this PR's own header comment cites -- the trailing login
