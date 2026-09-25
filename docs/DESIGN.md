@@ -292,6 +292,16 @@ the password that works.
 Neither operation is a **key rotation**, which is the subject of the next section: a much heavier
 operation, and the only one that invalidates existing wrapped group keys.
 
+**The `RECOVERY` item carries its own guessing-bound lockout**, a counter and lock-until timestamp
+distinct from login's — the same shape as login's (a rolling five-attempts-in-five-minutes window,
+the lock-until value itself acting as the window marker) but scoped to failed recovery-verifier
+checks rather than failed step-4 signatures, and never touching login's counter or vice versa.
+Reusing login's counter would corrupt its meaning — a wrong recovery code is not the signature
+failure it counts — and would let a recovery-guessing attacker lock a user out of logging in
+entirely, the wrong failure mode to hand an attacker. A locked `RECOVERY` item fails with the same
+uniform error as a wrong code, for the same enumeration-resistance reason every other failure mode
+here already collapses to one response.
+
 ### Key rotation
 
 Three operations get conflated under "changing my keys," and only the third one actually changes
