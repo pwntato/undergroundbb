@@ -363,6 +363,36 @@ describe('runSignup (issue #134: username_taken after a password change)', () =>
     expect(result.resume?.material).toBe(MATERIAL)
   })
 
+  // Round 1 review's blocking finding: a username_taken 409 on the EXACT
+  // resend (same username AND password as `resume`) means the opposite of
+  // the case above. If the resend's userId and material had actually
+  // matched what committed, the server's own #124 fix (isOwnRegistration,
+  // internal/db/register.go) would return 201, not 409 -- so a 409 here
+  // proves the original attempt did NOT land under this username (its
+  // claim never committed, or someone else took the name since). Echoing
+  // `resume` back in this case would tell the user to keep resubmitting
+  // the exact password that keeps failing, with no way out short of
+  // changing the username or reloading -- reproduced live against this
+  // branch pre-fix by the reviewer (three identical resubmissions, same
+  // "try your original password" response every time).
+  it('a username_taken 409 on the EXACT resend (same username AND password) reports no resume', async () => {
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken', 'username_taken')),
+    })
+    const resume = makeResume()
+
+    const result = await runSignup(deps, resume.username, resume.password, resume)
+
+    expect(deps.generateUserID).not.toHaveBeenCalled()
+    expect(deps.generateSignupMaterial).not.toHaveBeenCalled()
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.kind).toBe('definitelyUncommitted')
+    expect(result.resume).toBeUndefined()
+  })
+
   it('a username_taken 409 with NO stale resume reports no resume -- an ordinary conflict', async () => {
     const deps = makeDeps({
       register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken', 'username_taken')),
@@ -453,7 +483,7 @@ describe('signupErrorMessage', () => {
       resume: makeResume(),
     }
     expect(signupErrorMessage(result)).toBe(
-      'An earlier attempt may have already created this account. Try your original password, or log in if you remember it.',
+      'An earlier attempt may have already created this account. Resubmit with your original password to see its recovery code, or log in and use Change password to get a new one.',
     )
   })
 

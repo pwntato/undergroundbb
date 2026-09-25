@@ -101,14 +101,16 @@ export type SignupResult =
        *
        * The one 'definitelyUncommitted' exception is issue #134: a
        * `username_taken` 409 whose username matches a `resume` this call
-       * was passed in means an EARLIER ambiguous attempt already committed
-       * under that username -- runSignup echoes that same `resume` back
-       * unchanged here (never a new one; a 409 proves nothing committed
-       * under the input THIS call actually used) so the caller can offer the
-       * user a path back to their original password rather than silently
-       * discarding the only route to the account's real recovery code. See
-       * this file's own header comment below the accept-conflict-as-resume
-       * branch.
+       * was passed in, on a call that was NOT itself the exact resend of
+       * that `resume` (see round 1 review on runSignup's `!resuming`
+       * guard -- a 409 on the exact resend proves the opposite), means an
+       * EARLIER, different attempt already committed under that username
+       * -- runSignup echoes that same `resume` back unchanged here (never a
+       * new one; a 409 proves nothing committed under the input THIS call
+       * actually used) so the caller can offer the user a path back to
+       * their original password rather than silently discarding the only
+       * route to the account's real recovery code. See this file's own
+       * header comment below the accept-conflict-as-resume branch.
        */
       readonly resume?: PendingSignup
     }
@@ -132,7 +134,15 @@ export type SignupResult =
  */
 export function signupErrorMessage(result: Extract<SignupResult, { ok: false }>): string {
   if (result.kind === 'definitelyUncommitted' && result.resume !== undefined) {
-    return 'An earlier attempt may have already created this account. Try your original password, or log in if you remember it.'
+    // Round 1 review, non-blocking: an earlier draft's "or log in if you
+    // remember it" branch never told the user that path skips the recovery
+    // code shown on this screen -- naming Change password as how to get a
+    // fresh one closes that gap, matching how RecoveryScreen.tsx's own
+    // messages (RESET_RETRY_FAILED_ERROR, RETRY_CONFLICT_ERROR,
+    // GAVE_UP_ON_RETRY_ERROR) already handle the same "there's a real
+    // account, but you need a specific next step to reach its credentials"
+    // situation.
+    return 'An earlier attempt may have already created this account. Resubmit with your original password to see its recovery code, or log in and use Change password to get a new one.'
   }
   if (result.error instanceof ApiError && result.error.status !== 403) {
     return result.error.message
@@ -201,16 +211,22 @@ export interface SignupDeps {
  * silent 201 over a first attempt's still-live, different credentials.
  *
  * Issue #134: even when `resume` isn't reused for the request itself (a
- * changed password), it is still consulted once more if register() comes
- * back with a `username_taken` 409 for a username matching `resume`'s. That
- * combination means an EARLIER call already committed an account under this
- * username (the ambiguous failure that produced `resume` in the first
- * place), and this fresh attempt's different password just collided with
- * it -- not a real "someone else took this name" conflict. Without this
- * check, the caller has no way to distinguish the two and would discard
- * `resume` as a normal conflict, permanently losing the only path back to
- * the first attempt's recovery code (which was never sent to the server in
- * the clear and so cannot be recovered any other way). See the
+ * changed password, so this call is NOT the exact resend -- `!resuming`),
+ * it is still consulted once more if register() comes back with a
+ * `username_taken` 409 for a username matching `resume`'s. That combination
+ * means an EARLIER call already committed an account under this username
+ * (the ambiguous failure that produced `resume` in the first place), and
+ * this fresh attempt's different password just collided with it -- not a
+ * real "someone else took this name" conflict. Without this check, the
+ * caller has no way to distinguish the two and would discard `resume` as a
+ * normal conflict, permanently losing the only path back to the first
+ * attempt's recovery code (which was never sent to the server in the clear
+ * and so cannot be recovered any other way). The `!resuming` guard matters:
+ * on the exact resend itself, a 409 here means the OPPOSITE -- the server's
+ * own #124 fix (`isOwnRegistration`, internal/db/register.go) would have
+ * returned 201, not 409, had this resend's userId and material actually
+ * matched what committed, so a 409 on that path proves nothing committed
+ * under this username at all (round 1 review). See the
  * 'definitelyUncommitted' branch below and SignupResult's own doc comment.
  */
 export async function runSignup(
@@ -259,7 +275,7 @@ export async function runSignup(
       // Issue #134: a username_taken 409 whose username matches a stale
       // `resume` means an earlier ambiguous attempt under that username
       // already committed -- this fresh attempt (with different material,
-      // since resuming was false or it would have collided with itself
+      // since resuming was false, or it would have collided with itself
       // instead) just collided with that real account. Echo `resume`
       // back UNCHANGED rather than discarding it: nothing about THIS call
       // proves anything new committed, so there is nothing safe to update
@@ -269,7 +285,24 @@ export async function runSignup(
       // registration, validation, a userId conflict, or a username
       // conflict that doesn't match any stale `resume`) still has nothing
       // worth resuming.
+      //
+      // Round 1 review: `!resuming` is load-bearing here, not incidental.
+      // When THIS call already WAS the exact byte-identical resend
+      // (resuming true), a username_taken 409 means the opposite of the
+      // comment above -- register.go's own #124 fix (isOwnRegistration)
+      // would have returned 201, not 409, if this resend's userId and
+      // material actually matched what committed. A 409 on a resumed call
+      // instead proves the original attempt did NOT land under this name
+      // (its claim never committed, or someone else took the name since),
+      // so echoing `resume` back here would tell the user to keep
+      // resubmitting the exact password that keeps failing -- a loop with
+      // no way out short of changing the username or reloading. `resuming`
+      // itself already establishes username+password both matched `resume`
+      // exactly, so `resume.username === username` below is redundant in
+      // that branch but kept for clarity and because `!resuming` alone
+      // doesn't rule out a stale, non-matching `resume` for another user.
       const staleResumeApplies =
+        !resuming &&
         err instanceof ApiError &&
         err.status === 409 &&
         err.code === 'username_taken' &&
