@@ -82,11 +82,7 @@ export function isDefinitelyUncommitted(err: unknown): boolean {
 }
 
 export type RecoveryErrorKind =
-  | 'credential'
-  | 'staleVersion'
-  | 'resetResponseLost'
-  | 'unreachable'
-  | 'retryConflict'
+  'credential' | 'staleVersion' | 'resetResponseLost' | 'unreachable' | 'retryConflict'
 
 /**
  * Everything a retry needs to resend reset() byte-for-byte after a
@@ -355,7 +351,14 @@ export async function runRecovery(
       ok: false,
       kind: 'resetResponseLost',
       error: err,
-      resume: { username, recoveryCode, newPassword, expectedCredentialVersion, material, idempotencyToken },
+      resume: {
+        username,
+        recoveryCode,
+        newPassword,
+        expectedCredentialVersion,
+        material,
+        idempotencyToken,
+      },
     }
   }
 

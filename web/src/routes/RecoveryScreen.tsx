@@ -60,7 +60,12 @@ import type { RecoveryMaterial, SignupProgressEvent } from '@/lib/crypto/worker-
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { RecoveryCredentialsStep } from './RecoveryCredentialsStep'
 import { RecoveryRetryStep } from './RecoveryRetryStep'
-import { generateIdempotencyToken, runRecovery, type PendingRecovery, type RecoveryErrorKind } from './runRecovery'
+import {
+  generateIdempotencyToken,
+  runRecovery,
+  type PendingRecovery,
+  type RecoveryErrorKind,
+} from './runRecovery'
 import { SignupProgressStep } from './SignupProgressStep'
 
 const CREDENTIAL_ERROR = 'Incorrect username or recovery code.'

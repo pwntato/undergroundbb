@@ -288,7 +288,13 @@ describe('runRecovery resume (issue #130)', () => {
 
   it('falls back to a fresh attempt when the recovery code does not match', async () => {
     const deps = makeDeps()
-    const result = await runRecovery(deps, RESUME.username, 'different-code', RESUME.newPassword, RESUME)
+    const result = await runRecovery(
+      deps,
+      RESUME.username,
+      'different-code',
+      RESUME.newPassword,
+      RESUME,
+    )
 
     expect(result.ok).toBe(true)
     expect(deps.release).toHaveBeenCalled()
@@ -320,7 +326,7 @@ describe('runRecovery resume (issue #130)', () => {
     })
   })
 
-  it('classifies a resumed reset() 401 as retryConflict, not credential -- recoveryCodeReset only 401s a retry when the write was genuinely someone else\'s', async () => {
+  it("classifies a resumed reset() 401 as retryConflict, not credential -- recoveryCodeReset only 401s a retry when the write was genuinely someone else's", async () => {
     const err = new ApiError(401, 'invalid')
     const deps = makeDeps({ reset: vi.fn().mockRejectedValue(err) })
     const result = await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
