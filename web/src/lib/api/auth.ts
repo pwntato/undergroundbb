@@ -14,13 +14,26 @@ export interface WireWrappedBlob {
   readonly ciphertext: string
 }
 
-/** ApiError carries the HTTP status alongside the server's error message. */
+/**
+ * ApiError carries the HTTP status alongside the server's error message,
+ * and optionally the stable machine-readable `code` WriteErrorWithCode
+ * attaches to the few responses that need one (internal/handlers/
+ * handlers.go's own doc comment on when that's worth doing) -- undefined
+ * for every response WriteError sent instead, which is most of them.
+ */
 export class ApiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  readonly code?: string
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    // exactOptionalPropertyTypes: an omitted property and one explicitly
+    // set to undefined are distinct types here, so this must actually omit
+    // the assignment rather than assign `code` through when it's undefined.
+    if (code !== undefined) {
+      this.code = code
+    }
   }
 }
 
@@ -50,7 +63,11 @@ async function handleJSON<T>(res: Response): Promise<T> {
       typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string'
         ? data.error
         : res.statusText || 'request failed'
-    throw new ApiError(res.status, message)
+    const code =
+      typeof data === 'object' && data !== null && 'code' in data && typeof data.code === 'string'
+        ? data.code
+        : undefined
+    throw new ApiError(res.status, message, code)
   }
   return data as T
 }

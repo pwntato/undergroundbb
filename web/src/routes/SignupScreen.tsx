@@ -48,13 +48,24 @@
 // #133 round 1) for why "exact," not just "same username," is load-bearing:
 // regenerating even a single field defeats the point, since the server
 // would then be confirming credentials that were never actually stored. A
-// different username, or the same username with a different password, is
-// treated as a new signup attempt, not a retry -- pendingSignup is only
-// consulted (by runSignup itself) when both match exactly.
+// different username is a new signup attempt and gets no resume at all.
+//
+// The same username with a DIFFERENT password is also not resumed as a
+// request -- runSignup still generates fresh material and lets that attempt
+// stand or fail on its own -- but pendingSignup is still handed to runSignup
+// as a candidate (see handleCredentials below), because of issue #134: if
+// that fresh attempt comes back with username_taken, it means the FIRST
+// attempt (the one pendingSignup is from) already committed, and the user
+// most likely mistyped or is unsure which password they used the first
+// time. runSignup echoes pendingSignup back unchanged in exactly that case
+// (see its own doc comment) so handleCredentials can keep it alive and
+// point the user back to their original password instead of silently
+// converging on a permanently unrecoverable account -- see its own header
+// comment in SignupResult and the "Suggested fix" in issue #134 itself.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ApiError, challenge, register, verify } from '@/lib/api/auth'
+import { challenge, register, verify } from '@/lib/api/auth'
 import { generateUserID } from '@/lib/crypto/uuid'
 import { completeLogin, generateSignupMaterial } from '@/lib/crypto/worker-client'
 import type { SignupMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
@@ -63,7 +74,7 @@ import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { SignupCredentialsStep } from './SignupCredentialsStep'
 import { SignupProgressStep } from './SignupProgressStep'
 import { ThemePickerStep } from './ThemePickerStep'
-import { runSignup, type PendingSignup } from './runSignup'
+import { runSignup, signupErrorMessage, type PendingSignup } from './runSignup'
 
 type Step =
   | { readonly name: 'credentials' }
@@ -119,10 +130,12 @@ export function SignupScreen() {
     setStep({ name: 'generating' })
     setProgress(null)
 
-    // See this file's own header comment on #124: hand pendingSignup to
-    // runSignup as a CANDIDATE resume only when the username matches;
-    // runSignup itself makes the final call, additionally checking the
-    // password (see its own header comment) before actually reusing it.
+    // See this file's own header comment on #124/#134: hand pendingSignup
+    // to runSignup as a CANDIDATE whenever the username matches, even if
+    // the password doesn't -- runSignup itself decides whether to actually
+    // resend it as this request's material (only on an exact match) versus
+    // merely echo it back unchanged if a username_taken 409 shows the first
+    // attempt already committed (#134).
     const resume = pendingSignup?.username === username ? pendingSignup : undefined
 
     void (async () => {
@@ -151,17 +164,16 @@ export function SignupScreen() {
 
       if (!result.ok) {
         // See runSignup's own isDefinitelyUncommitted for the distinction:
-        // a definite 4xx means nothing committed and there's no identity
-        // worth preserving (a real conflict resending it would just
-        // collide again); an ambiguous failure means register()'s write
-        // may have landed, so the full identity + material runSignup
+        // a definite 4xx normally means nothing committed and there's no
+        // identity worth preserving (a real conflict resending it would
+        // just collide again); an ambiguous failure means register()'s
+        // write may have landed, so the full identity + material runSignup
         // returned are kept, to resend unchanged on a matching retry.
-        setPendingSignup(result.kind === 'ambiguous' ? (result.resume ?? null) : null)
-        setError(
-          result.error instanceof ApiError && result.error.status !== 403
-            ? result.error.message
-            : 'Could not create your account. Try again.',
-        )
+        // Issue #134's exception -- a 'definitelyUncommitted' result CAN
+        // also carry a resume worth keeping -- lives in, and is tested via,
+        // signupErrorMessage's own doc comment.
+        setPendingSignup(result.resume ?? null)
+        setError(signupErrorMessage(result))
         setStep({ name: 'credentials' })
         return
       }
