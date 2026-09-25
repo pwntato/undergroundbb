@@ -37,15 +37,20 @@
 // always retry login themselves with the password they just chose, but
 // nobody can ever retry showing them the code.
 //
-// pendingSignup (issue #124) holds the userId/password from an ambiguous
-// register() failure (network error or 5xx -- runSignup's own
-// isDefinitelyUncommitted) so that if the SAME username is resubmitted, the
-// retry reuses the same UserID rather than generating a fresh one. Reusing
-// it is what lets internal/db/register.go's own #124 fix recognize the
-// retry as this caller's own earlier, possibly-already-committed write
-// instead of a genuine username conflict. A different username submitted
-// after a failure is a new signup attempt, not a retry, so pendingSignup is
-// only consulted when the resubmitted username matches exactly.
+// pendingSignup (issue #124) holds the full identity AND SignupMaterial from
+// an ambiguous register() failure (network error or 5xx -- runSignup's own
+// isDefinitelyUncommitted) so that if the SAME username AND password are
+// resubmitted, the retry resends the exact same request rather than
+// generating a fresh UserID and material. Resending it unchanged is what
+// lets internal/db/register.go's own #124 fix recognize the retry as this
+// caller's own earlier, possibly-already-committed write instead of a
+// genuine username conflict -- see runSignup.ts's own header comment (PR
+// #133 round 1) for why "exact," not just "same username," is load-bearing:
+// regenerating even a single field defeats the point, since the server
+// would then be confirming credentials that were never actually stored. A
+// different username, or the same username with a different password, is
+// treated as a new signup attempt, not a retry -- pendingSignup is only
+// consulted (by runSignup itself) when both match exactly.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -114,9 +119,10 @@ export function SignupScreen() {
     setStep({ name: 'generating' })
     setProgress(null)
 
-    // See this file's own header comment on #124: only reuse a pending
-    // signup's userId when this submission is a resend of the SAME
-    // username. A different username is a new attempt, not a retry.
+    // See this file's own header comment on #124: hand pendingSignup to
+    // runSignup as a CANDIDATE resume only when the username matches;
+    // runSignup itself makes the final call, additionally checking the
+    // password (see its own header comment) before actually reusing it.
     const resume = pendingSignup?.username === username ? pendingSignup : undefined
 
     void (async () => {
@@ -148,8 +154,8 @@ export function SignupScreen() {
         // a definite 4xx means nothing committed and there's no identity
         // worth preserving (a real conflict resending it would just
         // collide again); an ambiguous failure means register()'s write
-        // may have landed, so its userId/password are kept for a retry of
-        // this same username to resend unchanged.
+        // may have landed, so the full identity + material runSignup
+        // returned are kept, to resend unchanged on a matching retry.
         setPendingSignup(result.kind === 'ambiguous' ? (result.resume ?? null) : null)
         setError(
           result.error instanceof ApiError && result.error.status !== 403

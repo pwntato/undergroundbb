@@ -127,8 +127,8 @@ export interface SignupDeps {
    * succeeds -- SessionContext's session.login, injected rather than
    * imported directly so this stays a plain function callable from a test
    * without React context. Never called if the post-register login fails;
-   * see this file's own header comment on why that's still an `ok: true`
-   * result rather than a thrown error.
+   * see SignupScreen.tsx's own header comment on why that's still an
+   * `ok: true` result rather than a thrown error.
    */
   readonly onLogin: (userId: string) => void
   /**
@@ -142,14 +142,14 @@ export interface SignupDeps {
 
 /**
  * Runs registration + immediate login: generateSignupMaterial (worker) ->
- * register() -> challenge -> completeLogin (worker) -> verify. See this
- * file's own header comment for why register() and the post-register login
- * are two separate try blocks -- once register() succeeds the account
- * exists server-side with a real recovery code that must reach the caller
- * regardless of what happens next, so only the first try's failure can
- * produce a SignupResult with ok: false; every path after that resolves
- * `ok: true` with `loggedIn` reflecting whether the follow-up login
- * actually worked.
+ * register() -> challenge -> completeLogin (worker) -> verify. See
+ * SignupScreen.tsx's own header comment for why register() and the
+ * post-register login are two separate try blocks -- once register()
+ * succeeds the account exists server-side with a real recovery code that
+ * must reach the caller regardless of what happens next, so only the first
+ * try's failure can produce a SignupResult with ok: false; every path after
+ * that resolves `ok: true` with `loggedIn` reflecting whether the
+ * follow-up login actually worked.
  *
  * `resume`, when passed, is only actually used -- skipping
  * generateSignupMaterial and resending its cached material byte-for-byte --
@@ -228,7 +228,8 @@ export async function runSignup(
 
   // The account now exists server-side. Everything from here on is a
   // separate try: whatever happens, the caller must still get this
-  // material back with ok: true -- see this file's own header comment.
+  // material back with ok: true -- see SignupScreen.tsx's own header
+  // comment.
   deps.onRegistered(material)
   let loggedIn = false
   try {
