@@ -72,8 +72,17 @@ export function SignupScreen() {
   const [progress, setProgress] = useState<SignupProgressEvent | null>(null)
   const [error, setError] = useState<string | null>(null)
   // See this file's own header comment on #124: only ever set from an
-  // ambiguous register() failure, and only ever consulted when the next
-  // submission's username matches it exactly.
+  // ambiguous register() failure, and only ever consulted (by runSignup
+  // itself, which re-checks both username AND password -- see its own
+  // header comment on PR #133 round 1) when the next submission matches it
+  // exactly. It holds a plaintext password and a not-yet-shown recovery
+  // code -- review non-blocking finding #4 asked that this be cleared on
+  // unmount, but that's a no-op in React: unmounting discards the
+  // component's state (this included) regardless of what a cleanup
+  // function does, since there is no later render for a stale setState to
+  // reach. Its actual lifetime is already bounded to this component
+  // existing at all -- there is no route away from /signup that leaves
+  // SignupScreen mounted with this state still reachable.
   const [pendingSignup, setPendingSignup] = useState<PendingSignup | null>(null)
   const session = useSession()
   const navigate = useNavigate()

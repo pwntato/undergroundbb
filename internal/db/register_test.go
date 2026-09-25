@@ -402,3 +402,56 @@ func TestRegisterMismatchedRetryStillFails(t *testing.T) {
 		t.Errorf("first's PROFILE Username = %q, want %q (unchanged)", gotFirst.Username, first.Username)
 	}
 }
+
+// TestRegisterRetryWithDifferentKeyMaterialStillFails is PR #133 round 1's
+// finding: matching UserID and username alone is not enough to treat a
+// double-failure as a safe retry. A resend that regenerated its key
+// material (whether from a client bug, or a client that never should have
+// resent in the first place) must NOT be told "success" -- the server would
+// be lying, since nothing about the newly regenerated keys was actually
+// written; the account is still wrapped under the FIRST attempt's material.
+// This must surface as ErrUsernameTaken, loudly, rather than a silent 201
+// the caller would wrongly trust.
+func TestRegisterRetryWithDifferentKeyMaterialStillFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	username := "keymismatch-" + randomSuffix(t)
+	userID := "test-register-keymismatch-" + randomSuffix(t)
+
+	first := testRegisterInput(userID, username)
+	if err := c.Register(ctx, first); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	// Same UserID, same username -- but different wrapped key material,
+	// exactly what a client that regenerated between attempts would send.
+	retry := testRegisterInput(userID, username)
+	retry.WrappedPrivateKeys = models.WrappedBlob{
+		Nonce:      make([]byte, 12),
+		Ciphertext: []byte("different-ciphertext-entirely"),
+	}
+	err := c.Register(ctx, retry)
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("retry with different key material error = %v, want ErrUsernameTaken", err)
+	}
+
+	// The original PROFILE's key material must be exactly what the FIRST
+	// attempt wrote -- the rejected retry must not have overwritten it, and
+	// nothing about the retry's own (different) material may have landed.
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+userID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if user.Item == nil {
+		t.Fatal("PROFILE item missing")
+	}
+	var got models.User
+	if err := unmarshalItem(user.Item, &got); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if string(got.WrappedPrivateKeys.Ciphertext) != string(first.WrappedPrivateKeys.Ciphertext) {
+		t.Errorf("PROFILE WrappedPrivateKeys.Ciphertext = %q, want first attempt's %q (unchanged)",
+			got.WrappedPrivateKeys.Ciphertext, first.WrappedPrivateKeys.Ciphertext)
+	}
+}
