@@ -160,6 +160,15 @@ export interface RecoveryCodeResetRequest {
   readonly username: string
   readonly recoveryCode: string
   readonly expectedCredentialVersion: number
+  /**
+   * A random value runRecovery.ts generates once per reset attempt and
+   * resends unchanged on a retry -- see recovery.go's own doc comment on
+   * recoveryCodeReset for why this is what lets a retry whose response was
+   * lost be recognized as such, rather than rejected as a wrong code
+   * (issue #130). Optional at the wire level; omitted entirely rather than
+   * sent empty when a caller has none to offer.
+   */
+  readonly idempotencyToken?: string
   readonly salt: string
   readonly argon2Params: WireArgon2Params
   readonly wrappedPrivateKeys: WireWrappedBlob

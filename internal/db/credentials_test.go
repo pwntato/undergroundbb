@@ -221,3 +221,241 @@ func TestRewrapCredentialsConcurrentRace(t *testing.T) {
 		t.Errorf("RECOVERY CredentialVersion = %d, want 2", rec.CredentialVersion)
 	}
 }
+
+// TestRewrapCredentialsStoresIdempotencyToken confirms RewrapCredentials
+// actually persists IdempotencyToken to RECOVERY's LastRewrapToken when set
+// -- the field IsOwnRewrap reads back. Issue #130.
+func TestRewrapCredentialsStoresIdempotencyToken(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-rewrap-token-store-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "rewraptokenstore-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1)
+	in.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	recovery, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+userID, "RECOVERY"))
+	if err != nil {
+		t.Fatalf("GetItem RECOVERY: %v", err)
+	}
+	var rec models.Recovery
+	if err := unmarshalItem(recovery.Item, &rec); err != nil {
+		t.Fatalf("unmarshal RECOVERY: %v", err)
+	}
+	if string(rec.LastRewrapToken) != string(in.IdempotencyToken) {
+		t.Errorf("RECOVERY LastRewrapToken = %q, want %q", rec.LastRewrapToken, in.IdempotencyToken)
+	}
+}
+
+// TestRewrapCredentialsNoTokenLeavesFieldUntouched confirms a caller that
+// doesn't set IdempotencyToken (changePassword, #30) doesn't clear a token a
+// PRIOR re-wrap stored -- RewrapCredentialsInput.IdempotencyToken's own
+// comment on why an empty write is avoided rather than relied on to behave
+// like "no value."
+func TestRewrapCredentialsNoTokenLeavesFieldUntouched(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-rewrap-token-untouched-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "rewraptokenuntouched-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	first := testRewrapInput(userID, 1)
+	first.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, first); err != nil {
+		t.Fatalf("first RewrapCredentials: %v", err)
+	}
+
+	second := testRewrapInput(userID, 2) // IdempotencyToken left unset, like changePassword
+	if err := c.RewrapCredentials(ctx, second); err != nil {
+		t.Fatalf("second RewrapCredentials: %v", err)
+	}
+
+	recovery, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+userID, "RECOVERY"))
+	if err != nil {
+		t.Fatalf("GetItem RECOVERY: %v", err)
+	}
+	var rec models.Recovery
+	if err := unmarshalItem(recovery.Item, &rec); err != nil {
+		t.Fatalf("unmarshal RECOVERY: %v", err)
+	}
+	if string(rec.LastRewrapToken) != string(first.IdempotencyToken) {
+		t.Errorf("RECOVERY LastRewrapToken = %q, want %q (first re-wrap's, untouched by the second)", rec.LastRewrapToken, first.IdempotencyToken)
+	}
+	if rec.CredentialVersion != 3 {
+		t.Errorf("RECOVERY CredentialVersion = %d, want 3", rec.CredentialVersion)
+	}
+}
+
+// matchingRewrapMaterial extracts the RewrapMaterial that exactly matches
+// what in itself wrote -- what a caller resending the same request would
+// present as `want`.
+func matchingRewrapMaterial(in RewrapCredentialsInput) RewrapMaterial {
+	return RewrapMaterial{
+		RecoverySalt:               in.RecoverySalt,
+		RecoveryArgon2Params:       in.RecoveryArgon2Params,
+		RecoveryWrappedPrivateKeys: in.RecoveryWrappedPrivateKeys,
+
+		RecoveryVerifierSalt:   in.RecoveryVerifierSalt,
+		RecoveryVerifierParams: in.RecoveryVerifierParams,
+		RecoveryVerifier:       in.RecoveryVerifier,
+	}
+}
+
+// TestIsOwnRewrapMatches confirms IsOwnRewrap recognizes a token and
+// material that both match what's stored, at the exact version a caller's
+// own request would have produced.
+func TestIsOwnRewrapMatches(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-isownrewrap-match-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "isownrewrapmatch-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1)
+	in.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	isRetry, err := c.IsOwnRewrap(ctx, userID, in.IdempotencyToken, in.NewCredentialVersion, matchingRewrapMaterial(in))
+	if err != nil {
+		t.Fatalf("IsOwnRewrap: %v", err)
+	}
+	if !isRetry {
+		t.Error("IsOwnRewrap = false, want true (matching token and material at the version this write produced)")
+	}
+}
+
+// TestIsOwnRewrapWrongTokenFails confirms a different token at the same
+// version is not mistaken for a match -- the actual identity check, not
+// just the version comparison.
+func TestIsOwnRewrapWrongTokenFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-isownrewrap-wrongtoken-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "isownrewrapwrongtoken-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1)
+	in.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	isRetry, err := c.IsOwnRewrap(ctx, userID, []byte("token-b-16-bytes"), in.NewCredentialVersion, matchingRewrapMaterial(in))
+	if err != nil {
+		t.Fatalf("IsOwnRewrap: %v", err)
+	}
+	if isRetry {
+		t.Error("IsOwnRewrap = true, want false (different token)")
+	}
+}
+
+// TestIsOwnRewrapWrongVersionFails confirms a matching token at the WRONG
+// version is not mistaken for a match -- a stale token from an earlier
+// reset must not be replayed against a request it was never for. See
+// IsOwnRewrap's own doc comment.
+func TestIsOwnRewrapWrongVersionFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-isownrewrap-wrongversion-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "isownrewrapwrongversion-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1)
+	in.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	// Same token, but asking about a version this write did not produce.
+	isRetry, err := c.IsOwnRewrap(ctx, userID, in.IdempotencyToken, in.NewCredentialVersion+1, matchingRewrapMaterial(in))
+	if err != nil {
+		t.Fatalf("IsOwnRewrap: %v", err)
+	}
+	if isRetry {
+		t.Error("IsOwnRewrap = true, want false (right token, wrong version)")
+	}
+}
+
+// TestIsOwnRewrapEmptyTokenFails confirms an empty token never matches, even
+// against a RECOVERY item whose own LastRewrapToken also happens to be empty
+// (never set) -- comparing two empty values must not count as a match.
+func TestIsOwnRewrapEmptyTokenFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-isownrewrap-emptytoken-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "isownrewrapemptytoken-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1) // IdempotencyToken left unset
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	isRetry, err := c.IsOwnRewrap(ctx, userID, nil, in.NewCredentialVersion, matchingRewrapMaterial(in))
+	if err != nil {
+		t.Fatalf("IsOwnRewrap: %v", err)
+	}
+	if isRetry {
+		t.Error("IsOwnRewrap = true, want false (no token presented)")
+	}
+}
+
+// TestIsOwnRewrapWrongMaterialFails is the material-comparison analogue of
+// TestRegisterRetryWithDifferentKeyMaterialStillFails (PR #133 round 1's
+// finding, applied to IsOwnRewrap): a token and version that both match, but
+// material that doesn't, must not be treated as a retry -- otherwise a
+// caller resending the same token with different fields would get back a
+// false "success" for a write that never actually happened with those
+// fields.
+func TestIsOwnRewrapWrongMaterialFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	userID := "test-isownrewrap-wrongmaterial-" + randomSuffix(t)
+	reg := testRegisterInput(userID, "isownrewrapwrongmaterial-"+randomSuffix(t))
+	if err := c.Register(ctx, reg); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	in := testRewrapInput(userID, 1)
+	in.IdempotencyToken = []byte("token-a-16-bytes")
+	if err := c.RewrapCredentials(ctx, in); err != nil {
+		t.Fatalf("RewrapCredentials: %v", err)
+	}
+
+	// Same token, same version -- but a different recovery verifier than
+	// what was actually stored.
+	want := matchingRewrapMaterial(in)
+	want.RecoveryVerifier = []byte("different-verifier-entirely")
+	isRetry, err := c.IsOwnRewrap(ctx, userID, in.IdempotencyToken, in.NewCredentialVersion, want)
+	if err != nil {
+		t.Fatalf("IsOwnRewrap: %v", err)
+	}
+	if isRetry {
+		t.Error("IsOwnRewrap = true, want false (token and version match, but material does not)")
+	}
+}

@@ -425,3 +425,207 @@ func TestRecoveryResetLegacyAccountNoVerifierFails(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }
+
+// testIdempotencyToken returns a base64-encoded value of exactly
+// idempotencyTokenLen decoded bytes -- what a real IdempotencyToken looks
+// like on the wire.
+func testIdempotencyToken(seed byte) string {
+	token := make([]byte, idempotencyTokenLen)
+	for i := range token {
+		token[i] = seed
+	}
+	return base64.StdEncoding.EncodeToString(token)
+}
+
+// TestRecoveryResetRetryWithTokenSucceeds is issue #130's fix: a reset
+// retry that presents the same (now-stale, since the first attempt's
+// success already rotated it) recovery code, but the same IdempotencyToken
+// as the first attempt, must be treated as that attempt's own response
+// landing late -- not a fresh authentication failure. Mirrors
+// TestRegisterRetryAfterLostResponseSucceeds's shape (#124) at the handler
+// layer.
+func TestRecoveryResetRetryWithTokenSucceeds(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+	token := testIdempotencyToken(0xAB)
+	fields := validCredentialRewrapFields()
+
+	first := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          token,
+		credentialRewrapFields:    fields,
+	})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first reset status = %d, want %d, body: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+	var firstResp changePasswordResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("decoding first response: %v", err)
+	}
+
+	// The identical retry: same (now-stale) code, same token, same
+	// expectedCredentialVersion, same credential fields -- exactly what a
+	// client resending after a lost response sends, per runRecovery.ts's own
+	// comment on why the code is unchanged (the client never learned the
+	// new one).
+	second := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          token,
+		credentialRewrapFields:    fields,
+	})
+	if second.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want %d (idempotent success), body: %s", second.Code, http.StatusOK, second.Body.String())
+	}
+	var secondResp changePasswordResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResp); err != nil {
+		t.Fatalf("decoding retry response: %v", err)
+	}
+	if secondResp.CredentialVersion != firstResp.CredentialVersion {
+		t.Errorf("retry CredentialVersion = %d, want %d (same as first attempt's, not bumped again)", secondResp.CredentialVersion, firstResp.CredentialVersion)
+	}
+
+	// GetRecovery directly confirms the retry did not write anything a
+	// second time -- CredentialVersion must still be exactly 2, not bumped
+	// again by a second successful RewrapCredentials call.
+	rec, err := h.db.GetRecovery(context.Background(), fixture.userID)
+	if err != nil {
+		t.Fatalf("GetRecovery: %v", err)
+	}
+	if rec.CredentialVersion != 2 {
+		t.Errorf("RECOVERY CredentialVersion = %d, want 2 (retry must not re-run the write)", rec.CredentialVersion)
+	}
+}
+
+// TestRecoveryResetRetryWithoutTokenStillFails confirms a retry that
+// presents the same stale code but NO token gets the plain, uniform 401 --
+// the fallback issue #130 adds must never trigger for a caller that hasn't
+// opted in.
+func TestRecoveryResetRetryWithoutTokenStillFails(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+	fields := validCredentialRewrapFields()
+
+	first := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		credentialRewrapFields:    fields,
+	})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first reset status = %d, want %d, body: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+
+	second := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		credentialRewrapFields:    fields,
+	})
+	if second.Code != http.StatusUnauthorized {
+		t.Fatalf("retry (no token) status = %d, want %d, body: %s", second.Code, http.StatusUnauthorized, second.Body.String())
+	}
+}
+
+// TestRecoveryResetRetryWithWrongTokenStillFails confirms a retry presenting
+// a DIFFERENT token than the first attempt used is not mistaken for that
+// attempt's own retry -- a genuinely different (if oddly timed) request must
+// still fail like any other wrong code.
+func TestRecoveryResetRetryWithWrongTokenStillFails(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+	fields := validCredentialRewrapFields()
+
+	first := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          testIdempotencyToken(0xAB),
+		credentialRewrapFields:    fields,
+	})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first reset status = %d, want %d, body: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+
+	second := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          testIdempotencyToken(0xCD),
+		credentialRewrapFields:    fields,
+	})
+	if second.Code != http.StatusUnauthorized {
+		t.Fatalf("retry (wrong token) status = %d, want %d, body: %s", second.Code, http.StatusUnauthorized, second.Body.String())
+	}
+}
+
+// TestRecoveryResetRetryWithDifferentMaterialStillFails is the handler-level
+// twin of db.TestIsOwnRewrapWrongMaterialFails: a retry presenting the SAME
+// token but DIFFERENT credential fields than the first attempt must not be
+// told "success" for a write that never actually happened with those
+// fields -- PR #133 round 1's finding, applied to this fallback too.
+func TestRecoveryResetRetryWithDifferentMaterialStillFails(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+	token := testIdempotencyToken(0xAB)
+	fields := validCredentialRewrapFields()
+
+	first := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          token,
+		credentialRewrapFields:    fields,
+	})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first reset status = %d, want %d, body: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+
+	// Same (now-stale) code, same token -- but different credential fields,
+	// exactly what a client that re-derived between attempts would send.
+	differentFields := validCredentialRewrapFields()
+	second := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          token,
+		credentialRewrapFields:    differentFields,
+	})
+	if second.Code != http.StatusUnauthorized {
+		t.Fatalf("retry (different material) status = %d, want %d, body: %s", second.Code, http.StatusUnauthorized, second.Body.String())
+	}
+
+	// The original write's material must be exactly what the FIRST attempt
+	// wrote -- the rejected retry must not have overwritten it (it never
+	// even reaches RewrapCredentials on this fallback path).
+	rec, err := h.db.GetRecovery(context.Background(), fixture.userID)
+	if err != nil {
+		t.Fatalf("GetRecovery: %v", err)
+	}
+	if base64.StdEncoding.EncodeToString(rec.Verifier) != fields.RecoveryVerifier {
+		t.Errorf("RECOVERY Verifier = %q, want first attempt's %q (unchanged)",
+			base64.StdEncoding.EncodeToString(rec.Verifier), fields.RecoveryVerifier)
+	}
+}
+
+// TestRecoveryResetInvalidTokenLength confirms IdempotencyToken is validated
+// like every other base64 field -- a present-but-wrong-length value is a
+// 400, not silently ignored or accepted as "no token."
+func TestRecoveryResetInvalidTokenLength(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+
+	rec := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          base64.StdEncoding.EncodeToString([]byte("too-short")),
+		credentialRewrapFields:    validCredentialRewrapFields(),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
