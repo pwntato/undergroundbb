@@ -43,3 +43,19 @@ func New(ctx context.Context, table, endpoint string) (*Client, error) {
 
 // Table returns the name of the table this client is bound to.
 func (c *Client) Table() string { return c.table }
+
+// Ping verifies the client can actually reach and use its table: right
+// region, right table name, and IAM permission to describe it. New cannot
+// catch any of this -- awsconfig.LoadDefaultConfig resolves configuration
+// lazily and never contacts AWS, so New returns a working-looking Client for
+// a table that does not exist or that the caller has no access to. Call this
+// once at cold start so a misconfigured deployment fails there instead of on
+// the first request that actually queries DynamoDB. See #86.
+func (c *Client) Ping(ctx context.Context) error {
+	if _, err := c.ddb.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(c.table),
+	}); err != nil {
+		return fmt.Errorf("db: describe table %q: %w", c.table, err)
+	}
+	return nil
+}

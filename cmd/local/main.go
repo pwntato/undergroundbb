@@ -23,6 +23,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
+	// See cmd/lambda/main.go: db.New never contacts DynamoDB, so a stopped
+	// DynamoDB Local or a table local-setup.sh hasn't created yet would
+	// otherwise surface as a confusing 500 on first request rather than a
+	// clear failure to start.
+	if err := dbClient.Ping(ctx); err != nil {
+		log.Fatalf("db: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	handlers.New(cfg, dbClient).RegisterRoutes(mux)
