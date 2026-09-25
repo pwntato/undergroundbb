@@ -247,7 +247,9 @@ Three things follow, and none of them is stated anywhere else:
   session and no password, so there is no route that could avoid releasing it. What the gate buys is
   real, though: the release is against a high-entropy secret rather than a user-chosen password, it
   is rate-limitable per account, and **a failed attempt is observable server-side** in a way offline
-  cracking never is. A database dump still exposes the blob, like everything else in the table.
+  cracking never is — see [DESIGN.md's Recovery section](DESIGN.md#recovery) for the account-level
+  lockout that makes both of those literal rather than merely possible in principle. A database dump
+  still exposes the blob, like everything else in the table.
 - **A leaked code is neutralized only by changing the password.** There is no "revoke my recovery
   code" operation, because a password change already reissues the code and re-wraps the copy under
   the new one, invalidating the old. A user who believes their code has leaked should change their

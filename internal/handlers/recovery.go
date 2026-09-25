@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -21,6 +22,27 @@ import (
 // oversized value into a 400 here rather than feeding an unbounded string
 // into Argon2id.
 const maxRecoveryCodeLen = 256
+
+// recoveryLockThreshold and recoveryLockDuration implement resolveRecovery's
+// own guessing-bound lockout (issue #136) -- deliberately NOT login's
+// lockThreshold/lockDuration (5 attempts / 5 minutes), even though the
+// rolling-window mechanism they parameterize is shared. Round 2 review of
+// #136 (and the issue's own "a deliberate call, not a default"): at 128 bits
+// of CSPRNG entropy (docs/DESIGN.md), a five-minute lock buys the code
+// itself essentially no brute-force resistance it doesn't already have --
+// unlike login's password, which the lock genuinely protects against
+// credential stuffing. What it does add is a real griefing vector: anyone
+// who knows a username can keep RECOVERY locked indefinitely at roughly 5
+// requests per 5 minutes, and the uniform response means the victim sees
+// only "invalid code," with no way to tell their code is fine and the
+// account is merely locked. A much looser window keeps the counter's real
+// value -- the observability and doc-accuracy #136 was about -- while
+// making that griefing path take meaningfully more sustained effort, at no
+// real security cost given the code's actual entropy.
+const (
+	recoveryLockThreshold = 20
+	recoveryLockDuration  = time.Hour
+)
 
 // errRecoveryCodeInvalid is the uniform response for every way a recovery
 // release/reset attempt can fail to authenticate: unknown username, wrong
@@ -56,26 +78,47 @@ var errInvalidRecoveryAttempt = errors.New("handlers: invalid username or recove
 // itself, re-checked, as what authorizes the write.
 //
 // Returns the resolved userID and RECOVERY item on success. Every failure
-// -- unknown username, missing RECOVERY, or a verifier mismatch -- comes
-// back as the single errInvalidRecoveryAttempt sentinel; only a genuine
-// infrastructure error is returned distinctly, for a 500 rather than a 401
-// at the HTTP layer.
+// -- unknown username, missing RECOVERY, a currently-locked RECOVERY item,
+// or a verifier mismatch -- comes back as the single errInvalidRecoveryAttempt
+// sentinel; only a genuine infrastructure error is returned distinctly, for
+// a 500 rather than a 401 at the HTTP layer. A locked RECOVERY item is
+// deliberately indistinguishable from a wrong code in the response, for the
+// same enumeration-resistance reason as every other case here: a
+// distinguishable "locked" response would be a new oracle this endpoint
+// doesn't otherwise grant.
 //
-// Deliberately does not consult or update LockUntil/FailedVerifyCount --
-// PR #118 round 2 review. That counter is scoped to /auth/challenge's
-// signature failures (DESIGN.md:193, "bounding credential stuffing" at
-// step 4 of login), and reusing it here would corrupt its meaning: a wrong
-// recovery code is not the failure it counts. This is a design gap, not a
-// contradiction of one -- DESIGN.md:206 is explicit the lock is step-4
-// only -- but it means the recovery code (THREAT_MODEL.md: "equivalent to
-// the password, not a lesser factor") has no application-side bound on
-// guessing, unlike the password, which never reaches the server to be
-// guessed against at all. terraform/waf.tf's rate-limit-auth rule is the
-// only bound in front of this path, and it's IP-keyed, not account-keyed
-// -- see that rule's own comment for why that doesn't close a distributed
-// attempt against one account. Left as a design gap for #33 rather than
-// fixed here: a full-entropy 26-character code (DESIGN.md: 128 bits of
-// CSPRNG output) is not a practical target for either gap alone today.
+// Consults and updates RECOVERY's own FailedVerifyCount/LockUntil (issue
+// #136) -- deliberately NOT User.FailedVerifyCount/LockUntil, the counter
+// PR #118 round 2 review scoped to /auth/challenge's step-4 signature
+// failures (DESIGN.md:193, "bounding credential stuffing"). Reusing that
+// counter here would corrupt its meaning (a wrong recovery code is not the
+// failure it counts) and would let a recovery-guessing attacker lock a
+// user out of logging in, a worse outcome than intended. Before #136, this
+// path had no application-side bound on guessing at all -- the recovery
+// code (THREAT_MODEL.md: "equivalent to the password, not a lesser factor")
+// was the one credential that never reached any counter, unlike the
+// password, which never reaches the server to be guessed against in the
+// first place. terraform/waf.tf's rate-limit-auth rule remains the only
+// bound in front of this path that's keyed by anything other than the
+// account itself, and it's IP-keyed -- see that rule's own comment for why
+// that doesn't close a distributed attempt against one account; #136's
+// counter is what closes the account-keyed half.
+//
+// A lost-response retry of recoveryCodeReset (issue #130) necessarily
+// re-presents the same, now-superseded code and so always fails the
+// verifier check below and counts as one failed attempt here, before
+// recoveryCodeReset's own IsOwnRewrap fallback ever runs -- a deliberate
+// choice (issue #136) over threading retry-awareness into this shared,
+// security-sensitive check. Enough retries (recoveryLockThreshold-many) DO
+// lock the (new, post-reset) RECOVERY item, same as any other run of failures would --
+// but that's harmless to #130 specifically, because the LockUntil check
+// above and the IsOwnRewrap fallback below are independent of each other:
+// this function returns errInvalidRecoveryAttempt whether the failure was an
+// ordinary wrong code or a lock, and recoveryCodeReset takes the fallback on
+// that error either way, never short-circuiting on "locked" before checking
+// it. A retry is therefore never rejected because of this lockout -- it can
+// only ever also (harmlessly) trip it. See
+// TestRecoveryResetRetrySucceedsWhileLocked. Round 1 review.
 func (h *Handler) resolveRecovery(ctx context.Context, usernameLower, code string) (userID string, recovery *models.Recovery, err error) {
 	user, err := h.db.LookupUserByUsername(ctx, usernameLower)
 	if err != nil {
@@ -99,12 +142,35 @@ func (h *Handler) resolveRecovery(ctx context.Context, usernameLower, code strin
 		return "", nil, err
 	}
 
+	if rec.LockUntil != "" {
+		if lockedUntil, err := time.Parse(time.RFC3339, rec.LockUntil); err == nil && time.Now().Before(lockedUntil) {
+			// Locked: rejected without attempting the verifier check, same
+			// shape as login.go's verify -- "the lock is enforced at step 4
+			// only" there, this is the equivalent enforcement point here.
+			// Does not touch FailedVerifyCount either direction.
+			return "", nil, errInvalidRecoveryAttempt
+		}
+		// A parse failure or an expired lock both fall through to the
+		// verifier check -- same reasoning as login.go's verify: a corrupt
+		// LockUntil must not itself become a denial-of-service, and an
+		// expired lock is simply no longer locked (RecordFailedRecoveryVerify
+		// overwrites LockUntil on the next failure rather than clearing it
+		// on expiry, since nothing reads it again until this check does).
+	}
+
 	if !crypto.CheckRecoveryVerifier(code, rec.VerifierSalt, crypto.Argon2IDParams{
 		MemoryKiB:   rec.VerifierArgon2Params.MemoryKiB,
 		Iterations:  rec.VerifierArgon2Params.Iterations,
 		Parallelism: rec.VerifierArgon2Params.Parallelism,
 	}, rec.Verifier) {
+		if recErr := h.db.RecordFailedRecoveryVerify(ctx, uid, recoveryLockThreshold, recoveryLockDuration); recErr != nil {
+			return "", nil, recErr
+		}
 		return "", nil, errInvalidRecoveryAttempt
+	}
+
+	if err := h.db.ClearFailedRecoveryVerify(ctx, uid); err != nil {
+		return "", nil, err
 	}
 
 	return uid, rec, nil

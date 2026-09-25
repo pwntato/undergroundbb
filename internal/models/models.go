@@ -180,6 +180,19 @@ type Recovery struct {
 	// original request itself would have produced -- see db.IsOwnRewrap's
 	// own doc comment for the full check. Issue #130.
 	LastRewrapToken []byte `dynamodbav:"LastRewrapToken,omitempty"`
+
+	// FailedVerifyCount and LockUntil are this item's own lockout pair,
+	// deliberately separate from User's fields of the same name -- see
+	// resolveRecovery's doc comment (internal/handlers/recovery.go) for why
+	// a wrong recovery code must never touch the login lockout: reusing that
+	// counter would let a recovery-guessing attacker lock a user out of
+	// logging in, and would corrupt a counter DESIGN.md scopes to step-4
+	// signature failures specifically. Same shape and semantics as User's
+	// pair (rolling window via LockUntil-as-window-marker, RFC 3339 compared
+	// on read, not a TTL) but counts failed verifier checks in
+	// resolveRecovery instead. Issue #136.
+	FailedVerifyCount int64  `dynamodbav:"FailedVerifyCount,omitempty"`
+	LockUntil         string `dynamodbav:"LockUntil,omitempty"`
 }
 
 // Challenge is the USER#<uuid> / CHALLENGE item -- a single slot per user,

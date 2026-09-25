@@ -157,6 +157,134 @@ func TestRecoveryReleaseWrongCodeFails(t *testing.T) {
 	}
 }
 
+// TestRecoveryLockoutAfterThreshold covers issue #136: resolveRecovery's own
+// account-level guard on recovery-code guessing, mirroring
+// TestLockoutAfterFiveFailures in login_test.go -- recovery uses its own,
+// much looser recoveryLockThreshold/recoveryLockDuration rather than
+// login's five-attempts-in-five-minutes (round 2 review: at 128 bits, a
+// tight lock buys the code no real brute-force resistance it doesn't
+// already have, but does add a griefing vector against a known username).
+// Unlike login, a locked RECOVERY item does NOT get a distinguishable
+// status -- resolveRecovery returns the same errInvalidRecoveryAttempt/401
+// uniform response as a wrong code, deliberately (see resolveRecovery's own
+// doc comment on why a distinguishable "locked" response would be a new
+// oracle). So this pins the externally-observable behavior: after
+// recoveryLockThreshold wrong-code attempts, even the CORRECT code is
+// rejected with the same uniform error, until the lock would expire.
+func TestRecoveryLockoutAfterThreshold(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+
+	for i := range recoveryLockThreshold {
+		rec := doRecoveryRelease(t, h, recoveryReleaseRequest{
+			Username:     fixture.username,
+			RecoveryCode: "WRONGCODE-0000-0000-0000-000000",
+		})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: status = %d, want %d, body: %s", i+1, rec.Code, http.StatusUnauthorized, rec.Body.String())
+		}
+	}
+
+	// Now present the REAL code -- must still be rejected as locked, exactly
+	// like a wrong code, even though it would otherwise succeed.
+	rec := doRecoveryRelease(t, h, recoveryReleaseRequest{
+		Username:     fixture.username,
+		RecoveryCode: fixture.recoveryCode,
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("locked-account release status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	if body["error"] != errRecoveryCodeInvalid {
+		t.Errorf("error = %q, want %q (uniform, no lockout-specific message)", body["error"], errRecoveryCodeInvalid)
+	}
+}
+
+// TestRecoveryLockoutDoesNotAffectLogin confirms RECOVERY's lockout is
+// independent of login's -- the entire reason #136 added a separate counter
+// (see resolveRecovery's doc comment) rather than reusing
+// User.FailedVerifyCount/LockUntil. Asserts on PROFILE directly rather than
+// going through /auth/challenge: that endpoint never consults LockUntil at
+// all (the lock is enforced at verify, step 4, only -- DESIGN.md, "the lock
+// is enforced at step 4 only"), so a challenge call can't actually detect a
+// regression that routes recovery failures into User's counter instead of
+// RECOVERY's -- round 1 review, caught by mutating resolveRecovery to call
+// RecordFailedVerify and finding this test still passed.
+func TestRecoveryLockoutDoesNotAffectLogin(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+
+	for range recoveryLockThreshold {
+		doRecoveryRelease(t, h, recoveryReleaseRequest{
+			Username:     fixture.username,
+			RecoveryCode: "WRONGCODE-0000-0000-0000-000000",
+		})
+	}
+
+	user, err := h.db.LookupUserByUsername(context.Background(), fixture.username)
+	if err != nil {
+		t.Fatalf("LookupUserByUsername: %v", err)
+	}
+	if user.FailedVerifyCount != 0 {
+		t.Errorf("User.FailedVerifyCount = %d, want 0 -- recovery failures must not touch the login counter", user.FailedVerifyCount)
+	}
+	if user.LockUntil != "" {
+		t.Errorf("User.LockUntil = %q, want empty -- recovery failures must never lock login", user.LockUntil)
+	}
+}
+
+// TestRecoveryReleaseSuccessClearsLockoutCounter confirms a successful
+// release resets RECOVERY's FailedVerifyCount/LockUntil (issue #136,
+// mirroring login's ClearFailedVerify-on-success), so a legitimate user who
+// mistyped their code a few times before getting it right isn't left with a
+// partially-spent guessing budget indefinitely.
+func TestRecoveryReleaseSuccessClearsLockoutCounter(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+
+	for i := 0; i < recoveryLockThreshold-1; i++ {
+		rec := doRecoveryRelease(t, h, recoveryReleaseRequest{
+			Username:     fixture.username,
+			RecoveryCode: "WRONGCODE-0000-0000-0000-000000",
+		})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: status = %d, want %d", i+1, rec.Code, http.StatusUnauthorized)
+		}
+	}
+
+	// One below threshold, then a real success -- must succeed (not yet
+	// locked) and must clear the counter rather than leaving it primed.
+	success := doRecoveryRelease(t, h, recoveryReleaseRequest{
+		Username:     fixture.username,
+		RecoveryCode: fixture.recoveryCode,
+	})
+	if success.Code != http.StatusOK {
+		t.Fatalf("success status = %d, want %d, body: %s", success.Code, http.StatusOK, success.Body.String())
+	}
+
+	// Confirm the counter actually reset: it should now take a fresh
+	// recoveryLockThreshold-many failures to lock, not just one more.
+	for i := range recoveryLockThreshold - 1 {
+		rec := doRecoveryRelease(t, h, recoveryReleaseRequest{
+			Username:     fixture.username,
+			RecoveryCode: "WRONGCODE-0000-0000-0000-000000",
+		})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("post-clear failure %d: status = %d, want %d", i+1, rec.Code, http.StatusUnauthorized)
+		}
+	}
+	stillGood := doRecoveryRelease(t, h, recoveryReleaseRequest{
+		Username:     fixture.username,
+		RecoveryCode: fixture.recoveryCode,
+	})
+	if stillGood.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (counter should have been cleared by the earlier success, not still primed toward a lock)", stillGood.Code, http.StatusOK)
+	}
+}
+
 // TestRecoveryReleaseUnknownUsernameSameError confirms an unknown username
 // gets the exact same response as a wrong code for a real one -- see
 // errRecoveryCodeInvalid's own doc comment on why the two must be
@@ -497,6 +625,64 @@ func TestRecoveryResetRetryWithTokenSucceeds(t *testing.T) {
 	}
 	if rec.CredentialVersion != 2 {
 		t.Errorf("RECOVERY CredentialVersion = %d, want 2 (retry must not re-run the write)", rec.CredentialVersion)
+	}
+}
+
+// TestRecoveryResetRetrySucceedsWhileLocked pins issue #136's round 1 review
+// finding: enough #130 retries DO trip the new (post-reset) RECOVERY item's
+// own lockout -- each retry necessarily fails resolveRecovery's verifier
+// check first, same as any wrong code would -- but that lockout never blocks
+// the retry itself. recoveryCodeReset's IsOwnRewrap fallback is reached on
+// every errInvalidRecoveryAttempt, including the locked case, since
+// resolveRecovery collapses both into the same uniform error and
+// recoveryCodeReset never short-circuits on "locked" before checking the
+// fallback. So retries keep succeeding even once they've locked the item
+// they're retrying against -- see resolveRecovery's own doc comment for why
+// that's safe rather than a bypass (the fallback only replays a success for
+// an exact token+version+material match and writes nothing new).
+func TestRecoveryResetRetrySucceedsWhileLocked(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	fixture := registerWithRecoveryCode(t, h)
+	token := testIdempotencyToken(0xCD)
+	fields := validCredentialRewrapFields()
+
+	first := doRecoveryReset(t, h, recoveryResetRequest{
+		Username:                  fixture.username,
+		RecoveryCode:              fixture.recoveryCode,
+		ExpectedCredentialVersion: 1,
+		IdempotencyToken:          token,
+		credentialRewrapFields:    fields,
+	})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first reset status = %d, want %d, body: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+
+	// More retries than recoveryLockThreshold -- enough that the new
+	// RECOVERY item's own lockout counter should trip partway through. Every
+	// one of them must still succeed: the retry fallback doesn't care
+	// whether resolveRecovery failed because the code is merely stale or
+	// because the item is locked.
+	for i := 0; i < recoveryLockThreshold+2; i++ {
+		retry := doRecoveryReset(t, h, recoveryResetRequest{
+			Username:                  fixture.username,
+			RecoveryCode:              fixture.recoveryCode,
+			ExpectedCredentialVersion: 1,
+			IdempotencyToken:          token,
+			credentialRewrapFields:    fields,
+		})
+		if retry.Code != http.StatusOK {
+			t.Fatalf("retry %d status = %d, want %d (idempotent success even once locked), body: %s", i+1, retry.Code, http.StatusOK, retry.Body.String())
+		}
+	}
+
+	// Confirm the item really did lock along the way -- otherwise this test
+	// wouldn't actually be exercising the interaction it claims to.
+	rec, err := h.db.GetRecovery(context.Background(), fixture.userID)
+	if err != nil {
+		t.Fatalf("GetRecovery: %v", err)
+	}
+	if rec.LockUntil == "" {
+		t.Error("RECOVERY LockUntil is empty after more than recoveryLockThreshold retries -- test setup didn't actually trip the lockout, so it isn't testing the intended interaction")
 	}
 }
 

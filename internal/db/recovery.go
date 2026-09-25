@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -42,4 +43,42 @@ func (c *Client) GetRecovery(ctx context.Context, userID string) (*models.Recove
 		return nil, fmt.Errorf("db: unmarshal recovery: %w", err)
 	}
 	return &recovery, nil
+}
+
+// RecordFailedRecoveryVerify increments userID's RECOVERY item's
+// FailedVerifyCount and, if this failure is the lockThreshold-th within the
+// counting window, sets its LockUntil. Issue #136 -- the recovery-code twin
+// of login.go's RecordFailedVerify, counting failed recovery-verifier checks
+// (resolveRecovery, internal/handlers/recovery.go) against the RECOVERY
+// item instead of failed login signatures against PROFILE. The rolling-
+// window logic itself is shared (recordFailedVerify in login.go); see that
+// function's own doc comment for the full reasoning.
+//
+// Deliberately a distinct counter from User.FailedVerifyCount/LockUntil --
+// see resolveRecovery's own doc comment for why the two must never share
+// state.
+func (c *Client) RecordFailedRecoveryVerify(ctx context.Context, userID string, lockThreshold int64, lockDuration time.Duration) error {
+	if err := c.recordFailedVerify(ctx, userID, "RECOVERY", lockThreshold, lockDuration); err != nil {
+		return fmt.Errorf("db: record failed recovery verify: %w", err)
+	}
+	return nil
+}
+
+// ClearFailedRecoveryVerify resets userID's RECOVERY item's
+// FailedVerifyCount and LockUntil after a successful recovery-verifier
+// check. Issue #136 -- the recovery-code twin of login.go's
+// ClearFailedVerify.
+func (c *Client) ClearFailedRecoveryVerify(ctx context.Context, userID string) error {
+	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "RECOVERY"},
+		},
+		UpdateExpression: aws.String("REMOVE FailedVerifyCount, LockUntil"),
+	})
+	if err != nil {
+		return fmt.Errorf("db: clear failed recovery verify: %w", err)
+	}
+	return nil
 }
