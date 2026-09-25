@@ -37,6 +37,13 @@ func initHandler(ctx context.Context) {
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
+	// db.New cannot fail for a wrong table name or missing IAM permissions --
+	// it only resolves configuration, it never contacts AWS. Ping actually
+	// calls DynamoDB, so a bad deployment fails cold start here instead of
+	// reporting healthy and 500ing on the first real request. See #86.
+	if err := dbClient.Ping(ctx); err != nil {
+		log.Fatalf("db: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	handlers.New(cfg, dbClient).RegisterRoutes(mux)
