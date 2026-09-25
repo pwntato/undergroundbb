@@ -1,36 +1,56 @@
 // #33's signup flow: username/password -> key generation with progress ->
 // recovery code (RecoveryCodeStep enforces its own "must not be skimmed"
-// requirement) -> theme picker, skippable -> done.
+// requirement) -> theme picker, skippable -> done. The actual work
+// (register -> login) is runSignup.ts, a plain function pulled out for the
+// same reason runRecovery.ts and runChangePassword.ts were: it can be unit
+// tested against real ApiError instances without jsdom or a real worker.
 //
-// The user uuid is generated here, before the worker call, per #123: the
-// credential-wrap AAD binds it, so it must exist before wrapping, and
-// register() sends it back to the server as-is rather than receiving one.
+// The user uuid is generated in runSignup, before the worker call, per
+// #123: the credential-wrap AAD binds it, so it must exist before wrapping,
+// and register() sends it back to the server as-is rather than receiving
+// one.
 //
 // register() only creates the account -- it does not establish a session.
 // Only POST /api/auth/verify sets the session cookie
 // (internal/handlers/login.go:279 is the only SetCookie in internal/), so
-// signup runs a full login (challenge -> worker unwrap/sign -> verify)
-// immediately after register succeeds, using the same password still held
-// in this closure. session.login() is only called once verify actually
-// succeeds -- never on register's response alone, which would put the UI
-// in a logged-in state with no session behind it.
+// runSignup runs a full login (challenge -> worker unwrap/sign -> verify)
+// immediately after register succeeds, using the same password. session's
+// onLogin dep is only called once verify actually succeeds -- never on
+// register's response alone, which would put the UI in a logged-in state
+// with no session behind it.
 //
-// register() and the post-register login are two SEPARATE try blocks, not
-// one -- this is load-bearing, not stylistic. Once register() resolves, the
-// account exists server-side with a real recovery code that will never be
-// shown again if anything after this point throws it away (round-2 review:
-// realistic causes include the WAF's 30 req/5min /api/auth/* rule -- signup
-// already spends 3 of those, login spends a 4th -- a 64 MiB Argon2id OOM on
-// a low-memory phone, the exact case worker-client.ts's error/messageerror
-// handling plans for, or ordinary network flakiness between requests). So a
-// failure in challenge/completeLogin/verify must still reach the
-// recoveryCode step with the material register() already produced, never
-// discard it and bounce back to the credentials form (which would also
-// re-submit a now-taken username and 409). If login fails, the user still
-// proceeds through recoveryCode and theme, then lands on /login instead of
-// Home with a note that their account exists and they should log in --
-// they can always retry login themselves with the password they just
-// chose, but nobody can ever retry showing them the code.
+// register() and the post-register login are two SEPARATE try blocks
+// inside runSignup, not one -- this is load-bearing, not stylistic. Once
+// register() resolves, the account exists server-side with a real recovery
+// code that will never be shown again if anything after this point throws
+// it away (round-2 review: realistic causes include the WAF's 30 req/5min
+// /api/auth/* rule -- signup already spends 3 of those, login spends a
+// 4th -- a 64 MiB Argon2id OOM on a low-memory phone, the exact case
+// worker-client.ts's error/messageerror handling plans for, or ordinary
+// network flakiness between requests). So a failure in
+// challenge/completeLogin/verify must still reach the recoveryCode step
+// with the material register() already produced, never discard it and
+// bounce back to the credentials form (which would also re-submit a
+// now-taken username and 409). If login fails, the user still proceeds
+// through recoveryCode and theme, then lands on /login instead of Home with
+// a note that their account exists and they should log in -- they can
+// always retry login themselves with the password they just chose, but
+// nobody can ever retry showing them the code.
+//
+// pendingSignup (issue #124) holds the full identity AND SignupMaterial from
+// an ambiguous register() failure (network error or 5xx -- runSignup's own
+// isDefinitelyUncommitted) so that if the SAME username AND password are
+// resubmitted, the retry resends the exact same request rather than
+// generating a fresh UserID and material. Resending it unchanged is what
+// lets internal/db/register.go's own #124 fix recognize the retry as this
+// caller's own earlier, possibly-already-committed write instead of a
+// genuine username conflict -- see runSignup.ts's own header comment (PR
+// #133 round 1) for why "exact," not just "same username," is load-bearing:
+// regenerating even a single field defeats the point, since the server
+// would then be confirming credentials that were never actually stored. A
+// different username, or the same username with a different password, is
+// treated as a new signup attempt, not a retry -- pendingSignup is only
+// consulted (by runSignup itself) when both match exactly.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -43,6 +63,7 @@ import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { SignupCredentialsStep } from './SignupCredentialsStep'
 import { SignupProgressStep } from './SignupProgressStep'
 import { ThemePickerStep } from './ThemePickerStep'
+import { runSignup, type PendingSignup } from './runSignup'
 
 type Step =
   | { readonly name: 'credentials' }
@@ -55,6 +76,19 @@ export function SignupScreen() {
   const [step, setStep] = useState<Step>({ name: 'credentials' })
   const [progress, setProgress] = useState<SignupProgressEvent | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // See this file's own header comment on #124: only ever set from an
+  // ambiguous register() failure, and only ever consulted (by runSignup
+  // itself, which re-checks both username AND password -- see its own
+  // header comment on PR #133 round 1) when the next submission matches it
+  // exactly. It holds a plaintext password and a not-yet-shown recovery
+  // code -- review non-blocking finding #4 asked that this be cleared on
+  // unmount, but that's a no-op in React: unmounting discards the
+  // component's state (this included) regardless of what a cleanup
+  // function does, since there is no later render for a stale setState to
+  // reach. Its actual lifetime is already bounded to this component
+  // existing at all -- there is no route away from /signup that leaves
+  // SignupScreen mounted with this state still reachable.
+  const [pendingSignup, setPendingSignup] = useState<PendingSignup | null>(null)
   const session = useSession()
   const navigate = useNavigate()
 
@@ -85,71 +119,55 @@ export function SignupScreen() {
     setStep({ name: 'generating' })
     setProgress(null)
 
+    // See this file's own header comment on #124: hand pendingSignup to
+    // runSignup as a CANDIDATE resume only when the username matches;
+    // runSignup itself makes the final call, additionally checking the
+    // password (see its own header comment) before actually reusing it.
+    const resume = pendingSignup?.username === username ? pendingSignup : undefined
+
     void (async () => {
-      let material: SignupMaterial
-      try {
-        const userId = generateUserID()
-        material = await generateSignupMaterial(password, userId, (event) => {
-          setProgress(event)
-        })
-        await register({
-          username,
-          userId,
-          signingPublicKey: material.signingPublicKey,
-          wrappingPublicKey: material.wrappingPublicKey,
-          salt: material.salt,
-          argon2Params: material.argon2Params,
-          wrappedPrivateKeys: material.wrappedPrivateKeys,
-          recoverySalt: material.recoverySalt,
-          recoveryArgon2Params: material.recoveryArgon2Params,
-          recoveryWrappedPrivateKeys: material.recoveryWrappedPrivateKeys,
-          recoveryVerifierSalt: material.recoveryVerifierSalt,
-          recoveryVerifierParams: material.recoveryVerifierParams,
-          recoveryVerifier: material.recoveryVerifier,
-        })
-      } catch (err) {
-        // register() itself failed -- no account exists, nothing to
-        // preserve, safe to bounce back to the credentials form exactly
-        // like before. (Unless the response was merely lost after the
-        // write committed -- see #124. That's a distinct, narrower bug:
-        // this catch still can't tell that case apart from a real 4xx.)
+      const result = await runSignup(
+        {
+          generateUserID,
+          generateSignupMaterial,
+          register,
+          challenge,
+          completeLogin,
+          verify,
+          onProgress: (event) => {
+            setProgress(event)
+          },
+          onRegistered: (material) => {
+            setStep({ name: 'loggingIn', material })
+          },
+          onLogin: (userId) => {
+            session.login(userId)
+          },
+        },
+        username,
+        password,
+        resume,
+      )
+
+      if (!result.ok) {
+        // See runSignup's own isDefinitelyUncommitted for the distinction:
+        // a definite 4xx means nothing committed and there's no identity
+        // worth preserving (a real conflict resending it would just
+        // collide again); an ambiguous failure means register()'s write
+        // may have landed, so the full identity + material runSignup
+        // returned are kept, to resend unchanged on a matching retry.
+        setPendingSignup(result.kind === 'ambiguous' ? (result.resume ?? null) : null)
         setError(
-          err instanceof ApiError && err.status !== 403
-            ? err.message
+          result.error instanceof ApiError && result.error.status !== 403
+            ? result.error.message
             : 'Could not create your account. Try again.',
         )
         setStep({ name: 'credentials' })
         return
       }
 
-      // The account now exists server-side. Everything from here on is a
-      // SEPARATE try: whatever happens, the user must still reach
-      // recoveryCode with this material -- see this file's own header
-      // comment.
-      setStep({ name: 'loggingIn', material })
-      let loggedIn = false
-      try {
-        const ch = await challenge(username)
-        const signature = await completeLogin({
-          password,
-          salt: ch.salt,
-          argon2Params: ch.argon2Params,
-          wrappedPrivateKeys: ch.wrappedPrivateKeys,
-          userId: ch.userId,
-          nonce: ch.nonce,
-        })
-        const result = await verify(username, ch.nonce, signature)
-        session.login(result.userId)
-        loggedIn = true
-      } catch {
-        // Login failed after the account was already created -- the user
-        // can always retry logging in themselves afterward with the
-        // password they just chose. What must not happen is losing the
-        // recovery code over this, so loggedIn stays false and the flow
-        // continues exactly as it would have on success.
-      }
-
-      setStep({ name: 'recoveryCode', material, loggedIn })
+      setPendingSignup(null)
+      setStep({ name: 'recoveryCode', material: result.material, loggedIn: result.loggedIn })
     })()
   }
 

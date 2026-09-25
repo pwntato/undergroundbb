@@ -315,3 +315,143 @@ func TestRegisterUserIDTakenConcurrent(t *testing.T) {
 		t.Errorf("PROFILE Username = %q, want winner's %q", got.Username, winner.Username)
 	}
 }
+
+// TestRegisterRetryAfterLostResponseSucceeds is issue #124: a client that
+// registered successfully but never saw the response (timeout, cold Lambda
+// path, flaky mobile connection) naturally retries with the identical
+// registerRequest -- same UserID, same username. Both the PROFILE and CLAIM
+// conditions fail on that retry, exactly as they would for a genuine
+// conflict, but this must resolve as success rather than ErrUsernameTaken:
+// the caller is being told someone else took a username they themselves
+// just registered.
+func TestRegisterRetryAfterLostResponseSucceeds(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	in := testRegisterInput("test-register-retry-"+randomSuffix(t), "retry-"+randomSuffix(t))
+	if err := c.Register(ctx, in); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	// The identical request, resent -- not a copy with a new UserID, the
+	// exact same RegisterInput a real client-side retry would resend.
+	if err := c.Register(ctx, in); err != nil {
+		t.Fatalf("retry Register: %v, want nil (idempotent success)", err)
+	}
+
+	// The original PROFILE must be untouched -- a retry succeeding must not
+	// have re-run the transaction and silently overwritten anything.
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+in.UserID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if user.Item == nil {
+		t.Fatal("PROFILE item missing after retry")
+	}
+	var got models.User
+	if err := unmarshalItem(user.Item, &got); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if got.Username != in.Username {
+		t.Errorf("PROFILE Username = %q, want %q (unchanged by retry)", got.Username, in.Username)
+	}
+}
+
+// TestRegisterMismatchedRetryStillFails covers the other shape that can
+// produce a double conditional failure: a request whose PROFILE already
+// exists under its UserID (from some earlier registration) but whose
+// username belongs to a *different* account's claim. This is not the
+// caller's own earlier write -- issue #124's fix must not treat every
+// double failure as a retry, only ones where the claim actually points back
+// at the same UserID making the request.
+func TestRegisterMismatchedRetryStillFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	// Two real, distinct accounts already registered.
+	first := testRegisterInput("test-register-mismatch-a-"+randomSuffix(t), "mismatch-a-"+randomSuffix(t))
+	if err := c.Register(ctx, first); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	second := testRegisterInput("test-register-mismatch-b-"+randomSuffix(t), "mismatch-b-"+randomSuffix(t))
+	if err := c.Register(ctx, second); err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+
+	// A third attempt claims to be `first`'s UserID (so the PROFILE
+	// condition fails) but under `second`'s already-claimed username (so
+	// the CLAIM condition fails too) -- a double failure, but the claim it
+	// collides with does not point at this UserID, so it must not be
+	// mistaken for first's own retry.
+	mismatched := testRegisterInput(first.UserID, second.Username)
+	err := c.Register(ctx, mismatched)
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("mismatched Register error = %v, want ErrUsernameTaken", err)
+	}
+
+	// Neither original account's PROFILE may have been disturbed.
+	firstUser, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+first.UserID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	var gotFirst models.User
+	if err := unmarshalItem(firstUser.Item, &gotFirst); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if gotFirst.Username != first.Username {
+		t.Errorf("first's PROFILE Username = %q, want %q (unchanged)", gotFirst.Username, first.Username)
+	}
+}
+
+// TestRegisterRetryWithDifferentKeyMaterialStillFails is PR #133 round 1's
+// finding: matching UserID and username alone is not enough to treat a
+// double-failure as a safe retry. A resend that regenerated its key
+// material (whether from a client bug, or a client that never should have
+// resent in the first place) must NOT be told "success" -- the server would
+// be lying, since nothing about the newly regenerated keys was actually
+// written; the account is still wrapped under the FIRST attempt's material.
+// This must surface as ErrUsernameTaken, loudly, rather than a silent 201
+// the caller would wrongly trust.
+func TestRegisterRetryWithDifferentKeyMaterialStillFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	username := "keymismatch-" + randomSuffix(t)
+	userID := "test-register-keymismatch-" + randomSuffix(t)
+
+	first := testRegisterInput(userID, username)
+	if err := c.Register(ctx, first); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	// Same UserID, same username -- but different wrapped key material,
+	// exactly what a client that regenerated between attempts would send.
+	retry := testRegisterInput(userID, username)
+	retry.WrappedPrivateKeys = models.WrappedBlob{
+		Nonce:      make([]byte, 12),
+		Ciphertext: []byte("different-ciphertext-entirely"),
+	}
+	err := c.Register(ctx, retry)
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("retry with different key material error = %v, want ErrUsernameTaken", err)
+	}
+
+	// The original PROFILE's key material must be exactly what the FIRST
+	// attempt wrote -- the rejected retry must not have overwritten it, and
+	// nothing about the retry's own (different) material may have landed.
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+userID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if user.Item == nil {
+		t.Fatal("PROFILE item missing")
+	}
+	var got models.User
+	if err := unmarshalItem(user.Item, &got); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	if string(got.WrappedPrivateKeys.Ciphertext) != string(first.WrappedPrivateKeys.Ciphertext) {
+		t.Errorf("PROFILE WrappedPrivateKeys.Ciphertext = %q, want first attempt's %q (unchanged)",
+			got.WrappedPrivateKeys.Ciphertext, first.WrappedPrivateKeys.Ciphertext)
+	}
+}

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -169,15 +170,130 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		},
 	})
 	if err != nil {
-		if isConditionalCheckFailure(err, claimItemIndex) {
+		claimFailed := isConditionalCheckFailure(err, claimItemIndex)
+		userFailed := isConditionalCheckFailure(err, userItemIndex)
+		if claimFailed && userFailed {
+			// Both conditions failing together is exactly the shape a lost
+			// response produces: the first call committed, the response
+			// never reached the client, and the client's retry resends the
+			// identical registerRequest -- same UserID, same username. See
+			// issue #124: before this check, that retry was told "username
+			// is taken" for the account it just created, because the claim
+			// index was always checked first regardless of what else failed.
+			//
+			// A consistent read (not the eventually-consistent default) is
+			// required here -- this runs microseconds after the losing
+			// transaction, and a stale read could still see the claim as
+			// absent or, worse, see a prior winner's UserID from a version
+			// before this one, whichever committed most recently but hasn't
+			// propagated.
+			//
+			// Matching UserID alone is NOT enough (PR #133 round 1 review):
+			// it only proves this caller registered *a* PROFILE at this
+			// UserID before, not that it was created with THIS request's key
+			// material. A client that regenerated its keys between attempts
+			// (a real client bug, but this package can't assume it never
+			// happens) would otherwise get back a silent "success" for a
+			// write that never actually happened, while the OLD, different
+			// keys stay live server-side -- worse than the 409 this issue
+			// set out to fix, since the caller has no way to know its new
+			// keys were never stored. isOwnRegistration additionally checks
+			// the stored PROFILE's own key material against in, so a
+			// non-identical resend fails loudly with ErrUsernameTaken
+			// instead of succeeding silently.
+			isRetry, checkErr := c.isOwnRegistration(ctx, in)
+			if checkErr != nil {
+				return checkErr
+			}
+			if isRetry {
+				return nil
+			}
 			return ErrUsernameTaken
 		}
-		if isConditionalCheckFailure(err, userItemIndex) {
+		if claimFailed {
+			return ErrUsernameTaken
+		}
+		if userFailed {
 			return ErrUserIDTaken
 		}
 		return err
 	}
 	return nil
+}
+
+// isOwnRegistration reports whether a registration attempt that lost both
+// the PROFILE and CLAIM conditions is actually in.UserID's own earlier,
+// successful call being resent -- not a genuine conflict with a different
+// account, and not a resend whose key material has since diverged from what
+// was actually stored (see this function's own two checks below, and
+// Register's call site for why both are needed: PR #133 round 1 review
+// found that matching UserID alone is not a safe basis for returning
+// success, since it doesn't prove this request's material is what the
+// server actually has). See Register's own call site (issue #124) for why
+// this is only ever consulted when both the claim and the profile writes
+// fail together.
+func (c *Client) isOwnRegistration(ctx context.Context, in RegisterInput) (bool, error) {
+	claimOut, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USERNAME#" + in.UsernameLower},
+			"SK": &types.AttributeValueMemberS{Value: "CLAIM"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, err
+	}
+	if claimOut.Item == nil {
+		// The condition check just reported this claim exists; a strongly
+		// consistent read finding it gone a moment later would mean
+		// something this package's model doesn't support (claims are never
+		// deleted) -- treat it as "not a match" rather than assume retry.
+		return false, nil
+	}
+	var claim models.UsernameClaim
+	if err := attributevalue.UnmarshalMap(claimOut.Item, &claim); err != nil {
+		return false, err
+	}
+	if claim.UserID != in.UserID {
+		// The claimed username belongs to a different account entirely --
+		// a genuine conflict, not this caller's own write.
+		return false, nil
+	}
+
+	// The claim's UserID matches, but that alone only proves this caller
+	// registered *a* PROFILE at this UserID before -- not that it was
+	// created with the key material this specific request carries. Read the
+	// stored PROFILE and compare: only an exact match on the fields that
+	// differ between two otherwise-identical-looking registerRequests (a
+	// resend that regenerated its keys, whether by a client bug or by
+	// design, would fail this) is treated as the same request being
+	// resent.
+	profileOut, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + in.UserID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, err
+	}
+	if profileOut.Item == nil {
+		// The PROFILE condition just reported this item exists; missing a
+		// moment later on a consistent read would mean something this
+		// package's model doesn't support (PROFILE is never deleted).
+		return false, nil
+	}
+	var profile models.User
+	if err := attributevalue.UnmarshalMap(profileOut.Item, &profile); err != nil {
+		return false, err
+	}
+	return bytes.Equal(profile.SigningPublicKey, in.SigningPublicKey) &&
+		bytes.Equal(profile.WrappingPublicKey, in.WrappingPublicKey) &&
+		bytes.Equal(profile.WrappedPrivateKeys.Nonce, in.WrappedPrivateKeys.Nonce) &&
+		bytes.Equal(profile.WrappedPrivateKeys.Ciphertext, in.WrappedPrivateKeys.Ciphertext), nil
 }
 
 // isConditionalCheckFailure reports whether err is a TransactWriteItems

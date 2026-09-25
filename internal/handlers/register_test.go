@@ -444,3 +444,40 @@ func lowerASCII(s string) string {
 	}
 	return string(b)
 }
+
+// TestRegisterRetryAfterLostResponseSucceeds covers issue #124 end to end
+// through the handler: resending the exact same registerRequest (as a
+// client retrying after a lost response, not a new signup attempt, would)
+// must come back 201 with the same userId, not the 409 username_taken a
+// caller would otherwise be told about the account they themselves just
+// created. internal/db's own TestRegisterRetryAfterLostResponseSucceeds
+// covers the db-layer condition-check logic directly; this test covers that
+// the handler surfaces it as the same success response, not just a bare nil
+// error.
+func TestRegisterRetryAfterLostResponseSucceeds(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	req := validRegisterRequest(randomUsername(t))
+
+	first := doRegister(t, h, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first register status = %d, want %d, body: %s", first.Code, http.StatusCreated, first.Body.String())
+	}
+	var firstBody registerResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatalf("decoding first body: %v", err)
+	}
+
+	// The identical request, resent -- same UserID, same username, exactly
+	// what a client's retry after a lost response sends.
+	retry := doRegister(t, h, req)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("retry register status = %d, want %d, body: %s", retry.Code, http.StatusCreated, retry.Body.String())
+	}
+	var retryBody registerResponse
+	if err := json.Unmarshal(retry.Body.Bytes(), &retryBody); err != nil {
+		t.Fatalf("decoding retry body: %v", err)
+	}
+	if retryBody.UserID != firstBody.UserID {
+		t.Errorf("retry userId = %q, want %q (same account, not a new one)", retryBody.UserID, firstBody.UserID)
+	}
+}
