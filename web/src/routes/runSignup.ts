@@ -40,9 +40,14 @@
 // then correctly surfaces as a 409 rather than a silent, wrong "success".
 //
 // Only ambiguous failures (isDefinitelyUncommitted false: a network error or
-// 5xx) produce a `resume` at all. A clean 4xx (validation, WAF, or a
-// genuine username_taken/user_id_taken conflict) proves nothing committed,
-// so there is nothing to retry.
+// 5xx) produce a `resume` at all -- with one exception, issue #134: a clean
+// 4xx that is SPECIFICALLY a username_taken 409 matching a still-stale
+// `resume` also produces one, echoed back unchanged rather than built from
+// this call's own (unproven) attempt. Every other clean 4xx (validation,
+// WAF, closed registration, a userId conflict, or a username conflict with
+// no matching stale `resume`) still proves nothing committed, so there is
+// still nothing to retry. See the 'definitelyUncommitted' branch inside
+// runSignup below, and SignupResult's own doc comment, for the full case.
 
 import { ApiError } from '@/lib/api/auth'
 import type { ChallengeResponse, RegisterRequest, VerifyResponse } from '@/lib/api/auth'
@@ -296,11 +301,13 @@ export async function runSignup(
       // (its claim never committed, or someone else took the name since),
       // so echoing `resume` back here would tell the user to keep
       // resubmitting the exact password that keeps failing -- a loop with
-      // no way out short of changing the username or reloading. `resuming`
-      // itself already establishes username+password both matched `resume`
-      // exactly, so `resume.username === username` below is redundant in
-      // that branch but kept for clarity and because `!resuming` alone
-      // doesn't rule out a stale, non-matching `resume` for another user.
+      // no way out short of changing the username or reloading.
+      //
+      // Round 2 review: when `resuming` is false, `resume.username ===
+      // username` is what separates #134's same-username/different-password
+      // case from a stale `resume` for some other username entirely
+      // (SignupScreen filters on username before calling, but runSignup
+      // shouldn't depend on that invariant holding).
       const staleResumeApplies =
         !resuming &&
         err instanceof ApiError &&
