@@ -17,15 +17,13 @@ resource "aws_iam_role" "lambda" {
 }
 
 # Scoped to exactly the table this Lambda uses and its one GSI, per #6.
-# cmd/lambda's handlers don't yet call any DynamoDB operation (see
-# internal/handlers -- only GET /api/health is registered today), so this is
-# the full single-table read/write surface DESIGN.md's data model describes,
-# plus DescribeTable (#86: cmd/lambda's cold start pings the table to fail
-# fast on a wrong table name or missing grant, rather than reporting healthy
-# and 500ing on the first real request) -- not what's exercised for read/write
-# yet. No Scan: the single-table design's access patterns are all PK/SK or
-# GSI1 lookups: an unbounded Scan is never the right tool here, so it's
-# deliberately absent rather than granted "in case."
+# cmd/lambda's handlers use this read/write surface (the single-table data
+# model in DESIGN.md), plus DescribeTable: cmd/lambda's cold start pings the
+# table (#86) so a wrong table name or missing grant fails init instead of
+# reporting healthy and 500ing on the first real request. No Scan: the
+# single-table design's access patterns are all PK/SK or GSI1 lookups: an
+# unbounded Scan is never the right tool here, so it's deliberately absent
+# rather than granted "in case."
 data "aws_iam_policy_document" "lambda_policy" {
   statement {
     actions = [
