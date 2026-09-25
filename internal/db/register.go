@@ -169,15 +169,73 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		},
 	})
 	if err != nil {
-		if isConditionalCheckFailure(err, claimItemIndex) {
+		claimFailed := isConditionalCheckFailure(err, claimItemIndex)
+		userFailed := isConditionalCheckFailure(err, userItemIndex)
+		if claimFailed && userFailed {
+			// Both conditions failing together is exactly the shape a lost
+			// response produces: the first call committed, the response
+			// never reached the client, and the client's retry resends the
+			// identical registerRequest -- same UserID, same username. See
+			// issue #124: before this check, that retry was told "username
+			// is taken" for the account it just created, because the claim
+			// index was always checked first regardless of what else failed.
+			//
+			// A consistent read (not the eventually-consistent default) is
+			// required here -- this runs microseconds after the losing
+			// transaction, and a stale read could still see the claim as
+			// absent or, worse, see a prior winner's UserID from a version
+			// before this one, whichever committed most recently but hasn't
+			// propagated.
+			isRetry, checkErr := c.isOwnUsernameClaim(ctx, in.UsernameLower, in.UserID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if isRetry {
+				return nil
+			}
 			return ErrUsernameTaken
 		}
-		if isConditionalCheckFailure(err, userItemIndex) {
+		if claimFailed {
+			return ErrUsernameTaken
+		}
+		if userFailed {
 			return ErrUserIDTaken
 		}
 		return err
 	}
 	return nil
+}
+
+// isOwnUsernameClaim reports whether the USERNAME#<usernameLower> claim
+// already points at userID -- i.e. whether a failed registration attempt is
+// actually the caller's own earlier write being resent, not a genuine
+// conflict with someone else's account. See Register's own call site
+// (issue #124) for why this is only ever consulted when both the claim and
+// the profile writes fail together.
+func (c *Client) isOwnUsernameClaim(ctx context.Context, usernameLower, userID string) (bool, error) {
+	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USERNAME#" + usernameLower},
+			"SK": &types.AttributeValueMemberS{Value: "CLAIM"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return false, err
+	}
+	if out.Item == nil {
+		// The condition check just reported this claim exists; a strongly
+		// consistent read finding it gone a moment later would mean
+		// something this package's model doesn't support (claims are never
+		// deleted) -- treat it as "not a match" rather than assume retry.
+		return false, nil
+	}
+	var claim models.UsernameClaim
+	if err := attributevalue.UnmarshalMap(out.Item, &claim); err != nil {
+		return false, err
+	}
+	return claim.UserID == userID, nil
 }
 
 // isConditionalCheckFailure reports whether err is a TransactWriteItems
