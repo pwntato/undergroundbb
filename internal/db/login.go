@@ -176,9 +176,23 @@ func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []by
 // every single subsequent failure re-locked them for a full lockDuration,
 // indefinitely, reproduced live against DynamoDB Local. This is the fix.
 func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThreshold int64, lockDuration time.Duration) error {
+	if err := c.recordFailedVerify(ctx, userID, "PROFILE", lockThreshold, lockDuration); err != nil {
+		return fmt.Errorf("db: record failed verify: %w", err)
+	}
+	return nil
+}
+
+// recordFailedVerify is the rolling-window lockout logic itself, shared by
+// RecordFailedVerify (PROFILE, login's step-4 signature failures) and
+// RecordFailedRecoveryVerify (RECOVERY, resolveRecovery's verifier
+// mismatches, issue #136) -- identical in every respect except which item's
+// SK it targets. Kept as one implementation, parameterized on sk, rather
+// than two copies that could silently drift apart the way PR #117's bug
+// crept in -- issue #136 round 1 review nit.
+func (c *Client) recordFailedVerify(ctx context.Context, userID, sk string, lockThreshold int64, lockDuration time.Duration) error {
 	key := map[string]types.AttributeValue{
 		"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
-		"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		"SK": &types.AttributeValueMemberS{Value: sk},
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -203,7 +217,7 @@ func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThre
 		// budget at 1, well under lockThreshold (which is > 1 in every
 		// real configuration), so there's nothing further to do.
 		if uErr := attributevalue.UnmarshalMap(resetOut.Attributes, &updated); uErr != nil {
-			return fmt.Errorf("db: unmarshal reset failed-verify count: %w", uErr)
+			return fmt.Errorf("unmarshal reset failed-verify count: %w", uErr)
 		}
 		if updated.FailedVerifyCount < lockThreshold {
 			return nil
@@ -221,16 +235,16 @@ func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThre
 			ReturnValues: types.ReturnValueUpdatedNew,
 		})
 		if incErr != nil {
-			return fmt.Errorf("db: record failed verify: %w", incErr)
+			return fmt.Errorf("record failed verify: %w", incErr)
 		}
 		if uErr := attributevalue.UnmarshalMap(incOut.Attributes, &updated); uErr != nil {
-			return fmt.Errorf("db: unmarshal updated failed-verify count: %w", uErr)
+			return fmt.Errorf("unmarshal updated failed-verify count: %w", uErr)
 		}
 		if updated.FailedVerifyCount < lockThreshold {
 			return nil
 		}
 	default:
-		return fmt.Errorf("db: record failed verify: %w", err)
+		return fmt.Errorf("record failed verify: %w", err)
 	}
 
 	lockUntil := time.Now().Add(lockDuration).UTC().Format(time.RFC3339)
@@ -243,7 +257,7 @@ func (c *Client) RecordFailedVerify(ctx context.Context, userID string, lockThre
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("db: set lock until: %w", err)
+		return fmt.Errorf("set lock until: %w", err)
 	}
 	return nil
 }

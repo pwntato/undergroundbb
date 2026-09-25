@@ -23,6 +23,27 @@ import (
 // into Argon2id.
 const maxRecoveryCodeLen = 256
 
+// recoveryLockThreshold and recoveryLockDuration implement resolveRecovery's
+// own guessing-bound lockout (issue #136) -- deliberately NOT login's
+// lockThreshold/lockDuration (5 attempts / 5 minutes), even though the
+// rolling-window mechanism they parameterize is shared. Round 2 review of
+// #136 (and the issue's own "a deliberate call, not a default"): at 128 bits
+// of CSPRNG entropy (docs/DESIGN.md), a five-minute lock buys the code
+// itself essentially no brute-force resistance it doesn't already have --
+// unlike login's password, which the lock genuinely protects against
+// credential stuffing. What it does add is a real griefing vector: anyone
+// who knows a username can keep RECOVERY locked indefinitely at roughly 5
+// requests per 5 minutes, and the uniform response means the victim sees
+// only "invalid code," with no way to tell their code is fine and the
+// account is merely locked. A much looser window keeps the counter's real
+// value -- the observability and doc-accuracy #136 was about -- while
+// making that griefing path take meaningfully more sustained effort, at no
+// real security cost given the code's actual entropy.
+const (
+	recoveryLockThreshold = 20
+	recoveryLockDuration  = time.Hour
+)
+
 // errRecoveryCodeInvalid is the uniform response for every way a recovery
 // release/reset attempt can fail to authenticate: unknown username, wrong
 // code, or a user with no RECOVERY item at all. See docs/DESIGN.md's
@@ -88,8 +109,16 @@ var errInvalidRecoveryAttempt = errors.New("handlers: invalid username or recove
 // verifier check below and counts as one failed attempt here, before
 // recoveryCodeReset's own IsOwnRewrap fallback ever runs -- a deliberate
 // choice (issue #136) over threading retry-awareness into this shared,
-// security-sensitive check: a legitimate retry costs one of five attempts,
-// not a lockout by itself.
+// security-sensitive check. Enough retries (recoveryLockThreshold-many) DO
+// lock the (new, post-reset) RECOVERY item, same as any other run of failures would --
+// but that's harmless to #130 specifically, because the LockUntil check
+// above and the IsOwnRewrap fallback below are independent of each other:
+// this function returns errInvalidRecoveryAttempt whether the failure was an
+// ordinary wrong code or a lock, and recoveryCodeReset takes the fallback on
+// that error either way, never short-circuiting on "locked" before checking
+// it. A retry is therefore never rejected because of this lockout -- it can
+// only ever also (harmlessly) trip it. See
+// TestRecoveryResetRetrySucceedsWhileLocked. Round 1 review.
 func (h *Handler) resolveRecovery(ctx context.Context, usernameLower, code string) (userID string, recovery *models.Recovery, err error) {
 	user, err := h.db.LookupUserByUsername(ctx, usernameLower)
 	if err != nil {
@@ -134,7 +163,7 @@ func (h *Handler) resolveRecovery(ctx context.Context, usernameLower, code strin
 		Iterations:  rec.VerifierArgon2Params.Iterations,
 		Parallelism: rec.VerifierArgon2Params.Parallelism,
 	}, rec.Verifier) {
-		if recErr := h.db.RecordFailedRecoveryVerify(ctx, uid, lockThreshold, lockDuration); recErr != nil {
+		if recErr := h.db.RecordFailedRecoveryVerify(ctx, uid, recoveryLockThreshold, recoveryLockDuration); recErr != nil {
 			return "", nil, recErr
 		}
 		return "", nil, errInvalidRecoveryAttempt

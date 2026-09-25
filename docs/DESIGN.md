@@ -293,14 +293,24 @@ Neither operation is a **key rotation**, which is the subject of the next sectio
 operation, and the only one that invalidates existing wrapped group keys.
 
 **The `RECOVERY` item carries its own guessing-bound lockout**, a counter and lock-until timestamp
-distinct from login's — the same shape as login's (a rolling five-attempts-in-five-minutes window,
-the lock-until value itself acting as the window marker) but scoped to failed recovery-verifier
-checks rather than failed step-4 signatures, and never touching login's counter or vice versa.
-Reusing login's counter would corrupt its meaning — a wrong recovery code is not the signature
-failure it counts — and would let a recovery-guessing attacker lock a user out of logging in
-entirely, the wrong failure mode to hand an attacker. A locked `RECOVERY` item fails with the same
-uniform error as a wrong code, for the same enumeration-resistance reason every other failure mode
-here already collapses to one response.
+distinct from login's — the same rolling-window mechanism as login's (the lock-until value itself
+acting as the window marker) but scoped to failed recovery-verifier checks rather than failed step-4
+signatures, and never touching login's counter or vice versa. Reusing login's counter would corrupt
+its meaning — a wrong recovery code is not the signature failure it counts — and would let a
+recovery-guessing attacker lock a user out of logging in entirely, the wrong failure mode to hand an
+attacker. A locked `RECOVERY` item fails with the same uniform error as a wrong code, for the same
+enumeration-resistance reason every other failure mode here already collapses to one response.
+
+**The numbers are deliberately not login's five-in-five-minutes.** Login's lock earns its cost
+because a password is comparatively low-entropy and the lock is what makes guessing expensive
+against it. The recovery code is 128 bits of CSPRNG output — a tight lock buys it essentially no
+brute-force resistance it doesn't already have, while creating a real griefing vector: anyone who
+knows a username can keep their `RECOVERY` item locked indefinitely at a handful of requests every
+few minutes, and the uniform response means the victim only ever sees "invalid code," with no way
+to tell their code is fine and the account is merely locked. Recovery's threshold is 20 attempts per
+hour rather than 5 per 5 minutes — the counter still delivers the observability and doc-accuracy
+this section exists for, while making that griefing path take meaningfully more sustained effort, at
+no real security cost given the code's actual entropy.
 
 ### Key rotation
 
