@@ -22,8 +22,10 @@ import { ApiError } from '@/lib/api/auth'
 import {
   isDefinitelyUncommitted,
   runSignup,
+  signupErrorMessage,
   type PendingSignup,
   type SignupDeps,
+  type SignupResult,
 } from './runSignup'
 
 const MATERIAL = {
@@ -323,5 +325,168 @@ describe('runSignup (resume)', () => {
     // server never actually stored, since its own #124 fix wrote nothing
     // on a matching retry.
     expect(result.material.recoveryCode).toBe(MATERIAL.recoveryCode)
+  })
+})
+
+// Issue #134: the scenario is a resubmission with a DIFFERENT password
+// (so runSignup's own resuming check above correctly declines to reuse
+// `resume`'s material) whose fresh register() call then collides with the
+// account the FIRST attempt actually created. Without this, the caller has
+// no way to tell that apart from a genuine "someone else has this name"
+// conflict and discards the only path back to the first attempt's recovery
+// code -- see this file's own header, runSignup.ts's doc comment on the
+// 'definitelyUncommitted' branch, and SignupScreen.tsx's handling of
+// result.resume.
+describe('runSignup (issue #134: username_taken after a password change)', () => {
+  it('a username_taken 409 matching a stale resume echoes that SAME resume back, not the fresh attempt', async () => {
+    const deps = makeDeps({
+      generateUserID: vi.fn().mockReturnValue('fresh-user-id'),
+      generateSignupMaterial: vi.fn().mockResolvedValue(REGENERATED_MATERIAL),
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken', 'username_taken')),
+    })
+    const resume = makeResume()
+
+    // Same username as `resume`, but a different (corrected) password -- so
+    // resuming is declined and a genuinely fresh attempt runs, which then
+    // hits the real conflict left by the first, already-committed attempt.
+    const result = await runSignup(deps, 'alice', 'a-different-password', resume)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.kind).toBe('definitelyUncommitted')
+    // Echoes the ORIGINAL resume verbatim -- NOT a resume built from this
+    // failed attempt's own (fresh, never-committed) material, which would
+    // silently point the user at a recovery code the server never stored.
+    expect(result.resume).toEqual(resume)
+    expect(result.resume?.material).toBe(MATERIAL)
+  })
+
+  it('a username_taken 409 with NO stale resume reports no resume -- an ordinary conflict', async () => {
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken', 'username_taken')),
+    })
+
+    const result = await runSignup(deps, 'alice', 'password123')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.kind).toBe('definitelyUncommitted')
+    expect(result.resume).toBeUndefined()
+  })
+
+  it('a username_taken 409 whose resume is for a DIFFERENT username reports no resume', async () => {
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken', 'username_taken')),
+    })
+    // A stale resume exists, but from an entirely different signup attempt
+    // -- SignupScreen only ever hands runSignup a resume whose username
+    // already matches (see its own header comment), but runSignup's own
+    // check must not assume that invariant blindly.
+    const resume = makeResume({ username: 'someone-else' })
+
+    const result = await runSignup(deps, 'alice', 'password123', resume)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.resume).toBeUndefined()
+  })
+
+  it('a username_taken 409 without the machine-readable code reports no resume', async () => {
+    // Defensive: only WriteErrorWithCode's specific username_taken code
+    // triggers this, never a message-string match alone -- guards against a
+    // server-side wording change silently breaking (or, worse, silently
+    // mis-triggering) this path.
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'username is taken')),
+    })
+    const resume = makeResume()
+
+    const result = await runSignup(deps, 'alice', 'a-different-password', resume)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.resume).toBeUndefined()
+  })
+
+  it('a DIFFERENT 409 (user_id_taken) matching a stale resume still reports no resume -- only username_taken qualifies', async () => {
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'userId is taken', 'user_id_taken')),
+    })
+    const resume = makeResume()
+
+    const result = await runSignup(deps, 'alice', 'a-different-password', resume)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.resume).toBeUndefined()
+  })
+})
+
+// signupErrorMessage is what SignupScreen.tsx actually shows -- see its own
+// doc comment. The 'ambiguous'-also-has-a-resume case here is a regression
+// guard specifically: an earlier draft of #134's fix keyed the hint message
+// off `result.resume !== undefined` alone, which also (wrongly) fires for
+// the ordinary #124/#133 ambiguous-retry-caching case, since THAT kind of
+// result carries a resume too. Caught by hand during review, not by a
+// test, before this was added -- SignupScreen.tsx has no component test
+// covering this, hence testing the pure function directly.
+describe('signupErrorMessage', () => {
+  const definitelyUncommittedNoResume: Extract<SignupResult, { ok: false }> = {
+    ok: false,
+    kind: 'definitelyUncommitted',
+    error: new ApiError(409, 'username is taken', 'username_taken'),
+  }
+
+  it('shows the #134 hint for a definitelyUncommitted result WITH a resume', () => {
+    const result: Extract<SignupResult, { ok: false }> = {
+      ...definitelyUncommittedNoResume,
+      resume: makeResume(),
+    }
+    expect(signupErrorMessage(result)).toBe(
+      'An earlier attempt may have already created this account. Try your original password, or log in if you remember it.',
+    )
+  })
+
+  it('shows the server message for a definitelyUncommitted result with NO resume', () => {
+    expect(signupErrorMessage(definitelyUncommittedNoResume)).toBe('username is taken')
+  })
+
+  it('does NOT show the #134 hint for an ambiguous result, even though it also carries a resume', () => {
+    const result: Extract<SignupResult, { ok: false }> = {
+      ok: false,
+      kind: 'ambiguous',
+      error: new TypeError('Failed to fetch'),
+      resume: makeResume(),
+    }
+    expect(signupErrorMessage(result)).not.toContain('earlier attempt')
+    expect(signupErrorMessage(result)).toBe('Could not create your account. Try again.')
+  })
+
+  it('shows the generic message, not the server 403 message, for a closed-registration failure', () => {
+    const result: Extract<SignupResult, { ok: false }> = {
+      ok: false,
+      kind: 'definitelyUncommitted',
+      error: new ApiError(403, 'registration is closed'),
+    }
+    expect(signupErrorMessage(result)).toBe('Could not create your account. Try again.')
+  })
+
+  it('shows the generic message for a non-ApiError (e.g. a worker OOM)', () => {
+    const result: Extract<SignupResult, { ok: false }> = {
+      ok: false,
+      kind: 'definitelyUncommitted',
+      error: new Error('worker: out of memory'),
+    }
+    expect(signupErrorMessage(result)).toBe('Could not create your account. Try again.')
   })
 })

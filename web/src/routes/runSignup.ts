@@ -92,16 +92,53 @@ export type SignupResult =
       readonly kind: SignupErrorKind
       readonly error: unknown
       /**
-       * Set only when kind is 'ambiguous' -- the caller should hold onto
-       * this and pass it back in as `resume` on the next attempt if the
+       * Usually set only when kind is 'ambiguous' -- the caller should hold
+       * onto this and pass it back in as `resume` on the next attempt if the
        * user resubmits the SAME username and password, so the retry sends
        * the exact request the first, possibly-committed attempt did (see
        * this file's own header comment on why "exact" -- not merely the
-       * same userId -- is load-bearing). Undefined for
-       * 'definitelyUncommitted', since there is nothing safe to resend.
+       * same userId -- is load-bearing).
+       *
+       * The one 'definitelyUncommitted' exception is issue #134: a
+       * `username_taken` 409 whose username matches a `resume` this call
+       * was passed in means an EARLIER ambiguous attempt already committed
+       * under that username -- runSignup echoes that same `resume` back
+       * unchanged here (never a new one; a 409 proves nothing committed
+       * under the input THIS call actually used) so the caller can offer the
+       * user a path back to their original password rather than silently
+       * discarding the only route to the account's real recovery code. See
+       * this file's own header comment below the accept-conflict-as-resume
+       * branch.
        */
       readonly resume?: PendingSignup
     }
+
+/**
+ * The error message SignupScreen should show for a failed (ok: false)
+ * SignupResult -- pulled out to a plain function, same as the rest of this
+ * file's logic, so the issue #134 distinction below is unit-tested directly
+ * rather than only reachable through a mounted SignupScreen (this project
+ * has no jsdom/component-testing setup -- see this file's own header
+ * comment on why runSignup itself takes its deps as plain arguments).
+ *
+ * Issue #134: only a 'definitelyUncommitted' result WITH a resume (the
+ * username_taken-matching-a-stale-resume case -- see SignupResult's own doc
+ * comment) gets the "an earlier attempt may have already created this
+ * account" hint. An 'ambiguous' result also carries a `resume` -- the
+ * ordinary #124/#133 retry-caching case -- but that's a network hiccup with
+ * no evidence of any real prior conflict, so it keeps getting the generic
+ * message instead; showing the #134 hint there would tell a user something
+ * happened that this function has no actual evidence for.
+ */
+export function signupErrorMessage(result: Extract<SignupResult, { ok: false }>): string {
+  if (result.kind === 'definitelyUncommitted' && result.resume !== undefined) {
+    return 'An earlier attempt may have already created this account. Try your original password, or log in if you remember it.'
+  }
+  if (result.error instanceof ApiError && result.error.status !== 403) {
+    return result.error.message
+  }
+  return 'Could not create your account. Try again.'
+}
 
 export interface SignupDeps {
   readonly generateUserID: () => string
@@ -151,18 +188,30 @@ export interface SignupDeps {
  * that resolves `ok: true` with `loggedIn` reflecting whether the
  * follow-up login actually worked.
  *
- * `resume`, when passed, is only actually used -- skipping
- * generateSignupMaterial and resending its cached material byte-for-byte --
- * when its username AND password both equal this call's arguments exactly.
- * Any mismatch means this is not a resend of the same request (a different
- * username is a new attempt; the same username with a different password
- * means the user changed something, e.g. fixing a typo), so runSignup falls
- * back to generating fresh material rather than resuming, exactly as if no
- * `resume` had been passed. See this file's own header comment (PR #133
- * round 1) for why this check has to be exact, not just "same username": a
- * retry that resent different material could make the server's own #124 fix
- * (internal/db/register.go) return a silent 201 over a first attempt's
- * still-live, different credentials.
+ * `resume`, when passed, is only actually used to SKIP generateSignupMaterial
+ * and resend cached material byte-for-byte when its username AND password
+ * both equal this call's arguments exactly. Any mismatch means this is not a
+ * resend of the same request (a different username is a new attempt; the
+ * same username with a different password means the user changed something,
+ * e.g. fixing a typo), so runSignup falls back to generating fresh material
+ * rather than resuming, exactly as if no `resume` had been passed. See this
+ * file's own header comment (PR #133 round 1) for why this check has to be
+ * exact, not just "same username": a retry that resent different material
+ * could make the server's own #124 fix (internal/db/register.go) return a
+ * silent 201 over a first attempt's still-live, different credentials.
+ *
+ * Issue #134: even when `resume` isn't reused for the request itself (a
+ * changed password), it is still consulted once more if register() comes
+ * back with a `username_taken` 409 for a username matching `resume`'s. That
+ * combination means an EARLIER call already committed an account under this
+ * username (the ambiguous failure that produced `resume` in the first
+ * place), and this fresh attempt's different password just collided with
+ * it -- not a real "someone else took this name" conflict. Without this
+ * check, the caller has no way to distinguish the two and would discard
+ * `resume` as a normal conflict, permanently losing the only path back to
+ * the first attempt's recovery code (which was never sent to the server in
+ * the clear and so cannot be recovered any other way). See the
+ * 'definitelyUncommitted' branch below and SignupResult's own doc comment.
  */
 export async function runSignup(
   deps: SignupDeps,
@@ -207,10 +256,30 @@ export async function runSignup(
     })
   } catch (err) {
     if (isDefinitelyUncommitted(err)) {
-      // A real conflict, closed registration, or validation failure --
-      // nothing committed, and (for a conflict) reusing this userId would
-      // just collide again. Nothing to resume.
-      return { ok: false, kind: 'definitelyUncommitted', error: err }
+      // Issue #134: a username_taken 409 whose username matches a stale
+      // `resume` means an earlier ambiguous attempt under that username
+      // already committed -- this fresh attempt (with different material,
+      // since resuming was false or it would have collided with itself
+      // instead) just collided with that real account. Echo `resume`
+      // back UNCHANGED rather than discarding it: nothing about THIS call
+      // proves anything new committed, so there is nothing safe to update
+      // it to, but the caller still needs a path back to the original
+      // attempt's material for the user to reach by resubmitting the
+      // ORIGINAL password. Every other definitelyUncommitted cause (closed
+      // registration, validation, a userId conflict, or a username
+      // conflict that doesn't match any stale `resume`) still has nothing
+      // worth resuming.
+      const staleResumeApplies =
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.code === 'username_taken' &&
+        resume !== undefined &&
+        resume.username === username
+      // exactOptionalPropertyTypes: `resume` must be omitted, not set to
+      // undefined, when staleResumeApplies is false.
+      return staleResumeApplies
+        ? { ok: false, kind: 'definitelyUncommitted', error: err, resume }
+        : { ok: false, kind: 'definitelyUncommitted', error: err }
     }
     // Network failure or a 5xx: register()'s write may have committed even
     // though this response was lost. Hand back the exact identity AND
