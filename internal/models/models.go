@@ -161,6 +161,25 @@ type Recovery struct {
 	// together on every credential change, under the same transaction
 	// condition. Registration sets it to 1.
 	CredentialVersion int64 `dynamodbav:"CredentialVersion"`
+
+	// LastRewrapToken is the client-generated IdempotencyToken the most
+	// recent db.RewrapCredentials call carried, or empty if that call didn't
+	// set one or none has landed since registration. Opaque to this package
+	// beyond that.
+	//
+	// Exists so recoveryCodeReset (internal/handlers/recovery.go) can
+	// recognize its own lost-response retry: resolveRecovery re-checks the
+	// presented code against THIS item's own Verifier on every call, so once
+	// a reset has landed, a retry presenting the same (now stale) code fails
+	// resolveRecovery's check before ever reaching RewrapCredentials -- there
+	// is no separate "stale version, but let me check if it's my own write"
+	// step to catch it the way issue #124's fix catches Register's retry.
+	// The token is the fallback: when resolveRecovery's code check fails,
+	// recoveryCodeReset additionally checks whether this field matches a
+	// token the retry presents, at the CredentialVersion the client's
+	// original request itself would have produced -- see db.IsOwnRewrap's
+	// own doc comment for the full check. Issue #130.
+	LastRewrapToken []byte `dynamodbav:"LastRewrapToken,omitempty"`
 }
 
 // Challenge is the USER#<uuid> / CHALLENGE item -- a single slot per user,

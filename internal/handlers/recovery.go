@@ -32,6 +32,14 @@ const maxRecoveryCodeLen = 256
 // benefit to a legitimate caller.
 const errRecoveryCodeInvalid = "invalid username or recovery code"
 
+// idempotencyTokenLen is recoveryResetRequest's IdempotencyToken's required
+// decoded length -- 16 bytes (128 bits), generous entropy for a value whose
+// only job is to distinguish one reset attempt from any other the same
+// client might make, not to resist any cryptographic attack the way a real
+// credential field must. See recoveryCodeReset's own doc comment; issue
+// #130.
+const idempotencyTokenLen = 16
+
 // errInvalidRecoveryAttempt is resolveRecovery's internal sentinel for
 // every uniform-response failure mode -- callers map it to
 // errRecoveryCodeInvalid at the HTTP layer rather than comparing against a
@@ -183,6 +191,15 @@ type recoveryResetRequest struct {
 	RecoveryCode              string `json:"recoveryCode"`
 	ExpectedCredentialVersion int64  `json:"expectedCredentialVersion"`
 
+	// IdempotencyToken is a random value the client generates once per
+	// reset attempt (not per submission -- runRecovery.ts keeps it across a
+	// manual retry) and resends unchanged only when retrying an attempt
+	// whose response it never saw. Optional: an empty string disables
+	// recoveryCodeReset's retry fallback entirely (every ambiguous failure
+	// is reported as-is, exactly as before issue #130) -- a client that
+	// hasn't adopted the retry flow yet is unaffected.
+	IdempotencyToken string `json:"idempotencyToken"`
+
 	credentialRewrapFields
 }
 
@@ -192,6 +209,18 @@ type recoveryResetRequest struct {
 // docs/DESIGN.md states the verifier is what authorizes this write, not a
 // token minted by the release call. Re-wraps PROFILE and RECOVERY together
 // via db.RewrapCredentials, exactly like changePassword.
+//
+// Handles issue #130's retry case: once a reset has landed, its own retry
+// -- necessarily presenting the same, now-superseded code, since the client
+// never learned the new one -- fails resolveRecovery's check like any wrong
+// code would, before ever reaching RewrapCredentials. If the request also
+// carries a matching IdempotencyToken, that failure is treated as this
+// caller's own earlier write landing late rather than a real authentication
+// failure: db.IsOwnRewrap confirms RECOVERY is at exactly the version this
+// request would itself have produced, with the token to match, and the
+// original success response is replayed rather than a spurious 401. See
+// db.IsOwnRewrap's own doc comment for the full sequence and why this check
+// cannot live inside RewrapCredentials the way Register's #124 fix does.
 func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 	var req recoveryResetRequest
@@ -207,28 +236,87 @@ func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "expectedCredentialVersion: must be positive")
 		return
 	}
-
-	userID, _, err := h.resolveRecovery(r.Context(), strings.ToLower(req.Username), req.RecoveryCode)
-	if err != nil {
-		if errors.Is(err, errInvalidRecoveryAttempt) {
-			WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
+	var idempotencyToken []byte
+	if req.IdempotencyToken != "" {
+		// wantLen is idempotencyTokenLen, not 0 -- a caller that sets this
+		// field at all must send a real token, not an arbitrary-length value
+		// that happens to be non-empty.
+		token, err := decodeBase64Field(req.IdempotencyToken, idempotencyTokenLen, idempotencyTokenLen)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, "idempotencyToken: "+err.Error())
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not process recovery")
-		return
+		idempotencyToken = token
 	}
-
+	// Decoded once, up front -- both the normal write below and the retry
+	// fallback need it: the fallback compares it against what's already
+	// stored (db.IsOwnRewrap's own doc comment on why a token+version match
+	// alone is not enough, PR #133 round 1's lesson applied here too),
+	// rather than trusting the token match alone.
 	decoded, err := decodeCredentialRewrapFields(req.credentialRewrapFields)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
 	newVersion := req.ExpectedCredentialVersion + 1
+	usernameLower := strings.ToLower(req.Username)
+
+	userID, _, err := h.resolveRecovery(r.Context(), usernameLower, req.RecoveryCode)
+	if err != nil {
+		if !errors.Is(err, errInvalidRecoveryAttempt) {
+			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			return
+		}
+		// The uniform failure resolveRecovery returns for every cause --
+		// unknown username, missing RECOVERY, or (the retry case this
+		// fallback exists for) a code that no longer matches because this
+		// caller's own earlier reset already rotated it. Only worth a
+		// second lookup at all when a token was presented; otherwise this is
+		// definitely just a failed attempt.
+		if len(idempotencyToken) == 0 {
+			WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
+			return
+		}
+		user, lookupErr := h.db.LookupUserByUsername(r.Context(), usernameLower)
+		if lookupErr != nil {
+			if errors.Is(lookupErr, db.ErrUserNotFound) {
+				WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			return
+		}
+		retryUserID := user.PK[len("USER#"):]
+		isRetry, checkErr := h.db.IsOwnRewrap(r.Context(), retryUserID, idempotencyToken, newVersion, db.RewrapMaterial{
+			RecoverySalt:               decoded.RecoverySalt,
+			RecoveryArgon2Params:       decoded.RecoveryArgon2Params,
+			RecoveryWrappedPrivateKeys: decoded.RecoveryWrappedPrivateKeys,
+
+			RecoveryVerifierSalt:   decoded.RecoveryVerifierSalt,
+			RecoveryVerifierParams: decoded.RecoveryVerifierParams,
+			RecoveryVerifier:       decoded.RecoveryVerifier,
+		})
+		if checkErr != nil {
+			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			return
+		}
+		if !isRetry {
+			WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
+			return
+		}
+		// Confirmed: RECOVERY is already at exactly the version this
+		// request's own write would have produced, under this same token,
+		// with this same material. Nothing left to write -- replay the
+		// success this caller never saw.
+		WriteJSON(w, http.StatusOK, changePasswordResponse{CredentialVersion: newVersion})
+		return
+	}
+
 	err = h.db.RewrapCredentials(r.Context(), db.RewrapCredentialsInput{
 		UserID:                    userID,
 		ExpectedCredentialVersion: req.ExpectedCredentialVersion,
 		NewCredentialVersion:      newVersion,
+		IdempotencyToken:          idempotencyToken,
 
 		Salt:               decoded.Salt,
 		Argon2Params:       decoded.Argon2Params,

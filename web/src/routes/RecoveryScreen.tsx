@@ -37,6 +37,16 @@
 // after reset() succeeds and before the new code is acknowledged --
 // exactly parallel to SignupScreen's recoveryCode step, and guarded the
 // same way (beforeunload).
+//
+// issue #130 closed the one dead end this flow used to have: a
+// resetResponseLost failure used to be a plain message pointing at #131's
+// change-password screen, discarding the material (and the new recovery
+// code inside it) reset() may have just written server-side with no way
+// back to it from here. runRecovery.ts's `resume` now lets this screen
+// offer an actual retry -- resending the exact same reset() request,
+// recognized server-side by its idempotency token -- instead of only that
+// escape hatch. #131 remains the fallback if the retry itself also fails
+// ambiguously twice in a row, or the user navigates away before retrying.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -49,7 +59,13 @@ import { completeRecovery } from '@/lib/crypto/worker-client'
 import type { RecoveryMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { RecoveryCredentialsStep } from './RecoveryCredentialsStep'
-import { runRecovery, type RecoveryErrorKind } from './runRecovery'
+import { RecoveryRetryStep } from './RecoveryRetryStep'
+import {
+  generateIdempotencyToken,
+  runRecovery,
+  type PendingRecovery,
+  type RecoveryErrorKind,
+} from './runRecovery'
 import { SignupProgressStep } from './SignupProgressStep'
 
 const CREDENTIAL_ERROR = 'Incorrect username or recovery code.'
@@ -64,18 +80,38 @@ const STALE_VERSION_ERROR =
 // The one case a plain retry from the top is NOT safe for: reset()'s
 // response was lost after the write already committed (see runRecovery's
 // own comment on isDefinitelyUncommitted for why every 4xx it can return is
-// excluded from reaching this message). The write, if it landed, also
-// issued a new recovery code that this message can't hand back. #130
-// (idempotent retry for this write) is still open, but #131 (the logged-in
-// change-password/new-recovery-code screen, ChangePasswordScreen.tsx) now
-// exists, so this message can point there for the one thing it can't hand
-// back directly -- round 3 of PR #129's review caught an earlier draft
-// claiming "your account settings" before #131 existed at all, and PR #132
-// review caught this draft still not naming the real entry point (the
-// Change password button on Home) or saying that changing your password,
-// specifically, is how you get a new code.
+// excluded from reaching this message). RecoveryRetryStep is what offers
+// the actual, safe retry now (issue #130) -- but the write may genuinely
+// already have committed even before that retry runs, so this first
+// message carries the same "your old code may be dead, Change password is
+// the fallback" guidance the old dead-end message did, not just a generic
+// "might be slow" reassurance -- a user who clicks Start Over (onGiveUp)
+// instead of Try Again still needs to know that.
 const RESET_RESPONSE_LOST_ERROR =
-  "We couldn't confirm whether your new password was saved. Try logging in with it before retrying recovery. If it works, your old recovery code no longer does. Once you're in, use Change password to get a new one (you can keep the same password)."
+  "We couldn't confirm whether your new password was saved. Try again below -- it's safe to retry. If you'd rather not: try logging in with the new password first (your old recovery code may no longer work), or use Change password once you're in to get a fresh one."
+// Shown if a retry ALSO fails ambiguously -- two lost responses in a row is
+// unusual enough that pointing at #131's change-password screen (which
+// re-reads the account's actual current state rather than guessing) is a
+// better next step than a third blind retry, though Try Again is still
+// offered below it.
+const RESET_RETRY_FAILED_ERROR =
+  "Still couldn't confirm it. Try logging in with your new password -- if it works, your old recovery code no longer does. Once you're in, use Change password to get a new one (you can keep the same password)."
+// A retry's own reset() came back 401, but NOT because the code was wrong --
+// reaching this classification (runRecovery.ts's own comment on
+// 'retryConflict') already requires the verifier to have rotated away from
+// this retry's code, and the server's own idempotency check found that
+// rotation was not this attempt's own write. That means something else
+// changed the account in between -- a genuinely different message from a
+// plain wrong code, and pointing at #131 (which re-reads the account's
+// actual current state) is more useful than a third blind retry here too.
+const RETRY_CONFLICT_ERROR =
+  "Your account's credentials changed before this could be confirmed. Try logging in with your original password, or with the new one you just set -- whichever works, use Change password from there to get a fresh recovery code."
+// Shown on the credentials form after Start Over from RecoveryRetryStep --
+// the write this screen could never confirm may still have committed, and
+// that guidance must survive leaving the retry step, not just live in
+// RESET_RESPONSE_LOST_ERROR's text while the user is looking at it.
+const GAVE_UP_ON_RETRY_ERROR =
+  "Starting over. If your last attempt's new password was actually saved, your old recovery code no longer works -- try logging in with the new password, or with the old one if that attempt didn't land, and use Change password to get a fresh code either way."
 
 function errorMessageFor(kind: RecoveryErrorKind): string {
   switch (kind) {
@@ -87,6 +123,8 @@ function errorMessageFor(kind: RecoveryErrorKind): string {
       return RESET_RESPONSE_LOST_ERROR
     case 'unreachable':
       return UNREACHABLE_ERROR
+    case 'retryConflict':
+      return RETRY_CONFLICT_ERROR
   }
 }
 
@@ -98,6 +136,7 @@ type Step =
       readonly release: RecoveryCodeReleaseResponse
     }
   | { readonly name: 'resetting'; readonly material: RecoveryMaterial }
+  | { readonly name: 'resetResponseLost'; readonly resume: PendingRecovery }
   | { readonly name: 'recoveryCode'; readonly recoveryCode: string }
 
 export function RecoveryScreen() {
@@ -108,9 +147,13 @@ export function RecoveryScreen() {
 
   // Once reset() has committed a new recovery code, it lives only in
   // component state until the user acknowledges it -- same risk and same
-  // guard as SignupScreen's recoveryCode step (that file's own comment).
+  // guard as SignupScreen's recoveryCode step. resetResponseLost carries an
+  // unconfirmed reset()'s material too (it may already be committed
+  // server-side), so it gets the same protection: navigating away here
+  // means the retry option -- and the new code, if the write actually
+  // landed -- is gone for good, same as SignupScreen's own reasoning.
   useEffect(() => {
-    if (step.name !== 'recoveryCode') {
+    if (step.name !== 'recoveryCode' && step.name !== 'resetResponseLost') {
       return
     }
     const handleBeforeUnload = (e: BeforeUnloadEvent): void => {
@@ -122,9 +165,14 @@ export function RecoveryScreen() {
     }
   }, [step.name])
 
-  const handleCredentials = (username: string, enteredCode: string, newPassword: string) => {
+  const runAttempt = (
+    username: string,
+    enteredCode: string,
+    newPassword: string,
+    resume?: PendingRecovery,
+  ) => {
     setError(null)
-    setStep({ name: 'releasing' })
+    setStep(resume ? { name: 'resetting', material: resume.material } : { name: 'releasing' })
     setProgress(null)
 
     void (async () => {
@@ -137,13 +185,25 @@ export function RecoveryScreen() {
             setProgress(event)
           },
           onStep: setStep,
+          generateIdempotencyToken,
         },
         username,
         enteredCode,
         newPassword,
+        resume,
       )
 
       if (!result.ok) {
+        if (result.kind === 'resetResponseLost' && result.resume) {
+          setStep({ name: 'resetResponseLost', resume: result.resume })
+          // A retry that itself fails ambiguously a second time gets the
+          // stronger message pointing at #131 instead of offering a third
+          // blind retry -- resume from THIS failure is still attached to
+          // the step, so RecoveryRetryStep's button keeps working, but the
+          // text steers toward the more reliable path.
+          setError(resume ? RESET_RETRY_FAILED_ERROR : RESET_RESPONSE_LOST_ERROR)
+          return
+        }
         setError(errorMessageFor(result.kind))
         setStep({ name: 'credentials' })
         return
@@ -151,6 +211,10 @@ export function RecoveryScreen() {
 
       setStep({ name: 'recoveryCode', recoveryCode: result.material.recoveryCode })
     })()
+  }
+
+  const handleCredentials = (username: string, enteredCode: string, newPassword: string) => {
+    runAttempt(username, enteredCode, newPassword)
   }
 
   switch (step.name) {
@@ -187,6 +251,24 @@ export function RecoveryScreen() {
           trailingStep="Saving your new credentials…"
           currentStep="trailing"
           heading="Recovering your account"
+        />
+      )
+    case 'resetResponseLost':
+      return (
+        <RecoveryRetryStep
+          message={error ?? RESET_RESPONSE_LOST_ERROR}
+          onRetry={() => {
+            runAttempt(
+              step.resume.username,
+              step.resume.recoveryCode,
+              step.resume.newPassword,
+              step.resume,
+            )
+          }}
+          onGiveUp={() => {
+            setError(GAVE_UP_ON_RETRY_ERROR)
+            setStep({ name: 'credentials' })
+          }}
         />
       )
     case 'recoveryCode':

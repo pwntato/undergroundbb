@@ -49,6 +49,8 @@ const RECOVERY_MATERIAL = {
   recoveryCode: 'NEW00-00000-00000-00000-000000',
 }
 
+const TEST_TOKEN = 'dGVzdC10b2tlbi0xNmJ5dGVzIQ=='
+
 function makeDeps(overrides: Partial<RecoveryDeps> = {}): RecoveryDeps {
   return {
     release: vi.fn().mockResolvedValue(RELEASE_RESPONSE),
@@ -56,6 +58,7 @@ function makeDeps(overrides: Partial<RecoveryDeps> = {}): RecoveryDeps {
     reset: vi.fn().mockResolvedValue({ credentialVersion: 2 }),
     onProgress: () => {},
     onStep: () => {},
+    generateIdempotencyToken: () => TEST_TOKEN,
     ...overrides,
   }
 }
@@ -135,7 +138,9 @@ describe('runRecovery', () => {
       expect.objectContaining({ recoveryCode: expected }),
       expect.any(Function),
     )
-    expect(deps.reset).toHaveBeenCalledWith(expect.objectContaining({ recoveryCode: expected }))
+    expect(deps.reset).toHaveBeenCalledWith(
+      expect.objectContaining({ recoveryCode: expected, idempotencyToken: TEST_TOKEN }),
+    )
 
     // The bug this pins: if any call site used the raw entered string (or
     // just trim()) instead of the normalized value, this would fail.
@@ -180,17 +185,34 @@ describe('runRecovery', () => {
     expect(result).toEqual({ ok: false, kind: 'unreachable', error: expect.any(ApiError) })
   })
 
-  it('classifies a 503 at reset() as resetResponseLost -- genuinely ambiguous, not provably safe', async () => {
+  it('classifies a 503 at reset() as resetResponseLost -- genuinely ambiguous, not provably safe, and carries a resume', async () => {
     const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(503, 'unavailable')) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')
-    expect(result).toEqual({ ok: false, kind: 'resetResponseLost', error: expect.any(ApiError) })
+    expect(result).toEqual({
+      ok: false,
+      kind: 'resetResponseLost',
+      error: expect.any(ApiError),
+      resume: {
+        username: 'alice',
+        recoveryCode: normalizeRecoveryCode('code'),
+        newPassword: 'new-password',
+        expectedCredentialVersion: RELEASE_RESPONSE.credentialVersion,
+        material: RECOVERY_MATERIAL,
+        idempotencyToken: TEST_TOKEN,
+      },
+    })
   })
 
   it('classifies a network failure at reset() as resetResponseLost', async () => {
     const err = new TypeError('network')
     const deps = makeDeps({ reset: vi.fn().mockRejectedValue(err) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')
-    expect(result).toEqual({ ok: false, kind: 'resetResponseLost', error: err })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('resetResponseLost')
+      expect(result.error).toBe(err)
+      expect(result.resume).toBeDefined()
+    }
   })
 
   it('reports the recovering and resetting steps with the release response and material', async () => {
@@ -205,5 +227,120 @@ describe('runRecovery', () => {
       { name: 'recovering', release: RELEASE_RESPONSE },
       { name: 'resetting', material: RECOVERY_MATERIAL },
     ])
+  })
+})
+
+describe('runRecovery resume (issue #130)', () => {
+  const RESUME = {
+    username: 'alice',
+    recoveryCode: normalizeRecoveryCode('code'),
+    newPassword: 'new-password',
+    expectedCredentialVersion: 7,
+    material: RECOVERY_MATERIAL,
+    idempotencyToken: 'previous-attempt-token',
+  }
+
+  it('skips release() and completeRecovery when resuming an exact match', async () => {
+    const deps = makeDeps()
+    const result = await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
+
+    expect(result.ok).toBe(true)
+    expect(deps.release).not.toHaveBeenCalled()
+    expect(deps.completeRecovery).not.toHaveBeenCalled()
+    expect(deps.reset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: RESUME.username,
+        recoveryCode: RESUME.recoveryCode,
+        expectedCredentialVersion: RESUME.expectedCredentialVersion,
+        idempotencyToken: RESUME.idempotencyToken,
+        salt: RECOVERY_MATERIAL.salt,
+        recoveryVerifier: RECOVERY_MATERIAL.recoveryVerifier,
+      }),
+    )
+  })
+
+  it('does not call generateIdempotencyToken when resuming -- the cached token is resent', async () => {
+    const generateIdempotencyToken = vi.fn().mockReturnValue('should-not-be-used')
+    const deps = makeDeps({ generateIdempotencyToken })
+    await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
+    expect(generateIdempotencyToken).not.toHaveBeenCalled()
+  })
+
+  it('reports only the resetting step when resuming, not recovering', async () => {
+    const steps: unknown[] = []
+    const deps = makeDeps({
+      onStep: (step) => {
+        steps.push(step)
+      },
+    })
+    await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
+    expect(steps).toEqual([{ name: 'resetting', material: RECOVERY_MATERIAL }])
+  })
+
+  it('falls back to a fresh attempt when the username does not match', async () => {
+    const deps = makeDeps()
+    const result = await runRecovery(deps, 'someone-else', 'code', RESUME.newPassword, RESUME)
+
+    expect(result.ok).toBe(true)
+    expect(deps.release).toHaveBeenCalledWith('someone-else', RESUME.recoveryCode)
+    expect(deps.completeRecovery).toHaveBeenCalled()
+  })
+
+  it('falls back to a fresh attempt when the recovery code does not match', async () => {
+    const deps = makeDeps()
+    const result = await runRecovery(
+      deps,
+      RESUME.username,
+      'different-code',
+      RESUME.newPassword,
+      RESUME,
+    )
+
+    expect(result.ok).toBe(true)
+    expect(deps.release).toHaveBeenCalled()
+    expect(deps.completeRecovery).toHaveBeenCalled()
+  })
+
+  it('falls back to a fresh attempt when the new password does not match', async () => {
+    const deps = makeDeps()
+    const result = await runRecovery(deps, RESUME.username, 'code', 'a-different-password', RESUME)
+
+    expect(result.ok).toBe(true)
+    expect(deps.release).toHaveBeenCalled()
+    expect(deps.completeRecovery).toHaveBeenCalledWith(
+      expect.objectContaining({ newPassword: 'a-different-password' }),
+      expect.any(Function),
+    )
+  })
+
+  it('a resumed reset() that fails ambiguously again returns a fresh resume with the same material and token', async () => {
+    const err = new TypeError('network')
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(err) })
+    const result = await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'resetResponseLost',
+      error: err,
+      resume: RESUME,
+    })
+  })
+
+  it("classifies a resumed reset() 401 as retryConflict, not credential -- recoveryCodeReset only 401s a retry when the write was genuinely someone else's", async () => {
+    const err = new ApiError(401, 'invalid')
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(err) })
+    const result = await runRecovery(deps, RESUME.username, 'code', RESUME.newPassword, RESUME)
+
+    expect(result).toEqual({ ok: false, kind: 'retryConflict', error: err })
+    // No resume: there is nothing safe left to retry -- see runRecovery's
+    // own comment on why this is a genuine conflict, not an ambiguous
+    // failure.
+    expect('resume' in result && result.resume).toBeFalsy()
+  })
+
+  it('a FRESH (non-resumed) reset() 401 is still classified as credential, not retryConflict', async () => {
+    const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(401, 'invalid')) })
+    const result = await runRecovery(deps, 'alice', 'code', 'new-password')
+    expect(result).toEqual({ ok: false, kind: 'credential', error: expect.any(ApiError) })
   })
 })

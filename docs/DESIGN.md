@@ -1120,7 +1120,14 @@ So the release is gated on **presenting the code first**. The server holds a **v
 Argon2id hash of the recovery code under its own salt and parameters, derived separately from the
 wrapping key so that holding the verifier does not yield the wrapper — checks it, and only then
 returns the blob. That verifier is also what authorizes the recovery reset's write to `PROFILE` and
-`RECOVERY`, which otherwise has nothing stated that permits it.
+`RECOVERY`, which otherwise has nothing stated that permits it — **with one narrow exception**:
+issue #130's retry fallback additionally authorizes a *reset's own retry* on a matching client-held
+idempotency token, once the code alone can no longer prove it (the first, successful call already
+rotated the verifier the retry still presents). That path never re-derives or trusts a new secret —
+it only replays the exact same write the code itself already authorized once, confirmed by an
+exact match on the stored token, the version it produced, and the credential material itself, all
+under a strongly consistent read. See `internal/db/credentials.go`'s `IsOwnRewrap` for the full
+check.
 
 The result is weaker than "no read path" and meaningfully stronger than the login blob: it is not
 available on request, it is rate-limitable per account against a high-entropy secret rather than a
