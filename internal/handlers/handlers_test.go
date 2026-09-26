@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pwntato/undergroundbb/internal/config"
+	"github.com/pwntato/undergroundbb/internal/db"
 )
 
 // TestMain sets a fixed, valid SESSION_SECRET for every test in this
@@ -24,9 +26,24 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// offlineDB returns a real, non-nil *db.Client that does no network I/O to
+// build (db.New only constructs the SDK client; it never dials out) --
+// unlike testDB, this never skips when DYNAMODB_ENDPOINT is unset. Use this
+// for routes that satisfy New's non-nil requirement (#87) but never actually
+// read h.db, such as health and getConfig, so those tests keep running under
+// a plain `go test ./...` with no DynamoDB Local available.
+func offlineDB(t *testing.T) *db.Client {
+	t.Helper()
+	c, err := db.New(context.Background(), testTableName(), "http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	return c
+}
+
 func TestHealth(t *testing.T) {
 	mux := http.NewServeMux()
-	New(config.FromEnv(), testDB(t)).RegisterRoutes(mux)
+	New(config.FromEnv(), offlineDB(t)).RegisterRoutes(mux)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
@@ -55,7 +72,7 @@ func TestGetConfig(t *testing.T) {
 	t.Setenv("DEFAULT_EXPIRATION_DAYS", "14")
 
 	mux := http.NewServeMux()
-	New(config.FromEnv(), testDB(t)).RegisterRoutes(mux)
+	New(config.FromEnv(), offlineDB(t)).RegisterRoutes(mux)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
