@@ -37,8 +37,6 @@ import { Label } from '@/components/ui/label'
 
 const CREDENTIAL_ERROR = 'Incorrect username or password.'
 const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
-const WRONG_ACCOUNT_ERROR =
-  'That username belongs to a different account than this tab is logged in as.'
 
 /** Mirrors LoginScreen's own isCredentialFailure -- see that file's doc comment for why a bad password and an unknown username collapse to the same message. */
 function isCredentialFailure(err: unknown): boolean {
@@ -57,13 +55,19 @@ function isCredentialFailure(err: unknown): boolean {
  * sessionUserId is confirmed to be the account that was just unwrapped.
  * Renders nothing but this form -- the parent screen decides when to show
  * it (worker.ts's isLiveKeysError) and what to do once it succeeds.
+ *
+ * onCancel returns to the parent screen's own form without unwrapping
+ * anything -- added per PR #142 round 2 review: without it, the only way
+ * off this step was browser navigation, since it has no route of its own.
  */
 export function ReauthenticateStep({
   sessionUserId,
   onDone,
+  onCancel,
 }: {
   readonly sessionUserId: string
   readonly onDone: () => void
+  readonly onCancel: () => void
 }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -79,7 +83,19 @@ export function ReauthenticateStep({
       try {
         const ch = await challenge(username)
         if (ch.userId !== sessionUserId) {
-          setError(WRONG_ACCOUNT_ERROR)
+          // Two genuinely different cases land here: a typo'd/unknown
+          // username (challenge() returns a random decoy userId for those,
+          // login.go/#125's own anti-enumeration design) and a correctly
+          // typed username that really does belong to a different account
+          // than this tab is logged in as. Showing CREDENTIAL_ERROR for
+          // both (PR #142 round 2 review) rather than a more specific
+          // "wrong account" message keeps the two indistinguishable here
+          // too, the same enumeration defense LoginScreen's own
+          // isCredentialFailure preserves for its own two cases -- a more
+          // specific message would tell a typo apart from a real
+          // wrong-account attempt, which is exactly the distinction
+          // #125 exists to hide.
+          setError(CREDENTIAL_ERROR)
           return
         }
         await completeLogin({
@@ -145,6 +161,9 @@ export function ReauthenticateStep({
       </div>
       <Button type="submit" disabled={submitting}>
         Continue
+      </Button>
+      <Button type="button" variant="ghost" disabled={submitting} onClick={onCancel}>
+        Cancel
       </Button>
     </form>
   )

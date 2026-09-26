@@ -92,11 +92,14 @@ export interface CreateGroupResponse {
 
 /**
  * POST /api/groups -- issue #34. Authenticated by the session cookie.
- * Throws ApiError(409, code: 'group_id_taken') on the astronomically rare
- * groupId collision (see db.ErrGroupIDTaken's own doc comment) -- a caller
- * hitting this must generate a fresh groupId and resign everything under
- * it, not retry this exact request, since the collision means this exact
- * id is unusable.
+ * Throws ApiError(409, code: 'group_id_taken') on a genuine groupId
+ * collision -- the server (db.isOwnGroupCreation) already ruled out "this
+ * is my own earlier request being resent after a lost response" before
+ * returning this, so reaching it means the id itself is unusable: the
+ * caller must generate a fresh groupId and resign everything under it, not
+ * retry this exact request. See runCreateGroup.ts's own handling of
+ * 'group_id_taken' for why this is NOT treated the same as a plain
+ * ambiguous network failure.
  */
 export async function createGroup(req: CreateGroupRequest): Promise<CreateGroupResponse> {
   return putOrPostJSON<CreateGroupResponse>('POST', '/api/groups', req)

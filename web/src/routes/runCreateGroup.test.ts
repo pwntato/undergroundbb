@@ -123,11 +123,30 @@ describe('runCreateGroup', () => {
     })
   })
 
-  it('classifies a groupId conflict (409) from createGroup as definitelyUncommitted', async () => {
+  it('classifies a groupId conflict (409, code group_id_taken) as its own groupIdConflict kind, not definitelyUncommitted', async () => {
+    // PR #142 round 2 review: this used to be classified
+    // 'definitelyUncommitted', which CreateGroupScreen showed as "Couldn't
+    // reach the server" and re-cached `pending` with the SAME now-taken
+    // groupId, so every resubmit hit the same 409 again.
     const deps = makeDeps({
       createGroup: vi
         .fn()
         .mockRejectedValue(new ApiError(409, 'groupId is taken', 'group_id_taken')),
+    })
+    const result = await runCreateGroup(deps, 'group-1', 'Z3JvdXBrZXk=', FORM)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('groupIdConflict')
+    }
+  })
+
+  it('classifies a 409 from createGroup WITHOUT the group_id_taken code as definitelyUncommitted', async () => {
+    // Any other 4xx (validation, signature failures) is still a plain
+    // definite-non-commit -- only the specific group_id_taken code gets the
+    // dedicated groupIdConflict treatment.
+    const deps = makeDeps({
+      createGroup: vi.fn().mockRejectedValue(new ApiError(409, 'some other conflict')),
     })
     const result = await runCreateGroup(deps, 'group-1', 'Z3JvdXBrZXk=', FORM)
 

@@ -51,8 +51,12 @@ func TestCreateGroupWritesAllThreeItems(t *testing.T) {
 	creatorUserID := "test-creator-" + randomSuffix(t)
 	in := testCreateGroupInput(t, groupID, creatorUserID)
 
-	if err := c.CreateGroup(ctx, in); err != nil {
+	gotRootGrantSortKey, err := c.CreateGroup(ctx, in)
+	if err != nil {
 		t.Fatalf("CreateGroup: %v", err)
+	}
+	if gotRootGrantSortKey != in.RootGrantSortKey {
+		t.Errorf("CreateGroup returned RootGrantSortKey = %q, want %q", gotRootGrantSortKey, in.RootGrantSortKey)
 	}
 
 	metaOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+groupID, "META"))
@@ -68,6 +72,9 @@ func TestCreateGroupWritesAllThreeItems(t *testing.T) {
 	}
 	if group.CreatorUserID != creatorUserID {
 		t.Errorf("META CreatorUserID = %q, want %q", group.CreatorUserID, creatorUserID)
+	}
+	if group.RootGrantSortKey != in.RootGrantSortKey {
+		t.Errorf("META RootGrantSortKey = %q, want %q", group.RootGrantSortKey, in.RootGrantSortKey)
 	}
 	if group.Visibility != models.VisibilityPrivate {
 		t.Errorf("META Visibility = %q, want %q", group.Visibility, models.VisibilityPrivate)
@@ -152,7 +159,7 @@ func TestCreateGroupPublicWritesDirectoryEntry(t *testing.T) {
 	in.NamePlaintext = "Book Club"
 	in.DescriptionPlaintext = "We read books"
 
-	if err := c.CreateGroup(ctx, in); err != nil {
+	if _, err := c.CreateGroup(ctx, in); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
@@ -185,12 +192,12 @@ func TestCreateGroupIDCollisionFails(t *testing.T) {
 
 	groupID := "test-group-" + randomSuffix(t)
 	first := testCreateGroupInput(t, groupID, "test-creator-"+randomSuffix(t))
-	if err := c.CreateGroup(ctx, first); err != nil {
+	if _, err := c.CreateGroup(ctx, first); err != nil {
 		t.Fatalf("CreateGroup (first): %v", err)
 	}
 
 	second := testCreateGroupInput(t, groupID, "test-creator-"+randomSuffix(t))
-	err := c.CreateGroup(ctx, second)
+	_, err := c.CreateGroup(ctx, second)
 	if !errors.Is(err, ErrGroupIDTaken) {
 		t.Fatalf("CreateGroup (colliding id): err = %v, want ErrGroupIDTaken", err)
 	}
@@ -216,23 +223,59 @@ func TestCreateGroupIDCollisionFails(t *testing.T) {
 }
 
 // TestCreateGroupRetrySucceeds covers isOwnGroupCreation: a lost-response
-// retry that resends the identical, already-committed request (same
-// GroupID, same CreatorUserID, same TrustAnchorSignature) must return
-// success rather than ErrGroupIDTaken -- see CreateGroup's own doc comment
-// on why this is checked on every META conflict.
+// retry must return success rather than ErrGroupIDTaken -- see CreateGroup's
+// own doc comment on why this is checked on every META conflict.
+//
+// The retry here does NOT resend byte-for-byte identical input -- PR #142
+// round 2 review caught that the real client never does either.
+// TrustAnchorSignature is deterministic (covers only creator+key+gid, no
+// grant-specific data) so it matches across attempts, but RootGrantSortKey
+// and RootGrantSignature are freshly re-signed every time
+// (CreateGroupScreen -> runCreateGroup -> signGroupCreation ->
+// generateGrantSortKey), so a round-1-style test that resends the exact
+// same CreateGroupInput would never have caught the bug: the response must
+// echo the FIRST attempt's RootGrantSortKey, the address something was
+// actually written under, not the retry's own.
 func TestCreateGroupRetrySucceeds(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 
 	groupID := "test-group-" + randomSuffix(t)
-	in := testCreateGroupInput(t, groupID, "test-creator-"+randomSuffix(t))
-	if err := c.CreateGroup(ctx, in); err != nil {
+	first := testCreateGroupInput(t, groupID, "test-creator-"+randomSuffix(t))
+	gotFirst, err := c.CreateGroup(ctx, first)
+	if err != nil {
 		t.Fatalf("CreateGroup (first): %v", err)
 	}
+	if gotFirst != first.RootGrantSortKey {
+		t.Fatalf("CreateGroup (first) returned %q, want %q", gotFirst, first.RootGrantSortKey)
+	}
 
-	// Resend the exact same input, as a client would after a lost response.
-	if err := c.CreateGroup(ctx, in); err != nil {
-		t.Fatalf("CreateGroup (retry): err = %v, want nil (identical resend should succeed)", err)
+	// Resend as the real client does on a resume: same GroupID,
+	// CreatorUserID, CreatorSigningPublicKey and TrustAnchorSignature (all
+	// deterministic over the cached form/groupId/keys), but a FRESH
+	// RootGrantSortKey/RootGrantSignature -- signGroupCreation is called
+	// again on every retry attempt.
+	retry := first
+	retry.RootGrantSortKey = "GRANT#" + first.CreatorUserID + "#2026-09-26#" + randomSuffix(t)
+	retry.RootGrantSignature = []byte("a-freshly-re-signed-root-grant-signature")
+
+	gotRetry, err := c.CreateGroup(ctx, retry)
+	if err != nil {
+		t.Fatalf("CreateGroup (retry): err = %v, want nil (identical-creator resend should succeed)", err)
+	}
+	if gotRetry != first.RootGrantSortKey {
+		t.Errorf("CreateGroup (retry) returned %q, want %q (the FIRST attempt's stored key, not the retry's own fresh one %q)", gotRetry, first.RootGrantSortKey, retry.RootGrantSortKey)
+	}
+
+	// The retry's own freshly-signed GRANT# row must never have been
+	// written -- isOwnGroupCreation short-circuits before CreateGroup's
+	// transaction runs at all on a retry.
+	retryGrantOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+groupID, retry.RootGrantSortKey))
+	if err != nil {
+		t.Fatalf("GetItem retry's GRANT#: %v", err)
+	}
+	if retryGrantOut.Item != nil {
+		t.Error("a GRANT# row exists at the retry's own freshly-signed sort key -- it should never have been written")
 	}
 }
 
@@ -248,13 +291,13 @@ func TestCreateGroupRetryWithDivergedSignatureFails(t *testing.T) {
 	groupID := "test-group-" + randomSuffix(t)
 	creatorUserID := "test-creator-" + randomSuffix(t)
 	first := testCreateGroupInput(t, groupID, creatorUserID)
-	if err := c.CreateGroup(ctx, first); err != nil {
+	if _, err := c.CreateGroup(ctx, first); err != nil {
 		t.Fatalf("CreateGroup (first): %v", err)
 	}
 
 	diverged := testCreateGroupInput(t, groupID, creatorUserID)
 	diverged.TrustAnchorSignature = []byte("a-different-trust-anchor-signature")
-	err := c.CreateGroup(ctx, diverged)
+	_, err := c.CreateGroup(ctx, diverged)
 	if !errors.Is(err, ErrGroupIDTaken) {
 		t.Fatalf("CreateGroup (diverged signature): err = %v, want ErrGroupIDTaken", err)
 	}

@@ -35,6 +35,14 @@ const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
 const AMBIGUOUS_ERROR =
   "We couldn't confirm whether your group was created. Try again — resubmitting is safe."
 const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
+// Distinct from UNREACHABLE_ERROR: a groupIdConflict means the request DID
+// reach the server and got a real answer (409 group_id_taken), not that it
+// failed to connect -- see runCreateGroup.ts's own doc comment on why this
+// is its own CreateGroupErrorKind (PR #142 round 2 review) rather than
+// folded into 'definitelyUncommitted'. Phrased as a plain retry prompt
+// since handleSubmit's groupIdConflict branch below clears `pending`
+// first, so the very next submit generates a fresh groupId automatically.
+const GROUP_ID_CONFLICT_ERROR = 'That request could not be completed. Try again.'
 function errorMessageFor(kind: CreateGroupErrorKind): string {
   switch (kind) {
     case 'definitelyUncommitted':
@@ -43,6 +51,8 @@ function errorMessageFor(kind: CreateGroupErrorKind): string {
       return AMBIGUOUS_ERROR
     case 'authRequired':
       return AUTH_REQUIRED_ERROR
+    case 'groupIdConflict':
+      return GROUP_ID_CONFLICT_ERROR
   }
 }
 
@@ -116,12 +126,23 @@ export function CreateGroupScreen() {
       )
 
       if (!result.ok) {
-        setPending({ groupId, groupKeyB64, values, form })
         setSubmitting(false)
         if (result.kind === 'definitelyUncommitted' && isLiveKeysError(result.error)) {
+          setPending({ groupId, groupKeyB64, values, form })
           setNeedsReauth(values)
           return
         }
+        if (result.kind === 'groupIdConflict') {
+          // This groupId is now known-taken (PR #142 round 2 review) --
+          // clearing `pending` rather than re-caching it means the very
+          // next submit generates a fresh groupId/group key instead of
+          // resending the one that just 409'd, which would otherwise 409
+          // again on every subsequent attempt.
+          setPending(undefined)
+          setError(errorMessageFor(result.kind))
+          return
+        }
+        setPending({ groupId, groupKeyB64, values, form })
         setError(errorMessageFor(result.kind))
         return
       }
@@ -145,6 +166,13 @@ export function CreateGroupScreen() {
           // already filled in, the same `pending` reuse path a plain
           // ambiguous-failure retry takes.
           handleSubmit(values)
+        }}
+        onCancel={() => {
+          // Back to the form with the same values still on it (values
+          // themselves are never cleared -- only needsReauth is), and
+          // `pending` intact so a later submit can still resume rather than
+          // starting over, matching every other failure path's caching.
+          setNeedsReauth(undefined)
         }}
       />
     )

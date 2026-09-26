@@ -106,7 +106,13 @@ type CreateGroupInput struct {
 // still let the server choose"). The handler validates shape, size and
 // encoding before this call, the same division register.go's handler and
 // this package already use.
-func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) error {
+//
+// Returns the root grant's actual sort key -- in.RootGrantSortKey on a
+// fresh write, but the STORED one (which may differ) on a lost-response
+// retry, since the client re-signs a brand new grantSortKey on every
+// attempt including a resumed one (PR #142 round 2 review: the caller must
+// never echo back an address nothing was written under).
+func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	group := models.Group{
@@ -119,6 +125,7 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) error {
 		CreatorUserID:           in.CreatorUserID,
 		CreatorSigningPublicKey: in.CreatorSigningPublicKey,
 		TrustAnchorSignature:    in.TrustAnchorSignature,
+		RootGrantSortKey:        in.RootGrantSortKey,
 		Visibility:              in.Visibility,
 		NamePlaintext:           in.NamePlaintext,
 		DescriptionPlaintext:    in.DescriptionPlaintext,
@@ -169,15 +176,15 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) error {
 
 	groupItem, err := attributevalue.MarshalMap(group)
 	if err != nil {
-		return err
+		return "", err
 	}
 	membershipItem, err := attributevalue.MarshalMap(membership)
 	if err != nil {
-		return err
+		return "", err
 	}
 	grantItem, err := attributevalue.MarshalMap(grant)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// groupItemIndex names the one conditional item's position, matching
@@ -209,18 +216,24 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) error {
 			// so a lost-response retry looks identical to a genuine
 			// collision at this point, and the two are told apart by
 			// reading META back and comparing it to in below.
-			isRetry, checkErr := c.isOwnGroupCreation(ctx, in)
+			storedRootGrantSortKey, isRetry, checkErr := c.isOwnGroupCreation(ctx, in)
 			if checkErr != nil {
-				return checkErr
+				return "", checkErr
 			}
 			if isRetry {
-				return nil
+				// Return the STORED root grant sort key, not
+				// in.RootGrantSortKey -- the client re-signs a brand new
+				// grantSortKey on every attempt, including a resumed one
+				// (CreateGroupScreen calls signGroupCreation again, which
+				// calls generateGrantSortKey again), so this retry's own
+				// request value addresses a row that was never written.
+				return storedRootGrantSortKey, nil
 			}
-			return ErrGroupIDTaken
+			return "", ErrGroupIDTaken
 		}
-		return err
+		return "", err
 	}
-	return nil
+	return in.RootGrantSortKey, nil
 }
 
 // isOwnGroupCreation reports whether a CreateGroup call that lost the META
@@ -241,7 +254,14 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) error {
 // same signed request, while any divergence (a different caller, or the
 // same caller with regenerated keys) fails loudly with ErrGroupIDTaken
 // instead of silently reporting success for a write that never happened.
-func (c *Client) isOwnGroupCreation(ctx context.Context, in CreateGroupInput) (bool, error) {
+//
+// On a match, also returns the STORED RootGrantSortKey -- PR #142 round 2
+// review found that a real retry re-signs a brand new grantSortKey on every
+// attempt (unlike TrustAnchorSignature, which is deterministic and so
+// matches byte-for-byte), so in.RootGrantSortKey on a retry addresses a
+// GRANT# row that was never written. The caller must use this returned
+// value, not in.RootGrantSortKey, when isRetry is true.
+func (c *Client) isOwnGroupCreation(ctx context.Context, in CreateGroupInput) (string, bool, error) {
 	metaOut, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
@@ -251,28 +271,28 @@ func (c *Client) isOwnGroupCreation(ctx context.Context, in CreateGroupInput) (b
 		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if metaOut.Item == nil {
 		// The condition check just reported this item exists; a strongly
 		// consistent read finding it gone a moment later would mean
 		// something this package's model doesn't support (META is never
 		// deleted) -- treat it as "not a match" rather than assume retry.
-		return false, nil
+		return "", false, nil
 	}
 	var group models.Group
 	if err := attributevalue.UnmarshalMap(metaOut.Item, &group); err != nil {
-		return false, err
+		return "", false, err
 	}
 	if group.CreatorUserID != in.CreatorUserID {
 		// This group id belongs to a different creator entirely -- a
 		// genuine conflict, not this caller's own write.
-		return false, nil
+		return "", false, nil
 	}
 	if !bytes.Equal(group.TrustAnchorSignature, in.TrustAnchorSignature) {
 		// Same creator, but the signed material has diverged -- not a safe
 		// resend (isOwnGroupCreation's own doc comment).
-		return false, nil
+		return "", false, nil
 	}
-	return true, nil
+	return group.RootGrantSortKey, true, nil
 }

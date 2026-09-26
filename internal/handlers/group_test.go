@@ -114,35 +114,57 @@ func TestCreateGroupSuccess(t *testing.T) {
 }
 
 // TestCreateGroupRetrySucceeds covers the lost-response case PR #142 review
-// found: a client that never saw the first 201 resends the byte-for-byte
-// identical, already-signed request (same groupId, same signatures --
-// exactly what CreateGroupScreen's own `resuming` path sends, see that
-// file's own header comment). This must return 201 again with the SAME
-// rootGrantSortKey, not 409 -- see db.isOwnGroupCreation's own doc comment.
+// found. The retry here does NOT resend the byte-for-byte identical
+// request -- round 1's version of this test did, and round 2 review caught
+// that the real client never does either: CreateGroupScreen's resume path
+// calls signGroupCreation again, which calls generateGrantSortKey again, so
+// a retry carries a FRESH rootGrantSortKey/rootGrantSignature every time,
+// while groupId/trustAnchorSignature (deterministic, no grant-specific
+// data) stay the same. This must still return 201, with the FIRST attempt's
+// rootGrantSortKey -- the address something was actually written under --
+// not the retry's own freshly-signed one, which addresses a GRANT# row
+// that was never written.
 func TestCreateGroupRetrySucceeds(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	user, cookie := loggedInUser(t, h)
-	req := signedCreateGroupRequest(t, user)
+	first := signedCreateGroupRequest(t, user)
 
-	first := doCreateGroup(t, h, cookie, req)
-	if first.Code != http.StatusCreated {
-		t.Fatalf("status (first) = %d, want %d, body: %s", first.Code, http.StatusCreated, first.Body.String())
+	firstRec := doCreateGroup(t, h, cookie, first)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("status (first) = %d, want %d, body: %s", firstRec.Code, http.StatusCreated, firstRec.Body.String())
 	}
 	var firstResp createGroupResponse
-	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &firstResp); err != nil {
 		t.Fatalf("decoding first response: %v", err)
 	}
+	if firstResp.RootGrantSortKey != first.RootGrantSortKey {
+		t.Fatalf("first response RootGrantSortKey = %q, want %q", firstResp.RootGrantSortKey, first.RootGrantSortKey)
+	}
 
-	retry := doCreateGroup(t, h, cookie, req)
-	if retry.Code != http.StatusCreated {
-		t.Fatalf("status (retry) = %d, want %d, body: %s", retry.Code, http.StatusCreated, retry.Body.String())
+	// Build the retry the way a real resumed submission does: same groupId
+	// and trust anchor signature (both cached verbatim by CreateGroupScreen
+	// and deterministic to re-derive), but signGroupCreation is called
+	// again, producing a fresh root grant sort key and signature.
+	retry := first
+	retryRootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	retryGrantPayload := crypto.RoleGrantPayload(first.GroupID, user.userID, "admin", retryRootGrantSortKey, "")
+	retryGrantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, retryGrantPayload)
+	if err != nil {
+		t.Fatalf("sign retry root grant: %v", err)
+	}
+	retry.RootGrantSortKey = retryRootGrantSortKey
+	retry.RootGrantSignature = base64.StdEncoding.EncodeToString(retryGrantSig)
+
+	retryRec := doCreateGroup(t, h, cookie, retry)
+	if retryRec.Code != http.StatusCreated {
+		t.Fatalf("status (retry) = %d, want %d, body: %s", retryRec.Code, http.StatusCreated, retryRec.Body.String())
 	}
 	var retryResp createGroupResponse
-	if err := json.Unmarshal(retry.Body.Bytes(), &retryResp); err != nil {
+	if err := json.Unmarshal(retryRec.Body.Bytes(), &retryResp); err != nil {
 		t.Fatalf("decoding retry response: %v", err)
 	}
-	if retryResp.RootGrantSortKey != firstResp.RootGrantSortKey {
-		t.Errorf("retry RootGrantSortKey = %q, want %q (same as first)", retryResp.RootGrantSortKey, firstResp.RootGrantSortKey)
+	if retryResp.RootGrantSortKey != first.RootGrantSortKey {
+		t.Errorf("retry RootGrantSortKey = %q, want %q (the FIRST attempt's stored key, not the retry's own fresh one %q)", retryResp.RootGrantSortKey, first.RootGrantSortKey, retry.RootGrantSortKey)
 	}
 }
 

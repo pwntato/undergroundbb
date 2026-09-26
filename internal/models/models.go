@@ -295,6 +295,19 @@ type Group struct {
 	// signature before trusting CreatorUserID/CreatorSigningPublicKey at all.
 	TrustAnchorSignature []byte `dynamodbav:"TrustAnchorSignature"`
 
+	// RootGrantSortKey is the address of this group's root GRANT# item
+	// ("GRANT#<uuid>#<YYYY-MM-DD>#<rand>") -- stored on META (PR #142 round
+	// 2 review) so a lost-response retry of group creation can echo back
+	// the actually-written root grant's address instead of the retry
+	// request's own freshly re-signed one, which points at a row that was
+	// never written (the client re-signs a fresh grantSortKey on every
+	// attempt, including a resumed one -- see db.isOwnGroupCreation's own
+	// doc comment). Unlike GenerationKeyWrapped (removed from this struct
+	// in the same review round for going stale at rotation), this value
+	// never changes after creation: the root grant is permanent and
+	// append-only, so a copy here carries none of that staleness risk.
+	RootGrantSortKey string `dynamodbav:"RootGrantSortKey"`
+
 	// Visibility is VisibilityPrivate or VisibilityPublic, chosen at
 	// creation and not changeable afterward -- switching a group's
 	// visibility would mean re-encrypting or newly encrypting its name and

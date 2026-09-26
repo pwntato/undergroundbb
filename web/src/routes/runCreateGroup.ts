@@ -37,7 +37,8 @@ export interface GroupFormInput {
   readonly expirationDays: number
 }
 
-export type CreateGroupErrorKind = 'definitelyUncommitted' | 'ambiguous' | 'authRequired'
+export type CreateGroupErrorKind =
+  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'groupIdConflict'
 
 export type CreateGroupResult =
   | { readonly ok: true; readonly response: CreateGroupResponse }
@@ -116,18 +117,31 @@ export async function runCreateGroup(
       // network error.
       return { ok: false, kind: 'authRequired', error: err }
     }
+    if (err instanceof ApiError && err.code === 'group_id_taken') {
+      // A genuine groupId collision -- db.isOwnGroupCreation (server-side)
+      // already ruled out "this is my own earlier request being resent," so
+      // reaching this means the id itself is unusable, not that the
+      // request failed to reach the server (PR #142 round 2 review: this
+      // used to fall into 'definitelyUncommitted' and show "Couldn't reach
+      // the server," which is both the wrong message and, worse, left
+      // CreateGroupScreen caching `pending` with the SAME groupId, so every
+      // resubmit hit this same 409 again). A distinct kind lets the screen
+      // clear its cached groupId/group key so the next submit generates
+      // fresh ones, instead of resending the one that's now known-taken.
+      return { ok: false, kind: 'groupIdConflict', error: err }
+    }
     if (isDefinitelyUncommitted(err)) {
-      // Includes ErrGroupIDTaken's 409 (code: group_id_taken) -- the
-      // astronomically rare collision case. Per createGroup's own doc
-      // comment, that specific id is unusable, so CreateGroupScreen must
-      // generate a fresh groupId (and re-encrypt under a fresh group key)
-      // before retrying, not resend this exact request.
       return { ok: false, kind: 'definitelyUncommitted', error: err }
     }
     // Network failure or a 5xx: createGroup()'s write may have committed
     // even though this response was lost. CreateGroupScreen is responsible
     // for caching groupId/groupKeyB64/form so a resubmission of the SAME
-    // form can resend it byte-for-byte rather than regenerating.
+    // form reuses the same groupId and group key rather than generating
+    // fresh ones -- NOT a byte-for-byte resend, though: signGroupCreation
+    // runs again on every attempt including this one, which re-signs a
+    // fresh rootGrantSortKey/rootGrantSignature each time (PR #142 round 2
+    // review). Only groupId/groupKeyB64/the plaintext form are reused
+    // verbatim; the signed material is not.
     return { ok: false, kind: 'ambiguous', error: err }
   }
 }

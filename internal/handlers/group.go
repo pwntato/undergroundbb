@@ -318,7 +318,14 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		RootGrantSignature: rootGrantSig,
 	}
 
-	if err := h.db.CreateGroup(r.Context(), in); err != nil {
+	// storedRootGrantSortKey is what actually got written -- rootGrantSortKey
+	// on a fresh create, but the ORIGINAL attempt's key on a lost-response
+	// retry (db.CreateGroup's own doc comment): the client re-signs a brand
+	// new grantSortKey on every attempt including a resumed one, so echoing
+	// back rootGrantSortKey here on a retry would hand out an address
+	// nothing was ever written under (PR #142 round 2 review).
+	storedRootGrantSortKey, err := h.db.CreateGroup(r.Context(), in)
+	if err != nil {
 		if errors.Is(err, db.ErrGroupIDTaken) {
 			// db.CreateGroup already checked (db.isOwnGroupCreation) whether
 			// this is the caller's own earlier, successful call being
@@ -338,7 +345,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusCreated, createGroupResponse{
 		GroupID:          groupID,
-		RootGrantSortKey: rootGrantSortKey,
+		RootGrantSortKey: storedRootGrantSortKey,
 	})
 }
 
