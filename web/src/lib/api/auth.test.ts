@@ -9,7 +9,7 @@
 // actually needs the `code` field from.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, register } from './auth'
+import { ApiError, getSession, register } from './auth'
 
 const VALID_REGISTER_REQUEST = {
   username: 'alice',
@@ -103,5 +103,31 @@ describe('ApiError.code (issue #134)', () => {
     }
     expect(caught).toBeInstanceOf(ApiError)
     expect((caught as ApiError).code).toBeUndefined()
+  })
+})
+
+describe('getSession (issue #32)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('resolves authenticated: true with a userId when a valid session cookie is present', async () => {
+    stubFetch(200, { authenticated: true, userId: 'user-1' })
+
+    await expect(getSession()).resolves.toEqual({ authenticated: true, userId: 'user-1' })
+  })
+
+  it('resolves authenticated: false, not a thrown ApiError, when there is no session', async () => {
+    // Matches getSession's own server-side handler: a missing or invalid
+    // cookie is always a 200 with authenticated: false, never a 401 -- this
+    // endpoint exists specifically for a caller that doesn't yet know
+    // whether it has a session (see internal/handlers/session.go's own doc
+    // comment on getSession).
+    stubFetch(200, { authenticated: false })
+
+    await expect(getSession()).resolves.toEqual({ authenticated: false })
   })
 })
