@@ -168,17 +168,28 @@ export function CreateGroupScreen() {
           handleSubmit(values)
         }}
         onCancel={() => {
-          // Back to the form with the same values still on it (values
-          // themselves are never cleared -- only needsReauth is), and
-          // `pending` intact so a later submit can still resume rather than
-          // starting over, matching every other failure path's caching.
+          // `pending` stays intact so a later submit can still resume
+          // rather than starting over, matching every other failure path's
+          // caching -- but this component (CreateGroupFormStep) unmounts
+          // entirely while ReauthenticateStep renders, so its own useState
+          // fields are gone regardless. CreateGroupFormStep's initialValues
+          // prop (seeded from pending?.values below) is what actually
+          // restores what the user typed -- see that prop's own doc
+          // comment (PR #142 round 3 review: this comment used to claim
+          // the values survived on their own, which was never true).
           setNeedsReauth(undefined)
         }}
       />
     )
   }
 
-  return <CreateGroupFormStep onSubmit={handleSubmit} error={submitting ? null : error} />
+  return (
+    <CreateGroupFormStep
+      onSubmit={handleSubmit}
+      error={submitting ? null : error}
+      {...(pending !== undefined && { initialValues: pending.values })}
+    />
+  )
 }
 
 /** Structural comparison of the plaintext form values a pending attempt was built from -- deliberately excludes derived ciphertext, which is always freshly re-encrypted under a fresh nonce even for identical plaintext (see buildFormInput). */

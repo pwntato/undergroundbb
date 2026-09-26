@@ -28,18 +28,37 @@ export interface GroupFormValues {
   readonly expirationDays: number
 }
 
+/**
+ * initialValues seeds the form's fields when this component mounts fresh
+ * with values a previous mount already had -- PR #142 round 3 review found
+ * that CreateGroupScreen's ReauthenticateStep branch unmounts this
+ * component entirely (it renders instead of, not alongside, the form), so
+ * this component's own useState hooks lose everything on Cancel or on a
+ * failed resubmit after re-auth. CreateGroupScreen passes `pending?.values`
+ * here so the user doesn't have to retype all five fields exactly to reuse
+ * a cached groupId/group key -- if they DID have to and got even one field
+ * wrong, `formValuesEqual` would fail to match, a fresh groupId would be
+ * generated, and an ambiguous failure that actually committed would create
+ * the orphaned second group `pending` exists to prevent.
+ */
 export function CreateGroupFormStep({
   onSubmit,
   error,
+  initialValues,
 }: {
   onSubmit: (values: GroupFormValues) => void
   error: string | null
+  initialValues?: GroupFormValues
 }) {
-  const [visibility, setVisibility] = useState<'private' | 'public'>('private')
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [revocationMode, setRevocationMode] = useState<'rotating' | 'open'>('rotating')
-  const [neverExpires, setNeverExpires] = useState(false)
+  const [visibility, setVisibility] = useState<'private' | 'public'>(
+    initialValues?.visibility ?? 'private',
+  )
+  const [name, setName] = useState(initialValues?.name ?? '')
+  const [description, setDescription] = useState(initialValues?.description ?? '')
+  const [revocationMode, setRevocationMode] = useState<'rotating' | 'open'>(
+    initialValues?.revocationMode ?? 'rotating',
+  )
+  const [neverExpires, setNeverExpires] = useState(initialValues?.expirationDays === 0)
   const [validationError, setValidationError] = useState<string | null>(null)
 
   const handleSubmit = (e: FormEvent) => {
