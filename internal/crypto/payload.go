@@ -35,25 +35,14 @@ import (
 func SignedPayload(authorUUID, groupID, sortKey string, generation uint64, utcDay string, ciphertext []byte) []byte {
 	ciphertextHash := sha256.Sum256(ciphertext)
 
-	fields := [][]byte{
+	return lengthPrefixedConcat([][]byte{
 		[]byte(authorUUID),
 		[]byte(groupID),
 		[]byte(sortKey),
 		[]byte(strconv.FormatUint(generation, 10)),
 		[]byte(utcDay),
 		ciphertextHash[:],
-	}
-
-	var size int
-	for _, f := range fields {
-		size += 4 + len(f)
-	}
-
-	out := make([]byte, 0, size)
-	for _, f := range fields {
-		out = appendLengthPrefixed(out, f)
-	}
-	return out
+	})
 }
 
 func appendLengthPrefixed(out, field []byte) []byte {

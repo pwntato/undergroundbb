@@ -10,6 +10,7 @@
 import { DecryptionFailedError } from './aesgcm.js'
 import type {
   ChangePasswordMaterial,
+  ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
   CompleteChangePasswordResponse,
   CompleteLoginRequest,
@@ -19,6 +20,9 @@ import type {
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
   RecoveryMaterial,
+  SignGroupCreationRequest,
+  SignGroupCreationResponse,
+  SignGroupCreationResult,
   SignupMaterial,
   SignupProgressEvent,
   WorkerErrorResponse,
@@ -248,4 +252,57 @@ export function completeChangePassword(
     w.addEventListener('message', onMessage)
     w.postMessage(fullReq)
   })
+}
+
+/**
+ * Signs a new group's trust anchor and root role grant, and wraps its
+ * generation-0 key to the caller's own wrapping public key -- issue #34.
+ * Relies entirely on the worker's own cached liveKeys (populated by an
+ * earlier completeLogin call in this same worker instance); there is no
+ * password or private key parameter here, unlike every other function in
+ * this file, because the whole point of caching keys inside the worker is
+ * that the main thread never holds one to pass. Rejects if no completeLogin
+ * has succeeded in this worker instance's lifetime (e.g. the page was
+ * reloaded since login) -- see worker.ts's own signGroupCreation for the
+ * exact error.
+ */
+export function signGroupCreation(
+  req: Omit<SignGroupCreationRequest, 'kind' | 'id'>,
+): Promise<SignGroupCreationResult> {
+  const id = nextRequestID()
+  const fullReq: SignGroupCreationRequest = { kind: 'signGroupCreation', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signGroupCreationDone') {
+        resolve((msg as SignGroupCreationResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signGroupCreation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Clears the worker's cached liveKeys -- call on logout. Fire-and-forget:
+ * there is no response to await, and no failure mode worth surfacing (worst
+ * case, the worker is terminated and replaced before this message is even
+ * processed, which clears the cache just as effectively).
+ */
+export function clearLiveKeys(): void {
+  const req: ClearLiveKeysRequest = { kind: 'clearLiveKeys', id: nextRequestID() }
+  getWorker().postMessage(req)
 }

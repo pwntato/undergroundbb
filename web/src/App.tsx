@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
 import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
+import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
 import { Home } from '@/routes/Home'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
@@ -12,9 +13,17 @@ import { SessionProvider } from '@/lib/session/SessionContext'
  * Application shell: session state + routing. #33 adds the first real
  * screens (signup, login) on top of the placeholder scaffold; #128 adds
  * recovery; #131 adds the logged-in change-password/new-recovery-code
- * screen; #32 adds the session bootstrap and the guards below; everything
- * else this milestone needs (the board views, etc.) arrives with the
- * features that need them.
+ * screen; #32 adds the session bootstrap and the guards below; #34 adds
+ * group creation; everything else this milestone needs (the board views,
+ * etc.) arrives with the features that need them.
+ *
+ * /groups/new uses RequireAuth like /account/password -- CreateGroupScreen
+ * additionally needs the crypto worker's cached signing/wrapping keys to be
+ * live (populated by a prior completeLogin in this worker instance's
+ * lifetime), which RequireAuth's session check cannot see; that screen's
+ * own error handling covers a cold cache separately, the same split
+ * ChangePasswordScreen's header comment describes between RequireAuth and
+ * its own live bootstrap check.
  *
  * /recovery is deliberately unguarded either way: it exists for a visitor
  * who cannot log in, so it must work regardless of session state, same as
@@ -59,6 +68,14 @@ function App() {
               element={
                 <RequireAuth>
                   <ChangePasswordScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/new"
+              element={
+                <RequireAuth>
+                  <CreateGroupScreen />
                 </RequireAuth>
               }
             />

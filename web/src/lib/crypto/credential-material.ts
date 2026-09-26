@@ -11,6 +11,7 @@
 import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
 import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
+import { memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import {
   deriveRecoveryVerifier,
@@ -18,7 +19,13 @@ import {
   generateRecoveryCode,
 } from './recovery-code.js'
 import * as ed25519 from './ed25519.js'
-import { generateWrappingKey, KEY_LEN as X25519_KEY_LEN } from './x25519.js'
+import {
+  generateWrappingKey,
+  wrap,
+  wrappingKeyFromPrivate,
+  KEY_LEN as X25519_KEY_LEN,
+  type WrappingKey,
+} from './x25519.js'
 import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
 import type { RecoveryMaterial, SignupMaterial } from './worker-protocol.js'
 
@@ -195,7 +202,32 @@ async function unwrapAndValidate(
   return { bundle, decoded }
 }
 
-/** Completes login step 3: unwraps the PROFILE copy with the password, signs the challenge nonce. */
+/**
+ * The unwrapped signing and wrapping keypairs for one user, live only for
+ * as long as this worker instance keeps them cached (worker.ts's own
+ * liveKeys) -- never the raw wrappingPrivateKey/signingSeed on their own,
+ * always paired with the userId they belong to so a cache read can confirm
+ * it is being used for the account that actually produced it. See
+ * worker.ts's own doc comment on liveKeys for why this pair never crosses
+ * back out of the worker via postMessage.
+ */
+export interface LiveKeys {
+  readonly userId: string
+  readonly signingKey: ed25519.SigningKey
+  readonly wrappingKey: WrappingKey
+}
+
+/**
+ * Completes login step 3: unwraps the PROFILE copy with the password, signs
+ * the challenge nonce, and returns the same unwrapped keypair as `keys` --
+ * added for issue #34, so worker.ts can cache it (liveKeys) for a later
+ * signGroupCreation call in the same worker instance, without a second,
+ * redundant Argon2id derivation + decrypt of the same blob. The signature
+ * itself is computed here, before this function returns, exactly as before
+ * this field was added -- worker.ts's own completeLogin handler still posts
+ * only `signature` across postMessage, matching every existing caller's
+ * contract unchanged.
+ */
 export async function completeLogin(req: {
   readonly password: string
   readonly salt: string
@@ -203,7 +235,7 @@ export async function completeLogin(req: {
   readonly wrappedPrivateKeys: { readonly nonce: string; readonly ciphertext: string }
   readonly userId: string
   readonly nonce: string
-}): Promise<string> {
+}): Promise<{ signature: string; keys: LiveKeys }> {
   const salt = base64ToBytes(req.salt)
   const key = await deriveKey(req.password, salt, req.argon2Params, KEY_SIZE)
   const { decoded } = await unwrapAndValidate(key, req.wrappedPrivateKeys, req.userId, 'PROFILE')
@@ -215,7 +247,77 @@ export async function completeLogin(req: {
     base64ToBytes(req.nonce),
   )
 
-  return bytesToBase64(signature)
+  const wrappingKey = wrappingKeyFromPrivate(decoded.wrappingPrivateKey)
+
+  return {
+    signature: bytesToBase64(signature),
+    keys: { userId: req.userId, signingKey, wrappingKey },
+  }
+}
+
+/**
+ * #34: signs a new group's trust anchor and self-signed root role grant
+ * with keys' signing key, and wraps groupKey to keys' own wrapping public
+ * key -- the creator's own copy, matching Go's
+ * models.Group.GenerationKeyWrapped and models.Membership.WrappedGroupKey,
+ * which store the identical wrap independently on both items (see those
+ * fields' own doc comments for why they are not one shared blob).
+ *
+ * keys comes from worker.ts's own liveKeys cache, populated by an earlier
+ * completeLogin call in this same worker instance -- this function itself
+ * takes no password and does no unwrapping, unlike every function above it
+ * in this file, since the keypair is already live by the time a group
+ * creation request reaches here.
+ *
+ * The AAD for wrapping groupKey is memberWrapAAD(groupId, keys.userId, 0) --
+ * see docs/DESIGN.md's AAD table, "Member's wrapped group key," and
+ * internal/crypto/group.go's MemberWrapAAD (the Go counterpart this must
+ * match byte-for-byte). This is deliberately NOT the same AAD a GENKEY#
+ * chain link would use: a member's own wrapped entry point is
+ * member-specific (it binds the member uuid), while a chain link is
+ * member-independent -- see models.Group.GenerationKeyWrapped's own doc
+ * comment on the Go side for why these are two different wraps of the same
+ * plaintext key, not one shared blob.
+ */
+export async function signGroupCreation(
+  keys: LiveKeys,
+  groupId: string,
+  groupKey: Uint8Array,
+): Promise<{
+  trustAnchorSignature: string
+  rootGrantSignature: string
+  groupKeyWrapped: { ephemeralPub: string; nonce: string; ciphertext: string }
+}> {
+  const anchorPayload = trustAnchorPayload(keys.userId, keys.signingKey.publicKey, groupId)
+  const trustAnchorSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.TrustAnchor,
+    anchorPayload,
+  )
+
+  // The root grant has no predecessor to reference -- grantorGrantRef is ""
+  // -- see internal/crypto/group.go's RoleGrantPayload and
+  // models.RoleGrant's own doc comment on the Go side for why the root
+  // grant's shape is exactly this.
+  const grantPayload = roleGrantPayload(groupId, keys.userId, 'admin', '')
+  const rootGrantSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RoleGrant,
+    grantPayload,
+  )
+
+  const wrapAAD = memberWrapAAD(groupId, keys.userId, 0)
+  const wrapped = await wrap(keys.wrappingKey.publicKey, groupKey, wrapAAD)
+
+  return {
+    trustAnchorSignature: bytesToBase64(trustAnchorSignature),
+    rootGrantSignature: bytesToBase64(rootGrantSignature),
+    groupKeyWrapped: {
+      ephemeralPub: bytesToBase64(wrapped.ephemeralPub),
+      nonce: bytesToBase64(wrapped.nonce),
+      ciphertext: bytesToBase64(wrapped.ciphertext),
+    },
+  }
 }
 
 /**

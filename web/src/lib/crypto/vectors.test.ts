@@ -16,6 +16,13 @@ import { deriveKey } from './argon2.js'
 import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
+import {
+  groupNameAAD,
+  memberWrapAAD,
+  roleGrantPayload,
+  trustAnchorPayload,
+  type GroupTextField,
+} from './group.js'
 import { bytesToHex, hexToBytes } from './hex.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
@@ -114,6 +121,48 @@ interface VectorFile {
     signing_seed_hex: string
     wrapping_private_key_hex: string
     encoded_hex: string
+  }[]
+  trust_anchor: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    creator_uuid: string
+    group_id: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  role_grant: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    subject_uuid: string
+    role: string
+    grantor_grant_ref: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  member_wrap_aad: {
+    name: string
+    group_id: string
+    member_uuid: string
+    generation: number
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
+  }[]
+  group_name_aad: {
+    name: string
+    group_id: string
+    field: string
+    generation: number
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
   }[]
 }
 
@@ -330,4 +379,101 @@ describe('key bundle vectors', () => {
       expect(bytesToHex(decoded.wrappingPrivateKey)).toBe(tc.wrapping_private_key_hex)
     })
   }
+})
+
+// Pins trustAnchorPayload's exact encoding -- issue #34, the same reasoning
+// as "signed payload vectors": a group's root of trust is verified by every
+// future member's client, so this payload must be byte-identical to Go's
+// before any real group exists under it.
+describe('trust anchor vectors', () => {
+  for (const tc of vectors.trust_anchor) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = trustAnchorPayload(tc.creator_uuid, key.publicKey, tc.group_id)
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.TrustAnchor, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins roleGrantPayload's exact encoding, for both the root-grant shape
+// (empty grantorGrantRef) and a non-root grant referencing a real
+// predecessor.
+describe('role grant vectors', () => {
+  for (const tc of vectors.role_grant) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = roleGrantPayload(tc.group_id, tc.subject_uuid, tc.role, tc.grantor_grant_ref)
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.RoleGrant, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins memberWrapAAD's exact encoding -- the same reasoning as "credential
+// wrap vectors" applied to a different AAD.
+describe('member wrap AAD vectors', () => {
+  for (const tc of vectors.member_wrap_aad) {
+    it(tc.name, async () => {
+      const wantAad = hexToBytes(tc.aad_hex)
+      const gotAad = memberWrapAAD(tc.group_id, tc.member_uuid, tc.generation)
+      expect(bytesToHex(gotAad)).toBe(bytesToHex(wantAad))
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const plaintext = hexToBytes(tc.plaintext_hex)
+
+      const ciphertext = await encryptWithNonce(key, nonce, plaintext, gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+
+      const decrypted = await decrypt(key, nonce, ciphertext, gotAad)
+      expect(bytesToHex(decrypted)).toBe(tc.plaintext_hex)
+    })
+  }
+})
+
+// Pins groupNameAAD's exact encoding, for both the name and description
+// fields -- the same reasoning as "member wrap AAD vectors" applied to a
+// different AAD.
+describe('group name AAD vectors', () => {
+  for (const tc of vectors.group_name_aad) {
+    it(tc.name, async () => {
+      const wantAad = hexToBytes(tc.aad_hex)
+      const gotAad = groupNameAAD(tc.group_id, tc.field as GroupTextField, tc.generation)
+      expect(bytesToHex(gotAad)).toBe(bytesToHex(wantAad))
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const plaintext = hexToBytes(tc.plaintext_hex)
+
+      const ciphertext = await encryptWithNonce(key, nonce, plaintext, gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+
+      const decrypted = await decrypt(key, nonce, ciphertext, gotAad)
+      expect(bytesToHex(decrypted)).toBe(tc.plaintext_hex)
+    })
+  }
+
+  it('cross-field AAD must fail (name ciphertext under description AAD)', async () => {
+    const nameVec = vectors.group_name_aad.find((v) => v.field === 'NAME')
+    const descVec = vectors.group_name_aad.find((v) => v.field === 'DESC')
+    if (!nameVec || !descVec) throw new Error('expected both NAME and DESC vectors')
+
+    const key = hexToBytes(nameVec.key_hex)
+    const nonce = hexToBytes(nameVec.nonce_hex)
+    const nameCiphertext = hexToBytes(nameVec.ciphertext_hex)
+    const descAad = hexToBytes(descVec.aad_hex)
+
+    await expect(decrypt(key, nonce, nameCiphertext, descAad)).rejects.toThrow(
+      DecryptionFailedError,
+    )
+  })
 })

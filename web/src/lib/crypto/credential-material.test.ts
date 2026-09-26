@@ -14,11 +14,16 @@ import { base64ToBytes } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   completeChangePassword,
+  completeLogin,
   completeRecovery,
   generateSignupMaterial,
+  signGroupCreation,
 } from './credential-material.js'
+import * as ed25519 from './ed25519.js'
+import { memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
+import { unwrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -254,5 +259,85 @@ describe('change-password round trip', () => {
       { step: 3, totalSteps: 4 },
       { step: 4, totalSteps: 4 },
     ])
+  })
+})
+
+// Issue #34: proves signGroupCreation's output actually verifies/unwraps
+// against the SAME keypair completeLogin unwraps from a real signup -- the
+// gap the vector tests alone don't cover, since those exercise
+// trustAnchorPayload/roleGrantPayload/memberWrapAAD in isolation against
+// fixed inputs, never against a keypair that came out of a real
+// signup -> login round trip the way worker.ts's liveKeys cache actually
+// does.
+describe('group creation signing', () => {
+  it('signs a verifiable trust anchor and root grant, and wraps a recoverable group key', async () => {
+    const signup = await generateSignupMaterial(USER_ID, 'group-creator-password', () => {})
+
+    const { keys } = await completeLogin({
+      password: 'group-creator-password',
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId: USER_ID,
+      nonce: Buffer.from([1, 2, 3, 4]).toString('base64'),
+    })
+    expect(keys.userId).toBe(USER_ID)
+
+    const groupId = 'group-uuid-test-1'
+    const groupKey = new Uint8Array(32).fill(7)
+
+    const result = await signGroupCreation(keys, groupId, groupKey)
+
+    const anchorPayload = trustAnchorPayload(USER_ID, keys.signingKey.publicKey, groupId)
+    expect(
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ed25519.SigningContext.TrustAnchor,
+        anchorPayload,
+        base64ToBytes(result.trustAnchorSignature),
+      ),
+    ).toBe(true)
+
+    const grantPayload = roleGrantPayload(groupId, USER_ID, 'admin', '')
+    expect(
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ed25519.SigningContext.RoleGrant,
+        grantPayload,
+        base64ToBytes(result.rootGrantSignature),
+      ),
+    ).toBe(true)
+
+    // The creator can unwrap their own wrapped group key with their own
+    // wrapping private key and the correct AAD -- the actual round trip
+    // this whole function exists to make possible, and the bug this test
+    // was added to catch: an earlier draft dropped groupKeyWrapped's
+    // ephemeralPub entirely, which made this unwrap always fail.
+    const wrapAAD = memberWrapAAD(groupId, USER_ID, 0)
+    const unwrapped = await unwrap(
+      keys.wrappingKey.privateKey,
+      {
+        ephemeralPub: base64ToBytes(result.groupKeyWrapped.ephemeralPub),
+        nonce: base64ToBytes(result.groupKeyWrapped.nonce),
+        ciphertext: base64ToBytes(result.groupKeyWrapped.ciphertext),
+      },
+      wrapAAD,
+    )
+    expect(unwrapped).toEqual(groupKey)
+
+    // Unwrapping under a DIFFERENT group id's AAD must fail -- proves the
+    // wrap is actually bound to this group and member, not merely present.
+    const wrongAad = memberWrapAAD('a-different-group', USER_ID, 0)
+    await expect(
+      unwrap(
+        keys.wrappingKey.privateKey,
+        {
+          ephemeralPub: base64ToBytes(result.groupKeyWrapped.ephemeralPub),
+          nonce: base64ToBytes(result.groupKeyWrapped.nonce),
+          ciphertext: base64ToBytes(result.groupKeyWrapped.ciphertext),
+        },
+        wrongAad,
+      ),
+    ).rejects.toThrow()
   })
 })

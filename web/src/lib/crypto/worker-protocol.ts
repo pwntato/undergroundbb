@@ -157,6 +157,65 @@ export interface CompleteChangePasswordResponse {
   readonly result: ChangePasswordMaterial
 }
 
+/**
+ * Signs a new group's trust anchor and self-signed root role grant, and
+ * wraps the group's freshly generated key to the caller's own X25519 public
+ * key -- issue #34. Unlike every request above, this one carries NO key
+ * material of its own: it relies entirely on the worker's own liveKeys
+ * cache (worker.ts), populated as a side effect of a prior completeLogin
+ * call in this same worker instance's lifetime. There is deliberately no
+ * way to pass a private key into this request -- the whole point of
+ * caching keys inside the worker rather than handing them back to the main
+ * thread (see worker.ts's own module doc comment) is that the main thread
+ * never holds one to pass.
+ *
+ * userId must match liveKeys' cached owner -- see worker.ts's own check --
+ * so a caller cannot accidentally (or otherwise) sign as whichever account
+ * happened to log in most recently in a worker instance reused across a
+ * logout/login in the same tab.
+ */
+export interface SignGroupCreationRequest {
+  readonly kind: 'signGroupCreation'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  /** The group's freshly generated symmetric key (Generation 0), raw bytes, base64. */
+  readonly groupKey: string
+}
+
+export interface SignGroupCreationResult {
+  readonly trustAnchorSignature: string
+  readonly rootGrantSignature: string
+  /**
+   * The X25519-ECIES wrap of the group's Generation 0 key, to the caller's
+   * own wrapping public key. Carries ephemeralPub alongside nonce/ciphertext
+   * -- unlike a WrappedBlob-shaped field elsewhere in this app (a plain
+   * Argon2id-derived AES-GCM wrap), an ECIES wrap cannot be unwrapped again
+   * without the ephemeral public key generated for this specific wrap. See
+   * models.WrappedKey (Go) / group.ts's own doc comments for the full
+   * reasoning.
+   */
+  readonly groupKeyWrapped: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+export interface SignGroupCreationResponse {
+  readonly kind: 'signGroupCreationDone'
+  readonly id: string
+  readonly result: SignGroupCreationResult
+}
+
+/**
+ * Clears the worker's cached liveKeys -- posted on logout so a worker
+ * instance reused across a logout/login in the same tab cannot sign
+ * anything under the previous account's keys. See worker.ts's own doc
+ * comment on liveKeys.  No response is posted back; this is fire-and-forget
+ * the same way there is nothing meaningful to await.
+ */
+export interface ClearLiveKeysRequest {
+  readonly kind: 'clearLiveKeys'
+  readonly id: string
+}
+
 export interface WorkerErrorResponse {
   readonly kind: 'error'
   readonly id: string
@@ -176,6 +235,8 @@ export type WorkerRequest =
   | CompleteLoginRequest
   | CompleteRecoveryRequest
   | CompleteChangePasswordRequest
+  | SignGroupCreationRequest
+  | ClearLiveKeysRequest
 
 export type WorkerResponse =
   | SignupProgressEvent
@@ -183,4 +244,5 @@ export type WorkerResponse =
   | CompleteLoginResponse
   | CompleteRecoveryResponse
   | CompleteChangePasswordResponse
+  | SignGroupCreationResponse
   | WorkerErrorResponse

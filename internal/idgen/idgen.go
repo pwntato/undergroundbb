@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"regexp"
+	"time"
 )
 
 // uuidPattern matches exactly what UUID produces: a well-formed, lowercase
@@ -50,4 +51,31 @@ func UUID() (string, error) {
 	// Variant: set the two most significant bits of byte 8 to 10.
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// randSuffixBytes is the width of the random component DaySuffix appends.
+// 8 bytes (16 hex characters) is far more than needed to avoid a same-day
+// collision within one partition -- the items this suffix addresses
+// (GRANT#, and later POST#/INVITE#/NOTIF#) are written at most a handful of
+// times a day even for a very active group -- but costs nothing extra on a
+// sort key that already carries a uuid and a date.
+const randSuffixBytes = 8
+
+// DaySuffix generates the "<YYYY-MM-DD, UTC>#<rand>" component several sort
+// keys in docs/DESIGN.md's data model use (GRANT#<uuid>#<YYYY-MM-DD>#<rand>,
+// and later POST#, INVITE#, NOTIF#) -- a day-resolution timestamp, which is
+// deliberately coarser than a full RFC 3339 value so the key discloses only
+// the day something happened rather than the second (see DESIGN.md's TTL
+// rounding discussion for why second-resolution values are avoided
+// elsewhere in this schema too), followed by CSPRNG randomness so two items
+// written the same day never collide and so the key does not become a
+// second, finer-grained clock in disguise. now is UTC, not local time, so
+// every server instance and every reader agrees on which day a given
+// instant falls in regardless of where it runs.
+func DaySuffix(now time.Time) (string, error) {
+	var b [randSuffixBytes]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("idgen: generate day suffix: %w", err)
+	}
+	return fmt.Sprintf("%s#%x", now.UTC().Format("2006-01-02"), b[:]), nil
 }

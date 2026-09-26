@@ -53,6 +53,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/account/password", h.requireSession(h.changePassword))
 	mux.HandleFunc("POST /api/account/recovery-code/release", h.recoveryCodeRelease)
 	mux.HandleFunc("PUT /api/account/recovery-code", h.recoveryCodeReset)
+	mux.HandleFunc("POST /api/groups", h.requireSession(h.createGroup))
 }
 
 // health reports that the process is up. It touches no dependencies, so it

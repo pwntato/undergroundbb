@@ -149,6 +149,69 @@ type keyBundleVector struct {
 	EncodedHex         string `json:"encoded_hex"`
 }
 
+// trustAnchorVector proves TrustAnchorPayload's exact encoding -- issue #34,
+// the same reasoning as signedPayloadVector: a group's root of trust is
+// verified by every future member's client, so this payload's byte layout
+// must be pinned across Go and TypeScript before any real group exists
+// under it.
+type trustAnchorVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	CreatorUUID  string `json:"creator_uuid"`
+	GroupID      string `json:"group_id"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+// roleGrantVector proves RoleGrantPayload's exact encoding, for both the
+// root-grant shape (empty grantorGrantRef) and a non-root grant referencing
+// a real predecessor -- see RoleGrantPayload's own doc comment.
+type roleGrantVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	GroupID         string `json:"group_id"`
+	SubjectUUID     string `json:"subject_uuid"`
+	Role            string `json:"role"`
+	GrantorGrantRef string `json:"grantor_grant_ref"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
+}
+
+// memberWrapVector proves MemberWrapAAD's exact encoding -- the same
+// reasoning as credentialWrapVector: pinning the AAD string itself, plus
+// the AES-256-GCM ciphertext it produces under a fixed key/nonce/plaintext,
+// so a member's own wrapped group-key entry point never drifts between
+// implementations.
+type memberWrapVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	MemberUUID    string `json:"member_uuid"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+// groupNameVector proves GroupNameAAD's exact encoding, for both the name
+// and description fields at the same group id and generation -- proving
+// the two encode to genuinely different AAD, the same shape
+// credentialWrapVector proves for PROFILE vs. RECOVERY.
+type groupNameVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	Field         string `json:"field"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
 type vectorFile struct {
 	Version        int                    `json:"version"`
 	KDF            []kdfVector            `json:"kdf"`
@@ -161,6 +224,10 @@ type vectorFile struct {
 	Fingerprint    []fingerprintVector    `json:"fingerprint"`
 	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
 	KeyBundle      []keyBundleVector      `json:"key_bundle"`
+	TrustAnchor    []trustAnchorVector    `json:"trust_anchor"`
+	RoleGrant      []roleGrantVector      `json:"role_grant"`
+	MemberWrap     []memberWrapVector     `json:"member_wrap_aad"`
+	GroupName      []groupNameVector      `json:"group_name_aad"`
 }
 
 func main() {
@@ -414,6 +481,133 @@ func main() {
 			WrappingPubHex: hex.EncodeToString(wrappingPriv.PublicKey().Bytes()),
 			Fingerprint:    fp,
 		})
+	}
+
+	// --- Trust anchor (#34) ---
+	{
+		pub, priv := fixedEd25519Key("trust-anchor-key-1")
+		creatorUUID := "creator-uuid-1"
+		groupID := "group-uuid-2"
+
+		payload := crypto.TrustAnchorPayload(creatorUUID, pub, groupID)
+		sig, err := crypto.Sign(priv, crypto.ContextTrustAnchor, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.TrustAnchor = append(out.TrustAnchor, trustAnchorVector{
+			Name:         "basic",
+			PrivateHex:   hex.EncodeToString(priv),
+			PublicHex:    hex.EncodeToString(pub),
+			CreatorUUID:  creatorUUID,
+			GroupID:      groupID,
+			PayloadHex:   hex.EncodeToString(payload),
+			SignatureHex: hex.EncodeToString(sig),
+		})
+	}
+
+	// --- Role grant (#34): root grant (empty ref) and a non-root grant ---
+	{
+		pub, priv := fixedEd25519Key("role-grant-key-1")
+		groupID := "group-uuid-2"
+		creatorUUID := "creator-uuid-1"
+
+		rootPayload := crypto.RoleGrantPayload(groupID, creatorUUID, "admin", "")
+		rootSig, err := crypto.Sign(priv, crypto.ContextRoleGrant, rootPayload)
+		if err != nil {
+			panic(err)
+		}
+		out.RoleGrant = append(out.RoleGrant, roleGrantVector{
+			Name:            "root",
+			PrivateHex:      hex.EncodeToString(priv),
+			PublicHex:       hex.EncodeToString(pub),
+			GroupID:         groupID,
+			SubjectUUID:     creatorUUID,
+			Role:            "admin",
+			GrantorGrantRef: "",
+			PayloadHex:      hex.EncodeToString(rootPayload),
+			SignatureHex:    hex.EncodeToString(rootSig),
+		})
+
+		subjectUUID := "member-uuid-1"
+		grantRef := "GRANT#" + creatorUUID + "#2026-09-06#a1b2c3d4e5f6a1b2"
+		nonRootPayload := crypto.RoleGrantPayload(groupID, subjectUUID, "member", grantRef)
+		nonRootSig, err := crypto.Sign(priv, crypto.ContextRoleGrant, nonRootPayload)
+		if err != nil {
+			panic(err)
+		}
+		out.RoleGrant = append(out.RoleGrant, roleGrantVector{
+			Name:            "non_root",
+			PrivateHex:      hex.EncodeToString(priv),
+			PublicHex:       hex.EncodeToString(pub),
+			GroupID:         groupID,
+			SubjectUUID:     subjectUUID,
+			Role:            "member",
+			GrantorGrantRef: grantRef,
+			PayloadHex:      hex.EncodeToString(nonRootPayload),
+			SignatureHex:    hex.EncodeToString(nonRootSig),
+		})
+	}
+
+	// --- Member wrap AAD (#34) ---
+	{
+		groupID := "group-uuid-2"
+		memberUUID := "member-uuid-1"
+		var generation uint64 = 0
+		key := fixedSeed("member-wrap-key-1")[:crypto.KeySize]
+		plaintext := fixedSeed("member-wrap-plaintext-1")[:crypto.KeySize]
+		nonce := fixedSeed("member-wrap-nonce-1")[:crypto.NonceSize]
+
+		aad := crypto.MemberWrapAAD(groupID, memberUUID, generation)
+		ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+		if err != nil {
+			panic(err)
+		}
+		out.MemberWrap = append(out.MemberWrap, memberWrapVector{
+			Name:          "generation_0",
+			GroupID:       groupID,
+			MemberUUID:    memberUUID,
+			Generation:    generation,
+			AADHex:        hex.EncodeToString(aad),
+			KeyHex:        hex.EncodeToString(key),
+			PlaintextHex:  hex.EncodeToString(plaintext),
+			NonceHex:      hex.EncodeToString(nonce),
+			CiphertextHex: hex.EncodeToString(ciphertext),
+		})
+	}
+
+	// --- Group name AAD (#34) ---
+	{
+		groupID := "group-uuid-2"
+		var generation uint64 = 0
+		key := fixedSeed("group-name-key-1")[:crypto.KeySize]
+
+		for _, tc := range []struct {
+			name       string
+			field      crypto.GroupTextField
+			plaintext  []byte
+			nonceLabel string
+		}{
+			{"name", crypto.GroupNameField, []byte("Book Club"), "group-name-nonce-name-1"},
+			{"description", crypto.GroupDescriptionField, []byte("We read books"), "group-name-nonce-description-1"},
+		} {
+			aad := crypto.GroupNameAAD(groupID, tc.field, generation)
+			nonce := fixedSeed(tc.nonceLabel)[:crypto.NonceSize]
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, tc.plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.GroupName = append(out.GroupName, groupNameVector{
+				Name:          tc.name,
+				GroupID:       groupID,
+				Field:         string(tc.field),
+				Generation:    generation,
+				AADHex:        hex.EncodeToString(aad),
+				KeyHex:        hex.EncodeToString(key),
+				PlaintextHex:  hex.EncodeToString(tc.plaintext),
+				NonceHex:      hex.EncodeToString(nonce),
+				CiphertextHex: hex.EncodeToString(ciphertext),
+			})
+		}
 	}
 
 	enc := json.NewEncoder(os.Stdout)
