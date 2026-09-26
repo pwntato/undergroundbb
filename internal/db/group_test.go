@@ -78,8 +78,13 @@ func TestCreateGroupWritesAllThreeItems(t *testing.T) {
 	if group.GSI1PK != "" || group.GSI1SK != "" {
 		t.Errorf("private group META has GSI1PK=%q GSI1SK=%q, want both empty -- see DESIGN.md, private groups write no directory entry", group.GSI1PK, group.GSI1SK)
 	}
-	if len(group.GenerationKeyWrapped.EphemeralPub) != 32 {
-		t.Errorf("META GenerationKeyWrapped.EphemeralPub len = %d, want 32 -- an ECIES wrap without its ephemeral public key can never be unwrapped again", len(group.GenerationKeyWrapped.EphemeralPub))
+	// PR #142 review: META does not carry a wrapped group key -- only the
+	// creator's own MEMBER# item does (checked below). Verified by reading
+	// the raw item map rather than the models.Group struct, since a struct
+	// with no such field would trivially "pass" a struct-level check even
+	// if a stray attribute were still being written.
+	if _, ok := metaOut.Item["GenerationKeyWrapped"]; ok {
+		t.Error("META has a GenerationKeyWrapped attribute, want none -- the creator's wrapped key belongs on their own MEMBER# item only")
 	}
 
 	memberOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+groupID, "MEMBER#"+creatorUserID))
@@ -207,5 +212,50 @@ func TestCreateGroupIDCollisionFails(t *testing.T) {
 	}
 	if collidingMemberOut.Item != nil {
 		t.Fatal("colliding CreateGroup's MEMBER# item was written despite the transaction failing")
+	}
+}
+
+// TestCreateGroupRetrySucceeds covers isOwnGroupCreation: a lost-response
+// retry that resends the identical, already-committed request (same
+// GroupID, same CreatorUserID, same TrustAnchorSignature) must return
+// success rather than ErrGroupIDTaken -- see CreateGroup's own doc comment
+// on why this is checked on every META conflict.
+func TestCreateGroupRetrySucceeds(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	groupID := "test-group-" + randomSuffix(t)
+	in := testCreateGroupInput(t, groupID, "test-creator-"+randomSuffix(t))
+	if err := c.CreateGroup(ctx, in); err != nil {
+		t.Fatalf("CreateGroup (first): %v", err)
+	}
+
+	// Resend the exact same input, as a client would after a lost response.
+	if err := c.CreateGroup(ctx, in); err != nil {
+		t.Fatalf("CreateGroup (retry): err = %v, want nil (identical resend should succeed)", err)
+	}
+}
+
+// TestCreateGroupRetryWithDivergedSignatureFails covers isOwnGroupCreation's
+// second check: the same GroupID and CreatorUserID, but a
+// TrustAnchorSignature that does not match what was actually stored, must
+// fail loudly rather than silently report success for material that was
+// never written -- see that function's own doc comment.
+func TestCreateGroupRetryWithDivergedSignatureFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	groupID := "test-group-" + randomSuffix(t)
+	creatorUserID := "test-creator-" + randomSuffix(t)
+	first := testCreateGroupInput(t, groupID, creatorUserID)
+	if err := c.CreateGroup(ctx, first); err != nil {
+		t.Fatalf("CreateGroup (first): %v", err)
+	}
+
+	diverged := testCreateGroupInput(t, groupID, creatorUserID)
+	diverged.TrustAnchorSignature = []byte("a-different-trust-anchor-signature")
+	err := c.CreateGroup(ctx, diverged)
+	if !errors.Is(err, ErrGroupIDTaken) {
+		t.Fatalf("CreateGroup (diverged signature): err = %v, want ErrGroupIDTaken", err)
 	}
 }

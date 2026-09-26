@@ -11,7 +11,12 @@
 import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
 import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
-import { memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
+import {
+  generateGrantSortKey,
+  memberWrapAAD,
+  roleGrantPayload,
+  trustAnchorPayload,
+} from './group.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import {
   deriveRecoveryVerifier,
@@ -258,10 +263,11 @@ export async function completeLogin(req: {
 /**
  * #34: signs a new group's trust anchor and self-signed root role grant
  * with keys' signing key, and wraps groupKey to keys' own wrapping public
- * key -- the creator's own copy, matching Go's
- * models.Group.GenerationKeyWrapped and models.Membership.WrappedGroupKey,
- * which store the identical wrap independently on both items (see those
- * fields' own doc comments for why they are not one shared blob).
+ * key -- the creator's own entry point, stored on their own MEMBER# item
+ * (Go's models.Membership.WrappedGroupKey) exactly like every other
+ * member's wrapped copy will be, not duplicated onto META (PR #142 review
+ * dropped that duplicate -- see db.CreateGroupInput.GenerationKeyWrapped's
+ * own doc comment on the Go side for why).
  *
  * keys comes from worker.ts's own liveKeys cache, populated by an earlier
  * completeLogin call in this same worker instance -- this function itself
@@ -275,9 +281,7 @@ export async function completeLogin(req: {
  * match byte-for-byte). This is deliberately NOT the same AAD a GENKEY#
  * chain link would use: a member's own wrapped entry point is
  * member-specific (it binds the member uuid), while a chain link is
- * member-independent -- see models.Group.GenerationKeyWrapped's own doc
- * comment on the Go side for why these are two different wraps of the same
- * plaintext key, not one shared blob.
+ * member-independent.
  */
 export async function signGroupCreation(
   keys: LiveKeys,
@@ -285,6 +289,7 @@ export async function signGroupCreation(
   groupKey: Uint8Array,
 ): Promise<{
   trustAnchorSignature: string
+  rootGrantSortKey: string
   rootGrantSignature: string
   groupKeyWrapped: { ephemeralPub: string; nonce: string; ciphertext: string }
 }> {
@@ -298,8 +303,14 @@ export async function signGroupCreation(
   // The root grant has no predecessor to reference -- grantorGrantRef is ""
   // -- see internal/crypto/group.go's RoleGrantPayload and
   // models.RoleGrant's own doc comment on the Go side for why the root
-  // grant's shape is exactly this.
-  const grantPayload = roleGrantPayload(groupId, keys.userId, 'admin', '')
+  // grant's shape is exactly this. rootGrantSortKey is generated here,
+  // client-side, and signed as part of the payload (see roleGrantPayload's
+  // own doc comment for why the grant's own address must be signed) --
+  // it is sent to the server alongside the signature so createGroup can
+  // write the grant under the exact address that was signed for, rather
+  // than picking one after the fact.
+  const rootGrantSortKey = generateGrantSortKey(keys.userId)
+  const grantPayload = roleGrantPayload(groupId, keys.userId, 'admin', rootGrantSortKey, '')
   const rootGrantSignature = ed25519.sign(
     keys.signingKey,
     ed25519.SigningContext.RoleGrant,
@@ -311,6 +322,7 @@ export async function signGroupCreation(
 
   return {
     trustAnchorSignature: bytesToBase64(trustAnchorSignature),
+    rootGrantSortKey,
     rootGrantSignature: bytesToBase64(rootGrantSignature),
     groupKeyWrapped: {
       ephemeralPub: bytesToBase64(wrapped.ephemeralPub),

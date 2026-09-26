@@ -79,3 +79,38 @@ func DaySuffix(now time.Time) (string, error) {
 	}
 	return fmt.Sprintf("%s#%x", now.UTC().Format("2006-01-02"), b[:]), nil
 }
+
+// grantSortKeyPattern matches a GRANT# item's sort key,
+// "GRANT#<uuid>#<YYYY-MM-DD>#<rand>" -- the uuid a subject's history is
+// queried by (begins_with(SK, "GRANT#"+uuid), docs/DESIGN.md), the day
+// DaySuffix produces, and randSuffixBytes' 16 lowercase hex characters. This
+// is now a value the CLIENT chooses and signs (see
+// crypto.RoleGrantPayload's own doc comment for why the grant's own address
+// must be part of what it signs), so the server validates its shape here
+// the same way it validates any other client-supplied id, rather than
+// trusting it -- matching ValidUUID's own reasoning applied to this
+// compound key.
+var grantSortKeyPattern = regexp.MustCompile(`^GRANT#[0-9a-f-]{36}#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$`)
+
+// ValidGrantSortKey reports whether s is a well-formed
+// "GRANT#<subjectUUID>#<YYYY-MM-DD>#<rand>" sort key for the given subject
+// uuid, and if so returns the day component, parsed as a UTC date at
+// midnight. The uuid itself is checked against subjectUUID (not just
+// ValidUUID's shape) since a grant sort key is meaningless in isolation --
+// it always addresses one specific subject's chain -- and a caller with a
+// well-formed but mismatched uuid inside the key would otherwise pass shape
+// validation while producing a row nothing can be queried against.
+func ValidGrantSortKey(s, subjectUUID string) (time.Time, bool) {
+	m := grantSortKeyPattern.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, false
+	}
+	if s[len("GRANT#"):len("GRANT#")+36] != subjectUUID {
+		return time.Time{}, false
+	}
+	day, err := time.Parse("2006-01-02", m[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return day, true
+}

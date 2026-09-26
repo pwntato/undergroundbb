@@ -70,21 +70,22 @@ func TestTrustAnchorPayloadSignsUnderContext(t *testing.T) {
 }
 
 func TestRoleGrantPayloadDeterministic(t *testing.T) {
-	p1 := RoleGrantPayload("group-1", "subject-1", "admin", "")
-	p2 := RoleGrantPayload("group-1", "subject-1", "admin", "")
+	p1 := RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa", "")
+	p2 := RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa", "")
 	if !bytes.Equal(p1, p2) {
 		t.Fatal("RoleGrantPayload is not deterministic")
 	}
 }
 
 func TestRoleGrantPayloadDistinguishesEveryField(t *testing.T) {
-	base := RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa")
+	base := RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa", "GRANT#subject-1#2026-09-05#cccc")
 
 	cases := map[string][]byte{
-		"groupID":         RoleGrantPayload("group-2", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa"),
-		"subjectUUID":     RoleGrantPayload("group-1", "subject-2", "admin", "GRANT#subject-1#2026-09-06#aaaa"),
-		"role":            RoleGrantPayload("group-1", "subject-1", "member", "GRANT#subject-1#2026-09-06#aaaa"),
-		"grantorGrantRef": RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#bbbb"),
+		"groupID":         RoleGrantPayload("group-2", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa", "GRANT#subject-1#2026-09-05#cccc"),
+		"subjectUUID":     RoleGrantPayload("group-1", "subject-2", "admin", "GRANT#subject-1#2026-09-06#aaaa", "GRANT#subject-1#2026-09-05#cccc"),
+		"role":            RoleGrantPayload("group-1", "subject-1", "member", "GRANT#subject-1#2026-09-06#aaaa", "GRANT#subject-1#2026-09-05#cccc"),
+		"grantSortKey":    RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#bbbb", "GRANT#subject-1#2026-09-05#cccc"),
+		"grantorGrantRef": RoleGrantPayload("group-1", "subject-1", "admin", "GRANT#subject-1#2026-09-06#aaaa", "GRANT#subject-1#2026-09-05#dddd"),
 	}
 
 	for name, other := range cases {
@@ -100,8 +101,8 @@ func TestRoleGrantPayloadDistinguishesEveryField(t *testing.T) {
 // field, not an omitted one -- see TestTrustAnchorPayloadFieldBoundariesAreUnambiguous
 // for why an omitted field would be the dangerous version of this.
 func TestRoleGrantPayloadRootGrantHasEmptyRef(t *testing.T) {
-	root := RoleGrantPayload("group-1", "creator-1", "admin", "")
-	nonRoot := RoleGrantPayload("group-1", "creator-1", "admin", "GRANT#creator-1#2026-09-06#aaaa")
+	root := RoleGrantPayload("group-1", "creator-1", "admin", "GRANT#creator-1#2026-09-06#aaaa", "")
+	nonRoot := RoleGrantPayload("group-1", "creator-1", "admin", "GRANT#creator-1#2026-09-06#aaaa", "GRANT#creator-1#2026-09-05#bbbb")
 	if bytes.Equal(root, nonRoot) {
 		t.Fatal("a root grant (empty ref) must not collide with a non-root grant referencing a real predecessor")
 	}
@@ -183,7 +184,7 @@ func TestRoleGrantPayloadSignsUnderContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := RoleGrantPayload("group-1", "creator-1", "admin", "")
+	payload := RoleGrantPayload("group-1", "creator-1", "admin", "GRANT#creator-1#2026-09-06#aaaa", "")
 
 	sig, err := Sign(priv, ContextRoleGrant, payload)
 	if err != nil {

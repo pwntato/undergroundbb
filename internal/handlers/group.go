@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -35,6 +36,14 @@ const maxGroupCiphertextLen = 4096
 // same way maxVerifierLen does for a field that's already exact-length
 // checked.
 const maxSignatureLen = 64
+
+// grantDaySkewTolerance bounds how far a client-chosen RootGrantSortKey's
+// day may drift from the server's own UTC clock, in either direction --
+// generous enough to absorb ordinary client/server clock drift and request
+// latency without opening a window a client could use to meaningfully
+// backdate or postdate a grant relative to a real rotation event, which
+// happens on the scale of DESIGN.md's key-history retention, not hours.
+const grantDaySkewTolerance = 2 * time.Hour
 
 // maxCreateGroupBodyBytes bounds the request body -- same reasoning as
 // maxRegisterBodyBytes, sized generously above the largest legitimate
@@ -69,9 +78,15 @@ type createGroupRequest struct {
 
 	// NamePlaintext and DescriptionPlaintext are set when Visibility is
 	// "public"; NameCiphertext/DescriptionCiphertext when it is "private".
-	// Exactly one pair is expected per Visibility -- validated below, not by
-	// the JSON shape itself, matching registerRequest's own field-by-field
-	// validation style rather than a oneof encoded into the type system.
+	// Exactly one pair is expected per Visibility -- validated below (both
+	// that the pair matching Visibility is well-formed, and that the OTHER
+	// pair is empty, PR #142 review), not by the JSON shape itself, matching
+	// registerRequest's own field-by-field validation style rather than a
+	// oneof encoded into the type system. Rejecting a populated off-visibility
+	// pair, rather than silently ignoring it, matters specifically for a
+	// private group carrying namePlaintext: ignoring it would still have let
+	// a buggy client send a private group's plaintext name over the wire
+	// with no error telling it that value was never stored.
 	NamePlaintext         string      `json:"namePlaintext,omitempty"`
 	DescriptionPlaintext  string      `json:"descriptionPlaintext,omitempty"`
 	NameCiphertext        wrappedBlob `json:"nameCiphertext,omitempty"`
@@ -99,16 +114,27 @@ type createGroupRequest struct {
 	// creatorSigningPublicKey is sourced before this signature can be
 	// verified.
 	TrustAnchorSignature string `json:"trustAnchorSignature"`
+	// RootGrantSortKey is the "GRANT#<uuid>#<YYYY-MM-DD>#<rand>" sort key
+	// the root grant will be written under, client-generated (matching
+	// GroupID's own reasoning): RoleGrantPayload now signs the grant's own
+	// address (see that function's own doc comment for why), so the client
+	// must choose it before signing, before this request is ever sent. The
+	// server validates its shape and that its day is within clock-skew
+	// tolerance of now -- see createGroup's own validation below -- rather
+	// than trusting it outright.
+	RootGrantSortKey string `json:"rootGrantSortKey"`
 	// RootGrantSignature is crypto.Sign(creatorPriv, ContextRoleGrant,
-	// crypto.RoleGrantPayload(gid, creatorUUID, "admin", "")).
+	// crypto.RoleGrantPayload(gid, creatorUUID, "admin", rootGrantSortKey, "")).
 	RootGrantSignature string `json:"rootGrantSignature"`
 }
 
-// createGroupResponse confirms the group was created and hands back the
-// server-generated ids the client needs to address it -- GroupID to fetch
-// or link to the group, and RootGrantSortKey so the client can address (or
-// a future grant can reference) the root grant it just wrote without
-// needing a separate query to discover it.
+// createGroupResponse confirms the group was created and echoes back the
+// client-chosen ids the client needs to address it -- GroupID to fetch or
+// link to the group, and RootGrantSortKey so a caller that only kept the
+// signed request around (not its own generated values) can still address
+// (or a future grant can reference) the root grant it just wrote, without a
+// separate query to discover it. Both are already known to the caller that
+// sent this request; this is a convenience echo, not new information.
 type createGroupResponse struct {
 	GroupID          string `json:"groupId"`
 	RootGrantSortKey string `json:"rootGrantSortKey"`
@@ -126,12 +152,12 @@ type createGroupResponse struct {
 // cannot assume is collision-free, guarded by db.CreateGroup's own
 // attribute_not_exists(PK) condition (ErrGroupIDTaken) rather than trust.
 //
-// The GRANT# sort key, by contrast, IS server-generated (idgen.DaySuffix) --
-// nothing signs over it. RoleGrantPayload's grantorGrantRef is what a
-// *future*, non-root grant references to prove its grantor held Admin at
-// signing time; the root grant has no predecessor to reference (empty
-// string, see models.RoleGrant's own doc comment), so there is no signed
-// field this handler would need the client to have pre-agreed on here.
+// The GRANT# sort key is also client-generated, like GroupID -- see
+// createGroupRequest.RootGrantSortKey's own doc comment for why
+// RoleGrantPayload now signs the grant's own address. This handler
+// validates its shape and day (idgen.ValidGrantSortKey, grantDaySkewTolerance)
+// rather than generating it, the same "client decides, server checks"
+// split GroupID gets.
 func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -169,6 +195,10 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	var namePlaintext, descriptionPlaintext string
 	var nameCiphertext, descriptionCiphertext *models.WrappedBlob
 	if req.Visibility == models.VisibilityPublic {
+		if !wrappedBlobEmpty(req.NameCiphertext) || !wrappedBlobEmpty(req.DescriptionCiphertext) {
+			WriteError(w, http.StatusBadRequest, "nameCiphertext/descriptionCiphertext: must not be set for a public group")
+			return
+		}
 		namePlaintext, err = validateGroupText(req.NamePlaintext, maxGroupNameLen, "namePlaintext", false)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -180,6 +210,10 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		if req.NamePlaintext != "" || req.DescriptionPlaintext != "" {
+			WriteError(w, http.StatusBadRequest, "namePlaintext/descriptionPlaintext: must not be set for a private group")
+			return
+		}
 		nc, err := decodeGroupCiphertext(req.NameCiphertext, "nameCiphertext")
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -233,22 +267,33 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RootGrantSortKey is the grant's own address, now part of what
+	// RoleGrantPayload signs (see that function's own doc comment for why)
+	// -- validated for shape (idgen.ValidGrantSortKey, the same "client
+	// decides, server checks the shape" split GroupID gets) and for a day
+	// within clock-skew tolerance of now, so a grant cannot be backdated or
+	// postdated into a day the chain walk would resolve against the wrong
+	// superseded signing key.
+	day, ok := idgen.ValidGrantSortKey(req.RootGrantSortKey, userID)
+	if !ok {
+		WriteError(w, http.StatusBadRequest, "rootGrantSortKey: must be a well-formed GRANT# sort key for the caller's own uuid")
+		return
+	}
+	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
+		WriteError(w, http.StatusBadRequest, "rootGrantSortKey: day is not within tolerance of the current UTC day")
+		return
+	}
+	rootGrantSortKey := req.RootGrantSortKey
+
 	// The root grant has no predecessor to reference (models.RoleGrant's own
 	// doc comment) -- grantorGrantRef is the empty string here, never a
 	// caller-supplied value, since the caller cannot reference a grant that
 	// does not yet exist.
-	grantPayload := crypto.RoleGrantPayload(groupID, userID, models.RoleAdmin, "")
+	grantPayload := crypto.RoleGrantPayload(groupID, userID, models.RoleAdmin, rootGrantSortKey, "")
 	if !crypto.Verify(creator.SigningPublicKey, crypto.ContextRoleGrant, grantPayload, rootGrantSig) {
 		WriteError(w, http.StatusBadRequest, "rootGrantSignature: does not verify against the caller's current signing key")
 		return
 	}
-
-	rootGrantDaySuffix, err := idgen.DaySuffix(time.Now())
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not create group")
-		return
-	}
-	rootGrantSortKey := "GRANT#" + userID + "#" + rootGrantDaySuffix
 
 	in := db.CreateGroupInput{
 		GroupID: groupID,
@@ -275,16 +320,15 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.db.CreateGroup(r.Context(), in); err != nil {
 		if errors.Is(err, db.ErrGroupIDTaken) {
-			// See db.ErrGroupIDTaken's own doc comment: astronomically rare
-			// against a well-behaved client, exactly like ErrUserIDTaken.
-			// Unlike register.go's ErrUserIDTaken, there is no retry-detection
-			// path to attempt first (register.go's isOwnRegistration exists
-			// because a lost response to a retried IDENTICAL request is a
-			// real, expected case for an account a user is actively trying to
-			// create; a group creation retry that generates a fresh gid
-			// client-side, as it should on any error, will simply never hit
-			// this again) -- the client must generate a new groupId and
-			// resubmit, not retry this exact request unchanged.
+			// db.CreateGroup already checked (db.isOwnGroupCreation) whether
+			// this is the caller's own earlier, successful call being
+			// resent after a lost response, and returned nil instead of
+			// this error if so -- see that function's own doc comment.
+			// Reaching here means it wasn't: a genuine collision with a
+			// different group (someone else's, or this caller's own
+			// resend with regenerated signed material), so the client must
+			// generate a new groupId and resubmit, not retry this exact
+			// request unchanged.
 			WriteErrorWithCode(w, http.StatusConflict, "groupId is taken", "group_id_taken")
 			return
 		}
@@ -304,17 +348,43 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 // package already imports under a shorter name.
 const ed25519SignatureSize = 64
 
+// wrappedGroupKeyCiphertextSize is the exact byte width of an ECIES-wrapped
+// group key's ciphertext: crypto.KeySize (32, the group key being wrapped)
+// plus AES-GCM's 16-byte authentication tag, always exactly 48 bytes for a
+// well-formed wrap -- there is no variable-length plaintext here the way a
+// group's name or description ciphertext has (maxGroupCiphertextLen's own
+// reasoning). An exact check catches a client that wrapped the wrong thing
+// (PR #142 review), the same reasoning ephemeralPub and nonce already get
+// exact-length checks for in decodeWrappedKey.
+const wrappedGroupKeyCiphertextSize = crypto.KeySize + 16
+
 // validateGroupText enforces a plaintext public-group field's length bound.
 // allowEmpty is false for the name (a public group must be named something)
-// and true for the description (optional).
+// and true for the description (optional). A whitespace-only value is
+// rejected the same as an empty one when allowEmpty is false (PR #142
+// review): unlike the description, the name becomes a GSI1 directory entry
+// (db.CreateGroup's own GSI1SK write) that every visitor to the public
+// directory sees, so "   " passing this check would surface as a listed
+// group with no visible name.
 func validateGroupText(s string, maxLen int, field string, allowEmpty bool) (string, error) {
-	if s == "" && !allowEmpty {
+	if strings.TrimSpace(s) == "" && !allowEmpty {
 		return "", fieldError(field + " is required for a public group")
 	}
 	if len(s) > maxLen {
 		return "", fieldError(field + " exceeds the maximum allowed length")
 	}
 	return s, nil
+}
+
+// wrappedBlobEmpty reports whether b is the zero value -- both fields
+// unset, meaning the client never populated this wrappedBlob at all. Used
+// to reject a public group's request carrying a private group's
+// nameCiphertext/descriptionCiphertext fields (or vice versa): a
+// well-formed wrappedBlob has both Nonce and Ciphertext non-empty, so
+// either one being non-empty here means the client sent something for the
+// wrong visibility, not that it left the field out.
+func wrappedBlobEmpty(b wrappedBlob) bool {
+	return b.Nonce == "" && b.Ciphertext == ""
 }
 
 // decodeGroupCiphertext decodes a private group's encrypted name or
@@ -353,18 +423,26 @@ func decodeWrappedKey(k wrappedKey) (models.WrappedKey, error) {
 	if err != nil {
 		return models.WrappedKey{}, fieldError("nonce: " + err.Error())
 	}
-	ciphertext, err := decodeBase64Field(k.Ciphertext, 0, maxGroupCiphertextLen)
+	ciphertext, err := decodeBase64Field(k.Ciphertext, wrappedGroupKeyCiphertextSize, wrappedGroupKeyCiphertextSize)
 	if err != nil {
 		return models.WrappedKey{}, fieldError("ciphertext: " + err.Error())
 	}
 	return models.WrappedKey{EphemeralPub: ephemeralPub, Nonce: nonce, Ciphertext: ciphertext}, nil
 }
 
+// maxExpirationDays bounds a group's expiration policy from above --
+// generous relative to any real retention policy (about 10 years), but
+// enough to matter once posts start computing a TTL as
+// days * 86400 seconds from now (PR #142 review): a huge, effectively
+// unbounded int64 here would risk overflowing that arithmetic once #34's
+// sibling issues actually consume ExpirationDays this way.
+const maxExpirationDays = 3650
+
 // errExpirationOffNotAllowed and errExpirationDaysInvalid are
 // validateExpirationDays' failure modes.
 var (
 	errExpirationOffNotAllowed = fieldError("expirationDays: this deployment does not allow groups to disable expiration (expirationDays must be positive)")
-	errExpirationDaysInvalid   = fieldError("expirationDays: must be zero (never expire) or a positive number of days")
+	errExpirationDaysInvalid   = fieldError("expirationDays: must be zero (never expire) or a positive number of days, up to 3650")
 )
 
 // validateExpirationDays checks a group's requested expiration policy.
@@ -374,7 +452,7 @@ var (
 // mechanism that works at any group size, per docs/DESIGN.md, "Message
 // expiration." A negative value is never valid; there is no meaning for it.
 func validateExpirationDays(days int64, allowOff bool) (int64, error) {
-	if days < 0 {
+	if days < 0 || days > maxExpirationDays {
 		return 0, errExpirationDaysInvalid
 	}
 	if days == 0 {

@@ -185,6 +185,14 @@ export interface SignGroupCreationRequest {
 
 export interface SignGroupCreationResult {
   readonly trustAnchorSignature: string
+  /**
+   * The "GRANT#<uuid>#<YYYY-MM-DD>#<rand>" sort key the root grant is
+   * signed for and must be written under -- generated client-side
+   * (group.ts's generateGrantSortKey) since roleGrantPayload now signs the
+   * grant's own address. See internal/crypto/group.go's RoleGrantPayload
+   * for why.
+   */
+  readonly rootGrantSortKey: string
   readonly rootGrantSignature: string
   /**
    * The X25519-ECIES wrap of the group's Generation 0 key, to the caller's

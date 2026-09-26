@@ -80,6 +80,8 @@ export interface CreateGroupRequest {
   readonly expirationDays: number
   readonly groupKeyWrapped: WireWrappedKey
   readonly trustAnchorSignature: string
+  /** The sort key rootGrantSignature is signed for -- see SignGroupCreationResult's own doc comment. */
+  readonly rootGrantSortKey: string
   readonly rootGrantSignature: string
 }
 

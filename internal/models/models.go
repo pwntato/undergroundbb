@@ -136,8 +136,7 @@ type WrappedBlob struct {
 // comes directly from Argon2id and no ECDH (and therefore no ephemeral
 // keypair) is ever involved -- conflating the two here would silently drop
 // the one field an ECIES unwrap cannot function without. Used for
-// Group.GenerationKeyWrapped, Membership.WrappedGroupKey, and every future
-// GENKEY# chain link.
+// Membership.WrappedGroupKey and every future GENKEY# chain link.
 type WrappedKey struct {
 	EphemeralPub []byte `dynamodbav:"EphemeralPub"`
 	Nonce        []byte `dynamodbav:"Nonce"`
@@ -333,20 +332,17 @@ type Group struct {
 	// through this issue's create-group endpoint (#73 builds DMs); the field
 	// exists on the model now because it lives on this same item, not
 	// because #34 populates it.
-	Type string `dynamodbav:"GroupType,omitempty"`
-
-	// GenerationKey is the group's symmetric key at Generation 0, wrapped to
-	// the creator's own X25519 public key -- ECIES via crypto.Wrap (see
-	// WrappedKey's own doc comment for why this is a WrappedKey, not a
-	// WrappedBlob), AAD bound per MemberWrapAAD (group id + member uuid +
-	// generation number). Every member holds their own wrapped copy on their
-	// MEMBER# item instead; this copy is the creator's, stored here because
-	// MEMBER# is written in the same transaction and the creator IS the
-	// first member. Kept separate from the eventual GENKEY# chain (which
-	// wraps each generation's key under its successor, member-independent)
-	// -- this field is member-keyed like every other member's wrap, not
-	// generation-keyed like GENKEY#.
-	GenerationKeyWrapped WrappedKey `dynamodbav:"GenerationKeyWrapped"`
+	//
+	// Named GroupType, not Type, despite the dynamodbav tag matching either
+	// way -- Group embeds Record, which already has its own Type field (the
+	// item's kind, "Group"); a same-named GroupType.Type would shadow
+	// Record.Type in Go (g.Type would mean this field, g.Record.Type the
+	// item kind), silently breaking any future g.Type == "Group" or
+	// g.Type = "dm" check on the wrong field. attributevalue itself
+	// marshals both correctly regardless of the Go field name -- this is
+	// purely for readers and future writers of this struct, not a wire
+	// concern.
+	GroupType string `dynamodbav:"GroupType,omitempty"`
 }
 
 // Group roles. See Membership.Role and docs/DESIGN.md, "Roles and the chain
@@ -379,13 +375,14 @@ type Membership struct {
 
 	// WrappedGroupKey is this member's own ECIES-wrapped copy of the group
 	// key at Generation, per MemberWrapAAD (group id + member uuid +
-	// generation number) -- a WrappedKey, not a WrappedBlob, for the same
-	// reason Group.GenerationKeyWrapped is (see that field's and
-	// WrappedKey's own doc comments). For the creator's own membership item
-	// (the only one #34 writes), this is the same plaintext as
-	// Group.GenerationKeyWrapped, independently wrapped -- see that field's
-	// own doc comment for why they are stored as two separate fields rather
-	// than one shared blob.
+	// generation number) -- a WrappedKey, not a WrappedBlob, since unwrapping
+	// an ECIES wrap needs the ephemeral public key from this specific wrap
+	// (WrappedKey's own doc comment). This member's MEMBER# item is the only
+	// place their wrapped entry point to the group key lives -- there is no
+	// second copy on META (db.CreateGroupInput.GenerationKeyWrapped's own
+	// doc comment: PR #142 review dropped that duplicate, since a copy on
+	// META would go stale at the first rotation while still looking current
+	// to anyone who fetched it).
 	WrappedGroupKey WrappedKey `dynamodbav:"WrappedGroupKey"`
 }
 

@@ -28,27 +28,17 @@ import { generateUUID } from '@/lib/crypto/uuid'
 import { signGroupCreation } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { runCreateGroup, type CreateGroupErrorKind, type GroupFormInput } from './runCreateGroup'
 
 const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
 const AMBIGUOUS_ERROR =
   "We couldn't confirm whether your group was created. Try again — resubmitting is safe."
 const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
-// Distinct from AUTH_REQUIRED_ERROR: the session cookie can still be valid
-// (RequireAuth and even a fresh createGroup call would both pass) while the
-// crypto worker's own cached signing/wrapping keys are cold -- e.g. this tab
-// was reloaded since login, which resets worker.ts's module-scope liveKeys
-// along with everything else. See worker.ts's own signGroupCreation for the
-// exact thrown error this message covers -- it surfaces here as a plain
-// Error (not an ApiError), so it is classified 'definitelyUncommitted' by
-// runCreateGroup but shown with this more specific, actionable copy instead
-// of UNREACHABLE_ERROR.
-const KEYS_NOT_LIVE_ERROR = 'Log in again on this tab before creating a group.'
-
-function errorMessageFor(kind: CreateGroupErrorKind, error: unknown): string {
+function errorMessageFor(kind: CreateGroupErrorKind): string {
   switch (kind) {
     case 'definitelyUncommitted':
-      return isLiveKeysError(error) ? KEYS_NOT_LIVE_ERROR : UNREACHABLE_ERROR
+      return UNREACHABLE_ERROR
     case 'ambiguous':
       return AMBIGUOUS_ERROR
     case 'authRequired':
@@ -56,7 +46,15 @@ function errorMessageFor(kind: CreateGroupErrorKind, error: unknown): string {
   }
 }
 
-/** See worker.ts's signGroupCreation: the exact message it throws when liveKeys is unset or belongs to a different account. */
+/**
+ * Reports whether err is worker.ts's signGroupCreation throwing because
+ * liveKeys is cold -- e.g. this tab was reloaded since login, which resets
+ * worker.ts's module-scope cache along with everything else, while the
+ * session cookie (and RequireAuth's own check) stay valid. See
+ * ReauthenticateStep's own header comment for why this is handled by an
+ * inline re-auth step rather than a plain error message: there was no
+ * other way out of this state short of the session cookie itself expiring.
+ */
 function isLiveKeysError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -77,6 +75,12 @@ export function CreateGroupScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingAttempt | undefined>(undefined)
+  // Set when signGroupCreation fails because the worker's liveKeys cache is
+  // cold (isLiveKeysError) -- see ReauthenticateStep's own header comment.
+  // Holds the in-flight submission's values so handleSubmit can be re-run
+  // with the exact same form once the re-auth step reports success, rather
+  // than asking the user to fill the form in twice.
+  const [needsReauth, setNeedsReauth] = useState<GroupFormValues | undefined>(undefined)
   const navigate = useNavigate()
   const session = useSession()
 
@@ -113,8 +117,12 @@ export function CreateGroupScreen() {
 
       if (!result.ok) {
         setPending({ groupId, groupKeyB64, values, form })
-        setError(errorMessageFor(result.kind, result.error))
         setSubmitting(false)
+        if (result.kind === 'definitelyUncommitted' && isLiveKeysError(result.error)) {
+          setNeedsReauth(values)
+          return
+        }
+        setError(errorMessageFor(result.kind))
         return
       }
 
@@ -124,6 +132,22 @@ export function CreateGroupScreen() {
       // this just returns Home, matching Home.tsx's own placeholder state.
       navigate('/', { replace: true })
     })()
+  }
+
+  if (needsReauth !== undefined && session.userId !== null) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={session.userId}
+        onDone={() => {
+          const values = needsReauth
+          setNeedsReauth(undefined)
+          // liveKeys is now warm again -- resubmit the exact form the user
+          // already filled in, the same `pending` reuse path a plain
+          // ambiguous-failure retry takes.
+          handleSubmit(values)
+        }}
+      />
+    )
   }
 
   return <CreateGroupFormStep onSubmit={handleSubmit} error={submitting ? null : error} />

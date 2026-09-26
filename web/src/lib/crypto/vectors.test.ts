@@ -138,6 +138,7 @@ interface VectorFile {
     group_id: string
     subject_uuid: string
     role: string
+    grant_sort_key: string
     grantor_grant_ref: string
     payload_hex: string
     signature_hex: string
@@ -409,7 +410,13 @@ describe('role grant vectors', () => {
       const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
       expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
 
-      const payload = roleGrantPayload(tc.group_id, tc.subject_uuid, tc.role, tc.grantor_grant_ref)
+      const payload = roleGrantPayload(
+        tc.group_id,
+        tc.subject_uuid,
+        tc.role,
+        tc.grant_sort_key,
+        tc.grantor_grant_ref,
+      )
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RoleGrant, payload)

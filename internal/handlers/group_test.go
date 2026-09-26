@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -50,7 +51,8 @@ func signedCreateGroupRequest(t *testing.T, user registeredUser) createGroupRequ
 		t.Fatalf("sign trust anchor: %v", err)
 	}
 
-	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", "")
+	rootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", rootGrantSortKey, "")
 	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
 	if err != nil {
 		t.Fatalf("sign root grant: %v", err)
@@ -71,8 +73,23 @@ func signedCreateGroupRequest(t *testing.T, user registeredUser) createGroupRequ
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     rootGrantSortKey,
 		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
 	}
+}
+
+// testGrantSortKey builds a well-formed "GRANT#<uuid>#<YYYY-MM-DD>#<rand>"
+// sort key for subjectUUID at day, matching idgen.DaySuffix's shape --
+// tests need to generate this client-side now that RoleGrantPayload signs
+// the grant's own address (see that function's own doc comment), the same
+// as a real client's group.ts#generateGrantSortKey would.
+func testGrantSortKey(t *testing.T, subjectUUID string, day time.Time) string {
+	t.Helper()
+	daySuffix, err := idgen.DaySuffix(day)
+	if err != nil {
+		t.Fatalf("idgen.DaySuffix: %v", err)
+	}
+	return "GRANT#" + subjectUUID + "#" + daySuffix
 }
 
 func TestCreateGroupSuccess(t *testing.T) {
@@ -93,6 +110,83 @@ func TestCreateGroupSuccess(t *testing.T) {
 	}
 	if resp.RootGrantSortKey == "" {
 		t.Error("RootGrantSortKey is empty")
+	}
+}
+
+// TestCreateGroupRetrySucceeds covers the lost-response case PR #142 review
+// found: a client that never saw the first 201 resends the byte-for-byte
+// identical, already-signed request (same groupId, same signatures --
+// exactly what CreateGroupScreen's own `resuming` path sends, see that
+// file's own header comment). This must return 201 again with the SAME
+// rootGrantSortKey, not 409 -- see db.isOwnGroupCreation's own doc comment.
+func TestCreateGroupRetrySucceeds(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	req := signedCreateGroupRequest(t, user)
+
+	first := doCreateGroup(t, h, cookie, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("status (first) = %d, want %d, body: %s", first.Code, http.StatusCreated, first.Body.String())
+	}
+	var firstResp createGroupResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("decoding first response: %v", err)
+	}
+
+	retry := doCreateGroup(t, h, cookie, req)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("status (retry) = %d, want %d, body: %s", retry.Code, http.StatusCreated, retry.Body.String())
+	}
+	var retryResp createGroupResponse
+	if err := json.Unmarshal(retry.Body.Bytes(), &retryResp); err != nil {
+		t.Fatalf("decoding retry response: %v", err)
+	}
+	if retryResp.RootGrantSortKey != firstResp.RootGrantSortKey {
+		t.Errorf("retry RootGrantSortKey = %q, want %q (same as first)", retryResp.RootGrantSortKey, firstResp.RootGrantSortKey)
+	}
+}
+
+// TestCreateGroupRejectsStaleGrantDay covers grantDaySkewTolerance: a
+// rootGrantSortKey dated well outside today's UTC day (signed correctly,
+// but for a day the server's own clock disagrees with) must be rejected,
+// not silently accepted with a day the chain walk could later resolve
+// against the wrong superseded signing key.
+func TestCreateGroupRejectsStaleGrantDay(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+
+	groupID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	anchorPayload := crypto.TrustAnchorPayload(user.userID, user.signPub, groupID)
+	anchorSig, err := crypto.Sign(user.signPriv, crypto.ContextTrustAnchor, anchorPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	staleSortKey := testGrantSortKey(t, user.userID, time.Now().AddDate(0, 0, -10))
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", staleSortKey, "")
+	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	req := createGroupRequest{
+		GroupID:               groupID,
+		Visibility:            "private",
+		NameCiphertext:        wrappedBlob{Nonce: b64(12), Ciphertext: b64(32)},
+		DescriptionCiphertext: wrappedBlob{Nonce: b64(12), Ciphertext: b64(32)},
+		RevocationMode:        "rotating",
+		ExpirationDays:        30,
+		GroupKeyWrapped:       wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		TrustAnchorSignature:  base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:      staleSortKey,
+		RootGrantSignature:    base64.StdEncoding.EncodeToString(grantSig),
+	}
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
@@ -161,7 +255,8 @@ func TestCreateGroupRejectsSignatureFromAnotherUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	grantPayload := crypto.RoleGrantPayload(groupID, caller.userID, "admin", "")
+	rootGrantSortKey := testGrantSortKey(t, caller.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, caller.userID, "admin", rootGrantSortKey, "")
 	grantSig, err := crypto.Sign(caller.signPriv, crypto.ContextRoleGrant, grantPayload)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -176,6 +271,7 @@ func TestCreateGroupRejectsSignatureFromAnotherUser(t *testing.T) {
 		ExpirationDays:        30,
 		GroupKeyWrapped:       wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature:  base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:      rootGrantSortKey,
 		RootGrantSignature:    base64.StdEncoding.EncodeToString(grantSig),
 	}
 
@@ -273,6 +369,137 @@ func TestCreateGroupRejectsNegativeExpirationDays(t *testing.T) {
 	}
 }
 
+// TestCreateGroupRejectsExcessiveExpirationDays covers maxExpirationDays --
+// PR #142 review: without an upper bound, a huge ExpirationDays risks
+// overflowing a future days*86400 TTL computation.
+func TestCreateGroupRejectsExcessiveExpirationDays(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	req := signedCreateGroupRequest(t, user)
+	req.ExpirationDays = maxExpirationDays + 1
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCreateGroupRejectsWrongSizeGroupKeyCiphertext covers
+// wrappedGroupKeyCiphertextSize: an ECIES-wrapped 32-byte group key under
+// AES-GCM is always exactly 48 bytes, so any other length is a client that
+// wrapped the wrong thing, not a legitimate wrap of unusual size.
+func TestCreateGroupRejectsWrongSizeGroupKeyCiphertext(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	req := signedCreateGroupRequest(t, user)
+	req.GroupKeyWrapped.Ciphertext = b64(32) // wrong size: not 48
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCreateGroupPublicRejectsWhitespaceOnlyName covers validateGroupText's
+// strings.TrimSpace check -- PR #142 review: an all-whitespace name would
+// otherwise pass length validation and become a directory entry with no
+// visible name.
+func TestCreateGroupPublicRejectsWhitespaceOnlyName(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	groupID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	anchorPayload := crypto.TrustAnchorPayload(user.userID, user.signPub, groupID)
+	anchorSig, err := crypto.Sign(user.signPriv, crypto.ContextTrustAnchor, anchorPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	rootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", rootGrantSortKey, "")
+	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	req := createGroupRequest{
+		GroupID:              groupID,
+		Visibility:           "public",
+		NamePlaintext:        "   ", // whitespace only -- must be rejected like empty
+		RevocationMode:       "rotating",
+		ExpirationDays:       30,
+		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     rootGrantSortKey,
+		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
+	}
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCreateGroupPrivateRejectsPlaintextFields covers the oneof rejection
+// PR #142 review added: a private group's request carrying
+// namePlaintext/descriptionPlaintext (the PUBLIC pair) must be rejected,
+// not silently ignored -- ignoring it would still have let a buggy client
+// send a private group's plaintext name over the wire with no error.
+func TestCreateGroupPrivateRejectsPlaintextFields(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	req := signedCreateGroupRequest(t, user)
+	req.NamePlaintext = "should not be here"
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCreateGroupPublicRejectsCiphertextFields is
+// TestCreateGroupPrivateRejectsPlaintextFields' mirror image: a public
+// group's request carrying nameCiphertext/descriptionCiphertext (the
+// PRIVATE pair) must also be rejected.
+func TestCreateGroupPublicRejectsCiphertextFields(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	groupID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	anchorPayload := crypto.TrustAnchorPayload(user.userID, user.signPub, groupID)
+	anchorSig, err := crypto.Sign(user.signPriv, crypto.ContextTrustAnchor, anchorPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	rootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", rootGrantSortKey, "")
+	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	req := createGroupRequest{
+		GroupID:              groupID,
+		Visibility:           "public",
+		NamePlaintext:        "Book Club",
+		NameCiphertext:       wrappedBlob{Nonce: b64(12), Ciphertext: b64(32)}, // should not be here
+		RevocationMode:       "rotating",
+		ExpirationDays:       30,
+		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     rootGrantSortKey,
+		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
+	}
+
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 // TestCreateGroupPublicRequiresName covers validateGroupText's allowEmpty=false
 // branch for a public group's name.
 func TestCreateGroupPublicRequiresName(t *testing.T) {
@@ -287,7 +514,8 @@ func TestCreateGroupPublicRequiresName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", "")
+	rootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", rootGrantSortKey, "")
 	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -301,6 +529,7 @@ func TestCreateGroupPublicRequiresName(t *testing.T) {
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     rootGrantSortKey,
 		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
 	}
 
@@ -327,7 +556,8 @@ func TestCreateGroupPublicSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", "")
+	rootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(groupID, user.userID, "admin", rootGrantSortKey, "")
 	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -342,6 +572,7 @@ func TestCreateGroupPublicSuccess(t *testing.T) {
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     rootGrantSortKey,
 		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
 	}
 

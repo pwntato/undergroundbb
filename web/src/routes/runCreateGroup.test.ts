@@ -10,6 +10,7 @@ import { isDefinitelyUncommitted, runCreateGroup, type CreateGroupDeps } from '.
 
 const SIGN_RESULT = {
   trustAnchorSignature: 'YW5jaG9yLXNpZw==',
+  rootGrantSortKey: 'GRANT#user-1#2026-09-25#aaaa',
   rootGrantSignature: 'Z3JhbnQtc2ln',
   groupKeyWrapped: {
     ephemeralPub: 'ZXBoZW1lcmFsLXB1Yg==',
@@ -73,6 +74,7 @@ describe('runCreateGroup', () => {
       expirationDays: 30,
       groupKeyWrapped: SIGN_RESULT.groupKeyWrapped,
       trustAnchorSignature: SIGN_RESULT.trustAnchorSignature,
+      rootGrantSortKey: SIGN_RESULT.rootGrantSortKey,
       rootGrantSignature: SIGN_RESULT.rootGrantSignature,
     })
   })

@@ -174,6 +174,7 @@ type roleGrantVector struct {
 	GroupID         string `json:"group_id"`
 	SubjectUUID     string `json:"subject_uuid"`
 	Role            string `json:"role"`
+	GrantSortKey    string `json:"grant_sort_key"`
 	GrantorGrantRef string `json:"grantor_grant_ref"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
@@ -511,7 +512,8 @@ func main() {
 		groupID := "group-uuid-2"
 		creatorUUID := "creator-uuid-1"
 
-		rootPayload := crypto.RoleGrantPayload(groupID, creatorUUID, "admin", "")
+		rootGrantSortKey := "GRANT#" + creatorUUID + "#2026-09-06#f0e1d2c3b4a59687"
+		rootPayload := crypto.RoleGrantPayload(groupID, creatorUUID, "admin", rootGrantSortKey, "")
 		rootSig, err := crypto.Sign(priv, crypto.ContextRoleGrant, rootPayload)
 		if err != nil {
 			panic(err)
@@ -523,6 +525,7 @@ func main() {
 			GroupID:         groupID,
 			SubjectUUID:     creatorUUID,
 			Role:            "admin",
+			GrantSortKey:    rootGrantSortKey,
 			GrantorGrantRef: "",
 			PayloadHex:      hex.EncodeToString(rootPayload),
 			SignatureHex:    hex.EncodeToString(rootSig),
@@ -530,7 +533,8 @@ func main() {
 
 		subjectUUID := "member-uuid-1"
 		grantRef := "GRANT#" + creatorUUID + "#2026-09-06#a1b2c3d4e5f6a1b2"
-		nonRootPayload := crypto.RoleGrantPayload(groupID, subjectUUID, "member", grantRef)
+		nonRootGrantSortKey := "GRANT#" + subjectUUID + "#2026-09-07#1122334455667788"
+		nonRootPayload := crypto.RoleGrantPayload(groupID, subjectUUID, "member", nonRootGrantSortKey, grantRef)
 		nonRootSig, err := crypto.Sign(priv, crypto.ContextRoleGrant, nonRootPayload)
 		if err != nil {
 			panic(err)
@@ -542,6 +546,7 @@ func main() {
 			GroupID:         groupID,
 			SubjectUUID:     subjectUUID,
 			Role:            "member",
+			GrantSortKey:    nonRootGrantSortKey,
 			GrantorGrantRef: grantRef,
 			PayloadHex:      hex.EncodeToString(nonRootPayload),
 			SignatureHex:    hex.EncodeToString(nonRootSig),

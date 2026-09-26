@@ -126,3 +126,44 @@ func TestDaySuffixUnique(t *testing.T) {
 		seen[s] = true
 	}
 }
+
+// TestValidGrantSortKeyAccepts covers the exact shape DaySuffix combined
+// with a subject uuid produces -- a well-formed GRANT# sort key for the
+// subject it addresses must parse and return its day.
+func TestValidGrantSortKeyAccepts(t *testing.T) {
+	const subjectUUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	key := "GRANT#" + subjectUUID + "#2026-09-25#a1b2c3d4e5f6a1b2"
+
+	day, ok := ValidGrantSortKey(key, subjectUUID)
+	if !ok {
+		t.Fatalf("ValidGrantSortKey(%q, %q) = false, want true", key, subjectUUID)
+	}
+	want := time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+	if !day.Equal(want) {
+		t.Errorf("ValidGrantSortKey(%q, %q) day = %v, want %v", key, subjectUUID, day, want)
+	}
+}
+
+// TestValidGrantSortKeyRejects covers ValidGrantSortKey's shape and
+// subject-binding checks -- a well-formed key for the WRONG subject must be
+// rejected just as loudly as a malformed one, since a grant sort key is
+// meaningless (and unqueryable) outside the one subject's chain it
+// addresses.
+func TestValidGrantSortKeyRejects(t *testing.T) {
+	const subjectUUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	const otherUUID = "a1a1a1a1-58cc-4372-a567-0e02b2c3d479"
+
+	cases := map[string]string{
+		"wrong subject uuid":  "GRANT#" + otherUUID + "#2026-09-25#a1b2c3d4e5f6a1b2",
+		"missing GRANT# tag":  subjectUUID + "#2026-09-25#a1b2c3d4e5f6a1b2",
+		"bad day shape":       "GRANT#" + subjectUUID + "#2026-9-25#a1b2c3d4e5f6a1b2",
+		"short random suffix": "GRANT#" + subjectUUID + "#2026-09-25#a1b2",
+		"uppercase hex":       "GRANT#" + subjectUUID + "#2026-09-25#A1B2C3D4E5F6A1B2",
+		"empty string":        "",
+	}
+	for name, key := range cases {
+		if _, ok := ValidGrantSortKey(key, subjectUUID); ok {
+			t.Errorf("%s: ValidGrantSortKey(%q, %q) = true, want false", name, key, subjectUUID)
+		}
+	}
+}

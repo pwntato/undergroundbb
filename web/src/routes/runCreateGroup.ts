@@ -104,6 +104,7 @@ export async function runCreateGroup(
       expirationDays: form.expirationDays,
       groupKeyWrapped: signed.groupKeyWrapped,
       trustAnchorSignature: signed.trustAnchorSignature,
+      rootGrantSortKey: signed.rootGrantSortKey,
       rootGrantSignature: signed.rootGrantSignature,
     })
     return { ok: true, response }

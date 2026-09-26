@@ -31,24 +31,42 @@ func TrustAnchorPayload(creatorUUID string, creatorSigningPublicKey []byte, grou
 // RoleGrantPayload builds the canonical byte string a role-grant signature
 // covers -- see docs/DESIGN.md, "Roles and the chain of trust." A grant
 // binds the group id (so a grant signed for one group cannot be replayed
-// into another), the subject uuid and the role granted, and the grantor's
-// own current grant reference -- the sort key of the grant that authorized
-// the grantor to act, so a chain walk can confirm the grantor held Admin at
-// the moment they signed this one. For the root grant a group's creation
-// writes (#34), the subject IS the grantor and grantorGrantRef is empty:
-// there is no predecessor grant to point at, which is exactly what makes it
-// the root -- see Group.TrustAnchorSignature's own doc comment for how a
-// verifier is meant to terminate there instead of expecting a predecessor.
+// into another), the subject uuid and the role granted, the grant's own
+// address (grantSortKey, the "GRANT#<uuid>#<YYYY-MM-DD>#<rand>" sort key
+// this exact grant will be written under), and the grantor's own current
+// grant reference -- the sort key of the grant that authorized the grantor
+// to act, so a chain walk can confirm the grantor held Admin at the moment
+// they signed this one. For the root grant a group's creation writes (#34),
+// the subject IS the grantor and grantorGrantRef is empty: there is no
+// predecessor grant to point at, which is exactly what makes it the root --
+// see Group.TrustAnchorSignature's own doc comment for how a verifier is
+// meant to terminate there instead of expecting a predecessor.
+//
+// grantSortKey is signed, not just chosen by whoever writes the row,
+// because DESIGN.md's chain walk relies on the day in a grant's own sort
+// key to pick which of the grantor's superseded signing keys verifies it
+// (see "For posts and grants the day in the sort key gives that to the
+// resolution required," and "verifying a grant signed on day D means
+// finding the grantor's grant that was current on D"). Without the address
+// itself in the signed bytes, a grant's signature says nothing about which
+// row it is allowed to land in or which day it was really signed: the
+// server (or anyone who can write rows) could copy a legitimately-signed
+// grant's signature onto a new GRANT# row at a different day, replaying a
+// revoked or superseded role, or backdating a grant signed after a subject
+// lost admin. Binding grantSortKey closes both: a copied signature only
+// verifies at the exact address it was signed for, and the day a verifier
+// reads for key-selection is the same day the signer committed to.
 //
 // Sign this payload under ContextRoleGrant; verify it the same way. Same
 // length-prefixed encoding as SignedPayload and TrustAnchorPayload, and the
 // same warning: this must never change once a real grant has been signed
 // under it.
-func RoleGrantPayload(groupID, subjectUUID, role, grantorGrantRef string) []byte {
+func RoleGrantPayload(groupID, subjectUUID, role, grantSortKey, grantorGrantRef string) []byte {
 	fields := [][]byte{
 		[]byte(groupID),
 		[]byte(subjectUUID),
 		[]byte(role),
+		[]byte(grantSortKey),
 		[]byte(grantorGrantRef),
 	}
 	return lengthPrefixedConcat(fields)

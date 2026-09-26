@@ -298,7 +298,8 @@ describe('group creation signing', () => {
       ),
     ).toBe(true)
 
-    const grantPayload = roleGrantPayload(groupId, USER_ID, 'admin', '')
+    expect(result.rootGrantSortKey).toContain(`GRANT#${USER_ID}#`)
+    const grantPayload = roleGrantPayload(groupId, USER_ID, 'admin', result.rootGrantSortKey, '')
     expect(
       ed25519.verify(
         keys.signingKey.publicKey,

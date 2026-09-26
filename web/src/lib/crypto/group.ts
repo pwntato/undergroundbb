@@ -2,6 +2,37 @@
 // internal/crypto/group.go byte-for-byte (see testdata/vectors.json's
 // "trust_anchor", "role_grant" and "member_wrap_aad" sections).
 
+import { bytesToHex } from './hex.js'
+
+/**
+ * randSuffixBytes is the width of the random component generateGrantSortKey
+ * appends -- matches internal/idgen/idgen.go's randSuffixBytes exactly
+ * (8 bytes / 16 hex characters), since the two must produce the same shape
+ * for a grant sort key the client generates and the server only validates.
+ */
+const RAND_SUFFIX_BYTES = 8
+
+/**
+ * Generates the "GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand>" sort key a new role
+ * grant will be written under -- the client-side counterpart of
+ * internal/idgen.go's DaySuffix, needed here because RoleGrantPayload now
+ * signs the grant's own address (see that function's own doc comment for
+ * why) and the client must therefore choose it before asking the server to
+ * verify a signature over it, the same "client decides, server validates
+ * the shape" split idgen.DaySuffix's own doc comment describes for every
+ * other day-suffixed sort key in this schema.
+ *
+ * now is UTC, not local time, matching DaySuffix -- otherwise a client in a
+ * timezone behind UTC could mint a grant dated "yesterday" from the
+ * server's perspective, which the server's own skew check
+ * (validateGrantDay) is what actually enforces isn't gamed for real.
+ */
+export function generateGrantSortKey(subjectUUID: string, now: Date = new Date()): string {
+  const day = now.toISOString().slice(0, 10)
+  const rand = bytesToHex(crypto.getRandomValues(new Uint8Array(RAND_SUFFIX_BYTES)))
+  return `GRANT#${subjectUUID}#${day}#${rand}`
+}
+
 /**
  * Builds the canonical byte string a group's trust-anchor signature covers
  * -- see docs/DESIGN.md, "Roles and the chain of trust": "The anchor is
@@ -33,10 +64,20 @@ export function trustAnchorPayload(
 /**
  * Builds the canonical byte string a role-grant signature covers -- see
  * docs/DESIGN.md, "Roles and the chain of trust." A grant binds the group
- * id, the subject uuid and the role granted, and the grantor's own current
- * grant reference (the sort key of the grant that authorized the grantor to
- * act) -- empty for the root grant a group's creation produces, since there
- * is no predecessor grant to point at.
+ * id, the subject uuid and the role granted, the grant's own address
+ * (grantSortKey, the "GRANT#<uuid>#<YYYY-MM-DD>#<rand>" sort key this exact
+ * grant will be written under), and the grantor's own current grant
+ * reference (the sort key of the grant that authorized the grantor to act)
+ * -- empty for the root grant a group's creation produces, since there is
+ * no predecessor grant to point at.
+ *
+ * grantSortKey is signed, not just chosen by whoever writes the row,
+ * because the chain walk relies on the day in a grant's own sort key to
+ * pick which of the grantor's superseded signing keys verifies it. Without
+ * the address itself in the signed bytes, a copied signature could be
+ * replayed onto a new GRANT# row at a different day -- see
+ * internal/crypto/group.go's RoleGrantPayload for the full reasoning this
+ * must match byte-for-byte.
  *
  * Sign this payload under ed25519.SigningContext.RoleGrant; verify it the
  * same way. Same length-prefixed encoding as trustAnchorPayload, and the
@@ -47,6 +88,7 @@ export function roleGrantPayload(
   groupId: string,
   subjectUUID: string,
   role: string,
+  grantSortKey: string,
   grantorGrantRef: string,
 ): Uint8Array {
   const encoder = new TextEncoder()
@@ -54,6 +96,7 @@ export function roleGrantPayload(
     encoder.encode(groupId),
     encoder.encode(subjectUUID),
     encoder.encode(role),
+    encoder.encode(grantSortKey),
     encoder.encode(grantorGrantRef),
   ])
 }

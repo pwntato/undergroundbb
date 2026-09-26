@@ -148,6 +148,7 @@ type roleGrantVector struct {
 	GroupID         string `json:"group_id"`
 	SubjectUUID     string `json:"subject_uuid"`
 	Role            string `json:"role"`
+	GrantSortKey    string `json:"grant_sort_key"`
 	GrantorGrantRef string `json:"grantor_grant_ref"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
@@ -564,7 +565,7 @@ func TestVectorRoleGrant(t *testing.T) {
 			wantPayload := mustHex(t, tc.PayloadHex)
 			wantSig := mustHex(t, tc.SignatureHex)
 
-			gotPayload := RoleGrantPayload(tc.GroupID, tc.SubjectUUID, tc.Role, tc.GrantorGrantRef)
+			gotPayload := RoleGrantPayload(tc.GroupID, tc.SubjectUUID, tc.Role, tc.GrantSortKey, tc.GrantorGrantRef)
 			if !bytes.Equal(gotPayload, wantPayload) {
 				t.Fatalf("RoleGrantPayload = %x, want %x", gotPayload, wantPayload)
 			}
