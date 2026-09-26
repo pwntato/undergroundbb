@@ -22,8 +22,21 @@ type Handler struct {
 	sessions *session.Signer
 }
 
-// New builds a Handler.
+// New builds a Handler. dbClient must not be nil: New has no way to serve a
+// real request without one, and every legitimate caller already has a
+// working client in hand or has failed fast during startup before reaching
+// here (see cmd/lambda and cmd/local, both of which log.Fatalf on db.New's
+// own error first). Passing nil is a wiring bug, not a runtime condition to
+// handle gracefully, so this panics here rather than letting it surface
+// later as a request-time panic on whichever handler first reads h.db. See
+// #87: that used to be no handler at all (only health and getConfig were
+// registered, and neither touches h.db), which is why a nil client passing
+// construction silently was survivable until routes that actually read h.db
+// existed.
 func New(cfg config.Config, dbClient *db.Client) *Handler {
+	if dbClient == nil {
+		panic("handlers.New: dbClient must not be nil")
+	}
 	return &Handler{cfg: cfg, db: dbClient, sessions: session.NewSigner(cfg.SessionSecret)}
 }
 
