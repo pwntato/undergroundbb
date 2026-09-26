@@ -13,16 +13,22 @@
 // where it genuinely differs (no server-side old-password check to fail
 // on).
 //
-// Unlike RecoveryScreen, this screen requires an existing session --
-// SessionContext's own doc comment is explicit that its userId does not
-// survive a reload and is not authentication's source of truth, so this
-// screen does not gate on it. Instead the initial GET
-// /api/account/credentials call (which it needs to run anyway, to bootstrap
-// the unwrap) doubles as the real auth check: a 401 sends the visitor to
-// /login exactly as if a protected page had rejected them, rather than
-// this screen trusting client-side session state it cannot rely on.
+// Unlike RecoveryScreen, this screen requires an existing session. #32 added
+// a RequireAuth wrapper around this route (App.tsx), so a visitor with no
+// session at all never reaches this component -- but this screen's own
+// bootstrap check below is not redundant with that: SessionContext can go
+// stale the instant a session expires mid-visit, after RequireAuth's own
+// one-time check already passed, which RequireAuth (checked once, on mount)
+// cannot catch. The initial GET /api/account/credentials call (which this
+// screen needs to run anyway, to bootstrap the unwrap) doubles as that real,
+// live auth check: a 401 sends the visitor to /login exactly as if
+// RequireAuth had rejected them itself, rather than this screen trusting
+// client-side session state that can be wrong. See its own effect below for
+// why that path also calls session.logout() -- reviewer-caught on #32's own
+// PR, without it RedirectIfAuthenticated on /login bounces straight back
+// here on stale session state.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
   ApiError,
@@ -32,6 +38,7 @@ import {
 } from '@/lib/api/auth'
 import { completeChangePassword } from '@/lib/crypto/worker-client'
 import type { ChangePasswordMaterial, SignupProgressEvent } from '@/lib/crypto/worker-protocol'
+import { useSession } from '@/lib/session/useSession'
 import { ChangePasswordCredentialsStep } from './ChangePasswordCredentialsStep'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { runChangePassword, type ChangePasswordErrorKind } from './runChangePassword'
@@ -89,6 +96,12 @@ export function ChangePasswordScreen() {
   const [progress, setProgress] = useState<SignupProgressEvent | null>(null)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const session = useSession()
+  // See the authRequired effect below for why this exists: it is only ever
+  // read/written inside that effect, never during render, so (unlike an
+  // earlier draft of RedirectIfAuthenticated's own fix) there's no unsound
+  // ref-read-during-render here for oxlint's react-hooks(refs) rule to catch.
+  const loggedOutRef = useRef(false)
 
   // The initial auth check -- see this file's own header comment for why a
   // 401 here, not SessionContext, is what sends an unauthenticated visitor
@@ -124,11 +137,29 @@ export function ChangePasswordScreen() {
   }, [step.name])
 
   useEffect(() => {
-    if (step.name !== 'authRequired') {
+    if (step.name !== 'authRequired' || loggedOutRef.current) {
       return
     }
+    // Reviewer-caught, #32's own PR: without this, SessionContext still
+    // holds the now-stale userId from before the session expired, so
+    // RedirectIfAuthenticated on /login sees an "authenticated" session and
+    // bounces straight back to /, which then confusingly claims "You're
+    // logged in" to a visitor whose session just failed. session.logout()
+    // makes this navigation land on the real login form instead of dead-
+    // ending in that loop.
+    //
+    // loggedOutRef guards against this effect re-running itself: it depends
+    // on session (correctly, per exhaustive-deps -- session.logout is what
+    // it calls), but session.logout() changes SessionContext's value
+    // identity (see its own useMemo), which would otherwise re-fire this
+    // same effect and call logout()/navigate() again. Both calls are
+    // individually idempotent, but the ref keeps this an intentional
+    // once-per-screen-visit effect rather than a self-triggering loop that
+    // merely happens to be harmless.
+    loggedOutRef.current = true
+    session.logout()
     navigate('/login', { replace: true })
-  }, [step.name, navigate])
+  }, [step.name, navigate, session])
 
   // Once changePassword() has committed a new recovery code, it lives only
   // in component state until the user acknowledges it -- same risk and same
