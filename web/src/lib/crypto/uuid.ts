@@ -18,8 +18,22 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
  * behaves as documented forever.
  */
 export function generateUserID(): string {
+  return generateUUID()
+}
+
+/**
+ * Generates a fresh, well-formed lowercase RFC 4122 v4 uuid via the
+ * platform CSPRNG -- the same generation generateUserID uses, under a name
+ * that doesn't imply "user" for callers generating an id for something
+ * else. Issue #34 needs a client-generated group id for the identical
+ * reason #123 needed a client-generated user id (see this module's own
+ * header comment): TrustAnchorPayload/RoleGrantPayload both bind the group
+ * id into what the creator signs, so the client must know the real id
+ * before it signs, before the server is ever called.
+ */
+export function generateUUID(): string {
   const id = crypto.randomUUID()
-  if (!isValidUserID(id)) {
+  if (!isValidUUID(id)) {
     throw new Error('crypto: crypto.randomUUID() produced an unexpected shape')
   }
   return id
@@ -27,5 +41,10 @@ export function generateUserID(): string {
 
 /** Reports whether s is a well-formed, lowercase RFC 4122 v4 uuid. */
 export function isValidUserID(s: string): boolean {
+  return isValidUUID(s)
+}
+
+/** Reports whether s is a well-formed, lowercase RFC 4122 v4 uuid -- an alias of isValidUserID under a name that doesn't imply "user." */
+export function isValidUUID(s: string): boolean {
   return UUID_PATTERN.test(s)
 }

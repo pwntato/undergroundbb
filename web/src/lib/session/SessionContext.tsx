@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getSession } from '@/lib/api/auth'
+import { clearLiveKeys } from '@/lib/crypto/worker-client'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
 
@@ -53,6 +54,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setUserId(id)
       },
       logout: () => {
+        // Issue #34: also clears the crypto worker's cached liveKeys, so a
+        // worker instance reused across a logout/login in the same tab
+        // never signs anything under the account that just logged out. No
+        // logout endpoint/UI exists yet (ChangePasswordScreen.tsx's own
+        // session.logout() calls are for an expired-session redirect, not a
+        // user-initiated logout) -- this still needs to run there too, once
+        // one does, for the same reason.
+        clearLiveKeys()
         setUserId(null)
       },
     }),

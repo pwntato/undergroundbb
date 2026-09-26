@@ -171,5 +171,79 @@
       "wrapping_private_key_hex": "1f380b0627dc85fb30f164b26e4ab97d37a9ca1852dac6fccae838cd8e17cfdb",
       "encoded_hex": "0100000020fa91835ab2e8e00e2fc40ce89c73f540a6bc3d7fe71ad171e835826addc6f84b000000201f380b0627dc85fb30f164b26e4ab97d37a9ca1852dac6fccae838cd8e17cfdb"
     }
+  ],
+  "trust_anchor": [
+    {
+      "name": "basic",
+      "private_key_hex": "28ca45b4b657b67f5df1f3c5f0c45201f9ce80b99797c1dcee026471fc7214d61227499c4abf1df1fd722d898ebb8368f709e051701d4397e3d7e46806148526",
+      "public_key_hex": "1227499c4abf1df1fd722d898ebb8368f709e051701d4397e3d7e46806148526",
+      "creator_uuid": "creator-uuid-1",
+      "group_id": "group-uuid-2",
+      "payload_hex": "0000000e63726561746f722d757569642d31000000201227499c4abf1df1fd722d898ebb8368f709e051701d4397e3d7e468061485260000000c67726f75702d757569642d32",
+      "signature_hex": "cbe754e8b42cce7abb15fa4ed9ee074866e5cba726972a318eb744bc0dac7944658232cbd0f09a63e8050939784cc6396f5396f25f7cd2e08117b47e5098cd09"
+    }
+  ],
+  "role_grant": [
+    {
+      "name": "root",
+      "private_key_hex": "42324b684a4f14da731ea32002026d7fc55d9025c876329d67b52bbb8300e7f404d94b4c41f8288a07aa129fb7172084350fbf0f16e4c8732512c5de946bfd6c",
+      "public_key_hex": "04d94b4c41f8288a07aa129fb7172084350fbf0f16e4c8732512c5de946bfd6c",
+      "group_id": "group-uuid-2",
+      "subject_uuid": "creator-uuid-1",
+      "role": "admin",
+      "grant_sort_key": "GRANT#creator-uuid-1#2026-09-06#f0e1d2c3b4a59687",
+      "grantor_grant_ref": "",
+      "payload_hex": "0000000c67726f75702d757569642d320000000e63726561746f722d757569642d310000000561646d696e000000304752414e542363726561746f722d757569642d3123323032362d30392d3036236630653164326333623461353936383700000000",
+      "signature_hex": "58a23f6eca76e930f64796921c69cfd0cc66d4ba08906165d4f749778ba5ad479c8357c676a3eba8464caae4684262d33d65bc288f7fc4ba1c31532765e6650a"
+    },
+    {
+      "name": "non_root",
+      "private_key_hex": "42324b684a4f14da731ea32002026d7fc55d9025c876329d67b52bbb8300e7f404d94b4c41f8288a07aa129fb7172084350fbf0f16e4c8732512c5de946bfd6c",
+      "public_key_hex": "04d94b4c41f8288a07aa129fb7172084350fbf0f16e4c8732512c5de946bfd6c",
+      "group_id": "group-uuid-2",
+      "subject_uuid": "member-uuid-1",
+      "role": "member",
+      "grant_sort_key": "GRANT#member-uuid-1#2026-09-07#1122334455667788",
+      "grantor_grant_ref": "GRANT#creator-uuid-1#2026-09-06#a1b2c3d4e5f6a1b2",
+      "payload_hex": "0000000c67726f75702d757569642d320000000d6d656d6265722d757569642d31000000066d656d6265720000002f4752414e54236d656d6265722d757569642d3123323032362d30392d30372331313232333334343535363637373838000000304752414e542363726561746f722d757569642d3123323032362d30392d30362361316232633364346535663661316232",
+      "signature_hex": "a212a71e8e76b58d5101ff079230695574364ef1a2f842d22ada8b40aeb53d94c7a040550036ae7b688dd251c641115a38fdf4d6cbb4484929b127a6410e9100"
+    }
+  ],
+  "member_wrap_aad": [
+    {
+      "name": "generation_0",
+      "group_id": "group-uuid-2",
+      "member_uuid": "member-uuid-1",
+      "generation": 0,
+      "aad_hex": "47524f55502367726f75702d757569642d323a4d454d424552236d656d6265722d757569642d313a47454e23303030303030",
+      "key_hex": "e721e9f67e16d3b4686356a82a8458645cbbf03829802849a8e193f90c8e1f60",
+      "plaintext_hex": "f64289198373d5ef18bfb1c408bdcd9eee6fdb0d0fabdd83d2e9f0858f9c729c",
+      "nonce_hex": "c8a60b5547f10b1d818e739b",
+      "ciphertext_hex": "f31a225ac30f405446f77118f25c70d3ccc58e1bbed8097bebd2dc3600ae8026be4f8088f11127a0caae8351aeb6779c"
+    }
+  ],
+  "group_name_aad": [
+    {
+      "name": "name",
+      "group_id": "group-uuid-2",
+      "field": "NAME",
+      "generation": 0,
+      "aad_hex": "47524f55502367726f75702d757569642d323a4e414d453a47454e23303030303030",
+      "key_hex": "cbdaa0ec542e6d1d443f349aaf64f1ae735844577ffc43a3d9ae67256f9ba708",
+      "plaintext_hex": "426f6f6b20436c7562",
+      "nonce_hex": "685e45f3da29d22024994cb3",
+      "ciphertext_hex": "f4946a9252e2fa164f65860635dd849a299f4672bed981380c"
+    },
+    {
+      "name": "description",
+      "group_id": "group-uuid-2",
+      "field": "DESC",
+      "generation": 0,
+      "aad_hex": "47524f55502367726f75702d757569642d323a444553433a47454e23303030303030",
+      "key_hex": "cbdaa0ec542e6d1d443f349aaf64f1ae735844577ffc43a3d9ae67256f9ba708",
+      "plaintext_hex": "5765207265616420626f6f6b73",
+      "nonce_hex": "5320f4702162921e4fdad410",
+      "ciphertext_hex": "936486f5497094276e7c1909355de3a53cb4d1f5cafd5a0c0cd2f64754"
+    }
   ]
 }

@@ -27,6 +27,10 @@ type vectorFile struct {
 	Fingerprint    []fingerprintVector    `json:"fingerprint"`
 	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
 	KeyBundle      []keyBundleVector      `json:"key_bundle"`
+	TrustAnchor    []trustAnchorVector    `json:"trust_anchor"`
+	RoleGrant      []roleGrantVector      `json:"role_grant"`
+	MemberWrap     []memberWrapVector     `json:"member_wrap_aad"`
+	GroupName      []groupNameVector      `json:"group_name_aad"`
 }
 
 type kdfVector struct {
@@ -125,6 +129,53 @@ type keyBundleVector struct {
 	SigningSeedHex     string `json:"signing_seed_hex"`
 	WrappingPrivKeyHex string `json:"wrapping_private_key_hex"`
 	EncodedHex         string `json:"encoded_hex"`
+}
+
+type trustAnchorVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	CreatorUUID  string `json:"creator_uuid"`
+	GroupID      string `json:"group_id"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+type roleGrantVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	GroupID         string `json:"group_id"`
+	SubjectUUID     string `json:"subject_uuid"`
+	Role            string `json:"role"`
+	GrantSortKey    string `json:"grant_sort_key"`
+	GrantorGrantRef string `json:"grantor_grant_ref"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
+}
+
+type memberWrapVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	MemberUUID    string `json:"member_uuid"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+type groupNameVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	Field         string `json:"field"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
 }
 
 func loadVectors(t *testing.T) vectorFile {
@@ -461,4 +512,178 @@ func TestVectorKeyBundle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVectorTrustAnchor pins TrustAnchorPayload's exact encoding -- issue
+// #34, the same reasoning TestVectorSignedPayload gives for posts and
+// comments: a group's root of trust is verified by every future member's
+// client, so this payload must produce byte-identical output in Go and
+// TypeScript before any real group exists under it.
+func TestVectorTrustAnchor(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.TrustAnchor) == 0 {
+		t.Fatal("expected at least 1 trust_anchor vector")
+	}
+	for _, tc := range v.TrustAnchor {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := TrustAnchorPayload(tc.CreatorUUID, pub, tc.GroupID)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("TrustAnchorPayload = %x, want %x", gotPayload, wantPayload)
+			}
+
+			gotSig, err := Sign(priv, ContextTrustAnchor, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextTrustAnchor, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature over TrustAnchorPayload")
+			}
+		})
+	}
+}
+
+// TestVectorRoleGrant pins RoleGrantPayload's exact encoding, for both the
+// root-grant shape (empty grantorGrantRef) and a non-root grant referencing
+// a real predecessor.
+func TestVectorRoleGrant(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.RoleGrant) < 2 {
+		t.Fatalf("expected at least 2 role_grant vectors (root, non_root), got %d", len(v.RoleGrant))
+	}
+	for _, tc := range v.RoleGrant {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := RoleGrantPayload(tc.GroupID, tc.SubjectUUID, tc.Role, tc.GrantSortKey, tc.GrantorGrantRef)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("RoleGrantPayload = %x, want %x", gotPayload, wantPayload)
+			}
+
+			gotSig, err := Sign(priv, ContextRoleGrant, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature over RoleGrantPayload")
+			}
+		})
+	}
+}
+
+// TestVectorMemberWrap pins MemberWrapAAD's exact encoding -- see
+// TestVectorCredentialWrap for the identical reasoning applied to a
+// different AAD.
+func TestVectorMemberWrap(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.MemberWrap) == 0 {
+		t.Fatal("expected at least 1 member_wrap_aad vector")
+	}
+	for _, tc := range v.MemberWrap {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := MemberWrapAAD(tc.GroupID, tc.MemberUUID, tc.Generation)
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("MemberWrapAAD(%q, %q, %d) = %x, want %x", tc.GroupID, tc.MemberUUID, tc.Generation, gotAAD, wantAAD)
+			}
+
+			key := mustHex(t, tc.KeyHex)
+			nonce := mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			wantCiphertext := mustHex(t, tc.CiphertextHex)
+
+			gotCiphertext, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotCiphertext, wantCiphertext) {
+				t.Fatalf("EncryptWithNonce = %x, want %x", gotCiphertext, wantCiphertext)
+			}
+
+			decrypted, err := Decrypt(key, nonce, gotCiphertext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(decrypted, plaintext) {
+				t.Fatalf("Decrypt = %x, want %x", decrypted, plaintext)
+			}
+		})
+	}
+}
+
+// TestVectorGroupName pins GroupNameAAD's exact encoding, for both the name
+// and description fields -- proving the two produce genuinely different
+// AAD, the same shape TestVectorCredentialWrap proves for PROFILE vs.
+// RECOVERY.
+func TestVectorGroupName(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.GroupName) < 2 {
+		t.Fatalf("expected at least 2 group_name_aad vectors (name, description), got %d", len(v.GroupName))
+	}
+	for _, tc := range v.GroupName {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := GroupNameAAD(tc.GroupID, GroupTextField(tc.Field), tc.Generation)
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("GroupNameAAD(%q, %q, %d) = %x, want %x", tc.GroupID, tc.Field, tc.Generation, gotAAD, wantAAD)
+			}
+
+			key := mustHex(t, tc.KeyHex)
+			nonce := mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			wantCiphertext := mustHex(t, tc.CiphertextHex)
+
+			gotCiphertext, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotCiphertext, wantCiphertext) {
+				t.Fatalf("EncryptWithNonce = %x, want %x", gotCiphertext, wantCiphertext)
+			}
+
+			decrypted, err := Decrypt(key, nonce, gotCiphertext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(decrypted, plaintext) {
+				t.Fatalf("Decrypt = %x, want %x", decrypted, plaintext)
+			}
+		})
+	}
+
+	t.Run("cross-field AAD must fail (name ciphertext under description AAD)", func(t *testing.T) {
+		var nameVec, descVec *groupNameVector
+		for i := range v.GroupName {
+			switch v.GroupName[i].Field {
+			case "NAME":
+				nameVec = &v.GroupName[i]
+			case "DESC":
+				descVec = &v.GroupName[i]
+			}
+		}
+		if nameVec == nil || descVec == nil {
+			t.Fatal("expected both NAME and DESC vectors")
+		}
+		key := mustHex(t, nameVec.KeyHex)
+		nonce := mustHex(t, nameVec.NonceHex)
+		nameCiphertext := mustHex(t, nameVec.CiphertextHex)
+		descAAD := mustHex(t, descVec.AADHex)
+
+		if _, err := Decrypt(key, nonce, nameCiphertext, descAAD); err == nil {
+			t.Fatal("Decrypt succeeded with the wrong field's AAD, want failure")
+		}
+	})
 }

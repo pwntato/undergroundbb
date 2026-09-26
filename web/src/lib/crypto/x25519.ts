@@ -50,6 +50,21 @@ export function generateWrappingKey(): WrappingKey {
 }
 
 /**
+ * Reconstructs a WrappingKey from an existing private scalar by re-deriving
+ * its public key -- the X25519 counterpart to ed25519.ts's
+ * signingKeyFromSeed, used by completeLogin (credential-material.ts) to
+ * rebuild the caller's full wrapping keypair from the private key alone
+ * once it has already been unwrapped from a stored credential, without
+ * generating fresh randomness the way generateWrappingKey does.
+ */
+export function wrappingKeyFromPrivate(privateKey: Uint8Array): WrappingKey {
+  if (privateKey.length !== KEY_LEN) {
+    throw new Error('crypto: private key must be 32 bytes')
+  }
+  return { privateKey, publicKey: x25519.getPublicKey(privateKey) }
+}
+
+/**
  * Wraps plaintext (typically a group key or a generation key) to
  * recipientPub using ECIES: a fresh ephemeral X25519 keypair, ECDH against
  * the recipient's public key, HKDF-SHA256 to derive a wrapping key from the

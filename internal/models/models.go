@@ -115,10 +115,32 @@ type Argon2Params struct {
 // WrappedBlob is an opaque AES-256-GCM-wrapped payload: a nonce and the
 // ciphertext (tag appended, per crypto.Encrypt's convention). The server
 // stores and serves it but has no way to open it -- it holds no key that
-// could.
+// could. Used where the wrapping key is derived directly (Argon2id from a
+// password or recovery code) rather than via X25519 ECDH -- see
+// WrappedKey's own doc comment for why an ECIES wrap needs a third field
+// this type does not have.
 type WrappedBlob struct {
 	Nonce      []byte `dynamodbav:"Nonce"`
 	Ciphertext []byte `dynamodbav:"Ciphertext"`
+}
+
+// WrappedKey is an opaque X25519-ECIES-wrapped payload -- crypto.Wrap's
+// output (crypto.Wrapped), stored exactly as produced: an ephemeral X25519
+// public key alongside the AES-256-GCM nonce and ciphertext. Distinct from
+// WrappedBlob because unwrapping an ECIES wrap needs the ephemeral public
+// key from THIS SPECIFIC wrap to redo the ECDH -- crypto.Unwrap's own doc
+// comment is explicit that "the returned Wrapped value carries the
+// ephemeral public key alongside the nonce and ciphertext -- it is
+// everything Unwrap needs." WrappedBlob's two fields are correct for
+// WrappedPrivateKeys and RecoveryWrappedPrivateKeys, where the wrapping key
+// comes directly from Argon2id and no ECDH (and therefore no ephemeral
+// keypair) is ever involved -- conflating the two here would silently drop
+// the one field an ECIES unwrap cannot function without. Used for
+// Membership.WrappedGroupKey and every future GENKEY# chain link.
+type WrappedKey struct {
+	EphemeralPub []byte `dynamodbav:"EphemeralPub"`
+	Nonce        []byte `dynamodbav:"Nonce"`
+	Ciphertext   []byte `dynamodbav:"Ciphertext"`
 }
 
 // Recovery is the USER#<uuid> / RECOVERY item -- a second copy of the
@@ -225,4 +247,190 @@ type UsernameClaim struct {
 	// UserID is the uuid this username resolves to -- what makes the claim a
 	// lookup and not merely a lock.
 	UserID string `dynamodbav:"UserID"`
+}
+
+// Revocation mode values. See Group.RevocationMode and docs/DESIGN.md,
+// "Revocation mode."
+const (
+	RevocationRotating = "rotating"
+	RevocationOpen     = "open"
+)
+
+// Group visibility values. See Group.Visibility and docs/DESIGN.md,
+// "Visibility -- private and public groups."
+const (
+	VisibilityPrivate = "private"
+	VisibilityPublic  = "public"
+)
+
+// Group is the GROUP#<gid> / META item -- see docs/DESIGN.md, "Data model"
+// and "Roles and the chain of trust." TTL never: a group's own record does
+// not expire, only the posts inside it do, per group policy.
+//
+// Name and Description are plaintext for a public group and opaque
+// ciphertext (AES-256-GCM under the group key) for a private one -- this
+// package stores whichever the client sent and does not interpret either,
+// since only a member holding the group key can tell the difference. The
+// wire and db layers are what choose which of NamePlaintext/NameCiphertext
+// is populated, matching Visibility.
+type Group struct {
+	Record
+
+	// CreatorUserID and CreatorSigningPublicKey anchor the chain of trust:
+	// a grant-chain walk terminates by checking that the root GRANT# is
+	// self-signed by this key, belonging to this uuid. Both are stored
+	// rather than inferred from "no predecessor" -- see DESIGN.md's own
+	// reasoning for why an inferred root is forgeable by the server. The key
+	// is the one that was current AT CREATION, which may since have been
+	// superseded by a rotation; verifying an old root grant's signature
+	// means checking it against this key, not the creator's current one.
+	CreatorUserID           string `dynamodbav:"CreatorUserID"`
+	CreatorSigningPublicKey []byte `dynamodbav:"CreatorSigningPublicKey"`
+	// TrustAnchorSignature is the creator's Ed25519 signature (under
+	// crypto.ContextTrustAnchor) over CreatorUserID + CreatorSigningPublicKey
+	// + the group id -- see DESIGN.md, "The anchor is signed by the creator
+	// at group creation." Without this, an unsigned anchor field would only
+	// move the operator's freedom to fabricate a chain root from
+	// verification time to a rewritten attribute; a client must check this
+	// signature before trusting CreatorUserID/CreatorSigningPublicKey at all.
+	TrustAnchorSignature []byte `dynamodbav:"TrustAnchorSignature"`
+
+	// RootGrantSortKey is the address of this group's root GRANT# item
+	// ("GRANT#<uuid>#<YYYY-MM-DD>#<rand>") -- stored on META (PR #142 round
+	// 2 review) so a lost-response retry of group creation can echo back
+	// the actually-written root grant's address instead of the retry
+	// request's own freshly re-signed one, which points at a row that was
+	// never written (the client re-signs a fresh grantSortKey on every
+	// attempt, including a resumed one -- see db.isOwnGroupCreation's own
+	// doc comment). Unlike GenerationKeyWrapped (removed from this struct
+	// in the same review round for going stale at rotation), this value
+	// never changes after creation: the root grant is permanent and
+	// append-only, so a copy here carries none of that staleness risk.
+	RootGrantSortKey string `dynamodbav:"RootGrantSortKey"`
+
+	// Visibility is VisibilityPrivate or VisibilityPublic, chosen at
+	// creation and not changeable afterward -- switching a group's
+	// visibility would mean re-encrypting or newly encrypting its name and
+	// description, and DESIGN.md does not describe that migration.
+	Visibility string `dynamodbav:"Visibility"`
+
+	// NamePlaintext and DescriptionPlaintext hold a PUBLIC group's name and
+	// description as typed. Empty (and absent from GSI1) for a private
+	// group -- see DESIGN.md, "Private groups write no entry at all."
+	NamePlaintext        string `dynamodbav:"NamePlaintext,omitempty"`
+	DescriptionPlaintext string `dynamodbav:"DescriptionPlaintext,omitempty"`
+
+	// NameCiphertext and DescriptionCiphertext hold a PRIVATE group's name
+	// and description, AES-256-GCM under the group key at Generation 0 (the
+	// only generation that exists at creation) -- see the AAD table in
+	// DESIGN.md, "Group name/description" (AAD: group id + generation
+	// number). Absent for a public group.
+	NameCiphertext        *WrappedBlob `dynamodbav:"NameCiphertext,omitempty"`
+	DescriptionCiphertext *WrappedBlob `dynamodbav:"DescriptionCiphertext,omitempty"`
+
+	// RevocationMode is RevocationRotating or RevocationOpen, chosen at
+	// creation. May later convert Rotating -> Open (not built by this
+	// issue) but never the reverse -- see DESIGN.md, "Revocation mode."
+	RevocationMode string `dynamodbav:"RevocationMode"`
+
+	// ExpirationDays is the group's message-expiration policy in days, or 0
+	// to mean "never expire" -- only valid when this deployment's
+	// config.AllowGroupExpirationOff permits it. See DESIGN.md, "Message
+	// expiration," and config.Config.AllowGroupExpirationOff.
+	ExpirationDays int64 `dynamodbav:"ExpirationDays"`
+
+	// Type is "dm" for a direct-message group, absent/empty for an ordinary
+	// group -- see DESIGN.md, "Direct messages": "type is a plaintext
+	// attribute on the group's META item, not a separate row." Not settable
+	// through this issue's create-group endpoint (#73 builds DMs); the field
+	// exists on the model now because it lives on this same item, not
+	// because #34 populates it.
+	//
+	// Named GroupType, not Type, despite the dynamodbav tag matching either
+	// way -- Group embeds Record, which already has its own Type field (the
+	// item's kind, "Group"); a same-named GroupType.Type would shadow
+	// Record.Type in Go (g.Type would mean this field, g.Record.Type the
+	// item kind), silently breaking any future g.Type == "Group" or
+	// g.Type = "dm" check on the wrong field. attributevalue itself
+	// marshals both correctly regardless of the Go field name -- this is
+	// purely for readers and future writers of this struct, not a wire
+	// concern.
+	GroupType string `dynamodbav:"GroupType,omitempty"`
+}
+
+// Group roles. See Membership.Role and docs/DESIGN.md, "Roles and the chain
+// of trust."
+const (
+	RoleAdmin      = "admin"
+	RoleAmbassador = "ambassador"
+	RoleMember     = "member"
+)
+
+// Membership is the GROUP#<gid> / MEMBER#<uuid> item -- see docs/DESIGN.md,
+// "Data model." GSI1PK is USER#<uuid>, GSI1SK is GROUP#<gid>, which is what
+// makes "list my groups" (#35) one GSI1 Query. TTL never: a membership
+// itself does not expire, independent of the group's message-retention
+// policy.
+type Membership struct {
+	Record
+
+	// Role is RoleAdmin, RoleAmbassador or RoleMember, gating write access on
+	// the hot path with a plain GetItem -- see DESIGN.md, "the current role
+	// lives on the membership item and gates writes... this history [the
+	// GRANT# chain] is read only by the chain walk, which is already the
+	// slow path."
+	Role string `dynamodbav:"Role"`
+
+	// Generation is the newest key generation this member's WrappedGroupKey
+	// is wrapped for. Always 0 at creation, since Generation 0 is the only
+	// generation a brand-new group has.
+	Generation int64 `dynamodbav:"Generation"`
+
+	// WrappedGroupKey is this member's own ECIES-wrapped copy of the group
+	// key at Generation, per MemberWrapAAD (group id + member uuid +
+	// generation number) -- a WrappedKey, not a WrappedBlob, since unwrapping
+	// an ECIES wrap needs the ephemeral public key from this specific wrap
+	// (WrappedKey's own doc comment). This member's MEMBER# item is the only
+	// place their wrapped entry point to the group key lives -- there is no
+	// second copy on META (db.CreateGroupInput.GenerationKeyWrapped's own
+	// doc comment: PR #142 review dropped that duplicate, since a copy on
+	// META would go stale at the first rotation while still looking current
+	// to anyone who fetched it).
+	WrappedGroupKey WrappedKey `dynamodbav:"WrappedGroupKey"`
+}
+
+// RoleGrant is a GROUP#<gid> / GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand> item --
+// see docs/DESIGN.md, "Roles and the chain of trust": "Grants are
+// append-only, and that is what makes the chain walkable." SubjectUserID is
+// duplicated off the sort key (rather than parsed back out of it) so a
+// grant-chain walk's Query result can read it directly. TTL never -- "GRANT#
+// items must stay verifiable back to the group creator forever."
+type RoleGrant struct {
+	Record
+
+	// SubjectUserID is who this grant is FOR -- the uuid receiving or
+	// having their role changed. For the root grant #34 writes, this is the
+	// creator's own uuid: a self-grant, which is what anchors the chain (see
+	// Group.TrustAnchorSignature's own doc comment).
+	SubjectUserID string `dynamodbav:"SubjectUserID"`
+	// GrantedRole is the role this grant confers -- RoleAdmin for the root
+	// grant, since the creator is always Admin.
+	GrantedRole string `dynamodbav:"GrantedRole"`
+
+	// GrantorUserID and GrantorSigningPublicKey identify who signed this
+	// grant and under which key -- for the root grant, identical to
+	// SubjectUserID and the group's CreatorSigningPublicKey, since it is
+	// self-signed. A later grant chain (#37) will have these differ from
+	// SubjectUserID/GrantedRole's subject.
+	GrantorUserID           string `dynamodbav:"GrantorUserID"`
+	GrantorSigningPublicKey []byte `dynamodbav:"GrantorSigningPublicKey"`
+
+	// Signature is the grantor's Ed25519 signature (under
+	// crypto.ContextRoleGrant) over the grant's content -- group id, subject
+	// uuid, granted role, and (for a non-root grant) a pointer to the
+	// grantor's own current grant, so a chain walk can verify each link was
+	// signed by someone who held Admin at the time. The exact signed payload
+	// is defined where the signing helper lives (internal/crypto), not here;
+	// this field only stores the resulting opaque bytes.
+	Signature []byte `dynamodbav:"Signature"`
 }

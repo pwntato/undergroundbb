@@ -45,6 +45,32 @@ why.
   after a real wrap exists would make every existing user's blob decode to
   the wrong bytes with nothing able to detect it before the client tried to
   use them as keys.
+- `trust_anchor`: `(creator uuid, creator signing public key, group id) ->
+  payload`, plus the Ed25519 signature over it — pinning `TrustAnchorPayload`
+  (#34), the group-creation counterpart of `signed_payload` above. A group's
+  root of trust is verified by every future member's client, so this
+  encoding must be byte-identical across Go and TypeScript before any real
+  group exists under it.
+- `role_grant`: `(group id, subject uuid, role, grantor grant ref) ->
+  payload`, plus the Ed25519 signature over it — pinning `RoleGrantPayload`
+  (#34). Two cases: a root grant (empty grantor grant ref, no predecessor to
+  reference) and a non-root grant referencing a real one, proving the two
+  shapes produce genuinely different payloads.
+- `member_wrap_aad`: `(group id, member uuid, generation) -> AAD`, plus the
+  AES-256-GCM ciphertext that AAD produces under a fixed key/nonce/plaintext
+  — pinning `MemberWrapAAD` (#34), the AAD for a single member's own wrapped
+  copy of a group's generation key (`docs/DESIGN.md`'s AAD table, "Member's
+  wrapped group key"). Unlike a `GENKEY#` chain link, this wrap is
+  member-specific, so the AAD binds the member uuid as well as the group id
+  and generation number.
+- `group_name_aad`: `(group id, field, generation) -> AAD`, plus the
+  AES-256-GCM ciphertext that AAD produces under a fixed key/nonce/plaintext
+  — pinning `GroupNameAAD` (#34), the AAD for a private group's encrypted
+  name and description (`docs/DESIGN.md`'s AAD table, "Group
+  name/description"). Two cases, same group id and key material, one per
+  field — proving the two encode to genuinely different AAD rather than
+  colliding, the same shape `credential_wrap` proves for `PROFILE` vs.
+  `RECOVERY`.
 
 ## Regenerating
 
