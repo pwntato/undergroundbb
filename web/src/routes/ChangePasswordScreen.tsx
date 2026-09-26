@@ -16,17 +16,18 @@
 // Unlike RecoveryScreen, this screen requires an existing session. #32 added
 // a RequireAuth wrapper around this route (App.tsx), so a visitor with no
 // session at all never reaches this component -- but this screen's own
-// bootstrap check below is not redundant with that: SessionContext can go
-// stale the instant a session expires mid-visit, after RequireAuth's own
-// one-time check already passed, which RequireAuth (checked once, on mount)
-// cannot catch. The initial GET /api/account/credentials call (which this
-// screen needs to run anyway, to bootstrap the unwrap) doubles as that real,
-// live auth check: a 401 sends the visitor to /login exactly as if
-// RequireAuth had rejected them itself, rather than this screen trusting
-// client-side session state that can be wrong. See its own effect below for
-// why that path also calls session.logout() -- reviewer-caught on #32's own
-// PR, without it RedirectIfAuthenticated on /login bounces straight back
-// here on stale session state.
+// bootstrap check below is not redundant with that: RequireAuth re-checks on
+// every session change, but it can only re-check the client-side state it
+// has, and SessionContext is never told when the server stops honoring the
+// cookie -- so RequireAuth cannot catch a session that expires mid-visit,
+// after its own check already passed. The initial GET /api/account/credentials
+// call (which this screen needs to run anyway, to bootstrap the unwrap)
+// doubles as that real, live auth check: a 401 sends the visitor to /login
+// exactly as if RequireAuth had rejected them itself, rather than this
+// screen trusting client-side session state that can be wrong. See its own
+// effect below for why that path also calls session.logout() --
+// reviewer-caught on #32's own PR, without it RedirectIfAuthenticated on
+// /login bounces straight back here on stale session state.
 
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'

@@ -21,9 +21,13 @@ describe('nextRedirectDecision (issue #32 review fix)', () => {
   })
 
   it('never re-decides away from redirect, even if userId later becomes null', () => {
-    // The exact shape of the regression: this is what would happen if a
-    // logout raced this decision, and the guard below must not let it
-    // flip back.
+    // Symmetric with the allow case below: once decided, never revisited.
+    // In practice a latched 'redirect' unmounts the component (it renders
+    // <Navigate>), so this exact input can't occur through RedirectIfAuthenticated
+    // itself -- but nextRedirectDecision's own contract shouldn't rely on
+    // that; the guard is `current !== 'pending'`, not `current !== 'pending'
+    // && current !== 'redirect'`, so this case is still worth pinning
+    // directly against the function.
     expect(nextRedirectDecision('redirect', 'ready', null)).toBe('redirect')
   })
 
