@@ -147,6 +147,23 @@ export async function verify(
   return postJSON<VerifyResponse>('/api/auth/verify', { username, nonce, signature })
 }
 
+export interface SessionResponse {
+  readonly authenticated: boolean
+  readonly userId?: string
+}
+
+/**
+ * GET /api/auth/session -- issue #32, app-boot bootstrap. Always resolves
+ * 200; a missing or invalid cookie is a normal "authenticated: false"
+ * answer, not a thrown ApiError -- see the handler's own doc comment. Unlike
+ * getAccountCredentials, this is safe to call from an unauthenticated tab,
+ * which is exactly the case app boot doesn't yet know it's in.
+ */
+export async function getSession(): Promise<SessionResponse> {
+  const res = await fetch('/api/auth/session', { credentials: 'same-origin' })
+  return handleJSON<SessionResponse>(res)
+}
+
 export interface RecoveryCodeReleaseResponse {
   readonly credentialVersion: number
   readonly userId: string

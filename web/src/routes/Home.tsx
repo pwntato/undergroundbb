@@ -8,6 +8,14 @@ import { useSession } from '@/lib/session/useSession'
 export function Home() {
   const session = useSession()
 
+  // Renders nothing rather than the logged-out view while the #32 bootstrap
+  // is still checking -- otherwise an authenticated visitor reloading this
+  // page would see the signup/login prompt flash before session.userId
+  // arrives, even though they're already signed in.
+  if (session.status === 'loading') {
+    return null
+  }
+
   if (!session.userId) {
     return (
       <div className="flex flex-col items-center gap-4 text-center">
