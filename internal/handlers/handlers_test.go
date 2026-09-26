@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 
 func TestHealth(t *testing.T) {
 	mux := http.NewServeMux()
-	New(config.FromEnv(), nil).RegisterRoutes(mux)
+	New(config.FromEnv(), testDB(t)).RegisterRoutes(mux)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
@@ -55,7 +55,7 @@ func TestGetConfig(t *testing.T) {
 	t.Setenv("DEFAULT_EXPIRATION_DAYS", "14")
 
 	mux := http.NewServeMux()
-	New(config.FromEnv(), nil).RegisterRoutes(mux)
+	New(config.FromEnv(), testDB(t)).RegisterRoutes(mux)
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
@@ -86,6 +86,19 @@ func TestGetConfig(t *testing.T) {
 	if body.DefaultExpirationDays != 14 {
 		t.Errorf("DefaultExpirationDays = %d, want 14", body.DefaultExpirationDays)
 	}
+}
+
+// TestNewPanicsOnNilClient pins #87: a nil dbClient must fail at
+// construction, not pass silently into a Handler and panic later at request
+// time on whichever route first reads h.db.
+func TestNewPanicsOnNilClient(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("New(cfg, nil) did not panic, want a panic")
+		}
+	}()
+	New(config.FromEnv(), nil)
+	t.Fatal("New(cfg, nil) returned, want it to panic before returning")
 }
 
 func TestWriteError(t *testing.T) {
