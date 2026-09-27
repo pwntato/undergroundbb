@@ -603,3 +603,165 @@ func TestCreateGroupPublicSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 }
+
+func doListGroups(t *testing.T, h *Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodGet, "/api/groups", nil)
+	if cookie != nil {
+		httpReq.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rec, httpReq)
+	return rec
+}
+
+func TestListGroupsRequiresSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+
+	rec := doListGroups(t, h, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func TestListGroupsEmpty(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	_, cookie := loggedInUser(t, h)
+
+	rec := doListGroups(t, h, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp listGroupsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp.Groups) != 0 {
+		t.Errorf("len(Groups) = %d, want 0", len(resp.Groups))
+	}
+}
+
+// TestListGroupsReturnsPublicAndPrivate covers the field-set split each
+// entry must carry -- a public group's plaintext name/description and
+// nothing else, a private group's ciphertext and the caller's own
+// WrappedGroupKey and no plaintext, matching createGroupRequest's own
+// opposite-direction split (see that type's doc comment).
+func TestListGroupsReturnsPublicAndPrivate(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+
+	privateReq := signedCreateGroupRequest(t, user)
+	privateRec := doCreateGroup(t, h, cookie, privateReq)
+	if privateRec.Code != http.StatusCreated {
+		t.Fatalf("create private group status = %d, body: %s", privateRec.Code, privateRec.Body.String())
+	}
+
+	publicGroupID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	anchorPayload := crypto.TrustAnchorPayload(user.userID, user.signPub, publicGroupID)
+	anchorSig, err := crypto.Sign(user.signPriv, crypto.ContextTrustAnchor, anchorPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	publicRootGrantSortKey := testGrantSortKey(t, user.userID, time.Now())
+	grantPayload := crypto.RoleGrantPayload(publicGroupID, user.userID, "admin", publicRootGrantSortKey, "")
+	grantSig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, grantPayload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	publicReq := createGroupRequest{
+		GroupID:              publicGroupID,
+		Visibility:           "public",
+		NamePlaintext:        "Book Club",
+		DescriptionPlaintext: "We read books",
+		RevocationMode:       "rotating",
+		ExpirationDays:       30,
+		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
+		RootGrantSortKey:     publicRootGrantSortKey,
+		RootGrantSignature:   base64.StdEncoding.EncodeToString(grantSig),
+	}
+	publicRec := doCreateGroup(t, h, cookie, publicReq)
+	if publicRec.Code != http.StatusCreated {
+		t.Fatalf("create public group status = %d, body: %s", publicRec.Code, publicRec.Body.String())
+	}
+
+	rec := doListGroups(t, h, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp listGroupsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp.Groups) != 2 {
+		t.Fatalf("len(Groups) = %d, want 2, body: %s", len(resp.Groups), rec.Body.String())
+	}
+
+	byID := make(map[string]groupListEntry, len(resp.Groups))
+	for _, g := range resp.Groups {
+		byID[g.GroupID] = g
+	}
+
+	priv, ok := byID[privateReq.GroupID]
+	if !ok {
+		t.Fatalf("private group %q missing from response", privateReq.GroupID)
+	}
+	if priv.Visibility != "private" {
+		t.Errorf("private entry Visibility = %q, want %q", priv.Visibility, "private")
+	}
+	if priv.Role != "admin" {
+		t.Errorf("private entry Role = %q, want %q", priv.Role, "admin")
+	}
+	if priv.NameCiphertext == nil || priv.WrappedGroupKey == nil {
+		t.Errorf("private entry missing NameCiphertext/WrappedGroupKey: %+v", priv)
+	}
+	if priv.NamePlaintext != "" || priv.DescriptionPlaintext != "" {
+		t.Errorf("private entry carries plaintext fields it must not: NamePlaintext=%q DescriptionPlaintext=%q",
+			priv.NamePlaintext, priv.DescriptionPlaintext)
+	}
+
+	pub, ok := byID[publicGroupID]
+	if !ok {
+		t.Fatalf("public group %q missing from response", publicGroupID)
+	}
+	if pub.Visibility != "public" {
+		t.Errorf("public entry Visibility = %q, want %q", pub.Visibility, "public")
+	}
+	if pub.NamePlaintext != "Book Club" {
+		t.Errorf("public entry NamePlaintext = %q, want %q", pub.NamePlaintext, "Book Club")
+	}
+	if pub.NameCiphertext != nil || pub.WrappedGroupKey != nil {
+		t.Errorf("public entry carries ciphertext/wrapped-key fields it must not: %+v", pub)
+	}
+}
+
+// TestListGroupsOnlyReturnsCallersOwnGroups covers the session boundary:
+// one user's groups must never appear in a different, unrelated user's
+// list, even though both live in the same table.
+func TestListGroupsOnlyReturnsCallersOwnGroups(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	userA, cookieA := loggedInUser(t, h)
+	_, cookieB := loggedInUser(t, h)
+
+	reqA := signedCreateGroupRequest(t, userA)
+	if rec := doCreateGroup(t, h, cookieA, reqA); rec.Code != http.StatusCreated {
+		t.Fatalf("create group for userA status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	recB := doListGroups(t, h, cookieB)
+	if recB.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", recB.Code, http.StatusOK, recB.Body.String())
+	}
+	var respB listGroupsResponse
+	if err := json.Unmarshal(recB.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(respB.Groups) != 0 {
+		t.Errorf("userB's Groups = %+v, want empty (userA's group must not appear)", respB.Groups)
+	}
+}

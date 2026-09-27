@@ -302,3 +302,135 @@ func TestCreateGroupRetryWithDivergedSignatureFails(t *testing.T) {
 		t.Fatalf("CreateGroup (diverged signature): err = %v, want ErrGroupIDTaken", err)
 	}
 }
+
+// TestListGroupsEmpty pins the "brand-new user" case: no memberships is a
+// normal state, not an error, and ListGroups must return empty (non-nil)
+// slices rather than fail.
+func TestListGroupsEmpty(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	memberships, groups, err := c.ListGroups(ctx, "test-user-"+randomSuffix(t))
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	if len(memberships) != 0 {
+		t.Errorf("len(memberships) = %d, want 0", len(memberships))
+	}
+	if len(groups) != 0 {
+		t.Errorf("len(groups) = %d, want 0", len(groups))
+	}
+}
+
+// TestListGroupsReturnsCreatorsOwnGroups covers the ordinary multi-group
+// case: a user who created several groups (one private, one public) sees
+// all of them back, each membership correctly joined to its own META --
+// role, generation and the private group's wrapped key/ciphertext round-trip
+// intact, and the public group's plaintext fields intact.
+func TestListGroupsReturnsCreatorsOwnGroups(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	creatorUserID := "test-creator-" + randomSuffix(t)
+
+	privateGroupID := "test-group-" + randomSuffix(t)
+	privateIn := testCreateGroupInput(t, privateGroupID, creatorUserID)
+	if _, err := c.CreateGroup(ctx, privateIn); err != nil {
+		t.Fatalf("CreateGroup (private): %v", err)
+	}
+
+	publicGroupID := "test-group-" + randomSuffix(t)
+	publicIn := testCreateGroupInput(t, publicGroupID, creatorUserID)
+	publicIn.Visibility = models.VisibilityPublic
+	publicIn.NameCiphertext = nil
+	publicIn.DescriptionCiphertext = nil
+	publicIn.NamePlaintext = "Book Club"
+	publicIn.DescriptionPlaintext = "We read books"
+	if _, err := c.CreateGroup(ctx, publicIn); err != nil {
+		t.Fatalf("CreateGroup (public): %v", err)
+	}
+
+	memberships, groups, err := c.ListGroups(ctx, creatorUserID)
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	if len(memberships) != 2 {
+		t.Fatalf("len(memberships) = %d, want 2", len(memberships))
+	}
+	if len(groups) != len(memberships) {
+		t.Fatalf("len(groups) = %d, want %d (same length as memberships)", len(groups), len(memberships))
+	}
+
+	byGroupID := make(map[string]int, len(groups))
+	for i := range groups {
+		byGroupID[groupIDFromMembership(memberships[i])] = i
+	}
+
+	privIdx, ok := byGroupID[privateGroupID]
+	if !ok {
+		t.Fatalf("private group %q missing from ListGroups result", privateGroupID)
+	}
+	privMember, privGroup := memberships[privIdx], groups[privIdx]
+	if privMember.Role != models.RoleAdmin {
+		t.Errorf("private membership Role = %q, want %q", privMember.Role, models.RoleAdmin)
+	}
+	if privMember.Generation != 0 {
+		t.Errorf("private membership Generation = %d, want 0", privMember.Generation)
+	}
+	if privGroup.Visibility != models.VisibilityPrivate {
+		t.Errorf("private group Visibility = %q, want %q", privGroup.Visibility, models.VisibilityPrivate)
+	}
+	if privGroup.NameCiphertext == nil || string(privGroup.NameCiphertext.Ciphertext) != "name-ciphertext" {
+		t.Errorf("private group NameCiphertext = %+v, want ciphertext %q", privGroup.NameCiphertext, "name-ciphertext")
+	}
+	if string(privMember.WrappedGroupKey.Ciphertext) != "wrapped-generation-key" {
+		t.Errorf("private membership WrappedGroupKey.Ciphertext = %q, want %q",
+			privMember.WrappedGroupKey.Ciphertext, "wrapped-generation-key")
+	}
+
+	pubIdx, ok := byGroupID[publicGroupID]
+	if !ok {
+		t.Fatalf("public group %q missing from ListGroups result", publicGroupID)
+	}
+	pubGroup := groups[pubIdx]
+	if pubGroup.Visibility != models.VisibilityPublic {
+		t.Errorf("public group Visibility = %q, want %q", pubGroup.Visibility, models.VisibilityPublic)
+	}
+	if pubGroup.NamePlaintext != "Book Club" {
+		t.Errorf("public group NamePlaintext = %q, want %q", pubGroup.NamePlaintext, "Book Club")
+	}
+}
+
+// TestListGroupsIgnoresOtherUsersGroups covers the GSI1 partition boundary:
+// a group created by someone else must never show up in this user's list,
+// even though both groups' Membership items live in the same table.
+func TestListGroupsIgnoresOtherUsersGroups(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	ownGroupID := "test-group-" + randomSuffix(t)
+	ownUserID := "test-creator-" + randomSuffix(t)
+	if _, err := c.CreateGroup(ctx, testCreateGroupInput(t, ownGroupID, ownUserID)); err != nil {
+		t.Fatalf("CreateGroup (own): %v", err)
+	}
+
+	otherGroupID := "test-group-" + randomSuffix(t)
+	otherUserID := "test-creator-" + randomSuffix(t)
+	if _, err := c.CreateGroup(ctx, testCreateGroupInput(t, otherGroupID, otherUserID)); err != nil {
+		t.Fatalf("CreateGroup (other): %v", err)
+	}
+
+	memberships, groups, err := c.ListGroups(ctx, ownUserID)
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	if len(memberships) != 1 {
+		t.Fatalf("len(memberships) = %d, want 1", len(memberships))
+	}
+	if groupIDFromMembership(memberships[0]) != ownGroupID {
+		t.Errorf("returned group id = %q, want %q", groupIDFromMembership(memberships[0]), ownGroupID)
+	}
+	if groups[0].CreatorUserID != ownUserID {
+		t.Errorf("returned group CreatorUserID = %q, want %q", groups[0].CreatorUserID, ownUserID)
+	}
+}

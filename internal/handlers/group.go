@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -435,6 +436,128 @@ func decodeWrappedKey(k wrappedKey) (models.WrappedKey, error) {
 		return models.WrappedKey{}, fieldError("ciphertext: " + err.Error())
 	}
 	return models.WrappedKey{EphemeralPub: ephemeralPub, Nonce: nonce, Ciphertext: ciphertext}, nil
+}
+
+// encodeWrappedBlob is decodeWrappedBlob's inverse -- issue #35 is the
+// first endpoint that SENDS a WrappedBlob to the client rather than only
+// ever receiving one, so this direction did not exist before it.
+func encodeWrappedBlob(b models.WrappedBlob) wrappedBlob {
+	return wrappedBlob{
+		Nonce:      base64.StdEncoding.EncodeToString(b.Nonce),
+		Ciphertext: base64.StdEncoding.EncodeToString(b.Ciphertext),
+	}
+}
+
+// encodeWrappedKey is decodeWrappedKey's inverse, for the same reason
+// encodeWrappedBlob exists: issue #35 sends a member's own WrappedGroupKey
+// back to them so their browser can unwrap it, the first outbound use of
+// this shape.
+func encodeWrappedKey(k models.WrappedKey) wrappedKey {
+	return wrappedKey{
+		EphemeralPub: base64.StdEncoding.EncodeToString(k.EphemeralPub),
+		Nonce:        base64.StdEncoding.EncodeToString(k.Nonce),
+		Ciphertext:   base64.StdEncoding.EncodeToString(k.Ciphertext),
+	}
+}
+
+// groupListEntry is one group in GET /api/groups's response -- issue #35.
+// Exactly one of the two field pairs is populated, matching Visibility, the
+// same split createGroupRequest's own doc comment describes for the
+// opposite (write) direction: NamePlaintext/DescriptionPlaintext for a
+// public group, NameCiphertext/DescriptionCiphertext (plus the member's own
+// WrappedGroupKey, needed to ever decrypt them) for a private one. There is
+// no unread count field -- see listGroups' own doc comment for why this
+// issue ships without one.
+type groupListEntry struct {
+	GroupID    string `json:"groupId"`
+	Visibility string `json:"visibility"`
+	Role       string `json:"role"`
+	Generation int64  `json:"generation"`
+
+	NamePlaintext        string `json:"namePlaintext,omitempty"`
+	DescriptionPlaintext string `json:"descriptionPlaintext,omitempty"`
+
+	NameCiphertext        *wrappedBlob `json:"nameCiphertext,omitempty"`
+	DescriptionCiphertext *wrappedBlob `json:"descriptionCiphertext,omitempty"`
+	WrappedGroupKey       *wrappedKey  `json:"wrappedGroupKey,omitempty"`
+}
+
+// listGroupsResponse is the wire shape of GET /api/groups.
+type listGroupsResponse struct {
+	Groups []groupListEntry `json:"groups"`
+}
+
+// listGroups implements GET /api/groups -- issue #35. Authenticated by
+// requireSession, same as createGroup.
+//
+// This is db.ListGroups' one GSI1 Query (the caller's own memberships) plus
+// one META GetItem-equivalent per group (db.ListGroups' own BatchGetItem
+// fan-out), exactly the read shape docs/DESIGN.md names as the product's
+// hottest path: "Rendering a user's group list is... one GSI1 Query...
+// plus one GetItem per group." This handler does no decryption of its
+// own -- a private group's name and description are ciphertext under the
+// group key, which only the caller's own browser can unwrap (its wrapping
+// private key never leaves the crypto worker, per worker.ts's own doc
+// comment), so this response hands back exactly the ciphertext and the
+// caller's own WrappedGroupKey and nothing more.
+//
+// Deliberately has NO unread-count field, unlike issue #35's own one-line
+// description ("returning groups with unread counts"). Investigating this
+// issue found that the only unread mechanism docs/DESIGN.md describes
+// depends on NOTIF# items (a notification's `read` flag), and nothing in
+// that chain exists yet: no posts (#42-46), no comments, no notifications
+// (M7+). Shipping a fabricated or always-zero count here would be worse
+// than omitting the field -- a client cannot tell "genuinely zero unread"
+// from "this deployment hasn't built unread tracking yet." Filed as a
+// separate follow-up (#144) once that infrastructure exists; today's
+// omitempty-free field set is additive-only from here, not a breaking
+// change to this response shape.
+func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	memberships, groups, err := h.db.ListGroups(r.Context(), userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list groups")
+		return
+	}
+
+	// db.ListGroups already drops a membership whose META vanished (a state
+	// this schema does not otherwise produce -- see that function's own doc
+	// comment) rather than erroring the whole call, so memberships and
+	// groups are the same length here, in matching order, safe to zip by
+	// index rather than re-joining by id a second time.
+	entries := make([]groupListEntry, 0, len(memberships))
+	for i, m := range memberships {
+		g := groups[i]
+		entry := groupListEntry{
+			GroupID:    strings.TrimPrefix(m.PK, "GROUP#"),
+			Visibility: g.Visibility,
+			Role:       m.Role,
+			Generation: m.Generation,
+		}
+		if g.Visibility == models.VisibilityPublic {
+			entry.NamePlaintext = g.NamePlaintext
+			entry.DescriptionPlaintext = g.DescriptionPlaintext
+		} else {
+			if g.NameCiphertext != nil {
+				nc := encodeWrappedBlob(*g.NameCiphertext)
+				entry.NameCiphertext = &nc
+			}
+			if g.DescriptionCiphertext != nil {
+				dc := encodeWrappedBlob(*g.DescriptionCiphertext)
+				entry.DescriptionCiphertext = &dc
+			}
+			wk := encodeWrappedKey(m.WrappedGroupKey)
+			entry.WrappedGroupKey = &wk
+		}
+		entries = append(entries, entry)
+	}
+
+	WriteJSON(w, http.StatusOK, listGroupsResponse{Groups: entries})
 }
 
 // maxExpirationDays bounds a group's expiration policy from above --
