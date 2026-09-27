@@ -434,3 +434,141 @@ type RoleGrant struct {
 	// this field only stores the resulting opaque bytes.
 	Signature []byte `dynamodbav:"Signature"`
 }
+
+// Invite is the INVITE#<iid> / META item -- see docs/DESIGN.md, "Invites --
+// the signed handshake" and issues #38/#39/#40. Written at step 1
+// (creation) with no invitee identity at all -- GSI1PK/GSI1SK are left
+// unset, since GET /api/invites/:id is unauthenticated by design and an
+// invite is a link handed to someone who may not have an account yet. The
+// GSI1PK "USER#<invitee>" / GSI1SK "INVITE#<YYYY-MM-DD, UTC>#<rand>" entry
+// is added at step 2 (acceptance), once there is a uuid to point at -- see
+// InvitedUserID's own doc comment for why the write that adds it also names
+// this field.
+//
+// TTL is the signed ExpiresAt before acceptance, and a completion deadline
+// (rounded to the end of its UTC day, per the global TTL-rounding rule)
+// after it -- see docs/DESIGN.md, "Invites -- the signed handshake," #38's
+// own issue comments, and RoundUpToEndOfUTCDay. This package stores
+// whichever the caller computed; the rounding and deadline arithmetic live
+// in the db layer (db.AcceptInvite), matching this schema's usual "db
+// computes storage values, models just holds them" split.
+type Invite struct {
+	Record
+
+	// TTL is the DynamoDB TTL attribute -- the signed ExpiresAt (as a Unix
+	// epoch) before acceptance, replaced at acceptance with a completion
+	// deadline rounded up to the end of its UTC day (db.RoundUpToEndOfUTCDay,
+	// db.AcceptInvite). See this struct's own doc comment.
+	TTL int64 `dynamodbav:"TTL"`
+
+	GroupID string `dynamodbav:"GroupID"`
+
+	InviterUserID           string `dynamodbav:"InviterUserID"`
+	InviterSigningPublicKey []byte `dynamodbav:"InviterSigningPublicKey"`
+	// CreationSignature is the inviter's Ed25519 signature (crypto.Sign
+	// under crypto.ContextInvite, over crypto.InviteCreationPayload) proving
+	// InviterUserID actually holds InviterSigningPublicKey's private half at
+	// the moment this invite was created. Stored so GET /api/invites/:id can
+	// hand it back to an accountless invitee's client, which independently
+	// verifies it before ever trusting InviterSigningPublicKey -- the same
+	// "the server's own check is not what protects the invitee" reasoning
+	// Group.TrustAnchorSignature's doc comment gives for a group's anchor.
+	CreationSignature []byte `dynamodbav:"CreationSignature"`
+
+	// ExpiresAt is the RFC 3339 (UTC) deadline the inviter signed at step 1
+	// -- part of what CreationSignature covers, so the server cannot alter
+	// an invite's advertised lifetime without invalidating the signature.
+	// This is a plain string field, read on accept (before checking TTL,
+	// which is only eventually consistent -- see #39's own issue comments)
+	// -- distinct from the TTL attribute, which starts out numerically equal
+	// to this value but is REPLACED at acceptance with a completion
+	// deadline, while this field never changes.
+	ExpiresAt string `dynamodbav:"ExpiresAt"`
+
+	// InvitedUserID is empty until step 2 (acceptance) and, once set, never
+	// changes -- see docs/DESIGN.md's "single-use" requirement: the
+	// acceptance write is conditional on this field being ABSENT, so a
+	// second holder of the same link (a forwarded message, a screenshot)
+	// gets an explicit "already accepted" error rather than silently
+	// overwriting the first acceptance. This is what makes the invite a
+	// bearer token bound to exactly one accepter rather than a permissive
+	// multi-use join link (a different object this schema does not have).
+	InvitedUserID string `dynamodbav:"InvitedUserID,omitempty"`
+	// InvitedEd25519PublicKey and InvitedX25519PublicKey are the keys the
+	// invitee signed in AcceptanceSignature -- what step 3 wraps the group
+	// key to, never a key the server could otherwise offer unilaterally.
+	InvitedEd25519PublicKey []byte `dynamodbav:"InvitedEd25519PublicKey,omitempty"`
+	InvitedX25519PublicKey  []byte `dynamodbav:"InvitedX25519PublicKey,omitempty"`
+	// AcceptanceSignature is the invitee's Ed25519 signature (crypto.Sign
+	// under crypto.ContextInvite, over crypto.InviteAcceptancePayload) over
+	// {invite_id, ed25519_pub, x25519_pub} -- what step 3 verifies before
+	// ever wrapping the group key to the keys named above. Stored (rather
+	// than only checked once at accept time and discarded) so step 3's
+	// completion query can re-verify it independently, the same
+	// defense-in-depth reasoning every other signature in this schema gets:
+	// the inviter's own client verifying this is what actually protects the
+	// handshake, not the server having checked it first.
+	AcceptanceSignature []byte `dynamodbav:"AcceptanceSignature,omitempty"`
+	// InviteMAC is MAC_k(crypto.InviteAcceptancePayload(...)) -- k being the
+	// per-invite secret carried in the invite link's own URL fragment,
+	// never sent to any server (crypto.DeriveInviteMACKey's own doc
+	// comment). This server stores and serves it back opaquely: it cannot
+	// derive k and has no way to check this value itself, and does not try
+	// to. Its only purpose is reaching the inviter's own client at step 3
+	// (PendingInviteCompletions), the one party who CAN re-derive k and
+	// verify it, closing the gap AcceptanceSignature alone leaves open --
+	// see that same doc comment for what that gap is.
+	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
+}
+
+// SentInvite is the USER#<inviter> / SENT#<iid> item -- the inviter's own
+// copy of an invite they created, addressed by their own partition rather
+// than the invite id, so step 3 (db.PendingInviteCompletions) can find "my
+// invites that have been accepted and are awaiting completion" with a plain
+// Query -- something neither INVITE#<iid> (needs the id you're trying to
+// discover) nor a GSI keyed to the invitee can answer. See docs/DESIGN.md,
+// "Invites -- the signed handshake," on why this second row exists at all.
+//
+// Deleted once step 3 completes -- so a Query against this partition prefix
+// always returns pending work, never a history (docs/DESIGN.md: "the
+// inviter's client lists USER#<inviter>/SENT# and completes anything
+// accepted, deleting each row as it completes"). Carries no GSI1 entry: it
+// is only ever read by its own owner's direct Query on PK, matching
+// docs/DESIGN.md's schema table ("blank GSI1PK/GSI1SK").
+//
+// Duplicates GroupID, InvitedUserID, InvitedEd25519PublicKey,
+// InvitedX25519PublicKey and AcceptanceSignature off the INVITE# row rather
+// than requiring a second read to fetch them -- step 3's completion query
+// already has to read this row to discover the invite exists at all, and
+// everything it needs to wrap the group key and write the membership is
+// naturally available here without a second GetItem per pending invite.
+type SentInvite struct {
+	Record
+
+	// TTL mirrors Invite.TTL -- both rows take their lifetime from the same
+	// signed ExpiresAt and are updated together at acceptance.
+	TTL int64 `dynamodbav:"TTL"`
+
+	GroupID string `dynamodbav:"GroupID"`
+	// InviteID recovers the INVITE#<iid> row's address -- duplicated off
+	// this item's own SK ("SENT#<iid>") rather than parsed back out of it
+	// everywhere a caller needs it, matching RoleGrant.SubjectUserID's own
+	// reasoning for storing what the sort key would otherwise require
+	// parsing.
+	InviteID string `dynamodbav:"InviteID"`
+
+	// InvitedUserID, InvitedEd25519PublicKey, InvitedX25519PublicKey and
+	// AcceptanceSignature are empty/nil until acceptance, then set together
+	// in the same TransactWriteItems that sets INVITE#<iid>'s own copies --
+	// see db.AcceptInvite.
+	InvitedUserID           string `dynamodbav:"InvitedUserID,omitempty"`
+	InvitedEd25519PublicKey []byte `dynamodbav:"InvitedEd25519PublicKey,omitempty"`
+	InvitedX25519PublicKey  []byte `dynamodbav:"InvitedX25519PublicKey,omitempty"`
+	AcceptanceSignature     []byte `dynamodbav:"AcceptanceSignature,omitempty"`
+	// InviteMAC duplicates Invite.InviteMAC -- see that field's own doc
+	// comment. This is the copy PendingInviteCompletions actually reads
+	// (this row, not INVITE#<iid>, is what step 3's discovery query
+	// scans), so the inviter's client can re-derive k and verify it before
+	// ever wrapping the group key.
+	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
+}

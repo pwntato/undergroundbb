@@ -10,6 +10,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -58,4 +59,32 @@ func (c *Client) Ping(ctx context.Context) error {
 		return fmt.Errorf("db: describe table %q: %w", c.table, err)
 	}
 	return nil
+}
+
+// RoundUpToEndOfUTCDay rounds t up to 23:59:59 UTC on its own UTC calendar
+// day -- the global TTL-storage rule from issue #5's round-27 review
+// comment: "round every stored TTL value up to the end of its UTC day," so a
+// plaintext epoch-seconds TTL attribute never discloses a second-resolution
+// timestamp sitting next to a sort key this schema deliberately built to
+// disclose only a day. Applies to every item that carries a TTL at all --
+// POST#, CMT#, RXN#, NOTIF#, and the invite pair (INVITE#/SENT#) -- except
+// CHALLENGE, whose short (~2 minute) TTL is deliberately NOT rounded: it is
+// not derived from a day-resolution sort key or signed payload the way the
+// others are, and rounding a 2-minute lifetime up to the end of the day
+// would defeat its entire purpose (see login.go's own challengeTTL).
+//
+// Exported from this package (not idgen) because rounding a TTL is a
+// storage-attribute concern specific to how this package persists items,
+// not an id-generation concern -- unlike idgen.DaySuffix, callers never need
+// this value to be part of anything signed or otherwise agreed with a
+// client.
+func RoundUpToEndOfUTCDay(t time.Time) time.Time {
+	u := t.UTC()
+	endOfDay := time.Date(u.Year(), u.Month(), u.Day(), 23, 59, 59, 0, time.UTC)
+	if u.After(endOfDay) {
+		// t was already past 23:59:59 on its own calendar day, which cannot
+		// happen for a well-formed time.Time -- defensive only.
+		return u
+	}
+	return endOfDay
 }

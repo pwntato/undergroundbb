@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -23,12 +24,19 @@ import (
 
 // registeredUser bundles a registered account's response with the real
 // Ed25519 signing key it was registered under, so login tests can produce
-// genuine signatures.
+// genuine signatures. wrapPub is the WrappingPublicKey value the account
+// was registered under -- not a real X25519 keypair (nothing in this
+// package's tests ever performs a real ECIES wrap/unwrap against it, the
+// same reasoning group_test.go's fixture GroupKeyWrapped bytes rely on),
+// but a fixed value tests can both register a user under AND sign over in
+// crypto.InviteAcceptancePayload, so acceptInvite's crypto.Verify call
+// checks a real signature against the exact bytes GetUserByID reads back.
 type registeredUser struct {
 	username string
 	userID   string
 	signPub  ed25519.PublicKey
 	signPriv ed25519.PrivateKey
+	wrapPub  []byte
 }
 
 func registerTestUser(t *testing.T, h *Handler) registeredUser {
@@ -37,10 +45,15 @@ func registerTestUser(t *testing.T, h *Handler) registeredUser {
 	if err != nil {
 		t.Fatalf("GenerateSigningKey: %v", err)
 	}
+	wrapPub := make([]byte, 32)
+	if _, err := rand.Read(wrapPub); err != nil {
+		t.Fatalf("rand.Read wrapPub: %v", err)
+	}
 
 	username := randomUsername(t)
 	req := validRegisterRequest(username)
 	req.SigningPublicKey = base64.StdEncoding.EncodeToString(pub)
+	req.WrappingPublicKey = base64.StdEncoding.EncodeToString(wrapPub)
 
 	rec := doRegister(t, h, req)
 	if rec.Code != http.StatusCreated {
@@ -51,7 +64,7 @@ func registerTestUser(t *testing.T, h *Handler) registeredUser {
 		t.Fatalf("decoding register response: %v", err)
 	}
 
-	return registeredUser{username: username, userID: resp.UserID, signPub: pub, signPriv: priv}
+	return registeredUser{username: username, userID: resp.UserID, signPub: pub, signPriv: priv, wrapPub: wrapPub}
 }
 
 func doChallenge(t *testing.T, h *Handler, username string) *httptest.ResponseRecorder {

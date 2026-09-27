@@ -14,14 +14,24 @@ import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   completeChangePassword,
+  completeInvite,
   completeLogin,
   completeRecovery,
   decryptGroupNames,
   generateSignupMaterial,
+  InviteMACError,
   signGroupCreation,
+  signInviteAcceptance,
+  signInviteCreation,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import { groupNameAAD, memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
+import {
+  computeInviteMAC,
+  deriveInviteMACKey,
+  inviteAcceptancePayload,
+  inviteCreationPayload,
+} from './invite.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { unwrap } from './x25519.js'
@@ -493,5 +503,276 @@ describe('decryptGroupNames', () => {
       { groupId: goodGroupId, name: 'Good Group', description: 'Fine' },
       { groupId: badGroupId, name: null, description: null },
     ])
+  })
+})
+
+// Issues #38/#39/#40: the invite handshake's full round trip against real
+// keypairs from real signup->login flows -- the same class of gap
+// vectors.test.ts's fixed-input tests cannot cover (those pin the payload
+// ENCODING; this proves the whole ceremony actually delivers a working
+// group key end to end, mirroring "group creation signing" above but for
+// two distinct accounts playing inviter and invitee).
+describe('invite handshake round trip', () => {
+  const INVITER_ID = '22222222-2222-4222-8222-222222222222'
+  const INVITEE_ID = '33333333-3333-4333-8333-333333333333'
+
+  async function realUserKeys(userId: string, password: string) {
+    const signup = await generateSignupMaterial(userId, password, () => {})
+    const { keys } = await completeLogin({
+      password,
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId,
+      nonce: Buffer.from([5, 5, 5, 5]).toString('base64'),
+    })
+    return keys
+  }
+
+  it('signs a verifiable step-1 creation payload', async () => {
+    const inviter = await realUserKeys(INVITER_ID, 'inviter-password')
+    const inviteId = 'invite-uuid-test-1'
+    const groupId = 'group-uuid-test-3'
+    const expiresAt = '2026-10-03T00:00:00Z'
+
+    const result = await signInviteCreation(inviter, inviteId, groupId, expiresAt)
+
+    const payload = inviteCreationPayload(
+      inviteId,
+      groupId,
+      inviter.signingKey.publicKey,
+      expiresAt,
+    )
+    expect(
+      ed25519.verify(
+        inviter.signingKey.publicKey,
+        ed25519.SigningContext.Invite,
+        payload,
+        base64ToBytes(result.creationSignature),
+      ),
+    ).toBe(true)
+  })
+
+  it("signs a verifiable step-2 acceptance payload binding the invitee's own current keys", async () => {
+    const invitee = await realUserKeys(INVITEE_ID, 'invitee-password')
+    const inviteId = 'invite-uuid-test-2'
+    const macKey = new Uint8Array(32).fill(7)
+
+    const result = await signInviteAcceptance(invitee, inviteId, macKey)
+
+    const payload = inviteAcceptancePayload(
+      inviteId,
+      invitee.signingKey.publicKey,
+      invitee.wrappingKey.publicKey,
+    )
+    expect(
+      ed25519.verify(
+        invitee.signingKey.publicKey,
+        ed25519.SigningContext.Invite,
+        payload,
+        base64ToBytes(result.acceptanceSignature),
+      ),
+    ).toBe(true)
+
+    // A signature over a DIFFERENT invite id must not verify against this
+    // payload -- proves the signature is actually bound to this invite,
+    // not merely present.
+    const wrongPayload = inviteAcceptancePayload(
+      'a-different-invite-id',
+      invitee.signingKey.publicKey,
+      invitee.wrappingKey.publicKey,
+    )
+    expect(
+      ed25519.verify(
+        invitee.signingKey.publicKey,
+        ed25519.SigningContext.Invite,
+        wrongPayload,
+        base64ToBytes(result.acceptanceSignature),
+      ),
+    ).toBe(false)
+
+    // inviteMAC must be MAC_k(payload) under the SAME macKey the caller
+    // (the real invite link's fragment, in production) supplied -- not
+    // some other value derived independently.
+    expect(base64ToBytes(result.inviteMAC)).toEqual(computeInviteMAC(macKey, payload))
+  })
+
+  // The full three-step ceremony: inviter creates a group and wraps its own
+  // key (reusing signGroupCreation exactly as setUpMemberWithGroup does
+  // above), invitee signs step 2 with their OWN real keys, inviter's
+  // completeInvite unwraps its own copy and re-wraps to the invitee's real
+  // X25519 public key -- and the invitee can actually unwrap the result
+  // with their own real private key. This is the property the whole
+  // handshake exists to deliver; nothing short of an end-to-end run with
+  // two real keypairs can prove it.
+  it('delivers a group key the invitee can actually unwrap, wrapped to the keys they signed', async () => {
+    const inviter = await realUserKeys(INVITER_ID, 'inviter-password-2')
+    const invitee = await realUserKeys(INVITEE_ID, 'invitee-password-2')
+    const groupId = 'group-uuid-test-4'
+    const groupKey = new Uint8Array(32).fill(9)
+
+    const created = await signGroupCreation(inviter, groupId, groupKey)
+    const ownWrappedGroupKey = {
+      ephemeralPub: base64ToBytes(created.groupKeyWrapped.ephemeralPub),
+      nonce: base64ToBytes(created.groupKeyWrapped.nonce),
+      ciphertext: base64ToBytes(created.groupKeyWrapped.ciphertext),
+    }
+
+    const inviteId = 'invite-uuid-test-3'
+    // The real link-holder's macKey, as it would arrive via the invite
+    // link's own URL fragment -- derived here from the INVITER's real
+    // seed, exactly as signInviteCreation does, so this test exercises the
+    // real end-to-end derivation rather than an arbitrary shared secret.
+    const macKey = deriveInviteMACKey(inviter.signingKey.seed, inviteId)
+    const acceptance = await signInviteAcceptance(invitee, inviteId, macKey)
+    // The inviter's client re-verifies the invitee's acceptance signature
+    // before ever calling completeInvite -- see worker.ts's own doc
+    // comment on why that check happens in the caller, not inside
+    // completeInvite itself.
+    const acceptancePayload = inviteAcceptancePayload(
+      inviteId,
+      invitee.signingKey.publicKey,
+      invitee.wrappingKey.publicKey,
+    )
+    expect(
+      ed25519.verify(
+        invitee.signingKey.publicKey,
+        ed25519.SigningContext.Invite,
+        acceptancePayload,
+        base64ToBytes(acceptance.acceptanceSignature),
+      ),
+    ).toBe(true)
+
+    const completed = await completeInvite(
+      inviter,
+      inviteId,
+      groupId,
+      ownWrappedGroupKey,
+      0,
+      INVITEE_ID,
+      invitee.signingKey.publicKey,
+      invitee.wrappingKey.publicKey,
+      base64ToBytes(acceptance.inviteMAC),
+    )
+    expect(completed.generation).toBe(0)
+
+    // The invitee can now unwrap THEIR OWN copy with their own real
+    // wrapping private key and the AAD their future MEMBER# item carries.
+    const inviteeUnwrapAAD = memberWrapAAD(groupId, INVITEE_ID, 0)
+    const unwrapped = await unwrap(
+      invitee.wrappingKey.privateKey,
+      {
+        ephemeralPub: base64ToBytes(completed.wrappedGroupKey.ephemeralPub),
+        nonce: base64ToBytes(completed.wrappedGroupKey.nonce),
+        ciphertext: base64ToBytes(completed.wrappedGroupKey.ciphertext),
+      },
+      inviteeUnwrapAAD,
+    )
+    expect(unwrapped).toEqual(groupKey)
+
+    // The INVITER's own private key must NOT be able to unwrap the
+    // invitee's copy -- it was wrapped to a different X25519 public key
+    // entirely, so this proves completeInvite actually re-wrapped to the
+    // invitee rather than, say, silently reusing the inviter's own wrap.
+    await expect(
+      unwrap(
+        inviter.wrappingKey.privateKey,
+        {
+          ephemeralPub: base64ToBytes(completed.wrappedGroupKey.ephemeralPub),
+          nonce: base64ToBytes(completed.wrappedGroupKey.nonce),
+          ciphertext: base64ToBytes(completed.wrappedGroupKey.ciphertext),
+        },
+        inviteeUnwrapAAD,
+      ),
+    ).rejects.toThrow()
+
+    // Unwrapping under the INVITER's own AAD (wrong member uuid) must also
+    // fail, even with the invitee's own correct private key -- proves the
+    // wrap is bound to the invitee's identity, not just their key.
+    const wrongAad = memberWrapAAD(groupId, INVITER_ID, 0)
+    await expect(
+      unwrap(
+        invitee.wrappingKey.privateKey,
+        {
+          ephemeralPub: base64ToBytes(completed.wrappedGroupKey.ephemeralPub),
+          nonce: base64ToBytes(completed.wrappedGroupKey.nonce),
+          ciphertext: base64ToBytes(completed.wrappedGroupKey.ciphertext),
+        },
+        wrongAad,
+      ),
+    ).rejects.toThrow()
+  })
+
+  // This is the actual defect PR #146's round-1 review found: a malicious
+  // server can mint its own Ed25519/X25519 keypair, self-sign a step-2
+  // payload under crypto.ContextInvite, and serve that as if it came from
+  // the real invitee. Plain signature verification (the block above)
+  // cannot catch this -- the keys and the signature are mutually
+  // consistent, which is all that check proves. completeInvite's own
+  // inviteMAC check is what must catch it instead.
+  it('refuses to complete when inviteMAC does not verify (a malicious server substituting its own keypair)', async () => {
+    const inviter = await realUserKeys(INVITER_ID, 'inviter-password-3')
+    const groupId = 'group-uuid-test-5'
+    const groupKey = new Uint8Array(32).fill(3)
+
+    const created = await signGroupCreation(inviter, groupId, groupKey)
+    const ownWrappedGroupKey = {
+      ephemeralPub: base64ToBytes(created.groupKeyWrapped.ephemeralPub),
+      nonce: base64ToBytes(created.groupKeyWrapped.nonce),
+      ciphertext: base64ToBytes(created.groupKeyWrapped.ciphertext),
+    }
+
+    const inviteId = 'invite-uuid-test-5'
+
+    // A malicious server's own freshly minted keypair -- NOT the real
+    // invite link-holder's, and never handed the real macKey (which
+    // travelled only in the link's fragment, which this "server" never
+    // saw either).
+    const forgedSigningKey = ed25519.generateSigningKey()
+    const forgedWrappingKey = {
+      privateKey: new Uint8Array(32).fill(5),
+      publicKey: new Uint8Array(32).fill(6),
+    }
+    const forgedPayload = inviteAcceptancePayload(
+      inviteId,
+      forgedSigningKey.publicKey,
+      forgedWrappingKey.publicKey,
+    )
+    const forgedSignature = ed25519.sign(
+      forgedSigningKey,
+      ed25519.SigningContext.Invite,
+      forgedPayload,
+    )
+    // The forged signature DOES verify -- proving this scenario would slip
+    // straight past runCompleteInvites.ts's own Ed25519 check with no MAC
+    // involved at all.
+    expect(
+      ed25519.verify(
+        forgedSigningKey.publicKey,
+        ed25519.SigningContext.Invite,
+        forgedPayload,
+        forgedSignature,
+      ),
+    ).toBe(true)
+
+    // The server has no way to produce a valid inviteMAC (it never had the
+    // real macKey), so it can only ever serve a wrong one -- modeled here
+    // as a MAC computed under an unrelated key.
+    const wrongMacKey = new Uint8Array(32).fill(0xff)
+    const forgedMAC = computeInviteMAC(wrongMacKey, forgedPayload)
+
+    await expect(
+      completeInvite(
+        inviter,
+        inviteId,
+        groupId,
+        ownWrappedGroupKey,
+        0,
+        INVITEE_ID,
+        forgedSigningKey.publicKey,
+        forgedWrappingKey.publicKey,
+        forgedMAC,
+      ),
+    ).rejects.toThrow(InviteMACError)
   })
 })

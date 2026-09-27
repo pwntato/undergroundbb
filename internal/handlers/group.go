@@ -356,6 +356,10 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 // package already imports under a shorter name.
 const ed25519SignatureSize = 64
 
+// inviteMACSize is HMAC-SHA256's fixed output width -- crypto.ComputeInviteMAC's
+// return length, named for the same reason ed25519SignatureSize is.
+const inviteMACSize = 32
+
 // wrappedGroupKeyCiphertextSize is the exact byte width of an ECIES-wrapped
 // group key's ciphertext: crypto.KeySize (32, the group key being wrapped)
 // plus AES-GCM's 16-byte authentication tag, always exactly 48 bytes for a

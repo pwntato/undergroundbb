@@ -213,22 +213,69 @@ type groupNameVector struct {
 	CiphertextHex string `json:"ciphertext_hex"`
 }
 
+// inviteCreationVector proves InviteCreationPayload's exact encoding (#38)
+// -- the invite handshake's step-1 signed payload. Note there is no
+// ephemeral_pubkey field: docs/DESIGN.md's now-resolved open question
+// dropped it before this code was written.
+type inviteCreationVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	InviteID     string `json:"invite_id"`
+	GroupID      string `json:"group_id"`
+	ExpiresAt    string `json:"expires_at"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+// inviteAcceptanceVector proves InviteAcceptancePayload's exact encoding
+// (#39) -- the invite handshake's step-2 signed payload, signed by the
+// invitee under their own (freshly generated, not yet server-known) keys.
+type inviteAcceptanceVector struct {
+	Name                 string `json:"name"`
+	PrivateHex           string `json:"private_key_hex"`
+	PublicHex            string `json:"public_key_hex"`
+	InviteID             string `json:"invite_id"`
+	InvitedEd25519PubHex string `json:"invited_ed25519_pub_hex"`
+	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
+	PayloadHex           string `json:"payload_hex"`
+	SignatureHex         string `json:"signature_hex"`
+}
+
+// inviteMACVector proves DeriveInviteMACKey/ComputeInviteMAC's exact
+// encoding (PR #146 round-1 review's blocking finding #1) -- the per-invite
+// MAC that closes the gap plain signature verification leaves open. See
+// crypto.DeriveInviteMACKey's own doc comment for the full reasoning.
+type inviteMACVector struct {
+	Name                 string `json:"name"`
+	InviterSeedHex       string `json:"inviter_seed_hex"`
+	InviteID             string `json:"invite_id"`
+	InvitedEd25519PubHex string `json:"invited_ed25519_pub_hex"`
+	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
+	MACKeyHex            string `json:"mac_key_hex"`
+	PayloadHex           string `json:"payload_hex"`
+	MACHex               string `json:"mac_hex"`
+}
+
 type vectorFile struct {
-	Version        int                    `json:"version"`
-	KDF            []kdfVector            `json:"kdf"`
-	AEAD           []aeadVector           `json:"aead"`
-	AEADNegative   []aeadNegativeVector   `json:"aead_negative"`
-	Signing        []signingVector        `json:"signing"`
-	SignedPayload  []signedPayloadVector  `json:"signed_payload"`
-	Wrapping       []wrapVector           `json:"wrapping"`
-	GenkeyChain    []genkeyChainVector    `json:"genkey_chain"`
-	Fingerprint    []fingerprintVector    `json:"fingerprint"`
-	CredentialWrap []credentialWrapVector `json:"credential_wrap"`
-	KeyBundle      []keyBundleVector      `json:"key_bundle"`
-	TrustAnchor    []trustAnchorVector    `json:"trust_anchor"`
-	RoleGrant      []roleGrantVector      `json:"role_grant"`
-	MemberWrap     []memberWrapVector     `json:"member_wrap_aad"`
-	GroupName      []groupNameVector      `json:"group_name_aad"`
+	Version          int                      `json:"version"`
+	KDF              []kdfVector              `json:"kdf"`
+	AEAD             []aeadVector             `json:"aead"`
+	AEADNegative     []aeadNegativeVector     `json:"aead_negative"`
+	Signing          []signingVector          `json:"signing"`
+	SignedPayload    []signedPayloadVector    `json:"signed_payload"`
+	Wrapping         []wrapVector             `json:"wrapping"`
+	GenkeyChain      []genkeyChainVector      `json:"genkey_chain"`
+	Fingerprint      []fingerprintVector      `json:"fingerprint"`
+	CredentialWrap   []credentialWrapVector   `json:"credential_wrap"`
+	KeyBundle        []keyBundleVector        `json:"key_bundle"`
+	TrustAnchor      []trustAnchorVector      `json:"trust_anchor"`
+	RoleGrant        []roleGrantVector        `json:"role_grant"`
+	MemberWrap       []memberWrapVector       `json:"member_wrap_aad"`
+	GroupName        []groupNameVector        `json:"group_name_aad"`
+	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
+	InviteAcceptance []inviteAcceptanceVector `json:"invite_acceptance"`
+	InviteMAC        []inviteMACVector        `json:"invite_mac"`
 }
 
 func main() {
@@ -613,6 +660,82 @@ func main() {
 				CiphertextHex: hex.EncodeToString(ciphertext),
 			})
 		}
+	}
+
+	// --- Invite creation (#38) ---
+	{
+		pub, priv := fixedEd25519Key("invite-creation-key-1")
+		inviteID := "invite-uuid-1"
+		groupID := "group-uuid-2"
+		expiresAt := "2026-09-13T00:00:00Z"
+
+		payload := crypto.InviteCreationPayload(inviteID, groupID, pub, expiresAt)
+		sig, err := crypto.Sign(priv, crypto.ContextInvite, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.InviteCreation = append(out.InviteCreation, inviteCreationVector{
+			Name:         "basic",
+			PrivateHex:   hex.EncodeToString(priv),
+			PublicHex:    hex.EncodeToString(pub),
+			InviteID:     inviteID,
+			GroupID:      groupID,
+			ExpiresAt:    expiresAt,
+			PayloadHex:   hex.EncodeToString(payload),
+			SignatureHex: hex.EncodeToString(sig),
+		})
+	}
+
+	// --- Invite acceptance (#39) ---
+	{
+		pub, priv := fixedEd25519Key("invite-acceptance-key-1")
+		invitedEd25519Pub, _ := fixedEd25519Key("invite-acceptance-invited-ed25519-1")
+		invitedX25519Priv := fixedX25519Key("invite-acceptance-invited-x25519-1")
+		invitedX25519Pub := invitedX25519Priv.PublicKey().Bytes()
+		inviteID := "invite-uuid-1"
+
+		payload := crypto.InviteAcceptancePayload(inviteID, invitedEd25519Pub, invitedX25519Pub)
+		sig, err := crypto.Sign(priv, crypto.ContextInvite, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.InviteAcceptance = append(out.InviteAcceptance, inviteAcceptanceVector{
+			Name:                 "basic",
+			PrivateHex:           hex.EncodeToString(priv),
+			PublicHex:            hex.EncodeToString(pub),
+			InviteID:             inviteID,
+			InvitedEd25519PubHex: hex.EncodeToString(invitedEd25519Pub),
+			InvitedX25519PubHex:  hex.EncodeToString(invitedX25519Pub),
+			PayloadHex:           hex.EncodeToString(payload),
+			SignatureHex:         hex.EncodeToString(sig),
+		})
+	}
+
+	// --- Invite MAC (PR #146 round-1 review's blocking finding #1) ---
+	{
+		inviterSeed := fixedSeed("invite-mac-inviter-1")[:ed25519.SeedSize]
+		invitedEd25519Pub, _ := fixedEd25519Key("invite-mac-invited-ed25519-1")
+		invitedX25519Priv := fixedX25519Key("invite-mac-invited-x25519-1")
+		invitedX25519Pub := invitedX25519Priv.PublicKey().Bytes()
+		inviteID := "invite-uuid-mac-1"
+
+		macKey, err := crypto.DeriveInviteMACKey(inviterSeed, inviteID)
+		if err != nil {
+			panic(err)
+		}
+		payload := crypto.InviteAcceptancePayload(inviteID, invitedEd25519Pub, invitedX25519Pub)
+		mac := crypto.ComputeInviteMAC(macKey, payload)
+
+		out.InviteMAC = append(out.InviteMAC, inviteMACVector{
+			Name:                 "basic",
+			InviterSeedHex:       hex.EncodeToString(inviterSeed),
+			InviteID:             inviteID,
+			InvitedEd25519PubHex: hex.EncodeToString(invitedEd25519Pub),
+			InvitedX25519PubHex:  hex.EncodeToString(invitedX25519Pub),
+			MACKeyHex:            hex.EncodeToString(macKey),
+			PayloadHex:           hex.EncodeToString(payload),
+			MACHex:               hex.EncodeToString(mac),
+		})
 	}
 
 	enc := json.NewEncoder(os.Stdout)
