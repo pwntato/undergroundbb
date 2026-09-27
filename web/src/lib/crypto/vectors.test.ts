@@ -24,6 +24,7 @@ import {
   type GroupTextField,
 } from './group.js'
 import { bytesToHex, hexToBytes } from './hex.js'
+import { inviteAcceptancePayload, inviteCreationPayload } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
@@ -164,6 +165,26 @@ interface VectorFile {
     plaintext_hex: string
     nonce_hex: string
     ciphertext_hex: string
+  }[]
+  invite_creation: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    invite_id: string
+    group_id: string
+    expires_at: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  invite_acceptance: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    invite_id: string
+    invited_ed25519_pub_hex: string
+    invited_x25519_pub_hex: string
+    payload_hex: string
+    signature_hex: string
   }[]
 }
 
@@ -420,6 +441,46 @@ describe('role grant vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RoleGrant, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins inviteCreationPayload's exact encoding -- issue #38, the invite
+// handshake's step-1 signed payload. Every future invitee's client verifies
+// this signature before trusting the invite, so the encoding must be
+// byte-identical to Go's before any real invite exists under it. No
+// ephemeral_pubkey field -- see docs/DESIGN.md's now-resolved open question.
+describe('invite creation vectors', () => {
+  for (const tc of vectors.invite_creation) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = inviteCreationPayload(tc.invite_id, tc.group_id, key.publicKey, tc.expires_at)
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.Invite, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins inviteAcceptancePayload's exact encoding -- issue #39, the invite
+// handshake's step-2 signed payload. Step 3 (the inviter's client) verifies
+// this signature before ever wrapping the group key to the keys it names.
+describe('invite acceptance vectors', () => {
+  for (const tc of vectors.invite_acceptance) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const invitedEd25519Pub = hexToBytes(tc.invited_ed25519_pub_hex)
+      const invitedX25519Pub = hexToBytes(tc.invited_x25519_pub_hex)
+      const payload = inviteAcceptancePayload(tc.invite_id, invitedEd25519Pub, invitedX25519Pub)
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.Invite, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

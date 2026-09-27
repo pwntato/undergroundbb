@@ -14,9 +14,12 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ApiError, challenge, verify } from '@/lib/api/auth'
+import { listGroups } from '@/lib/api/groups'
+import { completeInvite as completeInviteApi, pendingInviteCompletions } from '@/lib/api/invites'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
-import { completeLogin } from '@/lib/crypto/worker-client'
+import { completeInvite as completeInviteCrypto, completeLogin } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
+import { runCompleteInvites } from './runCompleteInvites'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -84,6 +87,26 @@ export function LoginScreen() {
         })
         const result = await verify(username, ch.nonce, signature)
         session.login(result.userId)
+        // Issue #40, step 3: "completion is driven by that query on login."
+        // Deliberately NOT awaited -- this is a background chore, never a
+        // precondition for reaching Home (see runCompleteInvites' own doc
+        // comment). A failure here (network, one invite's signature not
+        // verifying, etc.) is swallowed by runCompleteInvites itself and
+        // simply leaves that invite pending for the next login.
+        void runCompleteInvites({
+          userId: result.userId,
+          pendingInviteCompletions,
+          getOwnMembership: async (groupId) => {
+            const { groups } = await listGroups()
+            const entry = groups.find((g) => g.groupId === groupId)
+            if (entry === undefined || entry.wrappedGroupKey === undefined) {
+              return null
+            }
+            return { generation: entry.generation, wrappedGroupKey: entry.wrappedGroupKey }
+          },
+          completeInviteCrypto,
+          completeInvite: completeInviteApi,
+        })
         navigate('/', { replace: true })
       } catch (err) {
         // Every real credential-failure mode -- unknown username, wrong

@@ -245,5 +245,29 @@
       "nonce_hex": "5320f4702162921e4fdad410",
       "ciphertext_hex": "936486f5497094276e7c1909355de3a53cb4d1f5cafd5a0c0cd2f64754"
     }
+  ],
+  "invite_creation": [
+    {
+      "name": "basic",
+      "private_key_hex": "0ade11a3ed4e6c6fe51e3a9edb70bf37de87c24d800a23a9a7c9f026a7be0afa8f41d606632531db9dd3df36cb44b0beef1b29078b2aafb10858970718e4f802",
+      "public_key_hex": "8f41d606632531db9dd3df36cb44b0beef1b29078b2aafb10858970718e4f802",
+      "invite_id": "invite-uuid-1",
+      "group_id": "group-uuid-2",
+      "expires_at": "2026-09-13T00:00:00Z",
+      "payload_hex": "0000000d696e766974652d757569642d310000000c67726f75702d757569642d32000000208f41d606632531db9dd3df36cb44b0beef1b29078b2aafb10858970718e4f80200000014323032362d30392d31335430303a30303a30305a",
+      "signature_hex": "d0da1751406222e8722df77ac10d5e13abd8f3d9bfa5a9d186054065b857432898d532a080aa7cbba710a70a82879de156c185f17bd1d037bd26aa4763c84003"
+    }
+  ],
+  "invite_acceptance": [
+    {
+      "name": "basic",
+      "private_key_hex": "8a7def617ed82969415918ed9ac646c8684ba1aed19e4243c83623ac13c7fa0e73015d3337a5800ea509d694387e4121c0e46d947b9acbe76a4d641bcaed7cfd",
+      "public_key_hex": "73015d3337a5800ea509d694387e4121c0e46d947b9acbe76a4d641bcaed7cfd",
+      "invite_id": "invite-uuid-1",
+      "invited_ed25519_pub_hex": "a2bcc23b9e57fd154019dce0fc0470d13ccab133ab4dd0aafb27762e7a6aff12",
+      "invited_x25519_pub_hex": "e97959c81dad1d2ea0848ed4d6b74859494a88a12b381cee90726d98c1d1ba52",
+      "payload_hex": "0000000d696e766974652d757569642d3100000020a2bcc23b9e57fd154019dce0fc0470d13ccab133ab4dd0aafb27762e7a6aff1200000020e97959c81dad1d2ea0848ed4d6b74859494a88a12b381cee90726d98c1d1ba52",
+      "signature_hex": "980ce986bebdf3e7a942d62c87296f0d1bbaebd0e2e1c64752016f6ae5ac516eac21077f435c21e07723faf2625140821aa5f136dc775c94f1215399e47cb20d"
+    }
   ]
 }

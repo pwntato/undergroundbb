@@ -1,17 +1,21 @@
 // Matches SignupProgressStep.test.tsx's established pattern for a
 // prop-driven component in this no-jsdom test suite: renderToStaticMarkup
 // is enough here since GroupList takes a plain LoadState and renders
-// synchronously, with no effects or context to exercise.
+// synchronously, with no effects to exercise -- the one piece of real
+// context it now needs is react-router's, for the per-group "Invite" link
+// (issue #38), so this wraps in a bare MemoryRouter rather than a real
+// BrowserRouter/history -- nothing here ever actually navigates.
 
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
 import { GroupList, type LoadState } from './GroupList'
 import { groupLabel } from './groupLabel'
 import type { DisplayGroup } from './runListGroups'
 
 function render(load: LoadState): string {
-  return renderToStaticMarkup(createElement(GroupList, { load }))
+  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(GroupList, { load })))
 }
 
 function displayGroup(overrides: Partial<DisplayGroup> = {}): DisplayGroup {
@@ -98,6 +102,22 @@ describe('GroupList', () => {
     const html = render({ status: 'ready', groups })
     expect(html).toContain('Good Group')
     expect(html).toContain('(unreadable group)')
+  })
+
+  // Issue #38: only an Admin or Ambassador may create an invite (the
+  // server's own 403 is the real authorization check -- this just governs
+  // whether the link is offered at all).
+  it('shows the Invite link for an admin or ambassador, not for a plain member', () => {
+    const groups = [
+      displayGroup({ groupId: 'g-admin', role: 'admin' }),
+      displayGroup({ groupId: 'g-ambassador', role: 'ambassador' }),
+      displayGroup({ groupId: 'g-member', role: 'member' }),
+    ]
+    const html = render({ status: 'ready', groups })
+
+    expect(html).toContain('/groups/g-admin/invite')
+    expect(html).toContain('/groups/g-ambassador/invite')
+    expect(html).not.toContain('/groups/g-member/invite')
   })
 
   it('shows the "log in again" hint only when at least one group is coldKeys', () => {

@@ -15,12 +15,10 @@ plaintext content anywhere in the backend. (The one exception is the short-lived
 item described below, which holds a random number and no key material.)
 
 **This document describes the complete design, not the current state of the code.** The design is
-settled **except where this document explicitly marks an open question** — there is one, on
-`ephemeral_pubkey` in the invite handshake, and it is resolved before that code is written. Beyond
-that, the work is built in milestones: private groups, invites, posts and comments come first, while
-public groups, join requests, notifications and custom themes are deliberately sequenced later.
-Where something is not yet built, it is because of ordering, not doubt. Progress is tracked in the
-repository's issues and milestones.
+settled, with no open questions remaining. The work is built in milestones: private groups, invites,
+posts and comments come first, while public groups, join requests, notifications and custom themes
+are deliberately sequenced later. Where something is not yet built, it is because of ordering, not
+doubt. Progress is tracked in the repository's issues and milestones.
 
 ## The cryptographic core
 
@@ -504,7 +502,7 @@ transmits, so the invitee's client can check it against a value the server never
 An invite is a three-step handshake that prevents the server from substituting its own key for the
 invitee's:
 
-1. **Inviter creates.** Signs `{invite_id, group_id, inviter_pubkey, ephemeral_pubkey, expires_at}`
+1. **Inviter creates.** Signs `{invite_id, group_id, inviter_pubkey, expires_at}`
    with their Ed25519 key. This payload contains **no secrets** and is safe at rest.
 2. **Invitee accepts.** Verifies the inviter's signature, then signs
    `{invite_id, ed25519_pub, x25519_pub}` with their own key.
@@ -554,14 +552,14 @@ design permits neither. **Completion is driven by that query on login**, not by 
 path — notifications carry no content a client can act on, and step 3 must work for an inviter who
 never opens the notification.
 
-> **Open question — `ephemeral_pubkey`.** It is signed into the step 1 payload and then plays no
-> part in steps 2 or 3, which wrap using the inviter's own X25519 key. Either it is vestigial and
-> should be dropped, or it is meant to give the wrap forward secrecy — in which case step 3 must
-> wrap with the ephemeral *private* key and this document must say where that key lives between
-> steps 1 and 3, which for a browser-held key is the hard part. It is called out rather than
-> quietly removed because signing a field with no defined semantics reliably produces
-> implementations that generate it, sign it, and discard it — the ceremony without the property.
-> This is resolved before the invite handshake is built.
+**Resolved — `ephemeral_pubkey` is dropped.** It was signed into the step 1 payload in an earlier
+draft of this design and never used in steps 2 or 3, which wrap using the inviter's own long-term
+X25519 key. Forward secrecy for the group-key wrap is not a property this design states or promises
+elsewhere — introducing it here would mean specifying where a browser persists an ephemeral private
+key across a session boundary (invite creation to completion, on a future login), which is a real
+storage problem with no other need driving it. Rather than carry a signed field with no defined
+semantics, the field is removed from the step 1 payload entirely; the three payloads above already
+reflect this.
 
 Invite links carry the inviter's key fingerprint in the **URL fragment**, which browsers never
 transmit. An invitee's client can therefore verify the inviter's key against a value the server

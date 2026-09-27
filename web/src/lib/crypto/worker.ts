@@ -19,11 +19,14 @@
 
 import {
   completeChangePassword as completeChangePasswordPure,
+  completeInvite as completeInvitePure,
   completeLogin as completeLoginPure,
   completeRecovery as completeRecoveryPure,
   decryptGroupNames as decryptGroupNamesPure,
   generateSignupMaterial as generateSignupMaterialPure,
   signGroupCreation as signGroupCreationPure,
+  signInviteAcceptance as signInviteAcceptancePure,
+  signInviteCreation as signInviteCreationPure,
   type LiveKeys,
 } from './credential-material.js'
 import { base64ToBytes } from './base64.js'
@@ -31,12 +34,15 @@ import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
+  CompleteInviteRequest,
   CompleteLoginRequest,
   CompleteRecoveryRequest,
   DecryptGroupNamesRequest,
   GenerateSignupMaterialRequest,
   RecoveryMaterial,
   SignGroupCreationRequest,
+  SignInviteAcceptanceRequest,
+  SignInviteCreationRequest,
   SignupMaterial,
   WorkerRequest,
   WorkerResponse,
@@ -93,6 +99,15 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
+      return
+    case 'signInviteCreation':
+      await signInviteCreation(req)
+      return
+    case 'signInviteAcceptance':
+      await signInviteAcceptance(req)
+      return
+    case 'completeInvite':
+      await completeInvite(req)
       return
     case 'clearLiveKeys':
       clearLiveKeys(req)
@@ -165,6 +180,70 @@ async function decryptGroupNames(req: DecryptGroupNamesRequest): Promise<void> {
   }
   const results = await decryptGroupNamesPure(liveKeys, req.groups)
   post({ kind: 'decryptGroupNamesDone', id: req.id, results })
+}
+
+/**
+ * Signs step 1 of the invite handshake -- issue #38. Same liveKeys-unset/
+ * wrong-account guards as signGroupCreation, for the identical reason.
+ */
+async function signInviteCreation(req: SignInviteCreationRequest): Promise<void> {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again before creating an invite (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const result = await signInviteCreationPure(liveKeys, req.inviteId, req.groupId, req.expiresAt)
+  post({ kind: 'signInviteCreationDone', id: req.id, result })
+}
+
+/**
+ * Signs step 2 of the invite handshake -- issue #39. Same liveKeys-unset/
+ * wrong-account guards as signGroupCreation.
+ */
+async function signInviteAcceptance(req: SignInviteAcceptanceRequest): Promise<void> {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again before accepting an invite (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const result = await signInviteAcceptancePure(liveKeys, req.inviteId)
+  post({ kind: 'signInviteAcceptanceDone', id: req.id, result })
+}
+
+/**
+ * Completes step 3 of the invite handshake -- issue #40. Same liveKeys-unset/
+ * wrong-account guards as signGroupCreation.
+ */
+async function completeInvite(req: CompleteInviteRequest): Promise<void> {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again to complete pending invites (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const ownWrappedGroupKey = {
+    ephemeralPub: base64ToBytes(req.ownWrappedGroupKey.ephemeralPub),
+    nonce: base64ToBytes(req.ownWrappedGroupKey.nonce),
+    ciphertext: base64ToBytes(req.ownWrappedGroupKey.ciphertext),
+  }
+  const invitedX25519PublicKey = base64ToBytes(req.invitedX25519PublicKey)
+  const result = await completeInvitePure(
+    liveKeys,
+    req.groupId,
+    ownWrappedGroupKey,
+    req.ownGeneration,
+    req.invitedUserId,
+    invitedX25519PublicKey,
+  )
+  post({ kind: 'completeInviteDone', id: req.id, result })
 }
 
 function clearLiveKeys(_req: ClearLiveKeysRequest): void {

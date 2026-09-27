@@ -1,6 +1,8 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
+import { AcceptInviteScreen } from '@/routes/AcceptInviteScreen'
 import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
 import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
+import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
 import { Home } from '@/routes/Home'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
@@ -14,16 +16,26 @@ import { SessionProvider } from '@/lib/session/SessionContext'
  * screens (signup, login) on top of the placeholder scaffold; #128 adds
  * recovery; #131 adds the logged-in change-password/new-recovery-code
  * screen; #32 adds the session bootstrap and the guards below; #34 adds
- * group creation; everything else this milestone needs (the board views,
- * etc.) arrives with the features that need them.
+ * group creation; #38/#39 add the invite handshake's two screens (#40's
+ * own step 3 has no screen at all -- it runs automatically on login, see
+ * LoginScreen's own runCompleteInvites call); everything else this
+ * milestone needs (the board views, etc.) arrives with the features that
+ * need them.
  *
- * /groups/new uses RequireAuth like /account/password -- CreateGroupScreen
- * additionally needs the crypto worker's cached signing/wrapping keys to be
- * live (populated by a prior completeLogin in this worker instance's
- * lifetime), which RequireAuth's session check cannot see; that screen's
- * own error handling covers a cold cache separately, the same split
+ * /groups/new and /groups/:groupId/invite both use RequireAuth like
+ * /account/password -- CreateGroupScreen/CreateInviteScreen additionally
+ * need the crypto worker's cached signing/wrapping keys to be live
+ * (populated by a prior completeLogin in this worker instance's lifetime),
+ * which RequireAuth's session check cannot see; each screen's own error
+ * handling covers a cold cache separately, the same split
  * ChangePasswordScreen's header comment describes between RequireAuth and
  * its own live bootstrap check.
+ *
+ * /invites/:inviteId is deliberately UNGUARDED, like /recovery -- an
+ * invite is a link handed to someone who may not have an account yet
+ * (models.Invite's own doc comment, Go side), so GET /api/invites/:id must
+ * be reachable by a fully logged-out visitor. AcceptInviteScreen does its
+ * own session check inline, only for the accept action itself.
  *
  * /recovery is deliberately unguarded either way: it exists for a visitor
  * who cannot log in, so it must work regardless of session state, same as
@@ -79,6 +91,15 @@ function App() {
                 </RequireAuth>
               }
             />
+            <Route
+              path="/groups/:groupId/invite"
+              element={
+                <RequireAuth>
+                  <CreateInviteScreen />
+                </RequireAuth>
+              }
+            />
+            <Route path="/invites/:inviteId" element={<AcceptInviteScreen />} />
           </Routes>
         </main>
       </BrowserRouter>

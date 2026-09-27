@@ -13,6 +13,9 @@ import type {
   ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
   CompleteChangePasswordResponse,
+  CompleteInviteRequest,
+  CompleteInviteResponse,
+  CompleteInviteResult,
   CompleteLoginRequest,
   CompleteLoginResponse,
   CompleteRecoveryRequest,
@@ -26,6 +29,12 @@ import type {
   SignGroupCreationRequest,
   SignGroupCreationResponse,
   SignGroupCreationResult,
+  SignInviteAcceptanceRequest,
+  SignInviteAcceptanceResponse,
+  SignInviteAcceptanceResult,
+  SignInviteCreationRequest,
+  SignInviteCreationResponse,
+  SignInviteCreationResult,
   SignupMaterial,
   SignupProgressEvent,
   WorkerErrorResponse,
@@ -292,6 +301,109 @@ export function signGroupCreation(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signGroupCreation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Signs step 1 of the invite handshake -- issue #38. Relies entirely on the
+ * worker's own cached liveKeys, matching signGroupCreation's own reasoning.
+ */
+export function signInviteCreation(
+  req: Omit<SignInviteCreationRequest, 'kind' | 'id'>,
+): Promise<SignInviteCreationResult> {
+  const id = nextRequestID()
+  const fullReq: SignInviteCreationRequest = { kind: 'signInviteCreation', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signInviteCreationDone') {
+        resolve((msg as SignInviteCreationResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signInviteCreation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Signs step 2 of the invite handshake -- issue #39. Relies entirely on the
+ * worker's own cached liveKeys, matching signGroupCreation's own reasoning.
+ */
+export function signInviteAcceptance(
+  req: Omit<SignInviteAcceptanceRequest, 'kind' | 'id'>,
+): Promise<SignInviteAcceptanceResult> {
+  const id = nextRequestID()
+  const fullReq: SignInviteAcceptanceRequest = { kind: 'signInviteAcceptance', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signInviteAcceptanceDone') {
+        resolve((msg as SignInviteAcceptanceResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signInviteAcceptance`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Completes step 3 of the invite handshake -- issue #40. Relies entirely on
+ * the worker's own cached liveKeys, matching signGroupCreation's own
+ * reasoning.
+ */
+export function completeInvite(
+  req: Omit<CompleteInviteRequest, 'kind' | 'id'>,
+): Promise<CompleteInviteResult> {
+  const id = nextRequestID()
+  const fullReq: CompleteInviteRequest = { kind: 'completeInvite', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'completeInviteDone') {
+        resolve((msg as CompleteInviteResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for completeInvite`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

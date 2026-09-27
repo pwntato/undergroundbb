@@ -213,6 +213,95 @@ export interface SignGroupCreationResponse {
 }
 
 /**
+ * Signs step 1 of the invite handshake (issue #38) -- the inviter's own
+ * Ed25519 signature over the invite's creation payload. Like
+ * SignGroupCreationRequest, relies entirely on the worker's own liveKeys
+ * cache and carries no key material of its own.
+ */
+export interface SignInviteCreationRequest {
+  readonly kind: 'signInviteCreation'
+  readonly id: string
+  readonly userId: string
+  readonly inviteId: string
+  readonly groupId: string
+  readonly expiresAt: string
+}
+
+export interface SignInviteCreationResult {
+  readonly creationSignature: string
+  /**
+   * The inviter's own fingerprint (fingerprint.ts), for the invite-creation
+   * screen to display "while the user is paying attention" and to embed in
+   * the generated link's URL fragment -- see credential-material.ts's own
+   * signInviteCreation doc comment.
+   */
+  readonly inviterFingerprint: string
+}
+
+export interface SignInviteCreationResponse {
+  readonly kind: 'signInviteCreationDone'
+  readonly id: string
+  readonly result: SignInviteCreationResult
+}
+
+/**
+ * Signs step 2 of the invite handshake (issue #39) -- the invitee's own
+ * Ed25519 signature over the invite's acceptance payload, binding their own
+ * current Ed25519/X25519 public keys (read from liveKeys, not passed in --
+ * same reasoning as every other liveKeys-backed request).
+ */
+export interface SignInviteAcceptanceRequest {
+  readonly kind: 'signInviteAcceptance'
+  readonly id: string
+  readonly userId: string
+  readonly inviteId: string
+}
+
+export interface SignInviteAcceptanceResult {
+  readonly acceptanceSignature: string
+}
+
+export interface SignInviteAcceptanceResponse {
+  readonly kind: 'signInviteAcceptanceDone'
+  readonly id: string
+  readonly result: SignInviteAcceptanceResult
+}
+
+/**
+ * Completes step 3 of the invite handshake (issue #40) -- unwraps the
+ * inviter's OWN copy of the group key and re-wraps it to the invitee's
+ * signed X25519 public key. ownWrappedGroupKey/ownGeneration are the
+ * caller's own MEMBER# entry (from GET /api/groups, exactly like
+ * DecryptGroupNamesRequest's per-group shape); invitedUserId/
+ * invitedX25519PublicKey come from GET /api/invites/pending-completions,
+ * already re-verified against AcceptanceSignature by the caller (see
+ * worker.ts's own completeInvite handler) before this request is sent --
+ * this request itself carries no signature to check, only what's needed
+ * to wrap.
+ */
+export interface CompleteInviteRequest {
+  readonly kind: 'completeInvite'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly ownGeneration: number
+  readonly invitedUserId: string
+  readonly invitedX25519PublicKey: string
+}
+
+export interface CompleteInviteResult {
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly generation: number
+}
+
+export interface CompleteInviteResponse {
+  readonly kind: 'completeInviteDone'
+  readonly id: string
+  readonly result: CompleteInviteResult
+}
+
+/**
  * Decrypts one or more private groups' name/description for the group list
  * (issue #35) -- like signGroupCreation, relies entirely on the worker's
  * own liveKeys cache and carries no key material of its own. Each entry is
@@ -305,6 +394,9 @@ export type WorkerRequest =
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
   | DecryptGroupNamesRequest
+  | SignInviteCreationRequest
+  | SignInviteAcceptanceRequest
+  | CompleteInviteRequest
   | ClearLiveKeysRequest
 
 export type WorkerResponse =
@@ -315,4 +407,7 @@ export type WorkerResponse =
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
   | DecryptGroupNamesResponse
+  | SignInviteCreationResponse
+  | SignInviteAcceptanceResponse
+  | CompleteInviteResponse
   | WorkerErrorResponse
