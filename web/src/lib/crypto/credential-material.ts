@@ -13,6 +13,7 @@ import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   generateGrantSortKey,
+  groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
   trustAnchorPayload,
@@ -26,13 +27,20 @@ import {
 import * as ed25519 from './ed25519.js'
 import {
   generateWrappingKey,
+  unwrap,
   wrap,
   wrappingKeyFromPrivate,
   KEY_LEN as X25519_KEY_LEN,
+  type Wrapped,
   type WrappingKey,
 } from './x25519.js'
 import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
-import type { RecoveryMaterial, SignupMaterial } from './worker-protocol.js'
+import type {
+  DecryptedGroupName,
+  DecryptGroupNamesRequest,
+  RecoveryMaterial,
+  SignupMaterial,
+} from './worker-protocol.js'
 
 /** One step of a call's progress, reported via the onProgress callback as it completes. */
 export interface ProgressStep {
@@ -330,6 +338,96 @@ export async function signGroupCreation(
       ciphertext: bytesToBase64(wrapped.ciphertext),
     },
   }
+}
+
+/**
+ * #35: decrypts a batch of private groups' names and descriptions for the
+ * group list, using keys' wrapping key -- the read-path counterpart of
+ * signGroupCreation's wrap. For each group: unwrap the member's own
+ * WrappedGroupKey (memberWrapAAD(groupId, keys.userId, generation), the
+ * same AAD signGroupCreation wrapped under) to recover the group key, then
+ * decrypt nameCiphertext/descriptionCiphertext under
+ * groupNameAAD(groupId, 'NAME'|'DESC', generation).
+ *
+ * Generation is always 0 for now -- #78 (key rotation) is what will ever
+ * make it otherwise, at which point a GENKEY# chain walk (not yet built)
+ * would need to run first for a member who joined after a rotation. This
+ * function does not know about that chain; it decrypts directly against
+ * whatever generation the caller passed, which GET /api/groups always
+ * reports as this member's OWN current generation (their WrappedGroupKey's
+ * generation, not necessarily the group's latest) -- correct today because
+ * the two are always equal before rotation exists.
+ *
+ * One group's failure (a stale cache entry, corrupt ciphertext, a
+ * generation mismatch) does not throw and does not fail the batch -- see
+ * DecryptGroupNamesResponse's own doc comment on the protocol side for why
+ * a partial result beats blanking the whole list. Only name/description
+ * are best-effort per group; a request-level problem (liveKeys cold or
+ * wrong account) is still the caller's job to check before calling this,
+ * same as signGroupCreation.
+ */
+export async function decryptGroupNames(
+  keys: LiveKeys,
+  groups: DecryptGroupNamesRequest['groups'],
+): Promise<DecryptedGroupName[]> {
+  const results: DecryptedGroupName[] = []
+  for (const group of groups) {
+    results.push(await decryptOneGroupName(keys, group))
+  }
+  return results
+}
+
+async function decryptOneGroupName(
+  keys: LiveKeys,
+  group: DecryptGroupNamesRequest['groups'][number],
+): Promise<DecryptedGroupName> {
+  try {
+    const wrappedGroupKey: Wrapped = {
+      ephemeralPub: base64ToBytes(group.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(group.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(group.wrappedGroupKey.ciphertext),
+    }
+    const unwrapAAD = memberWrapAAD(group.groupId, keys.userId, group.generation)
+    const groupKey = await unwrap(keys.wrappingKey.privateKey, wrappedGroupKey, unwrapAAD)
+
+    const name = await decryptGroupText(
+      groupKey,
+      group.groupId,
+      'NAME',
+      group.generation,
+      group.nameCiphertext,
+    )
+    const description = await decryptGroupText(
+      groupKey,
+      group.groupId,
+      'DESC',
+      group.generation,
+      group.descriptionCiphertext,
+    )
+    return { groupId: group.groupId, name, description }
+  } catch {
+    // Deliberately swallowed -- see this function's own doc comment (on
+    // decryptGroupNames) for why one group's decrypt failure surfaces as
+    // null fields here rather than rejecting the whole batch.
+    return { groupId: group.groupId, name: null, description: null }
+  }
+}
+
+async function decryptGroupText(
+  groupKey: Uint8Array,
+  groupId: string,
+  field: 'NAME' | 'DESC',
+  generation: number,
+  ciphertext: { readonly nonce: string; readonly ciphertext: string },
+): Promise<string> {
+  const aad = groupNameAAD(groupId, field, generation)
+  const plaintext = await decrypt(
+    groupKey,
+    base64ToBytes(ciphertext.nonce),
+    base64ToBytes(ciphertext.ciphertext),
+    aad,
+  )
+  return new TextDecoder().decode(plaintext)
 }
 
 /**

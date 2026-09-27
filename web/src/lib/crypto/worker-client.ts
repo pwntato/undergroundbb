@@ -17,6 +17,9 @@ import type {
   CompleteLoginResponse,
   CompleteRecoveryRequest,
   CompleteRecoveryResponse,
+  DecryptedGroupName,
+  DecryptGroupNamesRequest,
+  DecryptGroupNamesResponse,
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
   RecoveryMaterial,
@@ -289,6 +292,46 @@ export function signGroupCreation(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signGroupCreation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Decrypts a batch of private groups' names/descriptions for the group list
+ * -- issue #35, the read-path counterpart of signGroupCreation. Same
+ * liveKeys reliance and same rejection when no completeLogin has succeeded
+ * in this worker instance's lifetime -- see worker.ts's own
+ * decryptGroupNames for the exact error. That REQUEST-level rejection is
+ * distinct from one group's own decrypt failing, which never rejects this
+ * promise -- it surfaces as `null` fields on that group's entry in the
+ * resolved array instead (DecryptedGroupName's own doc comment).
+ */
+export function decryptGroupNames(
+  req: Omit<DecryptGroupNamesRequest, 'kind' | 'id'>,
+): Promise<readonly DecryptedGroupName[]> {
+  const id = nextRequestID()
+  const fullReq: DecryptGroupNamesRequest = { kind: 'decryptGroupNames', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'decryptGroupNamesDone') {
+        resolve((msg as DecryptGroupNamesResponse).results)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for decryptGroupNames`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

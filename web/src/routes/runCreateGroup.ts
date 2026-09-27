@@ -41,7 +41,23 @@ export type CreateGroupErrorKind =
   'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'groupIdConflict'
 
 export type CreateGroupResult =
-  | { readonly ok: true; readonly response: CreateGroupResponse }
+  | {
+      readonly ok: true
+      readonly response: CreateGroupResponse
+      /**
+       * The Generation-0 group key, wrapped to the creator's own wrapping
+       * public key -- signed.groupKeyWrapped, threaded through so
+       * CreateGroupScreen can build a GroupListEntry-shaped object for the
+       * new group without a second signGroupCreation call. Needed because
+       * GET /api/groups is read via GSI1, which is eventually consistent
+       * (PR #144 review) -- a group created and then immediately navigated
+       * to can be transiently missing from the very next list fetch on
+       * real DynamoDB (not reproducible against DynamoDB Local, which is
+       * why live-verification alone didn't catch it). Home.tsx merges this
+       * in via router state when the fetched list doesn't include it yet.
+       */
+      readonly groupKeyWrapped: { ephemeralPub: string; nonce: string; ciphertext: string }
+    }
   | { readonly ok: false; readonly kind: CreateGroupErrorKind; readonly error: unknown }
 
 /**
@@ -108,7 +124,7 @@ export async function runCreateGroup(
       rootGrantSortKey: signed.rootGrantSortKey,
       rootGrantSignature: signed.rootGrantSignature,
     })
-    return { ok: true, response }
+    return { ok: true, response, groupKeyWrapped: signed.groupKeyWrapped }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       // The session expired between this screen loading and submit -- same

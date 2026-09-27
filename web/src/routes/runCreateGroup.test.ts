@@ -59,7 +59,11 @@ describe('runCreateGroup', () => {
     const deps = makeDeps()
     const result = await runCreateGroup(deps, 'group-1', 'Z3JvdXBrZXk=', FORM)
 
-    expect(result).toEqual({ ok: true, response: CREATE_RESPONSE })
+    expect(result).toEqual({
+      ok: true,
+      response: CREATE_RESPONSE,
+      groupKeyWrapped: SIGN_RESULT.groupKeyWrapped,
+    })
     expect(deps.signGroupCreation).toHaveBeenCalledWith({
       userId: 'user-1',
       groupId: 'group-1',

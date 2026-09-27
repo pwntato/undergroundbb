@@ -91,6 +91,49 @@ export interface CreateGroupResponse {
 }
 
 /**
+ * One group in GET /api/groups's response -- see
+ * internal/handlers/group.go's groupListEntry for the server side. Exactly
+ * one of the two field pairs is populated, matching visibility: a public
+ * group's plaintext name/description, or a private group's ciphertext plus
+ * the caller's own wrappedGroupKey (needed to ever decrypt it) -- never
+ * both, and a consumer should not assume the other pair is merely absent
+ * rather than meaningless for that entry's visibility.
+ *
+ * No unread count -- see groupListEntry's own doc comment on the Go side
+ * for why issue #35 ships without one despite its own one-line description
+ * mentioning it.
+ */
+export interface GroupListEntry {
+  readonly groupId: string
+  readonly visibility: 'private' | 'public'
+  readonly role: 'admin' | 'ambassador' | 'member'
+  readonly generation: number
+
+  readonly namePlaintext?: string
+  readonly descriptionPlaintext?: string
+
+  readonly nameCiphertext?: WireWrappedBlob
+  readonly descriptionCiphertext?: WireWrappedBlob
+  readonly wrappedGroupKey?: WireWrappedKey
+}
+
+export interface ListGroupsResponse {
+  readonly groups: readonly GroupListEntry[]
+}
+
+/**
+ * GET /api/groups -- issue #35, "the hottest read in the application"
+ * (that issue's own description). Authenticated by the session cookie, like
+ * every other endpoint in this file; unlike them, this is the one GET here,
+ * so it doesn't fit putOrPostJSON's POST/PUT shape and calls fetch directly
+ * instead, reusing the same handleJSON error handling.
+ */
+export async function listGroups(): Promise<ListGroupsResponse> {
+  const res = await fetch('/api/groups', { credentials: 'same-origin' })
+  return handleJSON<ListGroupsResponse>(res)
+}
+
+/**
  * POST /api/groups -- issue #34. Authenticated by the session cookie.
  * Throws ApiError(409, code: 'group_id_taken') on a genuine groupId
  * collision -- the server (db.isOwnGroupCreation) already ruled out "this

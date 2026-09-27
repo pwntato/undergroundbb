@@ -21,6 +21,7 @@ import {
   completeChangePassword as completeChangePasswordPure,
   completeLogin as completeLoginPure,
   completeRecovery as completeRecoveryPure,
+  decryptGroupNames as decryptGroupNamesPure,
   generateSignupMaterial as generateSignupMaterialPure,
   signGroupCreation as signGroupCreationPure,
   type LiveKeys,
@@ -32,6 +33,7 @@ import type {
   CompleteChangePasswordRequest,
   CompleteLoginRequest,
   CompleteRecoveryRequest,
+  DecryptGroupNamesRequest,
   GenerateSignupMaterialRequest,
   RecoveryMaterial,
   SignGroupCreationRequest,
@@ -89,6 +91,9 @@ async function handle(req: WorkerRequest): Promise<void> {
     case 'signGroupCreation':
       await signGroupCreation(req)
       return
+    case 'decryptGroupNames':
+      await decryptGroupNames(req)
+      return
     case 'clearLiveKeys':
       clearLiveKeys(req)
       return
@@ -138,6 +143,28 @@ async function signGroupCreation(req: SignGroupCreationRequest): Promise<void> {
   }
   const result = await signGroupCreationPure(liveKeys, req.groupId, base64ToBytes(req.groupKey))
   post({ kind: 'signGroupCreationDone', id: req.id, result })
+}
+
+/**
+ * Decrypts a batch of private groups' names/descriptions for the group list
+ * -- issue #35, the read-path counterpart of signGroupCreation. Same
+ * liveKeys-unset/wrong-account guards as signGroupCreation: those are
+ * REQUEST-level failures (this call cannot proceed at all), distinct from a
+ * single group's decrypt failing, which decryptGroupNamesPure already
+ * handles per-entry (see that function's own doc comment) and never
+ * reaches here as a thrown error.
+ */
+async function decryptGroupNames(req: DecryptGroupNamesRequest): Promise<void> {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again to see private group names (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const results = await decryptGroupNamesPure(liveKeys, req.groups)
+  post({ kind: 'decryptGroupNamesDone', id: req.id, results })
 }
 
 function clearLiveKeys(_req: ClearLiveKeysRequest): void {

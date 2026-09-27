@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -295,4 +296,230 @@ func (c *Client) isOwnGroupCreation(ctx context.Context, in CreateGroupInput) (s
 		return "", false, nil
 	}
 	return group.RootGrantSortKey, true, nil
+}
+
+// batchGetItemLimit is DynamoDB's own hard cap on keys per BatchGetItem
+// call -- ListGroups chunks its META reads to this size rather than relying
+// on the SDK to do it, since exceeding it is a request-time
+// ValidationException, not something the client silently retries around.
+const batchGetItemLimit = 100
+
+// maxUnprocessedKeysRetries and unprocessedKeysBaseDelay bound
+// batchGetGroupMetas' UnprocessedKeys retry loop (PR #144 review): retrying
+// immediately with no backoff is the pattern AWS's own BatchGetItem docs
+// advise against, since UnprocessedKeys often means the request is already
+// being throttled. Capped exponential backoff (base * 2^attempt, doubling
+// each retry) gives a transient throttle room to clear; the attempt cap
+// keeps this from being bounded only by ctx/the Lambda timeout, and a
+// caller that exhausts it gets a real error instead of a request that
+// silently hangs until the function times out.
+const (
+	maxUnprocessedKeysRetries = 5
+	unprocessedKeysBaseDelay  = 50 * time.Millisecond
+)
+
+// errBatchGetGroupMetasExhausted is returned when
+// maxUnprocessedKeysRetries is reached with keys still unprocessed --
+// DynamoDB has been sufficiently overloaded that continuing to retry this
+// specific call isn't the right response; a fresh top-level request should
+// go through normal Lambda/client retry behavior instead.
+var errBatchGetGroupMetasExhausted = errors.New("db: batchGetGroupMetas: exhausted retries with UnprocessedKeys still outstanding")
+
+// ListGroups implements issue #35: the one GSI1 Query that makes "list my
+// groups" a bounded read, plus the per-group META fan-out docs/DESIGN.md
+// names as the actual cost ("Rendering a user's group list is the one
+// hot-path read that fans out... one GSI1 Query... plus one GetItem per
+// group"). Returns memberships and their groups as separate, equal-purpose
+// slices rather than a joined struct -- the handler decides how to shape a
+// response from them; this package stays a pure data-access layer, matching
+// CreateGroup's own division of labor.
+//
+// A membership whose META has since vanished (a state this schema does not
+// otherwise produce, since Group's own doc comment says "TTL never: a
+// group's own record does not expire") is dropped from the returned groups
+// slice rather than erroring the whole call -- the caller can detect this
+// by comparing the lengths of the two returned slices, and the handler's
+// own doc comment covers why a defensive read prefers a partial result over
+// a hard failure here.
+//
+// A brand-new user with no memberships gets back two empty, non-nil slices,
+// not an error -- this is the ordinary state for an account that has never
+// joined or created a group, not an anomaly.
+func (c *Client) ListGroups(ctx context.Context, userID string) ([]models.Membership, []models.Group, error) {
+	memberships, err := c.queryMembershipsByUser(ctx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(memberships) == 0 {
+		return []models.Membership{}, []models.Group{}, nil
+	}
+
+	groupsByID, err := c.batchGetGroupMetas(ctx, membershipGroupIDs(memberships))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	groups := make([]models.Group, 0, len(memberships))
+	kept := memberships[:0] // reuse the backing array; distinct slice header from memberships below
+	for _, m := range memberships {
+		if g, ok := groupsByID[groupIDFromMembership(m)]; ok {
+			kept = append(kept, m)
+			groups = append(groups, g)
+		}
+	}
+	return kept, groups, nil
+}
+
+// queryMembershipsByUser runs the GSI1 Query for GSI1PK = "USER#<userID>" --
+// the first Query in this codebase; db.go's own package doc comment
+// ("Query construction is confined to this package") anticipates exactly
+// this. Paginates on LastEvaluatedKey rather than assuming one page:
+// DESIGN.md is explicit that a user's own membership count, not the table,
+// is the number that actually grows here ("the bound is the number that
+// actually grows in use"), so a heavy user's memberships could exceed one
+// Query page in principle even though none exist yet to prove it in
+// practice.
+//
+// The query is restricted to GSI1SK begins_with "GROUP#" -- GSI1PK
+// "USER#<uuid>" is NOT membership-exclusive. Per DESIGN.md's data-model
+// table, Invite (PK "INVITE#<iid>", GSI1PK "USER#<invitee>", GSI1SK
+// "INVITE#<YYYY-MM-DD, UTC>#<rand>") and Join request (PK "GROUP#<gid>",
+// GSI1PK "USER#<requester>", GSI1SK "REQ#...") rows share this same
+// partition ("the three user reverse-lookups"). PR #144 round 2 review
+// corrected an earlier version of this comment that wrongly attributed
+// "SENT#<iid>" here -- that IS an Invite-related sort key, but it belongs
+// to a different row entirely (the Invite row's PK "INVITE#<iid>" /
+// "SENT#<iid>", the inviter's own copy, GSI1PK "USER#<inviter>"), which has
+// no GSI1 entry at all (blank GSI1PK/GSI1SK in DESIGN.md's own table) and
+// so was never actually relevant to this filter.
+//
+// Without this filter, a pending join request -- PK "GROUP#<gid>", GSI1SK
+// "REQ#..." -- would unmarshal as a Membership: groupIDFromMembership still
+// recovers a real gid from its PK, so the requester (not a member at all)
+// would get that group back with Role == "" (PR #144 review, reproduced
+// live against DynamoDB Local: a REQ# row put alongside a real group made a
+// non-member requester's own ListGroups return it). An invite row's PK is
+// "INVITE#<iid>", so it would instead miss the META BatchGetItem entirely
+// (wasted RCUs, but not a correctness bug) -- begins_with saves that read
+// too. Neither invites nor join requests are built yet (#38-40 are next in
+// M4), so this was silent until those land; TestListGroupsExcludesNonMembershipRows
+// pins it before that happens.
+func (c *Client) queryMembershipsByUser(ctx context.Context, userID string) ([]models.Membership, error) {
+	var memberships []models.Membership
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(c.table),
+			IndexName:              aws.String("GSI1"),
+			KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
+				":sk": &types.AttributeValueMemberS{Value: "GROUP#"},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, err
+		}
+		var page []models.Membership
+		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, page...)
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return memberships, nil
+}
+
+// groupIDFromMembership recovers "gid" from a Membership's own PK
+// ("GROUP#<gid>") rather than parsing GSI1SK -- both encode the same value
+// (models.Membership's own doc comment: "GSI1SK is GROUP#<gid>"), and PK is
+// the field every other Membership consumer in this package already reads
+// directly.
+func groupIDFromMembership(m models.Membership) string {
+	return strings.TrimPrefix(m.PK, "GROUP#")
+}
+
+// membershipGroupIDs collects the distinct group ids ListGroups needs META
+// for -- distinct because BatchGetItem rejects a request with duplicate
+// keys, which a caller could otherwise never construct here (a Query over
+// GSI1 cannot return two Membership items with the same PK for one user),
+// but de-duplicating defensively costs nothing and removes any dependence
+// on that invariant holding.
+func membershipGroupIDs(memberships []models.Membership) []string {
+	seen := make(map[string]bool, len(memberships))
+	ids := make([]string, 0, len(memberships))
+	for _, m := range memberships {
+		gid := groupIDFromMembership(m)
+		if !seen[gid] {
+			seen[gid] = true
+			ids = append(ids, gid)
+		}
+	}
+	return ids
+}
+
+// batchGetGroupMetas reads every GROUP#<gid>/META item in groupIDs via
+// BatchGetItem, chunked to batchGetItemLimit keys per call and retrying any
+// UnprocessedKeys DynamoDB hands back -- BatchGetItem does not guarantee it
+// serves every requested key in one round trip even for a well-formed
+// request within the size limit (throttling can return a partial batch),
+// so a caller that ignores UnprocessedKeys can silently drop a group from
+// the list it renders. Returns a map keyed by group id rather than a slice,
+// since ListGroups needs to look up by id to rejoin with the membership
+// each META belongs to, and BatchGetItem does not preserve request order.
+func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map[string]models.Group, error) {
+	result := make(map[string]models.Group, len(groupIDs))
+
+	for start := 0; start < len(groupIDs); start += batchGetItemLimit {
+		end := min(start+batchGetItemLimit, len(groupIDs))
+		keys := make([]map[string]types.AttributeValue, 0, end-start)
+		for _, gid := range groupIDs[start:end] {
+			keys = append(keys, map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+				"SK": &types.AttributeValueMemberS{Value: "META"},
+			})
+		}
+
+		requestItems := map[string]types.KeysAndAttributes{
+			c.table: {Keys: keys},
+		}
+		for attempt := 0; len(requestItems) > 0; attempt++ {
+			// The cap check comes BEFORE the sleep (PR #144 round 2 review):
+			// checking after would mean the exhausting pass (attempt ==
+			// maxUnprocessedKeysRetries) waits out a full delay -- 800ms at
+			// the default constants -- for a BatchGetItem call it then never
+			// makes, adding dead latency to the already-throttled path for
+			// no benefit.
+			if attempt >= maxUnprocessedKeysRetries {
+				return nil, errBatchGetGroupMetasExhausted
+			}
+			if attempt > 0 {
+				delay := unprocessedKeysBaseDelay * time.Duration(1<<(attempt-1))
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			out, err := c.ddb.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: requestItems,
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range out.Responses[c.table] {
+				var group models.Group
+				if err := attributevalue.UnmarshalMap(item, &group); err != nil {
+					return nil, err
+				}
+				result[strings.TrimPrefix(group.PK, "GROUP#")] = group
+			}
+			requestItems = out.UnprocessedKeys
+		}
+	}
+	return result, nil
 }
