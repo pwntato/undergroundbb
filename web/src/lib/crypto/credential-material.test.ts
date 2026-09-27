@@ -8,19 +8,20 @@
 // derivations run end to end.
 
 import { describe, expect, it } from 'vitest'
-import { decrypt, KEY_SIZE } from './aesgcm.js'
+import { decrypt, encrypt, KEY_SIZE } from './aesgcm.js'
 import { deriveKey, type Argon2idParams } from './argon2.js'
-import { base64ToBytes } from './base64.js'
+import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   completeChangePassword,
   completeLogin,
   completeRecovery,
+  decryptGroupNames,
   generateSignupMaterial,
   signGroupCreation,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
-import { memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
+import { groupNameAAD, memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { unwrap } from './x25519.js'
@@ -340,5 +341,157 @@ describe('group creation signing', () => {
         wrongAad,
       ),
     ).rejects.toThrow()
+  })
+})
+
+// Issue #35: decryptGroupNames is the group-list read path's counterpart to
+// signGroupCreation's write path -- this proves it actually recovers a
+// name/description that was wrapped/encrypted the same way a real private
+// group's META and the member's own MEMBER# item would be, and that one
+// corrupt entry in a batch does not take down the rest (DecryptGroupNames
+// Response's own doc comment on the protocol side).
+describe('decryptGroupNames', () => {
+  async function realMemberKeys() {
+    const signup = await generateSignupMaterial(USER_ID, 'group-member-password', () => {})
+    const { keys } = await completeLogin({
+      password: 'group-member-password',
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId: USER_ID,
+      nonce: Buffer.from([9, 9, 9, 9]).toString('base64'),
+    })
+    return keys
+  }
+
+  // signGroupCreation wraps groupKey at Generation 0 -- the only generation
+  // this codebase can produce today (rotation is #78, unbuilt) -- so every
+  // caller here uses generation 0 throughout, matching the wrap this
+  // function produces.
+  async function setUpMemberWithGroup(
+    groupId: string,
+    groupKey: Uint8Array,
+    existingKeys?: Awaited<ReturnType<typeof realMemberKeys>>,
+  ) {
+    const keys = existingKeys ?? (await realMemberKeys())
+    // signGroupCreation is reused purely for its wrap of groupKey to this
+    // member's own wrapping key under memberWrapAAD -- the exact shape a
+    // real MEMBER# item's WrappedGroupKey has, whether this member created
+    // the group or merely joined it (the wrap itself doesn't know which).
+    const signed = await signGroupCreation(keys, groupId, groupKey)
+    return { keys, wrappedGroupKey: signed.groupKeyWrapped }
+  }
+
+  it('recovers the name and description a real wrap+encrypt produced', async () => {
+    const groupId = 'group-uuid-test-2'
+    const generation = 0
+    const groupKey = new Uint8Array(32).fill(3)
+    const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+
+    const nameEnc = await encrypt(
+      groupKey,
+      new TextEncoder().encode('Roof Group'),
+      groupNameAAD(groupId, 'NAME', generation),
+    )
+    const descEnc = await encrypt(
+      groupKey,
+      new TextEncoder().encode('Talking about the roof'),
+      groupNameAAD(groupId, 'DESC', generation),
+    )
+
+    const results = await decryptGroupNames(keys, [
+      {
+        groupId,
+        generation,
+        wrappedGroupKey,
+        nameCiphertext: {
+          nonce: bytesToBase64(nameEnc.nonce),
+          ciphertext: bytesToBase64(nameEnc.ciphertext),
+        },
+        descriptionCiphertext: {
+          nonce: bytesToBase64(descEnc.nonce),
+          ciphertext: bytesToBase64(descEnc.ciphertext),
+        },
+      },
+    ])
+
+    expect(results).toEqual([
+      { groupId, name: 'Roof Group', description: 'Talking about the roof' },
+    ])
+  })
+
+  it('returns null fields for one bad entry without failing the rest of the batch', async () => {
+    // Both groups belong to the SAME member (one real caller's batch, one
+    // worker call covering their whole group list) -- only the bad entry's
+    // ciphertext is wrong, isolating the failure to the decrypt step rather
+    // than also failing to unwrap the group key at all.
+    const goodGroupId = 'group-uuid-test-good'
+    const badGroupId = 'group-uuid-test-bad'
+    const generation = 0
+    const goodKey = new Uint8Array(32).fill(5)
+    const badKey = new Uint8Array(32).fill(6)
+
+    const good = await setUpMemberWithGroup(goodGroupId, goodKey)
+    const bad = await setUpMemberWithGroup(badGroupId, badKey, good.keys)
+
+    const goodNameEnc = await encrypt(
+      goodKey,
+      new TextEncoder().encode('Good Group'),
+      groupNameAAD(goodGroupId, 'NAME', generation),
+    )
+    const goodDescEnc = await encrypt(
+      goodKey,
+      new TextEncoder().encode('Fine'),
+      groupNameAAD(goodGroupId, 'DESC', generation),
+    )
+    // Encrypted under the WRONG group id's AAD -- simulates corrupt/stale
+    // ciphertext (e.g. a generation mismatch after a rotation this client
+    // hasn't caught up on), which must fail this one entry only. The
+    // wrapped group key itself unwraps fine; only the name/description
+    // ciphertext is bad, isolating the failure to decryptGroupText.
+    const badNameEnc = await encrypt(
+      badKey,
+      new TextEncoder().encode('Bad Group'),
+      groupNameAAD('a-completely-different-group', 'NAME', generation),
+    )
+    const badDescEnc = await encrypt(
+      badKey,
+      new TextEncoder().encode('Corrupt'),
+      groupNameAAD('a-completely-different-group', 'DESC', generation),
+    )
+
+    const results = await decryptGroupNames(good.keys, [
+      {
+        groupId: goodGroupId,
+        generation,
+        wrappedGroupKey: good.wrappedGroupKey,
+        nameCiphertext: {
+          nonce: bytesToBase64(goodNameEnc.nonce),
+          ciphertext: bytesToBase64(goodNameEnc.ciphertext),
+        },
+        descriptionCiphertext: {
+          nonce: bytesToBase64(goodDescEnc.nonce),
+          ciphertext: bytesToBase64(goodDescEnc.ciphertext),
+        },
+      },
+      {
+        groupId: badGroupId,
+        generation,
+        wrappedGroupKey: bad.wrappedGroupKey,
+        nameCiphertext: {
+          nonce: bytesToBase64(badNameEnc.nonce),
+          ciphertext: bytesToBase64(badNameEnc.ciphertext),
+        },
+        descriptionCiphertext: {
+          nonce: bytesToBase64(badDescEnc.nonce),
+          ciphertext: bytesToBase64(badDescEnc.ciphertext),
+        },
+      },
+    ])
+
+    expect(results).toEqual([
+      { groupId: goodGroupId, name: 'Good Group', description: 'Fine' },
+      { groupId: badGroupId, name: null, description: null },
+    ])
   })
 })

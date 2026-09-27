@@ -213,6 +213,66 @@ export interface SignGroupCreationResponse {
 }
 
 /**
+ * Decrypts one or more private groups' name/description for the group list
+ * (issue #35) -- like signGroupCreation, relies entirely on the worker's
+ * own liveKeys cache and carries no key material of its own. Each entry is
+ * one member's own wrapped entry point (from their MEMBER# item) plus the
+ * group's own ciphertext (from META), both already fetched by
+ * GET /api/groups -- see lib/api/groups.ts's GroupListEntry, the wire shape
+ * this batches from.
+ *
+ * Batched (an array, not one group per call) so the caller pays one
+ * postMessage round trip for a whole group list rather than one per group
+ * -- the group list is DESIGN.md's own "hottest read," so this avoids
+ * turning a single fan-out read into a second fan-out of worker calls.
+ *
+ * userId must match liveKeys' cached owner, exactly like
+ * SignGroupCreationRequest, for the identical reason.
+ */
+export interface DecryptGroupNamesRequest {
+  readonly kind: 'decryptGroupNames'
+  readonly id: string
+  readonly userId: string
+  readonly groups: readonly {
+    readonly groupId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly nameCiphertext: { nonce: string; ciphertext: string }
+    readonly descriptionCiphertext: { nonce: string; ciphertext: string }
+  }[]
+}
+
+/**
+ * One group's decrypt outcome. name/description are null, not a thrown
+ * error, when this specific group's unwrap or decrypt fails (a stale cache
+ * entry from before a key rotation this client hasn't caught up on yet, or
+ * genuinely corrupt data) -- see DecryptGroupNamesResponse's own doc
+ * comment for why one bad entry must not fail the whole batch.
+ */
+export interface DecryptedGroupName {
+  readonly groupId: string
+  readonly name: string | null
+  readonly description: string | null
+}
+
+/**
+ * One failed group's ciphertext must not blank the rest of the caller's
+ * group list -- a sidebar that goes empty because one entry's key rotated
+ * out from under a stale cache is a worse failure mode than that one entry
+ * showing a fallback label while every other group still renders. So this
+ * response is always a full-length result array, never a rejection for a
+ * partial failure; per-entry null is the failure signal, not a thrown
+ * WorkerErrorResponse (that's reserved for a request-level failure, e.g.
+ * liveKeys being cold or belonging to a different account, same as
+ * signGroupCreation).
+ */
+export interface DecryptGroupNamesResponse {
+  readonly kind: 'decryptGroupNamesDone'
+  readonly id: string
+  readonly results: readonly DecryptedGroupName[]
+}
+
+/**
  * Clears the worker's cached liveKeys -- posted on logout so a worker
  * instance reused across a logout/login in the same tab cannot sign
  * anything under the previous account's keys. See worker.ts's own doc
@@ -244,6 +304,7 @@ export type WorkerRequest =
   | CompleteRecoveryRequest
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
+  | DecryptGroupNamesRequest
   | ClearLiveKeysRequest
 
 export type WorkerResponse =
@@ -253,4 +314,5 @@ export type WorkerResponse =
   | CompleteRecoveryResponse
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
+  | DecryptGroupNamesResponse
   | WorkerErrorResponse
