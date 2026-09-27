@@ -552,13 +552,14 @@ seed in the superseded-key retention window, not just the current one.
 **The MAC's guarantee also has a precondition worth stating explicitly: it protects the invite only
 if the link itself reaches the invitee without passing through this server.** `k` travels in the URL
 fragment specifically because browsers never transmit a fragment to any server — but that guarantee
-only holds for the *literal* link. If a future feature ever relays an invite link through the server
-itself (pasting it into a post or DM within another group, or a server-mediated invite-by-email/
-notification feature), the operator would see `k` in the relayed content and the substitution this
-section exists to block becomes possible again. **Any future feature must never deliver an invite
-link through this server** — out-of-band delivery (a message the inviter sends outside the app, or
-copy/pasting the link directly) is a load-bearing part of this guarantee, not an implementation
-detail.
+only holds for the *literal* link. Posts are encrypted under the group key regardless of a group's
+visibility, so pasting a link into one does not itself expose `k`; the real risk is a feature that
+relays the link through a mechanism the server can read at all, such as a server-mediated
+invite-by-email or notification feature. If a future feature ever does that, the operator would see
+`k` in the relayed content and the substitution this section exists to block becomes possible again.
+**Any future feature must never deliver an invite link through this server** — out-of-band delivery
+(a message the inviter sends outside the app, or copy/pasting the link directly) is a load-bearing
+part of this guarantee, not an implementation detail.
 
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.

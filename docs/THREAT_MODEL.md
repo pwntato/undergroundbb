@@ -40,11 +40,13 @@ HMAC keyed by a secret (`k`) derived from the inviter's own long-term signing ke
 the invite link's URL fragment, which the server never sees and therefore cannot reproduce. **This
 protection has a precondition: the link itself must reach the invitee out of band, never through this
 server.** `k` rides in the fragment specifically because browsers never transmit it — but that
-guarantee is about the literal link, not about UBB in general. If a future feature ever relays an
-invite link through the server (pasted into a post or DM in another group, or a server-mediated
-invite-by-email/notification feature), the operator sees `k` and the substitution this section
-describes as blocked becomes possible again. See `docs/DESIGN.md`, "Invites — the signed handshake,"
-for the full mechanism and this same caveat stated for anyone building such a feature.
+guarantee is about the literal link, not about UBB in general. Posts are encrypted under the group
+key regardless of a group's visibility, so pasting a link into one does not itself expose `k` to the
+server — the real risk is a feature that relays the link through a mechanism the server can read, such
+as a server-mediated invite-by-email or notification feature. If a future feature ever does that, the
+operator sees `k` and the substitution this section describes as blocked becomes possible again. See
+`docs/DESIGN.md`, "Invites — the signed handshake," for the full mechanism and this same caveat stated
+for anyone building such a feature.
 
 **Role claims.** Role grants are signed by the granting admin, forming a verifiable chain back to
 the group creator. A server cannot fabricate a role.
