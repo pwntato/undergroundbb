@@ -105,8 +105,12 @@ describe('verifyInvite', () => {
   })
 })
 
-const SIGN_RESULT = { acceptanceSignature: 'YWNjZXB0YW5jZS1zaWc=' }
+const SIGN_RESULT = {
+  acceptanceSignature: 'YWNjZXB0YW5jZS1zaWc=',
+  inviteMAC: 'aW52aXRlLW1hYw==',
+}
 const ACCEPT_RESPONSE = { groupId: GROUP_ID }
+const MAC_KEY = 'bWFjLWtleS1mcmFnbWVudA'
 
 function makeDeps(overrides: Partial<RunAcceptInviteDeps> = {}): RunAcceptInviteDeps {
   return {
@@ -136,20 +140,22 @@ describe('isDefinitelyUncommitted', () => {
 describe('runAcceptInvite', () => {
   it('signs and submits, returning ok:true on success', async () => {
     const deps = makeDeps()
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result).toEqual({ ok: true, response: ACCEPT_RESPONSE })
     expect(deps.signInviteAcceptance).toHaveBeenCalledWith({
       userId: 'invitee-uuid-1',
       inviteId: INVITE_ID,
+      inviteMACKey: MAC_KEY,
     })
     expect(deps.acceptInvite).toHaveBeenCalledWith(INVITE_ID, {
       acceptanceSignature: SIGN_RESULT.acceptanceSignature,
+      inviteMAC: SIGN_RESULT.inviteMAC,
     })
   })
 
   it('signInviteAcceptance throwing is definitelyUncommitted', async () => {
     const deps = makeDeps({ signInviteAcceptance: vi.fn().mockRejectedValue(new Error('boom')) })
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('definitelyUncommitted')
@@ -163,7 +169,7 @@ describe('runAcceptInvite', () => {
         .fn()
         .mockRejectedValue(new ApiError(409, 'already accepted', 'invite_already_accepted')),
     })
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('alreadyAccepted')
@@ -174,7 +180,7 @@ describe('runAcceptInvite', () => {
     const deps = makeDeps({
       acceptInvite: vi.fn().mockRejectedValue(new ApiError(410, 'invite has expired')),
     })
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('expired')
@@ -185,7 +191,7 @@ describe('runAcceptInvite', () => {
     const deps = makeDeps({
       acceptInvite: vi.fn().mockRejectedValue(new ApiError(401, 'not authenticated')),
     })
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('authRequired')
@@ -196,7 +202,7 @@ describe('runAcceptInvite', () => {
     const deps = makeDeps({
       acceptInvite: vi.fn().mockRejectedValue(new TypeError('fetch failed')),
     })
-    const result = await runAcceptInvite(deps, INVITE_ID)
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.kind).toBe('ambiguous')

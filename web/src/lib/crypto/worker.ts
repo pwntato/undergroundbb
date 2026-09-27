@@ -29,7 +29,7 @@ import {
   signInviteCreation as signInviteCreationPure,
   type LiveKeys,
 } from './credential-material.js'
-import { base64ToBytes } from './base64.js'
+import { base64ToBytes, base64UrlToBytes } from './base64.js'
 import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
@@ -212,7 +212,8 @@ async function signInviteAcceptance(req: SignInviteAcceptanceRequest): Promise<v
   if (liveKeys.userId !== req.userId) {
     throw new Error('worker: cached keys belong to a different account than requested')
   }
-  const result = await signInviteAcceptancePure(liveKeys, req.inviteId)
+  const inviteMACKey = base64UrlToBytes(req.inviteMACKey)
+  const result = await signInviteAcceptancePure(liveKeys, req.inviteId, inviteMACKey)
   post({ kind: 'signInviteAcceptanceDone', id: req.id, result })
 }
 
@@ -234,14 +235,19 @@ async function completeInvite(req: CompleteInviteRequest): Promise<void> {
     nonce: base64ToBytes(req.ownWrappedGroupKey.nonce),
     ciphertext: base64ToBytes(req.ownWrappedGroupKey.ciphertext),
   }
+  const invitedEd25519PublicKey = base64ToBytes(req.invitedEd25519PublicKey)
   const invitedX25519PublicKey = base64ToBytes(req.invitedX25519PublicKey)
+  const inviteMAC = base64ToBytes(req.inviteMAC)
   const result = await completeInvitePure(
     liveKeys,
+    req.inviteId,
     req.groupId,
     ownWrappedGroupKey,
     req.ownGeneration,
     req.invitedUserId,
+    invitedEd25519PublicKey,
     invitedX25519PublicKey,
+    inviteMAC,
   )
   post({ kind: 'completeInviteDone', id: req.id, result })
 }

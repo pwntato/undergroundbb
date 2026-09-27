@@ -2,6 +2,10 @@
 // byte-for-byte (see testdata/vectors.json's "invite_creation" and
 // "invite_acceptance" sections).
 
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+
 /**
  * Builds the canonical byte string the inviter signs at step 1 of the
  * invite handshake -- see docs/DESIGN.md, "Invites -- the signed handshake":
@@ -64,6 +68,77 @@ export function inviteAcceptancePayload(
     invitedEd25519PublicKey,
     invitedX25519PublicKey,
   ])
+}
+
+/**
+ * Labels HKDF's info parameter (alongside inviteId) with the operation
+ * deriving the key -- matches internal/crypto/invite.go's inviteMACInfo
+ * exactly.
+ */
+const INVITE_MAC_INFO = 'underground-bb:invite-mac:v1'
+
+/** Length in bytes of an Ed25519 seed -- deriveInviteMACKey's ikm. */
+const SIGNING_SEED_SIZE = 32
+
+/** Length in bytes of an HMAC-SHA256 tag / deriveInviteMACKey's output. */
+const INVITE_MAC_KEY_SIZE = 32
+
+/**
+ * Derives the per-invite MAC key k that binds step 2's acceptance to
+ * whoever holds the invite link -- see internal/crypto/invite.go's
+ * DeriveInviteMACKey for the full reasoning this must match byte-for-byte.
+ * Plain signature verification alone lets a malicious server mint its own
+ * keypair, sign its own inviteAcceptancePayload, and pass: every value
+ * step 3 checks arrives in the same response the server controls. k closes
+ * that gap because it never crosses the server at all -- derived once at
+ * creation from the inviter's own long-term Ed25519 seed, carried in the
+ * link's URL fragment (which browsers never transmit), and re-derivable by
+ * the inviter's client from (seed, inviteId) alone at step 3, on any
+ * future login, with nothing stored.
+ *
+ * inviterSigningSeed is the bare 32-byte Ed25519 seed
+ * (ed25519.SigningKey.seed on this side, the same value
+ * signingKeyFromSeed accepts) -- never the derived public key, which
+ * carries no entropy of its own.
+ */
+export function deriveInviteMACKey(inviterSigningSeed: Uint8Array, inviteId: string): Uint8Array {
+  if (inviterSigningSeed.length !== SIGNING_SEED_SIZE) {
+    throw new Error('crypto: invalid signing seed')
+  }
+  const info = new TextEncoder().encode(INVITE_MAC_INFO + inviteId)
+  return hkdf(sha256, inviterSigningSeed, undefined, info, INVITE_MAC_KEY_SIZE)
+}
+
+/**
+ * Computes MAC_k(payload) -- HMAC-SHA256 keyed by deriveInviteMACKey's
+ * output, over the exact same inviteAcceptancePayload bytes the invitee's
+ * Ed25519 signature already covers, so the MAC and the signature can never
+ * be checked against inconsistent views of "which keys were accepted."
+ * Matches internal/crypto/invite.go's ComputeInviteMAC byte-for-byte.
+ */
+export function computeInviteMAC(macKey: Uint8Array, payload: Uint8Array): Uint8Array {
+  return hmac(sha256, macKey, payload)
+}
+
+/**
+ * Verifies mac against computeInviteMAC(macKey, payload) in constant time
+ * -- an early-exit comparison (e.g. `===` on two byte arrays, or a loop
+ * that returns on the first mismatch) leaks, via timing, how many leading
+ * bytes of an attacker-supplied mac happened to match, letting a forgery
+ * be built one byte at a time. The XOR-accumulate loop below always
+ * touches every byte of both inputs regardless of where they first
+ * differ, matching Go's hmac.Equal on the other side of this same check.
+ */
+export function verifyInviteMAC(macKey: Uint8Array, payload: Uint8Array, mac: Uint8Array): boolean {
+  const computed = computeInviteMAC(macKey, payload)
+  if (computed.length !== mac.length) {
+    return false
+  }
+  let diff = 0
+  for (let i = 0; i < computed.length; i++) {
+    diff |= (computed[i] ?? 0) ^ (mac[i] ?? 0)
+  }
+  return diff === 0
 }
 
 function lengthPrefixedConcat(fields: readonly Uint8Array[]): Uint8Array {

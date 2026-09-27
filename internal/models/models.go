@@ -509,6 +509,16 @@ type Invite struct {
 	// the inviter's own client verifying this is what actually protects the
 	// handshake, not the server having checked it first.
 	AcceptanceSignature []byte `dynamodbav:"AcceptanceSignature,omitempty"`
+	// InviteMAC is MAC_k(crypto.InviteAcceptancePayload(...)) -- k being the
+	// per-invite secret carried in the invite link's own URL fragment,
+	// never sent to any server (crypto.DeriveInviteMACKey's own doc
+	// comment). This server stores and serves it back opaquely: it cannot
+	// derive k and has no way to check this value itself, and does not try
+	// to. Its only purpose is reaching the inviter's own client at step 3
+	// (PendingInviteCompletions), the one party who CAN re-derive k and
+	// verify it, closing the gap AcceptanceSignature alone leaves open --
+	// see that same doc comment for what that gap is.
+	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
 }
 
 // SentInvite is the USER#<inviter> / SENT#<iid> item -- the inviter's own
@@ -555,4 +565,10 @@ type SentInvite struct {
 	InvitedEd25519PublicKey []byte `dynamodbav:"InvitedEd25519PublicKey,omitempty"`
 	InvitedX25519PublicKey  []byte `dynamodbav:"InvitedX25519PublicKey,omitempty"`
 	AcceptanceSignature     []byte `dynamodbav:"AcceptanceSignature,omitempty"`
+	// InviteMAC duplicates Invite.InviteMAC -- see that field's own doc
+	// comment. This is the copy PendingInviteCompletions actually reads
+	// (this row, not INVITE#<iid>, is what step 3's discovery query
+	// scans), so the inviter's client can re-derive k and verify it before
+	// ever wrapping the group key.
+	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
 }

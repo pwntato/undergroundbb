@@ -21,6 +21,19 @@ async function getJSON<T>(path: string): Promise<T> {
   return handleJSON<T>(res)
 }
 
+/** No response body expected -- revokeInvite's own 204. */
+async function del(path: string): Promise<void> {
+  const res = await fetch(path, { method: 'DELETE', credentials: 'same-origin' })
+  if (res.ok) {
+    return
+  }
+  // handleJSON expects a body to parse -- a DELETE error response still
+  // carries the usual {error, code} JSON shape (WriteError/
+  // WriteErrorWithCode), so this reuses it rather than duplicating the
+  // parsing.
+  await handleJSON(res)
+}
+
 async function handleJSON<T>(res: Response): Promise<T> {
   let data: unknown
   try {
@@ -106,6 +119,19 @@ export async function getInvite(inviteId: string): Promise<GetInviteResponse> {
 }
 
 /**
+ * DELETE /api/invites/{id} -- docs/DESIGN.md's revocation remedy: "before
+ * acceptance that is the only remedy for a link sent to the wrong address
+ * or known to have leaked." Authenticated as the invite's own inviter.
+ * Throws ApiError(404) if the invite does not exist or the caller is not
+ * its inviter (the same shape, deliberately -- see the Go side's own doc
+ * comment), or ApiError(409, code: 'invite_already_accepted') if it has
+ * already moved past step 1.
+ */
+export async function revokeInvite(inviteId: string): Promise<void> {
+  await del(`/api/invites/${inviteId}`)
+}
+
+/**
  * The wire shape of POST /api/invites/{id}/accept -- issue #39, step 2. See
  * internal/handlers/invite.go's acceptInviteRequest for the server side.
  * Authenticated: the invitee's ed25519Pub/x25519Pub are read from their own
@@ -113,6 +139,17 @@ export async function getInvite(inviteId: string): Promise<GetInviteResponse> {
  */
 export interface AcceptInviteRequest {
   readonly acceptanceSignature: string
+  /**
+   * MAC_k(inviteAcceptancePayload(...)), k being the per-invite MAC key
+   * carried in the invite link's own URL fragment -- see
+   * deriveInviteMACKey's own doc comment (web/src/lib/crypto/invite.ts)
+   * for what this proves that acceptanceSignature alone does not. Opaque
+   * to the server: it is stored and served back at
+   * GET /api/invites/pending-completions purely so the inviter's own
+   * client can re-derive k and verify it there, at step 3 -- this endpoint
+   * neither checks nor can check it.
+   */
+  readonly inviteMAC: string
 }
 
 export interface AcceptInviteResponse {
@@ -148,6 +185,8 @@ export interface PendingInviteCompletion {
   readonly invitedEd25519PublicKey: string
   readonly invitedX25519PublicKey: string
   readonly acceptanceSignature: string
+  /** See AcceptInviteRequest.inviteMAC's own doc comment -- what completeInviteCrypto verifies before ever wrapping the group key. */
+  readonly inviteMAC: string
 }
 
 export interface PendingInviteCompletionsResponse {

@@ -18,3 +18,21 @@ export function base64ToBytes(b64: string): Uint8Array {
   }
   return out
 }
+
+/**
+ * Base64url (RFC 4648 §5), unpadded -- used only for values embedded
+ * directly in a URL fragment (currently just invite.ts's per-invite MAC
+ * key), where standard base64's `+`, `/` and `=` would otherwise need
+ * percent-encoding. Every OTHER binary field in this app still uses the
+ * standard, padded alphabet above, matching
+ * internal/handlers/*.go's decodeBase64Field.
+ */
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+export function base64UrlToBytes(b64url: string): Uint8Array {
+  const padded = b64url.replace(/-/g, '+').replace(/_/g, '/')
+  const padLen = (4 - (padded.length % 4)) % 4
+  return base64ToBytes(padded + '='.repeat(padLen))
+}

@@ -503,13 +503,39 @@ An invite is a three-step handshake that prevents the server from substituting i
 invitee's:
 
 1. **Inviter creates.** Signs `{invite_id, group_id, inviter_pubkey, expires_at}`
-   with their Ed25519 key. This payload contains **no secrets** and is safe at rest.
+   with their Ed25519 key. This payload contains **no secrets** and is safe at rest. Also derives
+   `k = HKDF-SHA256(inviter's own long-term Ed25519 seed, info = "underground-bb:invite-mac:v1" ||
+   invite_id)` — nothing is stored, so `k` is re-derivable by the inviter's own client at step 3, on
+   any future login, from `(seed, invite_id)` alone. `k` travels in the invite link's **URL
+   fragment**, next to the fingerprint (see below) — browsers never transmit a URL fragment to any
+   server, so `k` reaches exactly the party who was actually handed the link, and the server never
+   sees it.
 2. **Invitee accepts.** Verifies the inviter's signature, then signs
-   `{invite_id, ed25519_pub, x25519_pub}` with their own key.
-3. **Inviter completes.** Their client verifies the acceptance signature and wraps the group key to
-   the X25519 key **that was signed in step 2** — never to a key the server offers unilaterally.
+   `{invite_id, ed25519_pub, x25519_pub}` with their own key, and additionally computes
+   `invite_mac = HMAC-SHA256(k, that same signed payload)` using the `k` carried in the link's
+   fragment. `invite_mac` is submitted alongside the signature and stored (opaquely — the server
+   cannot derive `k` and never checks it) so step 3 can read it back.
+3. **Inviter completes.** Their client re-derives `k` from its own long-term seed and `invite_id`,
+   verifies `invite_mac` against the acceptance payload, and — only if that verifies — wraps the
+   group key to the X25519 key **that was signed in step 2** — never to a key the server offers
+   unilaterally.
 
-For the server to insert itself it would have to forge an Ed25519 signature, which it cannot.
+**Why step 2's signature alone is not enough, and what `invite_mac` actually closes.** Signing
+`{invite_id, ed25519_pub, x25519_pub}` proves those two public keys are mutually consistent — that
+whoever signed this payload controls the matching Ed25519 private key — but every value step 3
+checks it against (`ed25519_pub`, `x25519_pub`, and the signature itself) arrives in the **same**
+server response, which the server fully controls. A malicious or compromised server can mint its
+own fresh keypair, sign this payload itself, and serve that as if a real invitee had accepted; the
+signature verifies perfectly, because the forger did sign their own keys, and step 3 would wrap the
+real group key straight to the server's own key with no real invitee involved anywhere. Plain
+signature verification authenticates *a* keypair without binding it to *the link-holder specifically*
+— the same "authenticates a key-holder without binding which one" shape the single-use discussion
+below describes for a forwarded link, but here the attacker does not even need a forwarded link, just
+network position. `invite_mac` closes this because `k` is a secret the server never sees: a server
+that cannot compute `k` cannot produce a `invite_mac` that verifies, no matter what keypair it mints
+or signs with. This binds the acceptance to whoever holds the actual invite link, which is exactly
+the model the single-use rule already assumes but plain Ed25519 verification alone did not enforce.
+
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.
 
@@ -528,9 +554,14 @@ up in the group while the intended invitee, who was told acceptance succeeded, i
 keyed. A later acceptance therefore fails with an explicit "already accepted" error. Multi-use join
 links are a different object — they would need one row per acceptor — and are not this.
 
-**An invite can also be revoked**, by deleting the `INVITE#` row: before acceptance that is the only
-remedy for a link sent to the wrong address or known to have leaked, since the TTL is otherwise the
-only bound and acceptance replaces it with a completion deadline.
+**An invite can also be revoked**, via `DELETE /api/invites/:id` (inviter only), which deletes the
+`INVITE#` row and the inviter's own `SENT#` row: before acceptance that is the only remedy for a link
+sent to the wrong address or known to have leaked, since the TTL is otherwise the only bound and
+acceptance replaces it with a completion deadline. Conditional on `attribute_not_exists(invited_user_id)`
+on both rows — deleting them out from under an invitee who has already been told "you're in" (step 2
+succeeded; the group key arrives via step 3, not this write) would silently strand them with no
+membership and no remaining record anything was ever accepted, so revocation after acceptance is
+refused rather than allowed.
 
 *An invite has no invitee until step 2.* The step 1 payload deliberately contains no invitee
 identity — an invite is a link, handed to someone who may not have an account yet, and
@@ -561,9 +592,12 @@ storage problem with no other need driving it. Rather than carry a signed field 
 semantics, the field is removed from the step 1 payload entirely; the three payloads above already
 reflect this.
 
-Invite links carry the inviter's key fingerprint in the **URL fragment**, which browsers never
-transmit. An invitee's client can therefore verify the inviter's key against a value the server
-never saw.
+Invite links carry the inviter's key fingerprint AND the per-invite MAC key `k` in the **URL
+fragment** (`#<fingerprint>.<k>`, base64url), which browsers never transmit. An invitee's client can
+therefore verify the inviter's key against a value the server never saw, and `k` is what the
+inviter's own client later checks `invite_mac` against at step 3 — see this section's own three-step
+description above for why that check, not the Ed25519 signature alone, is what actually proves step
+2 was signed by the real link-holder.
 
 ### Visibility — private and public groups
 

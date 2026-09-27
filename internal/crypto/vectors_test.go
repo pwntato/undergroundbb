@@ -33,6 +33,7 @@ type vectorFile struct {
 	GroupName        []groupNameVector        `json:"group_name_aad"`
 	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
 	InviteAcceptance []inviteAcceptanceVector `json:"invite_acceptance"`
+	InviteMAC        []inviteMACVector        `json:"invite_mac"`
 }
 
 type kdfVector struct {
@@ -200,6 +201,20 @@ type inviteAcceptanceVector struct {
 	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
 	PayloadHex           string `json:"payload_hex"`
 	SignatureHex         string `json:"signature_hex"`
+}
+
+// inviteMACVector proves DeriveInviteMACKey/ComputeInviteMAC's exact
+// encoding (PR #146 round-1 review's blocking finding #1) -- see
+// crypto.DeriveInviteMACKey's own doc comment for the full reasoning.
+type inviteMACVector struct {
+	Name                 string `json:"name"`
+	InviterSeedHex       string `json:"inviter_seed_hex"`
+	InviteID             string `json:"invite_id"`
+	InvitedEd25519PubHex string `json:"invited_ed25519_pub_hex"`
+	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
+	MACKeyHex            string `json:"mac_key_hex"`
+	PayloadHex           string `json:"payload_hex"`
+	MACHex               string `json:"mac_hex"`
 }
 
 func loadVectors(t *testing.T) vectorFile {
@@ -783,6 +798,62 @@ func TestVectorInviteAcceptance(t *testing.T) {
 			}
 			if !Verify(pub, ContextInvite, wantPayload, wantSig) {
 				t.Fatal("Verify rejected the vector's own signature over InviteAcceptancePayload")
+			}
+		})
+	}
+}
+
+// TestVectorInviteMAC pins DeriveInviteMACKey/ComputeInviteMAC's exact
+// encoding -- PR #146 round-1 review's blocking finding #1, the per-invite
+// MAC that closes the gap plain signature verification leaves open (a
+// malicious server can mint its own keypair, self-sign, and pass that
+// check with no real invitee involved). This must be byte-identical in Go
+// and TypeScript before any real invite MAC exists under it, exactly like
+// every other signed/derived payload in this file.
+func TestVectorInviteMAC(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.InviteMAC) == 0 {
+		t.Fatal("expected at least 1 invite_mac vector")
+	}
+	for _, tc := range v.InviteMAC {
+		t.Run(tc.Name, func(t *testing.T) {
+			inviterSeed := mustHex(t, tc.InviterSeedHex)
+			invitedEd25519Pub := mustHex(t, tc.InvitedEd25519PubHex)
+			invitedX25519Pub := mustHex(t, tc.InvitedX25519PubHex)
+			wantMACKey := mustHex(t, tc.MACKeyHex)
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantMAC := mustHex(t, tc.MACHex)
+
+			gotMACKey, err := DeriveInviteMACKey(inviterSeed, tc.InviteID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotMACKey, wantMACKey) {
+				t.Fatalf("DeriveInviteMACKey = %x, want %x", gotMACKey, wantMACKey)
+			}
+
+			gotPayload := InviteAcceptancePayload(tc.InviteID, invitedEd25519Pub, invitedX25519Pub)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("InviteAcceptancePayload = %x, want %x", gotPayload, wantPayload)
+			}
+
+			gotMAC := ComputeInviteMAC(gotMACKey, gotPayload)
+			if !bytes.Equal(gotMAC, wantMAC) {
+				t.Fatalf("ComputeInviteMAC = %x, want %x", gotMAC, wantMAC)
+			}
+			if !VerifyInviteMAC(gotMACKey, gotPayload, wantMAC) {
+				t.Fatal("VerifyInviteMAC rejected the vector's own MAC")
+			}
+
+			// A MAC computed under a DIFFERENT invite id must not verify --
+			// proves the MAC is actually bound to this invite via HKDF's
+			// info parameter, not merely present.
+			wrongIDKey, err := DeriveInviteMACKey(inviterSeed, "a-different-invite-id")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if VerifyInviteMAC(wrongIDKey, gotPayload, wantMAC) {
+				t.Fatal("VerifyInviteMAC accepted a MAC key derived under a different invite id")
 			}
 		})
 	}

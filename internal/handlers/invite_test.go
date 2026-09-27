@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -9,10 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 func doJSON(t *testing.T, h *Handler, method, path string, cookie *http.Cookie, body any) *httptest.ResponseRecorder {
@@ -38,17 +45,34 @@ func doJSON(t *testing.T, h *Handler, method, path string, cookie *http.Cookie, 
 	return rec
 }
 
+// endOfUTCDayStr rounds t up to the end of its own UTC calendar day, exactly
+// "...T23:59:59Z" -- matching the client's own endOfUTCDay
+// (CreateInviteScreen.tsx) and createInvite's own new validation (see that
+// handler's own doc comment). Every test in this file that expects a
+// createInvite call to SUCCEED must build its ExpiresAt this way now --
+// signedCreateInviteRequest below does this automatically, so tests that
+// want to exercise a REJECTED shape (a non-day-end timestamp, a
+// millisecond-bearing one, an already-past one) build their own request
+// directly instead of going through this helper.
+func endOfUTCDayStr(t time.Time) string {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), u.Day(), 23, 59, 59, 0, time.UTC).Format(time.RFC3339)
+}
+
 // signedCreateInviteRequest builds a genuinely-signed createInviteRequest
 // for inviter, matching signedCreateGroupRequest's own reasoning: a real
 // Ed25519 signature over the real payload, so acceptInvite/createInvite's
-// crypto.Verify calls exercise real cryptography.
-func signedCreateInviteRequest(t *testing.T, inviter registeredUser, groupID string, expiresAt time.Time) createInviteRequest {
+// crypto.Verify calls exercise real cryptography. approxExpiresAt is rounded
+// to the end of its own UTC day (endOfUTCDayStr) before signing -- callers
+// pass roughly how far out they want the invite to expire, not the exact
+// wire string, matching how CreateInviteScreen.tsx's own EXPIRY_OPTIONS work.
+func signedCreateInviteRequest(t *testing.T, inviter registeredUser, groupID string, approxExpiresAt time.Time) createInviteRequest {
 	t.Helper()
 	inviteID, err := idgen.UUID()
 	if err != nil {
 		t.Fatalf("idgen.UUID: %v", err)
 	}
-	expiresAtStr := expiresAt.UTC().Format(time.RFC3339)
+	expiresAtStr := endOfUTCDayStr(approxExpiresAt)
 	payload := crypto.InviteCreationPayload(inviteID, groupID, inviter.signPub, expiresAtStr)
 	sig, err := crypto.Sign(inviter.signPriv, crypto.ContextInvite, payload)
 	if err != nil {
@@ -114,12 +138,43 @@ func TestCreateInviteRequiresAdminOrAmbassador(t *testing.T) {
 	}
 }
 
+// signedCreateInviteRequestExact builds a genuinely-signed
+// createInviteRequest for an EXACT wire expiresAt string, bypassing
+// signedCreateInviteRequest's own automatic end-of-UTC-day rounding --
+// used by tests that need a specific, deliberately non-default shape (an
+// out-of-bounds TTL that still passes the day-end check, a malformed
+// string, an already-past timestamp).
+func signedCreateInviteRequestExact(t *testing.T, inviter registeredUser, groupID, expiresAtStr string) createInviteRequest {
+	t.Helper()
+	inviteID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	payload := crypto.InviteCreationPayload(inviteID, groupID, inviter.signPub, expiresAtStr)
+	sig, err := crypto.Sign(inviter.signPriv, crypto.ContextInvite, payload)
+	if err != nil {
+		t.Fatalf("sign invite creation: %v", err)
+	}
+	return createInviteRequest{
+		InviteID:          inviteID,
+		ExpiresAt:         expiresAtStr,
+		CreationSignature: base64.StdEncoding.EncodeToString(sig),
+	}
+}
+
 func TestCreateInviteRejectsExpiryOutOfBounds(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	creator, creatorCookie := loggedInUser(t, h)
 	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
 
-	tooSoon := signedCreateInviteRequest(t, creator, groupID, time.Now().Add(1*time.Minute))
+	// A day-end timestamp that is not really "1 minute from now" (the
+	// day-end format cannot express that literally), but is guaranteed to
+	// fall under minInviteTTL: the day-end of a date already in the past.
+	// This exercises the SAME check TestCreateInviteRejectsNonDayEndExpiresAt
+	// does not (that test's rejection fires on the day-end suffix check,
+	// before ttl := time.Until(expiresAt) is even reached) -- a string that
+	// DOES pass the day-end shape check but still fails the TTL floor.
+	tooSoon := signedCreateInviteRequestExact(t, creator, groupID, endOfUTCDayStr(time.Now().Add(-48*time.Hour)))
 	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+groupID+"/invites", creatorCookie, tooSoon)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("too-soon expiry: status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -207,7 +262,13 @@ func TestGetInviteNotFound(t *testing.T) {
 }
 
 // signedAcceptInviteRequest builds a genuinely-signed acceptInviteRequest
-// for invitee, matching the real step-2 payload shape.
+// for invitee, matching the real step-2 payload shape. inviteMAC is
+// computed under a fixed test macKey -- this handler package cannot verify
+// it (it never has k, crypto.DeriveInviteMACKey's own doc comment), only
+// decode and length-check it, so any well-formed 32-byte value exercises
+// every path this package's own tests care about; the real derivation
+// end-to-end is covered by web/src/lib/crypto/credential-material.test.ts
+// instead.
 func signedAcceptInviteRequest(t *testing.T, invitee registeredUser, inviteID string) acceptInviteRequest {
 	t.Helper()
 	payload := crypto.InviteAcceptancePayload(inviteID, invitee.signPub, invitee.wrapPub)
@@ -215,7 +276,12 @@ func signedAcceptInviteRequest(t *testing.T, invitee registeredUser, inviteID st
 	if err != nil {
 		t.Fatalf("sign invite acceptance: %v", err)
 	}
-	return acceptInviteRequest{AcceptanceSignature: base64.StdEncoding.EncodeToString(sig)}
+	testMACKey := bytes.Repeat([]byte{0x42}, 32)
+	mac := crypto.ComputeInviteMAC(testMACKey, payload)
+	return acceptInviteRequest{
+		AcceptanceSignature: base64.StdEncoding.EncodeToString(sig),
+		InviteMAC:           base64.StdEncoding.EncodeToString(mac),
+	}
 }
 
 func TestAcceptInviteSuccess(t *testing.T) {
@@ -242,24 +308,20 @@ func TestAcceptInviteSuccess(t *testing.T) {
 	}
 }
 
-// TestAcceptInviteWithMillisecondPrecisionExpiresAtSucceeds is a live
-// regression test for a real bug caught in manual browser verification
-// (not by any earlier unit test, all of which built expiresAtStr via Go's
-// time.RFC3339 -- which has no fractional-seconds directive and so never
-// produces a millisecond-bearing string in the first place, unlike a real
-// browser's `new Date(...).toISOString()`, which always does).
-//
-// The bug: db.CreateInvite used to derive the STORED models.Invite.ExpiresAt
-// by reformatting the parsed time.Time via .Format(time.RFC3339), which
-// silently drops sub-second precision -- producing a stored string that
-// DIFFERED from the exact bytes crypto.InviteCreationPayload actually
-// signed whenever the client's original expiresAt carried milliseconds.
-// acceptInvite's later re-verification of CreationSignature against the
-// stored (reformatted) ExpiresAt then failed for every such invite, with a
-// 400 masquerading as "this invite cannot be trusted." Fixed by storing
-// ExpiresAt verbatim (CreateInviteInput.ExpiresAt) rather than re-deriving
-// it from a parsed time.Time.
-func TestAcceptInviteWithMillisecondPrecisionExpiresAtSucceeds(t *testing.T) {
+// TestCreateInviteRejectsMillisecondPrecisionExpiresAt pins PR #146 round-1
+// review's fix for the finding TestAcceptInviteWithMillisecondPrecisionExpiresAtSucceeds
+// used to regression-test in the OPPOSITE direction (accepting a
+// millisecond-bearing expiresAt, because storing it verbatim rather than
+// reformatting it was the only fix that PR shipped). This test replaces
+// that one: createInviteRequest.ExpiresAt must now be REJECTED outright
+// unless it is exactly "...T23:59:59Z" -- see createInvite's own doc
+// comment for why. A millisecond-bearing string like a real
+// `new Date(...).toISOString()` produces (".123Z", not exactly "T23:59:59Z")
+// is exactly the shape this now refuses, which also makes the original
+// verbatim-string/reformatting bug structurally impossible: a value that
+// can never carry milliseconds in the first place cannot suffer from a
+// reformatting that silently drops them.
+func TestCreateInviteRejectsMillisecondPrecisionExpiresAt(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	creator, creatorCookie := loggedInUser(t, h)
 	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
@@ -270,8 +332,8 @@ func TestAcceptInviteWithMillisecondPrecisionExpiresAtSucceeds(t *testing.T) {
 	}
 	// .123Z: milliseconds present, exactly like a real
 	// `new Date(...).toISOString()` -- time.RFC3339 alone never produces
-	// this, which is why every other test in this file accidentally
-	// avoided the bug shape.
+	// this, which is why every other test in this file uses a plain
+	// RFC3339 string instead.
 	expiresAtStr := time.Now().Add(24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
 	payload := crypto.InviteCreationPayload(inviteID, groupID, creator.signPub, expiresAtStr)
 	sig, err := crypto.Sign(creator.signPriv, crypto.ContextInvite, payload)
@@ -284,28 +346,31 @@ func TestAcceptInviteWithMillisecondPrecisionExpiresAtSucceeds(t *testing.T) {
 		CreationSignature: base64.StdEncoding.EncodeToString(sig),
 	}
 	createRec := doJSON(t, h, http.MethodPost, "/api/groups/"+groupID+"/invites", creatorCookie, req)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, want %d, body: %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	if createRec.Code != http.StatusBadRequest {
+		t.Fatalf("create status = %d, want %d, body: %s", createRec.Code, http.StatusBadRequest, createRec.Body.String())
 	}
+}
 
-	// The critical assertion: GET must return the EXACT string that was
-	// signed, byte-for-byte -- not a reformatted one.
-	getRec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
-	var getResp getInviteResponse
-	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
-		t.Fatalf("decoding get response: %v", err)
-	}
-	if getResp.ExpiresAt != expiresAtStr {
-		t.Fatalf("stored ExpiresAt = %q, want the exact signed string %q", getResp.ExpiresAt, expiresAtStr)
-	}
+// TestCreateInviteRejectsNonDayEndExpiresAt pins the other half of the same
+// check: a well-formed, millisecond-free RFC 3339 timestamp that simply
+// isn't the end of a UTC day (e.g. a plain "N hours from now") must also be
+// rejected, not just a millisecond-bearing one. Built via
+// signedCreateInviteRequestExact, not signedCreateInviteRequest -- that
+// helper's own automatic end-of-UTC-day rounding would make it impossible
+// to construct the very shape this test exists to reject.
+func TestCreateInviteRejectsNonDayEndExpiresAt(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
 
-	// The actual end-to-end proof: acceptInvite re-verifies
-	// CreationSignature against the STORED ExpiresAt -- if storage had
-	// reformatted it, this would fail with 400, not succeed.
-	invitee, inviteeCookie := loggedInUser(t, h)
-	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
-	if acceptRec.Code != http.StatusOK {
-		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	// Noon UTC, not 23:59:59 -- deliberately not a boundary time, so this
+	// can never accidentally coincide with a real day-end string.
+	future := time.Now().UTC().Add(24 * time.Hour)
+	nonDayEnd := time.Date(future.Year(), future.Month(), future.Day(), 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	req := signedCreateInviteRequestExact(t, creator, groupID, nonDayEnd)
+	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+groupID+"/invites", creatorCookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
@@ -476,5 +541,356 @@ func TestCompleteInviteRejectsNonInviter(t *testing.T) {
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", inviteeCookie, completeReq)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+// TestAcceptInviteStoresAndServesInviteMAC pins that AcceptInviteRequest's
+// InviteMAC round-trips, byte-for-byte, all the way to
+// pendingInviteCompletions -- this handler package cannot verify it (it
+// never has k), but it must still carry it faithfully, since the inviter's
+// own client is what actually checks it at step 3.
+func TestAcceptInviteStoresAndServesInviteMAC(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptReq := signedAcceptInviteRequest(t, invitee, inviteID)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, acceptReq)
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	}
+
+	pendingRec := doJSON(t, h, http.MethodGet, "/api/invites/pending-completions", creatorCookie, nil)
+	if pendingRec.Code != http.StatusOK {
+		t.Fatalf("pending status = %d, want %d, body: %s", pendingRec.Code, http.StatusOK, pendingRec.Body.String())
+	}
+	var pendingResp pendingInviteCompletionsResponse
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decoding pending response: %v", err)
+	}
+	if len(pendingResp.Invites) != 1 {
+		t.Fatalf("pending invites = %d, want 1", len(pendingResp.Invites))
+	}
+	if pendingResp.Invites[0].InviteMAC != acceptReq.InviteMAC {
+		t.Errorf("served InviteMAC = %q, want the exact value accepted = %q", pendingResp.Invites[0].InviteMAC, acceptReq.InviteMAC)
+	}
+}
+
+// TestAcceptInviteRejectsMalformedInviteMAC pins that a wrong-length
+// inviteMAC is rejected before ever reaching db.AcceptInvite -- HMAC-SHA256
+// is always exactly 32 bytes, and decodeBase64Field's own wantLen check is
+// what enforces that here.
+func TestAcceptInviteRejectsMalformedInviteMAC(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	req := signedAcceptInviteRequest(t, invitee, inviteID)
+	req.InviteMAC = base64.StdEncoding.EncodeToString([]byte("too-short"))
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestAcceptInviteRejectsExistingMember pins non-blocking review finding
+// #4/#5 (round 1): a caller who already holds a membership in the invite's
+// own group -- including the inviter accepting their own link -- must be
+// rejected with 409 already_member, rather than silently "using up" an
+// invite meant for someone else. Without this check, AcceptInvite's own
+// single-use condition (attribute_not_exists on InvitedUserID) still lets
+// it through.
+func TestAcceptInviteRejectsExistingMember(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	// The inviter -- already an Admin member of this group -- tries to
+	// accept their own invite link.
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", creatorCookie, signedAcceptInviteRequest(t, creator, inviteID))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var errResp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decoding error response: %v", err)
+	}
+	if errResp.Code != "already_member" {
+		t.Errorf("error code = %q, want %q", errResp.Code, "already_member")
+	}
+
+	// The invite must still be usable by someone who is NOT already a
+	// member -- this check must not have consumed it.
+	invitee, inviteeCookie := loggedInUser(t, h)
+	rec = doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("real invitee's accept status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+// setMembershipRole directly overwrites a GROUP#<gid>/MEMBER#<uid> item's
+// Role -- there is no demote/remove endpoint yet (#36/#37, next in M4), so
+// a role change between accept and complete can only be simulated by
+// writing the row directly, bypassing every application-level path, the
+// same escape-hatch reasoning rawDDB's own doc comment gives.
+func setMembershipRole(t *testing.T, groupID, userID, role string) {
+	t.Helper()
+	ddb := rawDDB(t)
+	_, err := ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+		UpdateExpression:         aws.String("SET #R = :role"),
+		ExpressionAttributeNames: map[string]string{"#R": "Role"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":role": &types.AttributeValueMemberS{Value: role},
+		},
+	})
+	if err != nil {
+		t.Fatalf("setMembershipRole UpdateItem: %v", err)
+	}
+}
+
+// TestCompleteInviteRejectsDemotedInviter pins blocking review finding #3
+// (round 1): completeInvite must re-check the caller's CURRENT role, not
+// just that a SENT# row exists (granted up to 30 days earlier). Simulates
+// the inviter being demoted to a plain Member between accept and complete
+// -- the only way to produce that state today, since #36/#37 (demote/
+// remove) have not shipped yet.
+func TestCompleteInviteRejectsDemotedInviter(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	}
+
+	// The inviter loses Admin between acceptance and completion.
+	setMembershipRole(t, groupID, creator.userID, "member")
+
+	completeReq := completeInviteRequest{
+		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		Generation:      0,
+	}
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+
+	// The pending completion must still be there -- a rejected attempt
+	// must not have silently consumed it.
+	pendingRec := doJSON(t, h, http.MethodGet, "/api/invites/pending-completions", creatorCookie, nil)
+	var pendingResp pendingInviteCompletionsResponse
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decoding pending response: %v", err)
+	}
+	if len(pendingResp.Invites) != 1 {
+		t.Errorf("pending invites after rejected complete = %d, want 1 (must not be consumed)", len(pendingResp.Invites))
+	}
+}
+
+// TestCompleteInviteRejectsGenerationMismatch pins non-blocking review
+// finding #6: req.Generation must match the inviter's own current
+// generation, not be taken purely on the client's word.
+func TestCompleteInviteRejectsGenerationMismatch(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	}
+
+	completeReq := completeInviteRequest{
+		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		Generation:      1, // the inviter's own real generation is 0
+	}
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCompleteInviteAlreadyMemberCleansUpInviteRows pins non-blocking
+// review finding #4: an already_member conflict at complete time must not
+// leave a zombie invite behind. Simulates the invitee joining the same
+// group some other way between acceptance and completion by completing
+// the SAME invite twice with two different "inviter" sessions is not
+// possible (completeInvite is scoped to the caller's own pending
+// completions) -- instead, this drives db.CompleteInvite's own
+// ErrAlreadyMember path directly by pre-creating the invitee's membership
+// before ever calling complete.
+func TestCompleteInviteAlreadyMemberCleansUpInviteRows(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	}
+
+	// The invitee becomes a member of this same group some other way
+	// (simulated directly -- no such alternate path exists yet) before the
+	// inviter's own client ever completes this invite.
+	membership := models.Membership{
+		Record: models.Record{
+			PK:     "GROUP#" + groupID,
+			SK:     "MEMBER#" + invitee.userID,
+			Type:   "Membership",
+			GSI1PK: "USER#" + invitee.userID,
+			GSI1SK: "GROUP#" + groupID,
+		},
+		Role:       models.RoleMember,
+		Generation: 0,
+	}
+	av, err := attributevalue.MarshalMap(membership)
+	if err != nil {
+		t.Fatalf("MarshalMap membership: %v", err)
+	}
+	ddb := rawDDB(t)
+	if _, err := ddb.PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(testTableName()),
+		Item:      av,
+	}); err != nil {
+		t.Fatalf("PutItem membership: %v", err)
+	}
+
+	completeReq := completeInviteRequest{
+		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		Generation:      0,
+	}
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	// The zombie-invite fix: pending-completions must no longer return
+	// this invite -- CleanupAlreadyMemberInvite must have deleted both
+	// rows, rather than leaving them to keep reappearing on every future
+	// login until the 7-day deadline TTL eventually sweeps them.
+	pendingRec := doJSON(t, h, http.MethodGet, "/api/invites/pending-completions", creatorCookie, nil)
+	var pendingResp pendingInviteCompletionsResponse
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decoding pending response: %v", err)
+	}
+	if len(pendingResp.Invites) != 0 {
+		t.Errorf("pending invites after already_member cleanup = %d, want 0", len(pendingResp.Invites))
+	}
+}
+
+// TestRevokeInviteSuccess pins docs/DESIGN.md's revocation remedy: the
+// inviter can DELETE an invite before acceptance, and it is genuinely gone
+// afterward -- GET returns 404 and it no longer shows up anywhere.
+func TestRevokeInviteSuccess(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	rec := doJSON(t, h, http.MethodDelete, "/api/invites/"+inviteID, creatorCookie, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	getRec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("get after revoke: status = %d, want %d, body: %s", getRec.Code, http.StatusNotFound, getRec.Body.String())
+	}
+
+	// The invite must also no longer be acceptable.
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if acceptRec.Code != http.StatusNotFound {
+		t.Fatalf("accept after revoke: status = %d, want %d, body: %s", acceptRec.Code, http.StatusNotFound, acceptRec.Body.String())
+	}
+}
+
+// TestRevokeInviteRejectsNonInviter pins that only the actual inviter can
+// revoke -- a third party (even a fellow admin of the same group) gets the
+// same 404 a nonexistent invite would, never a confirmation that this
+// invite exists but isn't theirs.
+func TestRevokeInviteRejectsNonInviter(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	_, outsiderCookie := loggedInUser(t, h)
+	rec := doJSON(t, h, http.MethodDelete, "/api/invites/"+inviteID, outsiderCookie, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+
+	// The invite must be untouched -- still fetchable and acceptable.
+	getRec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get after rejected revoke: status = %d, want %d, body: %s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+}
+
+// TestRevokeInviteRejectsAfterAcceptance pins that revocation is
+// pre-acceptance only -- docs/DESIGN.md: deleting the rows out from under
+// an invitee who was already told "you're in" would silently strand them.
+func TestRevokeInviteRejectsAfterAcceptance(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	acceptRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want %d, body: %s", acceptRec.Code, http.StatusOK, acceptRec.Body.String())
+	}
+
+	rec := doJSON(t, h, http.MethodDelete, "/api/invites/"+inviteID, creatorCookie, nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	// The pending completion must still be there -- the rejected revoke
+	// must not have touched either row.
+	pendingRec := doJSON(t, h, http.MethodGet, "/api/invites/pending-completions", creatorCookie, nil)
+	var pendingResp pendingInviteCompletionsResponse
+	if err := json.Unmarshal(pendingRec.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decoding pending response: %v", err)
+	}
+	if len(pendingResp.Invites) != 1 {
+		t.Errorf("pending invites after rejected revoke = %d, want 1", len(pendingResp.Invites))
+	}
+}
+
+// TestRevokeInviteRequiresSession pins that DELETE /api/invites/{id} is
+// authenticated -- an invite is otherwise a bearer token anyone holding the
+// link can act on for GET, but revocation is inviter-only and therefore
+// requires a real session.
+func TestRevokeInviteRequiresSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	rec := doJSON(t, h, http.MethodDelete, "/api/invites/"+inviteID, nil, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }

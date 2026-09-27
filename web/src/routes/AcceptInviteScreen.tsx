@@ -85,12 +85,40 @@ function acceptErrorMessageFor(kind: AcceptInviteErrorKind, error: unknown): str
   }
 }
 
+/**
+ * Splits the invite link's URL fragment into its two "." separated parts
+ * -- see CreateInviteScreen.tsx's own doc comment on InviteCreatedStep for
+ * the format this must match exactly. Returns both as undefined for a
+ * link shared without a fragment at all (an older link format, or a copy
+ * that dropped it) -- distinct from a fragment that has a fingerprint but
+ * no macKey (malformed, treated the same as absent: there is no partial
+ * fragment this app has ever produced).
+ */
+function parseInviteFragment(hash: string): {
+  fingerprint: string | undefined
+  macKey: string | undefined
+} {
+  if (hash.length <= 1) {
+    return { fingerprint: undefined, macKey: undefined }
+  }
+  const [fingerprint, macKey] = hash.slice(1).split('.')
+  if (fingerprint === undefined || macKey === undefined || macKey === '') {
+    return { fingerprint: undefined, macKey: undefined }
+  }
+  return { fingerprint, macKey }
+}
+
 type LoadState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'invalid'; readonly reason: InviteVerificationFailure }
   | { readonly kind: 'notFound' }
   | { readonly kind: 'networkError' }
-  | { readonly kind: 'ready'; readonly invite: GetInviteResponse; readonly fingerprint: string }
+  | {
+      readonly kind: 'ready'
+      readonly invite: GetInviteResponse
+      readonly fingerprint: string
+      readonly macKey: string | undefined
+    }
 
 export function AcceptInviteScreen() {
   const { inviteId } = useParams<{ inviteId: string }>()
@@ -106,9 +134,13 @@ export function AcceptInviteScreen() {
     }
     // The fragment is never sent to any server -- window.location.hash is
     // read directly, client-side only, per docs/DESIGN.md's own reasoning
-    // for why the fingerprint travels this way at all.
-    const fragmentFingerprint =
-      window.location.hash.length > 1 ? window.location.hash.slice(1) : undefined
+    // for why the fingerprint (and, now, the invite MAC key) travels this
+    // way at all. Format is "<fingerprint>.<inviteMACKey>" -- see
+    // CreateInviteScreen.tsx's own doc comment on InviteCreatedStep for why
+    // "." is a safe separator between the two alphabets.
+    const { fingerprint: fragmentFingerprint, macKey: fragmentMACKey } = parseInviteFragment(
+      window.location.hash,
+    )
 
     let cancelled = false
     void (async () => {
@@ -122,7 +154,12 @@ export function AcceptInviteScreen() {
           setState({ kind: 'invalid', reason: verification.reason })
           return
         }
-        setState({ kind: 'ready', invite, fingerprint: fragmentFingerprint ?? '' })
+        setState({
+          kind: 'ready',
+          invite,
+          fingerprint: fragmentFingerprint ?? '',
+          macKey: fragmentMACKey,
+        })
       } catch (err) {
         if (cancelled) {
           return
@@ -190,11 +227,27 @@ export function AcceptInviteScreen() {
     if (session.userId === null) {
       return
     }
+    if (state.macKey === undefined) {
+      // No fragment (or a malformed one) -- see parseInviteFragment's own
+      // doc comment. Refusing here, rather than silently accepting
+      // without a MAC, is deliberate: an accept with no inviteMACKey would
+      // leave step 3 with nothing to verify the response against, which is
+      // exactly the gap deriveInviteMACKey's own doc comment describes.
+      setAcceptError(
+        "This invite link is missing part of its address (the part after '#'). Ask the person who invited you to resend the full link.",
+      )
+      return
+    }
     const userId = session.userId
+    const macKey = state.macKey
     setAcceptError(null)
     setAccepting(true)
     void (async () => {
-      const result = await runAcceptInvite({ signInviteAcceptance, acceptInvite, userId }, inviteId)
+      const result = await runAcceptInvite(
+        { signInviteAcceptance, acceptInvite, userId },
+        inviteId,
+        macKey,
+      )
       setAccepting(false)
       if (!result.ok) {
         setAcceptError(acceptErrorMessageFor(result.kind, result.error))

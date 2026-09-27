@@ -40,6 +40,7 @@ export interface CompleteInvitesDeps {
   readonly getOwnMembership: (groupId: string) => Promise<OwnMembershipForCompletion | null>
   readonly completeInviteCrypto: (req: {
     readonly userId: string
+    readonly inviteId: string
     readonly groupId: string
     readonly ownWrappedGroupKey: {
       readonly ephemeralPub: string
@@ -48,7 +49,9 @@ export interface CompleteInvitesDeps {
     }
     readonly ownGeneration: number
     readonly invitedUserId: string
+    readonly invitedEd25519PublicKey: string
     readonly invitedX25519PublicKey: string
+    readonly inviteMAC: string
   }) => Promise<CompleteInviteResult>
   readonly completeInvite: (
     inviteId: string,
@@ -149,13 +152,22 @@ async function completeOne(
       return { inviteId: invite.inviteId, ok: false, reason: 'no longer a member of this group' }
     }
 
+    // inviteMAC is re-verified inside completeInviteCrypto itself, not
+    // here -- it needs the inviter's own long-term signing seed
+    // (deriveInviteMACKey), which lives only inside the worker's liveKeys
+    // cache and can never cross this postMessage boundary, unlike
+    // acceptanceSignature's plain-public-key verification above. See
+    // credential-material.ts's completeInvite for what this closes.
     const wrapped = await deps.completeInviteCrypto({
       userId: deps.userId,
+      inviteId: invite.inviteId,
       groupId: invite.groupId,
       ownWrappedGroupKey: membership.wrappedGroupKey,
       ownGeneration: membership.generation,
       invitedUserId: invite.invitedUserId,
+      invitedEd25519PublicKey: invite.invitedEd25519PublicKey,
       invitedX25519PublicKey: invite.invitedX25519PublicKey,
+      inviteMAC: invite.inviteMAC,
     })
 
     await deps.completeInvite(invite.inviteId, {
@@ -167,7 +179,12 @@ async function completeOne(
     // ApiError(409, 'already_member') and a plain "already completed" 200
     // (server-side idempotency for two racing tabs/devices) both count as
     // success from this caller's perspective -- the membership this call
-    // would have produced already exists either way.
+    // would have produced already exists either way. The server's own
+    // completeInvite handler now runs a cleanup transaction before ever
+    // returning this 409 (db.CleanupAlreadyMemberInvite), so this invite's
+    // two rows are already gone by the time this branch runs -- this is
+    // no longer a zombie invite that would keep reappearing from
+    // pending-completions on every future login.
     if (err instanceof ApiError && err.code === 'already_member') {
       return { inviteId: invite.inviteId, ok: true }
     }

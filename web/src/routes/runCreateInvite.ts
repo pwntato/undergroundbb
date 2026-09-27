@@ -22,6 +22,8 @@ export type CreateInviteResult =
       readonly response: CreateInviteResponse
       /** The inviter's own fingerprint -- see signInviteCreation's own doc comment for why this is shown at exactly this moment. */
       readonly inviterFingerprint: string
+      /** The per-invite MAC key, embedded in the link's fragment alongside inviterFingerprint -- see deriveInviteMACKey's own doc comment. */
+      readonly inviteMACKey: string
     }
   | { readonly ok: false; readonly kind: CreateInviteErrorKind; readonly error: unknown }
 
@@ -89,7 +91,12 @@ export async function runCreateInvite(
       expiresAt,
       creationSignature: signed.creationSignature,
     })
-    return { ok: true, response, inviterFingerprint: signed.inviterFingerprint }
+    return {
+      ok: true,
+      response,
+      inviterFingerprint: signed.inviterFingerprint,
+      inviteMACKey: signed.inviteMACKey,
+    }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       return { ok: false, kind: 'authRequired', error: err }

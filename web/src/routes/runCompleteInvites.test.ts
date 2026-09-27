@@ -34,6 +34,14 @@ function realPendingInvite(): PendingInviteCompletion {
     invitedEd25519PublicKey: toBase64(key.publicKey),
     invitedX25519PublicKey: toBase64(x25519Pub),
     acceptanceSignature: toBase64(signature),
+    // completeInviteCrypto (stubbed below) is what actually checks this in
+    // production -- this test suite is only exercising
+    // runCompleteInvites.ts's OWN orchestration (the Ed25519 re-verify,
+    // the getOwnMembership/completeInviteCrypto/completeInvite call
+    // sequence), so a fixed placeholder is enough everywhere except
+    // credential-material.test.ts, which is where inviteMAC's real
+    // verification is actually exercised.
+    inviteMAC: toBase64(new Uint8Array(32).fill(1)),
   }
 }
 
@@ -63,11 +71,14 @@ describe('runCompleteInvites', () => {
     expect(deps.getOwnMembership).toHaveBeenCalledWith(GROUP_ID)
     expect(deps.completeInviteCrypto).toHaveBeenCalledWith({
       userId: USER_ID,
+      inviteId: INVITE_ID,
       groupId: GROUP_ID,
       ownWrappedGroupKey: WRAPPED_KEY,
       ownGeneration: 0,
       invitedUserId: INVITED_USER_ID,
+      invitedEd25519PublicKey: expect.any(String),
       invitedX25519PublicKey: expect.any(String),
+      inviteMAC: expect.any(String),
     })
     expect(deps.completeInvite).toHaveBeenCalledWith(INVITE_ID, {
       wrappedGroupKey: WRAPPED_KEY,

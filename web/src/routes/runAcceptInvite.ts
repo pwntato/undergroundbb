@@ -128,6 +128,7 @@ export interface RunAcceptInviteDeps {
   readonly signInviteAcceptance: (req: {
     readonly userId: string
     readonly inviteId: string
+    readonly inviteMACKey: string
   }) => Promise<SignInviteAcceptanceResult>
   readonly acceptInvite: (
     inviteId: string,
@@ -151,10 +152,11 @@ export interface RunAcceptInviteDeps {
 export async function runAcceptInvite(
   deps: RunAcceptInviteDeps,
   inviteId: string,
+  inviteMACKey: string,
 ): Promise<RunAcceptInviteResult> {
   let signed: SignInviteAcceptanceResult
   try {
-    signed = await deps.signInviteAcceptance({ userId: deps.userId, inviteId })
+    signed = await deps.signInviteAcceptance({ userId: deps.userId, inviteId, inviteMACKey })
   } catch (err) {
     return { ok: false, kind: 'definitelyUncommitted', error: err }
   }
@@ -162,6 +164,7 @@ export async function runAcceptInvite(
   try {
     const response = await deps.acceptInvite(inviteId, {
       acceptanceSignature: signed.acceptanceSignature,
+      inviteMAC: signed.inviteMAC,
     })
     return { ok: true, response }
   } catch (err) {

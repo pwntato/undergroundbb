@@ -93,11 +93,18 @@ export function LoginScreen() {
         // comment). A failure here (network, one invite's signature not
         // verifying, etc.) is swallowed by runCompleteInvites itself and
         // simply leaves that invite pending for the next login.
+        // Fetched once and reused across every pending invite's own
+        // getOwnMembership call below, rather than each one re-calling
+        // listGroups() itself -- with N pending invites that was N
+        // redundant round trips for a list that does not change between
+        // them within this same runCompleteInvites call.
+        let ownGroupsPromise: ReturnType<typeof listGroups> | undefined
         void runCompleteInvites({
           userId: result.userId,
           pendingInviteCompletions,
           getOwnMembership: async (groupId) => {
-            const { groups } = await listGroups()
+            ownGroupsPromise ??= listGroups()
+            const { groups } = await ownGroupsPromise
             const entry = groups.find((g) => g.groupId === groupId)
             if (entry === undefined || entry.wrappedGroupKey === undefined) {
               return null

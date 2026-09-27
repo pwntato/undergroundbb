@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/pwntato/undergroundbb/internal/models"
 )
@@ -142,6 +143,7 @@ func testAcceptInviteInput(inviteID, invitedUserID string) AcceptInviteInput {
 		InvitedEd25519PublicKey: make([]byte, 32),
 		InvitedX25519PublicKey:  make([]byte, 32),
 		AcceptanceSignature:     []byte("acceptance-signature"),
+		InviteMAC:               []byte("invite-mac-32-bytes-of-filler!!"),
 	}
 }
 
@@ -465,5 +467,192 @@ func TestCompleteInviteAlreadyMemberFails(t *testing.T) {
 	err = c.CompleteInvite(ctx, completeIn)
 	if !errors.Is(err, ErrAlreadyMember) {
 		t.Fatalf("CompleteInvite with a pre-existing membership: err = %v, want ErrAlreadyMember", err)
+	}
+}
+
+// TestCleanupAlreadyMemberInviteDeletesBothRows pins non-blocking review
+// finding #4 (round 1): the follow-up cleanup CompleteInvite's own caller
+// runs after ErrAlreadyMember must actually delete both invite rows, so a
+// pending invite that can never be completed does not linger until the
+// 7-day deadline TTL eventually sweeps it.
+func TestCleanupAlreadyMemberInviteDeletesBothRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, expiresAt)); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+
+	if err := c.CleanupAlreadyMemberInvite(ctx, inviteID, inviterUserID); err != nil {
+		t.Fatalf("CleanupAlreadyMemberInvite: %v", err)
+	}
+
+	metaOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "INVITE#"+inviteID, "META"))
+	if err != nil {
+		t.Fatalf("GetItem META: %v", err)
+	}
+	if metaOut.Item != nil {
+		t.Error("INVITE# META item still exists after CleanupAlreadyMemberInvite, want deleted")
+	}
+	sentOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+inviterUserID, "SENT#"+inviteID))
+	if err != nil {
+		t.Fatalf("GetItem SENT#: %v", err)
+	}
+	if sentOut.Item != nil {
+		t.Error("SENT# item still exists after CleanupAlreadyMemberInvite, want deleted")
+	}
+
+	// A second cleanup attempt on the same, now-gone invite must fail
+	// loudly, not silently succeed a second time.
+	err = c.CleanupAlreadyMemberInvite(ctx, inviteID, inviterUserID)
+	if !errors.Is(err, ErrInviteAlreadyCompleted) {
+		t.Fatalf("second CleanupAlreadyMemberInvite: err = %v, want ErrInviteAlreadyCompleted", err)
+	}
+}
+
+// TestRevokeInviteDeletesBothRows pins docs/DESIGN.md's revocation remedy
+// at the db layer: before acceptance, RevokeInvite deletes both rows.
+func TestRevokeInviteDeletesBothRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, expiresAt)); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+
+	if err := c.RevokeInvite(ctx, inviteID, inviterUserID); err != nil {
+		t.Fatalf("RevokeInvite: %v", err)
+	}
+
+	invite, err := c.GetInvite(ctx, inviteID)
+	if err != nil {
+		t.Fatalf("GetInvite: %v", err)
+	}
+	if invite != nil {
+		t.Error("GetInvite after RevokeInvite returned a row, want nil")
+	}
+	sentOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+inviterUserID, "SENT#"+inviteID))
+	if err != nil {
+		t.Fatalf("GetItem SENT#: %v", err)
+	}
+	if sentOut.Item != nil {
+		t.Error("SENT# item still exists after RevokeInvite, want deleted")
+	}
+}
+
+// TestRevokeInviteAfterAcceptanceFails pins that revocation is
+// pre-acceptance only -- RevokeInvite's own ConditionExpression includes
+// attribute_not_exists(InvitedUserID), so an accepted invite's rows must
+// be left untouched.
+func TestRevokeInviteAfterAcceptanceFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, expiresAt)); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+
+	err := c.RevokeInvite(ctx, inviteID, inviterUserID)
+	if !errors.Is(err, ErrInviteAlreadyAcceptedForRevoke) {
+		t.Fatalf("RevokeInvite after acceptance: err = %v, want ErrInviteAlreadyAcceptedForRevoke", err)
+	}
+
+	// Both rows must be untouched.
+	invite, err := c.GetInvite(ctx, inviteID)
+	if err != nil {
+		t.Fatalf("GetInvite: %v", err)
+	}
+	if invite == nil {
+		t.Fatal("GetInvite after a rejected RevokeInvite returned nil, want the row still present")
+	}
+	if invite.InvitedUserID != invitedUserID {
+		t.Errorf("invite.InvitedUserID = %q, want %q (untouched)", invite.InvitedUserID, invitedUserID)
+	}
+}
+
+// TestRevokeInviteMissingFails pins that revoking a never-created (or
+// already-swept/already-revoked) invite id fails rather than silently
+// succeeding.
+func TestRevokeInviteMissingFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	err := c.RevokeInvite(ctx, "nonexistent-invite-"+randomSuffix(t), "some-inviter-"+randomSuffix(t))
+	if !errors.Is(err, ErrInviteAlreadyAcceptedForRevoke) {
+		t.Fatalf("RevokeInvite on a missing invite: err = %v, want ErrInviteAlreadyAcceptedForRevoke", err)
+	}
+}
+
+// TestAcceptInviteMissingSentRowFails pins non-blocking review finding #5:
+// the SENT# update's own ConditionExpression (attribute_exists(PK)) must
+// refuse to upsert a fresh row into the inviter's own partition when that
+// row is somehow already missing at accept time (e.g. a future revocation
+// path that only deleted the SENT# half, or the two rows falling out of
+// sync some other way) -- simulated here by deleting the SENT# row
+// directly after CreateInvite, before ever calling AcceptInvite.
+func TestAcceptInviteMissingSentRowFails(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, expiresAt)); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+
+	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
+			"SK": &types.AttributeValueMemberS{Value: "SENT#" + inviteID},
+		},
+	}); err != nil {
+		t.Fatalf("DeleteItem SENT#: %v", err)
+	}
+
+	err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID))
+	if !errors.Is(err, ErrInviteNotFound) {
+		t.Fatalf("AcceptInvite with a missing SENT# row: err = %v, want ErrInviteNotFound", err)
+	}
+
+	// The INVITE# row must NOT have been updated either -- a partial write
+	// (INVITE# accepted, SENT# never touched because it didn't exist)
+	// would be worse than this all-or-nothing failure.
+	invite, err := c.GetInvite(ctx, inviteID)
+	if err != nil {
+		t.Fatalf("GetInvite: %v", err)
+	}
+	if invite == nil {
+		t.Fatal("GetInvite returned nil, want the row still present")
+	}
+	if invite.InvitedUserID != "" {
+		t.Errorf("invite.InvitedUserID = %q after a failed accept, want empty (no partial write)", invite.InvitedUserID)
 	}
 }

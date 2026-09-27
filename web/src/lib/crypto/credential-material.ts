@@ -9,7 +9,7 @@
 // postMessage boundary; this module knows nothing about that boundary.
 
 import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
-import { base64ToBytes, bytesToBase64 } from './base64.js'
+import { base64ToBytes, bytesToBase64, bytesToBase64Url } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   generateGrantSortKey,
@@ -19,7 +19,13 @@ import {
   trustAnchorPayload,
 } from './group.js'
 import { fingerprint } from './fingerprint.js'
-import { inviteAcceptancePayload, inviteCreationPayload } from './invite.js'
+import {
+  computeInviteMAC,
+  deriveInviteMACKey,
+  inviteAcceptancePayload,
+  inviteCreationPayload,
+  verifyInviteMAC,
+} from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import {
   deriveRecoveryVerifier,
@@ -366,17 +372,32 @@ export async function signGroupCreation(
  * stays available rather than mandatory" section. Computed here rather
  * than as a separate worker call because keys is already live in this
  * exact call.
+ *
+ * Also derives and returns inviteMACKey (invite.ts's deriveInviteMACKey,
+ * over keys.signingKey.seed and inviteId) -- the per-invite secret that
+ * closes the gap plain signature verification leaves open: see
+ * deriveInviteMACKey's own doc comment for why a malicious server can
+ * otherwise mint its own keypair and pass step 3's check without a real
+ * invitee. Nothing about this value is ever sent to any server; the
+ * caller's job (CreateInviteScreen.tsx) is to embed it in the link's URL
+ * fragment, alongside inviterFingerprint, where only the link's actual
+ * holder can read it.
  */
 export async function signInviteCreation(
   keys: LiveKeys,
   inviteId: string,
   groupId: string,
   expiresAt: string,
-): Promise<{ creationSignature: string; inviterFingerprint: string }> {
+): Promise<{ creationSignature: string; inviterFingerprint: string; inviteMACKey: string }> {
   const payload = inviteCreationPayload(inviteId, groupId, keys.signingKey.publicKey, expiresAt)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Invite, payload)
   const inviterFingerprint = fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
-  return { creationSignature: bytesToBase64(signature), inviterFingerprint }
+  const macKey = deriveInviteMACKey(keys.signingKey.seed, inviteId)
+  return {
+    creationSignature: bytesToBase64(signature),
+    inviterFingerprint,
+    inviteMACKey: bytesToBase64Url(macKey),
+  }
 }
 
 /**
@@ -394,18 +415,31 @@ export async function signInviteCreation(
  * function the caller (runAcceptInvite.ts) invokes directly rather than a
  * worker round trip for no reason. This function is only the half that
  * genuinely needs a live private key.
+ *
+ * Also computes inviteMAC (invite.ts's computeInviteMAC) over the exact
+ * same payload the signature covers, keyed by inviteMACKey -- the invite
+ * link's URL fragment, decoded by the caller before this call, never sent
+ * to any server. This is what step 3 (the inviter's own client) checks
+ * before ever trusting the keys this function signs, closing the gap a
+ * malicious server could otherwise exploit -- see deriveInviteMACKey's own
+ * doc comment. inviteMACKey is required, not optional: an invite link
+ * shared without its fragment (an older format, or a copy that dropped it)
+ * cannot be completed with this real proof of possession, and this
+ * function has no fallback that silently skips it.
  */
 export async function signInviteAcceptance(
   keys: LiveKeys,
   inviteId: string,
-): Promise<{ acceptanceSignature: string }> {
+  inviteMACKey: Uint8Array,
+): Promise<{ acceptanceSignature: string; inviteMAC: string }> {
   const payload = inviteAcceptancePayload(
     inviteId,
     keys.signingKey.publicKey,
     keys.wrappingKey.publicKey,
   )
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Invite, payload)
-  return { acceptanceSignature: bytesToBase64(signature) }
+  const mac = computeInviteMAC(inviteMACKey, payload)
+  return { acceptanceSignature: bytesToBase64(signature), inviteMAC: bytesToBase64(mac) }
 }
 
 /**
@@ -431,17 +465,55 @@ export async function signInviteAcceptance(
  * AcceptanceSignature, is a separate value from invitedX25519PublicKey,
  * which THIS function uses only to wrap to, never to verify anything).
  */
+/**
+ * Thrown by completeInvite when inviteMAC does not verify against the
+ * invite's own MAC key -- see completeInvite's own doc comment for what
+ * this actually catches: a malicious server presenting keys/a signature
+ * it minted itself, rather than a real invitee's. Distinguished from a
+ * plain Error so callers (runCompleteInvites.ts) can report it as its own
+ * outcome rather than a generic crypto failure.
+ */
+export class InviteMACError extends Error {
+  constructor() {
+    super('crypto: invite MAC does not verify -- this response may not be from the real invitee')
+    this.name = 'InviteMACError'
+  }
+}
+
 export async function completeInvite(
   keys: LiveKeys,
+  inviteId: string,
   groupId: string,
   ownWrappedGroupKey: Wrapped,
   ownGeneration: number,
   invitedUserId: string,
+  invitedEd25519PublicKey: Uint8Array,
   invitedX25519PublicKey: Uint8Array,
+  inviteMAC: Uint8Array,
 ): Promise<{
   wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   generation: number
 }> {
+  // The real fix for the gap plain Ed25519 verification leaves open (see
+  // deriveInviteMACKey's own doc comment): invitedEd25519PublicKey,
+  // invitedX25519PublicKey and the acceptance signature all arrive in the
+  // same server response, which a malicious server fully controls -- it
+  // can mint its own keypair, self-sign, and pass runCompleteInvites.ts's
+  // own signature check with no real invitee involved at all. inviteMAC
+  // is the one value that check cannot forge: it is MAC_k(payload) under
+  // k, a secret this inviter derives fresh from their OWN long-term seed
+  // (never stored, never sent to any server) and the invite link's
+  // fragment carried to whoever actually held the real link. Re-deriving
+  // k and checking the MAC here -- inside the one place that already
+  // holds keys.signingKey.seed -- is what actually binds this completion
+  // to the real invitee, rather than to whatever the server chose to
+  // serve.
+  const macKey = deriveInviteMACKey(keys.signingKey.seed, inviteId)
+  const payload = inviteAcceptancePayload(inviteId, invitedEd25519PublicKey, invitedX25519PublicKey)
+  if (!verifyInviteMAC(macKey, payload, inviteMAC)) {
+    throw new InviteMACError()
+  }
+
   const ownUnwrapAAD = memberWrapAAD(groupId, keys.userId, ownGeneration)
   const groupKey = await unwrap(keys.wrappingKey.privateKey, ownWrappedGroupKey, ownUnwrapAAD)
 

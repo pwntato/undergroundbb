@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -120,6 +121,23 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	expiresAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "expiresAt: must be a valid RFC 3339 timestamp")
+		return
+	}
+	// Enforced server-side, not merely suggested to the client: expiresAt
+	// must be exactly the end of a UTC day ("...T23:59:59Z", no
+	// milliseconds, no non-UTC offset). Without this, expiresAt (stored
+	// in plaintext next to InviterUserID and, after acceptance, the
+	// invitee) dates invite creation to the millisecond -- Date.now() + N
+	// hours then toISOString() always carries milliseconds in a real
+	// browser, and rounding only the stored TTL (RoundUpToEndOfUTCDay)
+	// does not help, since the signed string sits right next to it with
+	// its own, sharper precision. Forcing exactly this format also
+	// permanently forecloses the verbatim-string/millisecond mismatch bug
+	// this PR's own db.CreateInviteInput.ExpiresAt doc comment describes:
+	// a value with no milliseconds in the first place cannot suffer from
+	// a reformatting that silently drops them.
+	if !strings.HasSuffix(req.ExpiresAt, "T23:59:59Z") {
+		WriteError(w, http.StatusBadRequest, "expiresAt: must be exactly the end of a UTC day (\"...T23:59:59Z\")")
 		return
 	}
 	if ttl := time.Until(expiresAt); ttl < minInviteTTL || ttl > maxInviteTTL {
@@ -264,6 +282,72 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// revokeInvite implements DELETE /api/invites/{id} -- docs/DESIGN.md: "An
+// invite can also be revoked, by deleting the INVITE# row: before
+// acceptance that is the only remedy for a link sent to the wrong address
+// or known to have leaked." Authenticated as the INVITER: this handler
+// reads the invite first and checks invite.InviterUserID == the caller's
+// own session userID BEFORE ever calling db.RevokeInvite, rather than
+// letting a caller-supplied inviterUserID address the SENT# delete
+// directly -- the same "second party must never name a row in the
+// inviter's own partition directly" principle acceptInvite's own doc
+// comment establishes.
+//
+// Pre-acceptance only -- see db.RevokeInvite's own doc comment for why:
+// once step 2 has run, the invitee has already been told "you're in," and
+// deleting the rows out from under them would silently strand them with
+// no membership and no remaining record anything was ever accepted.
+func (h *Handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	inviteID := r.PathValue("id")
+	if !idgen.ValidUUID(inviteID) {
+		WriteError(w, http.StatusBadRequest, "id: must be a well-formed, lowercase UUIDv4")
+		return
+	}
+
+	invite, err := h.db.GetInvite(r.Context(), inviteID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not revoke invite")
+		return
+	}
+	if invite == nil {
+		WriteError(w, http.StatusNotFound, "invite not found or expired")
+		return
+	}
+	if invite.InviterUserID != userID {
+		// Same shape as a not-found response -- confirming "this invite
+		// exists, but you didn't create it" to a caller who is not its
+		// inviter is an enumeration channel this endpoint has no reason to
+		// open, the same reasoning createInvite's own 403 doc comment
+		// gives for not distinguishing "not a member" from "a member, but
+		// not admin/ambassador."
+		WriteError(w, http.StatusNotFound, "invite not found or expired")
+		return
+	}
+	if invite.InvitedUserID != "" {
+		WriteErrorWithCode(w, http.StatusConflict, "this invite has already been accepted and can no longer be revoked", "invite_already_accepted")
+		return
+	}
+
+	if err := h.db.RevokeInvite(r.Context(), inviteID, userID); err != nil {
+		if errors.Is(err, db.ErrInviteAlreadyAcceptedForRevoke) {
+			// A race between our GetInvite above and RevokeInvite's own
+			// conditional delete (accepted, or already revoked, in
+			// between) -- same response as the earlier pre-check.
+			WriteErrorWithCode(w, http.StatusConflict, "this invite has already been accepted and can no longer be revoked", "invite_already_accepted")
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "could not revoke invite")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // acceptInviteRequest is the wire shape of POST /api/invites/{id}/accept --
 // issue #39, step 2. Authenticated: the invitee must have an account
 // (freshly created or existing) and a session before accepting, since
@@ -278,6 +362,20 @@ type acceptInviteRequest struct {
 	// "re-derive from the session, never trust the request" split every
 	// other signing key in this handler package gets.
 	AcceptanceSignature string `json:"acceptanceSignature"`
+	// InviteMAC is crypto.ComputeInviteMAC(k, the same payload
+	// AcceptanceSignature covers), k being the per-invite secret carried
+	// in the invite link's own URL fragment. This server cannot verify it
+	// -- it never sees k, and never will -- and does not try to. It is
+	// stored opaquely and served back at
+	// GET /api/invites/pending-completions purely so the INVITER's own
+	// client, the one party who can re-derive k, can verify it there
+	// before ever trusting the keys above. See
+	// crypto.DeriveInviteMACKey's own doc comment for what this closes:
+	// without it, this handler's own signature check alone lets a
+	// malicious server mint its own keypair, sign its own payload, and
+	// pass -- proving only that a keypair is self-consistent, never that
+	// it belongs to the real invitee.
+	InviteMAC string `json:"inviteMAC"`
 }
 
 // acceptInvite implements POST /api/invites/{id}/accept -- issue #39, step
@@ -315,6 +413,15 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	acceptanceSig, err := decodeBase64Field(req.AcceptanceSignature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "acceptanceSignature: "+err.Error())
+		return
+	}
+	// This handler cannot verify inviteMAC (it never has k) -- only decodes
+	// and length-checks it, then stores it opaquely for the inviter's own
+	// client to check at step 3. See acceptInviteRequest.InviteMAC's own
+	// doc comment.
+	inviteMAC, err := decodeBase64Field(req.InviteMAC, inviteMACSize, inviteMACSize)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "inviteMAC: "+err.Error())
 		return
 	}
 
@@ -358,12 +465,32 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject a caller who already holds a membership in this invite's own
+	// group -- including the inviter accepting their own link. Without
+	// this, AcceptInvite's single-use condition (attribute_not_exists on
+	// InvitedUserID) still lets it through: an existing member, or the
+	// inviter themselves, "uses up" an invite meant for someone else,
+	// silently leaving the intended invitee's link dead with no
+	// membership to show for it. Checked here rather than left to
+	// CompleteInvite's own ErrAlreadyMember guard -- that guard fires only
+	// at step 3, after this invite has already been consumed at step 2.
+	existingMembership, err := h.db.GetMembership(r.Context(), invite.GroupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		return
+	}
+	if existingMembership != nil {
+		WriteErrorWithCode(w, http.StatusConflict, "you are already a member of this group", "already_member")
+		return
+	}
+
 	err = h.db.AcceptInvite(r.Context(), db.AcceptInviteInput{
 		InviteID:                inviteID,
 		InvitedUserID:           userID,
 		InvitedEd25519PublicKey: invitee.SigningPublicKey,
 		InvitedX25519PublicKey:  invitee.WrappingPublicKey,
 		AcceptanceSignature:     acceptanceSig,
+		InviteMAC:               inviteMAC,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrInviteAlreadyAccepted) {
@@ -397,6 +524,11 @@ type pendingInviteCompletionEntry struct {
 	InvitedEd25519PublicKey string `json:"invitedEd25519PublicKey"`
 	InvitedX25519PublicKey  string `json:"invitedX25519PublicKey"`
 	AcceptanceSignature     string `json:"acceptanceSignature"`
+	// InviteMAC is served back opaquely -- see
+	// acceptInviteRequest.InviteMAC's own doc comment. The inviter's own
+	// client re-derives k from its own long-term signing seed and verifies
+	// this before ever wrapping the group key to InvitedX25519PublicKey.
+	InviteMAC string `json:"inviteMAC"`
 }
 
 type pendingInviteCompletionsResponse struct {
@@ -431,6 +563,7 @@ func (h *Handler) pendingInviteCompletions(w http.ResponseWriter, r *http.Reques
 			InvitedEd25519PublicKey: encodeBase64(p.InvitedEd25519PublicKey),
 			InvitedX25519PublicKey:  encodeBase64(p.InvitedX25519PublicKey),
 			AcceptanceSignature:     encodeBase64(p.AcceptanceSignature),
+			InviteMAC:               encodeBase64(p.InviteMAC),
 		})
 	}
 	WriteJSON(w, http.StatusOK, pendingInviteCompletionsResponse{Invites: entries})
@@ -518,6 +651,40 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The SENT# row alone only proves the caller WAS an admin or
+	// ambassador at CREATE time, up to 30 days earlier (maxInviteTTL) plus
+	// the 7-day completion deadline -- it says nothing about whether they
+	// still hold that role now. Without this check, an inviter demoted to
+	// Member or removed from the group entirely (#36/#37, next in M4)
+	// could still complete a pending invite and have the server write a
+	// MEMBER# for someone the group's CURRENT admins never approved.
+	// createInvite's own check (the same GetMembership call, same
+	// Admin/Ambassador requirement) is what this mirrors -- see
+	// docs/DESIGN.md: "the current role... gates writes... with a plain
+	// GetItem."
+	inviterMembership, err := h.db.GetMembership(r.Context(), match.GroupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		return
+	}
+	if inviterMembership == nil ||
+		(inviterMembership.Role != models.RoleAdmin && inviterMembership.Role != models.RoleAmbassador) {
+		WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group to complete an invite")
+		return
+	}
+	// req.Generation is otherwise taken purely on the client's word --
+	// harmless today (no key rotation exists yet, #78, so every
+	// membership's generation is always 0), but DESIGN.md is explicit that
+	// "the chain link must be committed before any membership item points
+	// at the new generation." Requiring it to match the inviter's OWN
+	// current generation (now already in hand from the role check above)
+	// is a cheap guard against a stale or misbehaving client writing a
+	// membership pointing at a superseded generation once rotation exists.
+	if req.Generation != inviterMembership.Generation {
+		WriteError(w, http.StatusBadRequest, "generation: does not match the caller's current generation")
+		return
+	}
+
 	err = h.db.CompleteInvite(r.Context(), db.CompleteInviteInput{
 		InviteID:        inviteID,
 		GroupID:         match.GroupID,
@@ -536,6 +703,23 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, db.ErrAlreadyMember) {
+			// The membership this call would have created already exists
+			// some other way -- but the two invite rows are still there,
+			// and would otherwise become a zombie: pending-completions
+			// keeps returning this same invite, and every future login
+			// re-unwraps, re-wraps, and hits this exact 409 again, until
+			// the 7-day completion deadline TTL eventually sweeps it. Run
+			// a follow-up cleanup transaction (no membership write, since
+			// there is nothing left to write) so this invite stops
+			// showing up as pending, and report success either way --
+			// ErrInviteAlreadyCompleted from the cleanup itself just means
+			// another racing completion attempt already cleared these
+			// same rows, which is exactly as fine.
+			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil &&
+				!errors.Is(cleanupErr, db.ErrInviteAlreadyCompleted) {
+				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				return
+			}
 			WriteErrorWithCode(w, http.StatusConflict, "invitee is already a member of this group", "already_member")
 			return
 		}

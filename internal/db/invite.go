@@ -105,7 +105,6 @@ var ErrInviteIDTaken = errors.New("db: invite id taken")
 // identically the way a signup or group creation does; a genuine InviteID
 // collision is treated as a plain conflict.
 func (c *Client) CreateInvite(ctx context.Context, in CreateInviteInput) error {
-	now := time.Now().UTC().Format(time.RFC3339)
 	// The stored TTL is ExpiresAtParsed rounded up to the end of its UTC
 	// day, per the global TTL-rounding rule (RoundUpToEndOfUTCDay's own
 	// doc comment) -- the TTL attribute is a separate numeric field from
@@ -114,12 +113,20 @@ func (c *Client) CreateInvite(ctx context.Context, in CreateInviteInput) error {
 	// itself must never be reformatted.
 	ttl := RoundUpToEndOfUTCDay(in.ExpiresAtParsed).Unix()
 
+	// CreatedAt is deliberately left UNSET on both rows -- Record.CreatedAt
+	// is `omitempty`, and THREAT_MODEL says the inviter's row "carries no
+	// time component" and that "nothing dates *inviting*". Setting it here
+	// (even to second resolution) would leak creation time in the
+	// inviter's own USER#<inviter>/SENT# partition, the sharper half of
+	// the asymmetry THREAT_MODEL deliberately holds to day granularity via
+	// the TTL-rounding rule alone -- see that same doc's own reasoning for
+	// why the day-rounded TTL, not the key shape, is what actually buys
+	// this, and why setting CreatedAt here would invert it.
 	invite := models.Invite{
 		Record: models.Record{
-			PK:        "INVITE#" + in.InviteID,
-			SK:        "META",
-			Type:      "Invite",
-			CreatedAt: now,
+			PK:   "INVITE#" + in.InviteID,
+			SK:   "META",
+			Type: "Invite",
 		},
 		TTL:                     ttl,
 		GroupID:                 in.GroupID,
@@ -133,10 +140,9 @@ func (c *Client) CreateInvite(ctx context.Context, in CreateInviteInput) error {
 	}
 	sent := models.SentInvite{
 		Record: models.Record{
-			PK:        "USER#" + in.InviterUserID,
-			SK:        "SENT#" + in.InviteID,
-			Type:      "SentInvite",
-			CreatedAt: now,
+			PK:   "USER#" + in.InviterUserID,
+			SK:   "SENT#" + in.InviteID,
+			Type: "SentInvite",
 		},
 		TTL:      ttl,
 		GroupID:  in.GroupID,
@@ -203,6 +209,97 @@ func (c *Client) GetInvite(ctx context.Context, inviteID string) (*models.Invite
 	return &invite, nil
 }
 
+// ErrInviteAlreadyAcceptedForRevoke is returned by RevokeInvite when the
+// invite has already moved past step 1 -- see that function's own doc
+// comment for why revocation is pre-acceptance only. Distinct from
+// ErrInviteAlreadyAccepted (AcceptInvite's own error for the SAME
+// underlying state) so a caller cannot conflate "someone else already
+// accepted this, too late to revoke" with "you already accepted this."
+var ErrInviteAlreadyAcceptedForRevoke = errors.New("db: invite already accepted, cannot revoke")
+
+// RevokeInvite implements DELETE /api/invites/{id} -- the "invite can also
+// be revoked, by deleting the INVITE# row" remedy docs/DESIGN.md describes
+// for a link sent to the wrong address or known to have leaked, before
+// acceptance the only remedy since the TTL is otherwise the only bound.
+// Deletes both the INVITE#<iid> and USER#<inviter>/SENT#<iid> rows as one
+// TransactWriteItems, matching CreateInvite's own partial-write reasoning
+// in reverse: an interruption must not leave the SENT# row behind after
+// INVITE# is gone (which would make this invite look pending forever, with
+// no INVITE# row for a would-be accepter's GET to ever resolve) or
+// INVITE# behind after SENT# is gone (which would leave a live, acceptable
+// link with no way for the inviter's own client to ever discover it was
+// revoked).
+//
+// Both deletes are conditional on attribute_exists(PK) AND
+// attribute_not_exists(InvitedUserID) -- the second half is what makes
+// this pre-acceptance only: once step 2 has run, deleting the rows out
+// from under an invitee who was already told "you're in" (the group key
+// arrives via step 3, not this write) would silently strand them with no
+// membership and no remaining record anything was ever accepted. A
+// revoke attempted after acceptance returns
+// ErrInviteAlreadyAcceptedForRevoke instead.
+//
+// inviterUserID is NOT re-derived from the stored invite here -- the
+// caller (revokeInvite's own handler) is expected to have already read
+// GetInvite and checked invite.InviterUserID == the session's own userID
+// before ever calling this, the same "second party must never name a row
+// in the inviter's own partition directly" principle AcceptInvite's own
+// doc comment establishes. Addressing SENT# by a caller-supplied
+// inviterUserID that turned out to be wrong would simply fail this
+// transaction's own condition (the caller does not own that SENT# row, or
+// it does not exist), never let anyone touch another user's partition.
+func (c *Client) RevokeInvite(ctx context.Context, inviteID, inviterUserID string) error {
+	const (
+		inviteDeleteIndex = 0
+		sentDeleteIndex   = 1
+	)
+	condition := aws.String("attribute_exists(PK) AND attribute_not_exists(InvitedUserID)")
+
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "INVITE#" + inviteID},
+						"SK": &types.AttributeValueMemberS{Value: "META"},
+					},
+					ConditionExpression: condition,
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
+						"SK": &types.AttributeValueMemberS{Value: "SENT#" + inviteID},
+					},
+					ConditionExpression: condition,
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailure(err, inviteDeleteIndex) || isConditionalCheckFailure(err, sentDeleteIndex) {
+			// Either the invite is already gone (never existed under this
+			// id, already TTL-swept, or a race with a concurrent revoke)
+			// or InvitedUserID is now set -- this package cannot tell
+			// which from the condition failure alone, but the caller
+			// (revokeInvite) already did its own GetInvite before this
+			// call and can tell from THAT read which message to show.
+			// Distinguishing not-found from already-accepted here would
+			// need a second read inside this same transaction, which
+			// DynamoDB's TransactWriteItems does not offer -- so this
+			// package reports the security-relevant one
+			// (ErrInviteAlreadyAcceptedForRevoke) and leaves the handler
+			// to have already ruled out not-found via its own prior read.
+			return ErrInviteAlreadyAcceptedForRevoke
+		}
+		return err
+	}
+	return nil
+}
+
 // completionDeadlineDuration bounds how long an accepted invite waits for
 // step 3 (the inviter's next login) before the deadline docs/DESIGN.md's
 // round-25 comment requires is considered passed -- surfaced by #83, not
@@ -246,6 +343,12 @@ type AcceptInviteInput struct {
 	// invitedX25519PublicKey)). Verified by the handler before this call,
 	// alongside CreationSignature -- see AcceptInvite's own doc comment.
 	AcceptanceSignature []byte
+	// InviteMAC is MAC_k(the same payload AcceptanceSignature covers) --
+	// see models.Invite.InviteMAC's own doc comment. This package stores
+	// it opaquely, exactly like AcceptanceSignature, and never checks it:
+	// only the inviter's own client, at step 3, can (it alone re-derives
+	// k).
+	InviteMAC []byte
 }
 
 // AcceptInvite implements step 2 of the invite handshake (issue #39): sets
@@ -299,7 +402,7 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			"PK": &types.AttributeValueMemberS{Value: "INVITE#" + in.InviteID},
 			"SK": &types.AttributeValueMemberS{Value: "META"},
 		},
-		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, #TTL = :ttl, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk"),
+		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk"),
 		ConditionExpression:      aws.String("attribute_not_exists(InvitedUserID)"),
 		ExpressionAttributeNames: map[string]string{"#TTL": "TTL"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -307,30 +410,49 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			":ed":     &types.AttributeValueMemberB{Value: in.InvitedEd25519PublicKey},
 			":x":      &types.AttributeValueMemberB{Value: in.InvitedX25519PublicKey},
 			":sig":    &types.AttributeValueMemberB{Value: in.AcceptanceSignature},
+			":mac":    &types.AttributeValueMemberB{Value: in.InviteMAC},
 			":ttl":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineTTL)},
 			":gsi1pk": &types.AttributeValueMemberS{Value: "USER#" + in.InvitedUserID},
 			":gsi1sk": &types.AttributeValueMemberS{Value: "INVITE#" + inviteDaySuffix(now)},
 		},
 	}
 
+	// ConditionExpression: attribute_exists(PK) -- closes a second-party
+	// upsert into the inviter's own USER# partition. Without it, DynamoDB's
+	// UpdateItem creates the item if it does not already exist: if the
+	// SENT# row were ever missing when this invitee-triggered request
+	// runs (a future revocation path that deletes only the INVITE# row, or
+	// the two rows somehow falling out of sync), this Update would write a
+	// fresh, partial SENT# row into USER#<inviter> from a request the
+	// INVITEE controls -- exactly the "second party writes into the
+	// inviter's own partition" shape round 23 warned about (the same
+	// partition that also holds PROFILE, RECOVERY, CHALLENGE and PIN#
+	// items). A missing SENT# row here becomes ErrInviteNotFound below,
+	// the same outcome as the invite never having existed, rather than a
+	// silent partial write.
 	sentUpdate := &types.Update{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: "USER#" + invite.InviterUserID},
 			"SK": &types.AttributeValueMemberS{Value: "SENT#" + in.InviteID},
 		},
-		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, #TTL = :ttl"),
+		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl"),
+		ConditionExpression:      aws.String("attribute_exists(PK)"),
 		ExpressionAttributeNames: map[string]string{"#TTL": "TTL"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":uid": &types.AttributeValueMemberS{Value: in.InvitedUserID},
 			":ed":  &types.AttributeValueMemberB{Value: in.InvitedEd25519PublicKey},
 			":x":   &types.AttributeValueMemberB{Value: in.InvitedX25519PublicKey},
 			":sig": &types.AttributeValueMemberB{Value: in.AcceptanceSignature},
+			":mac": &types.AttributeValueMemberB{Value: in.InviteMAC},
 			":ttl": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineTTL)},
 		},
 	}
 
-	const inviteItemIndex = 0
+	const (
+		inviteItemIndex = 0
+		sentItemIndex   = 1
+	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -341,6 +463,15 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 	if err != nil {
 		if isConditionalCheckFailure(err, inviteItemIndex) {
 			return ErrInviteAlreadyAccepted
+		}
+		if isConditionalCheckFailure(err, sentItemIndex) {
+			// The SENT# row this GetInvite call above still believed
+			// existed is gone by the time this transaction ran -- treated
+			// the same as ErrInviteNotFound (this comment's own doc
+			// comment on sentUpdate's ConditionExpression) rather than a
+			// distinct error, since there is nothing left for this
+			// invitee to accept either way.
+			return ErrInviteNotFound
 		}
 		return err
 	}
@@ -545,6 +676,66 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 			return ErrAlreadyMember
 		}
 		if isConditionalCheckFailure(err, sentDeleteIndex) {
+			return ErrInviteAlreadyCompleted
+		}
+		return err
+	}
+	return nil
+}
+
+// CleanupAlreadyMemberInvite deletes both an invite's rows (INVITE#<iid>
+// and USER#<inviter>/SENT#<iid>) with no membership write -- the follow-up
+// CompleteInvite's own caller runs after ErrAlreadyMember, for exactly the
+// case that error means: the invitee already holds a membership in this
+// group some other way, so there is no membership left for this call to
+// create, but the two invite rows would otherwise become a zombie --
+// pending-completions keeps returning them, and every login re-unwraps,
+// re-wraps, and gets ErrAlreadyMember again, until the 7-day deadline TTL
+// eventually sweeps them. Deleting both rows here, the moment
+// ErrAlreadyMember is first seen, is what actually clears that, rather
+// than waiting out the TTL.
+//
+// Both deletes are conditional on attribute_exists(PK) -- if either row is
+// already gone (a second, racing completion attempt, or a future
+// revocation path), this returns ErrInviteAlreadyCompleted, the same
+// "nothing left to do" outcome CompleteInvite's own sentDeleteIndex check
+// gives, rather than a confusing partial-delete error.
+func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, inviterUserID string) error {
+	const (
+		inviteDeleteIndex = 0
+		sentDeleteIndex   = 1
+	)
+
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "INVITE#" + inviteID},
+						"SK": &types.AttributeValueMemberS{Value: "META"},
+					},
+					ConditionExpression: aws.String("attribute_exists(PK)"),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
+						"SK": &types.AttributeValueMemberS{Value: "SENT#" + inviteID},
+					},
+					ConditionExpression: aws.String("attribute_exists(PK)"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		// Either condition failing means the same thing here -- one or
+		// both rows are already gone (a racing second cleanup/completion
+		// attempt), so there is nothing left to clean up. Any OTHER error
+		// (throttling, a network failure) is returned as-is, not masked.
+		if isConditionalCheckFailure(err, inviteDeleteIndex) || isConditionalCheckFailure(err, sentDeleteIndex) {
 			return ErrInviteAlreadyCompleted
 		}
 		return err

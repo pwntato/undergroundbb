@@ -236,6 +236,13 @@ export interface SignInviteCreationResult {
    * signInviteCreation doc comment.
    */
   readonly inviterFingerprint: string
+  /**
+   * The per-invite MAC key (invite.ts's deriveInviteMACKey), base64url
+   * encoded -- also embedded in the generated link's URL fragment,
+   * alongside inviterFingerprint. Never sent to any server. See
+   * deriveInviteMACKey's own doc comment for what this closes.
+   */
+  readonly inviteMACKey: string
 }
 
 export interface SignInviteCreationResponse {
@@ -255,10 +262,19 @@ export interface SignInviteAcceptanceRequest {
   readonly id: string
   readonly userId: string
   readonly inviteId: string
+  /**
+   * The per-invite MAC key, base64url decoded from the invite link's URL
+   * fragment by the caller (AcceptInviteScreen.tsx) before this request is
+   * sent -- never fetched from any server. Required: an invite link shared
+   * without its fragment cannot be accepted with real proof of possession,
+   * matching signInviteAcceptance's own doc comment.
+   */
+  readonly inviteMACKey: string
 }
 
 export interface SignInviteAcceptanceResult {
   readonly acceptanceSignature: string
+  readonly inviteMAC: string
 }
 
 export interface SignInviteAcceptanceResponse {
@@ -272,22 +288,33 @@ export interface SignInviteAcceptanceResponse {
  * inviter's OWN copy of the group key and re-wraps it to the invitee's
  * signed X25519 public key. ownWrappedGroupKey/ownGeneration are the
  * caller's own MEMBER# entry (from GET /api/groups, exactly like
- * DecryptGroupNamesRequest's per-group shape); invitedUserId/
- * invitedX25519PublicKey come from GET /api/invites/pending-completions,
- * already re-verified against AcceptanceSignature by the caller (see
- * worker.ts's own completeInvite handler) before this request is sent --
- * this request itself carries no signature to check, only what's needed
- * to wrap.
+ * DecryptGroupNamesRequest's per-group shape); inviteId/invitedUserId/
+ * invitedEd25519PublicKey/invitedX25519PublicKey/inviteMAC come from
+ * GET /api/invites/pending-completions, already re-verified against
+ * AcceptanceSignature by the caller (see worker.ts's own completeInvite
+ * handler) before this request is sent.
+ *
+ * inviteMAC is what this request itself DOES still need checked, and
+ * deliberately cannot be checked by the caller the way the Ed25519
+ * signature is: verifying it requires re-deriving k from the inviter's own
+ * long-term signing seed (deriveInviteMACKey), which exists only inside
+ * this worker's liveKeys cache and never crosses postMessage. See
+ * credential-material.ts's completeInvite for why this MAC, not the
+ * signature, is what actually proves the response came from the real
+ * invitee rather than a malicious server.
  */
 export interface CompleteInviteRequest {
   readonly kind: 'completeInvite'
   readonly id: string
   readonly userId: string
+  readonly inviteId: string
   readonly groupId: string
   readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   readonly ownGeneration: number
   readonly invitedUserId: string
+  readonly invitedEd25519PublicKey: string
   readonly invitedX25519PublicKey: string
+  readonly inviteMAC: string
 }
 
 export interface CompleteInviteResult {

@@ -24,7 +24,13 @@ import {
   type GroupTextField,
 } from './group.js'
 import { bytesToHex, hexToBytes } from './hex.js'
-import { inviteAcceptancePayload, inviteCreationPayload } from './invite.js'
+import {
+  computeInviteMAC,
+  deriveInviteMACKey,
+  inviteAcceptancePayload,
+  inviteCreationPayload,
+  verifyInviteMAC,
+} from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
@@ -185,6 +191,16 @@ interface VectorFile {
     invited_x25519_pub_hex: string
     payload_hex: string
     signature_hex: string
+  }[]
+  invite_mac: {
+    name: string
+    inviter_seed_hex: string
+    invite_id: string
+    invited_ed25519_pub_hex: string
+    invited_x25519_pub_hex: string
+    mac_key_hex: string
+    payload_hex: string
+    mac_hex: string
   }[]
 }
 
@@ -482,6 +498,38 @@ describe('invite acceptance vectors', () => {
 
       const signature = ed25519.sign(key, ed25519.SigningContext.Invite, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins deriveInviteMACKey/computeInviteMAC's exact encoding -- PR #146
+// round-1 review's blocking finding #1, the per-invite MAC that closes the
+// gap plain signature verification leaves open (a malicious server can
+// mint its own keypair, self-sign, and pass that check with no real
+// invitee involved). Must be byte-identical to Go's before any real
+// invite MAC exists under it.
+describe('invite MAC vectors', () => {
+  for (const tc of vectors.invite_mac) {
+    it(tc.name, () => {
+      const inviterSeed = hexToBytes(tc.inviter_seed_hex)
+      const invitedEd25519Pub = hexToBytes(tc.invited_ed25519_pub_hex)
+      const invitedX25519Pub = hexToBytes(tc.invited_x25519_pub_hex)
+
+      const macKey = deriveInviteMACKey(inviterSeed, tc.invite_id)
+      expect(bytesToHex(macKey)).toBe(tc.mac_key_hex)
+
+      const payload = inviteAcceptancePayload(tc.invite_id, invitedEd25519Pub, invitedX25519Pub)
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const mac = computeInviteMAC(macKey, payload)
+      expect(bytesToHex(mac)).toBe(tc.mac_hex)
+      expect(verifyInviteMAC(macKey, payload, hexToBytes(tc.mac_hex))).toBe(true)
+
+      // A MAC key derived under a DIFFERENT invite id must not verify --
+      // proves the key is actually bound to this invite via HKDF's info
+      // parameter, not merely present.
+      const wrongIDKey = deriveInviteMACKey(inviterSeed, 'a-different-invite-id')
+      expect(verifyInviteMAC(wrongIDKey, payload, hexToBytes(tc.mac_hex))).toBe(false)
     })
   }
 })

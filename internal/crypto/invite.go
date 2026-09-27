@@ -1,5 +1,11 @@
 package crypto
 
+import (
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/sha256"
+)
+
 // InviteCreationPayload builds the canonical byte string the inviter signs
 // at step 1 of the invite handshake -- see docs/DESIGN.md, "Invites -- the
 // signed handshake": "Signs {invite_id, group_id, inviter_pubkey,
@@ -62,4 +68,62 @@ func InviteAcceptancePayload(inviteID string, invitedEd25519PublicKey, invitedX2
 		invitedX25519PublicKey,
 	}
 	return lengthPrefixedConcat(fields)
+}
+
+// inviteMACInfo labels HKDF's info parameter (alongside inviteID) with the
+// operation deriving the key, matching hkdfInfo's own reasoning in
+// x25519.go: without a label, a key derived here would collide with one
+// derived from the same seed for any other purpose. Must match
+// web/src/lib/crypto/invite.ts's INVITE_MAC_INFO exactly.
+const inviteMACInfo = "underground-bb:invite-mac:v1"
+
+// DeriveInviteMACKey derives the per-invite MAC key k that binds step 2's
+// acceptance to whoever holds the invite link, closing the gap plain
+// signature verification leaves open: InviteAcceptancePayload proves the
+// invitee's Ed25519/X25519 keys are consistent with EACH OTHER, but every
+// value the inviter's client checks it against (the keys and the
+// signature) arrives in the same server response, so a malicious server
+// can mint its own keypair, sign its own InviteAcceptancePayload, and pass
+// that check without any real invitee involved at all.
+//
+// k is HKDF-SHA256(inviterSigningSeed, info = inviteMACInfo || inviteID,
+// length 32), computed from the INVITER's own long-term Ed25519 seed --
+// never stored anywhere, and re-derivable by the inviter's own client on
+// any future login purely from (seed, inviteID), exactly like
+// deriveWrappingKey's own no-storage reasoning. The invite link's URL
+// fragment carries k itself (base64url, alongside the fingerprint) --
+// browsers never transmit a URL fragment to any server, so the one party
+// who can compute MAC_k is the one party who was actually handed the link.
+// binding inviteID into HKDF's info parameter (rather than the ikm) is
+// what makes k unique per invite despite deriving from the same
+// long-term seed every time.
+//
+// inviterSigningSeed is the bare 32-byte Ed25519 seed (ed25519.PrivateKey's
+// first 32 bytes, matching signingKeyFromSeed's own encoding on the
+// TypeScript side) -- not the 64-byte Go-encoded private key, since the
+// public half carries no entropy of its own and including it would only
+// change the derivation for no benefit.
+func DeriveInviteMACKey(inviterSigningSeed []byte, inviteID string) ([]byte, error) {
+	info := inviteMACInfo + inviteID
+	return hkdf.Key(sha256.New, inviterSigningSeed, nil, info, sha256.Size)
+}
+
+// ComputeInviteMAC computes MAC_k(payload) -- HMAC-SHA256 keyed by the
+// per-invite key DeriveInviteMACKey derives, over the exact same
+// InviteAcceptancePayload bytes the invitee's Ed25519 signature already
+// covers. Reusing that payload rather than defining a third byte encoding
+// means the MAC and the signature can never be checked against
+// inconsistent views of "which keys were accepted."
+func ComputeInviteMAC(macKey, payload []byte) []byte {
+	mac := hmac.New(sha256.New, macKey)
+	mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+// VerifyInviteMAC reports whether mac is ComputeInviteMAC(macKey, payload),
+// using hmac.Equal for the constant-time comparison HMAC verification
+// requires -- a plain byte comparison would leak timing information an
+// attacker could use to forge a valid MAC one byte at a time.
+func VerifyInviteMAC(macKey, payload, mac []byte) bool {
+	return hmac.Equal(ComputeInviteMAC(macKey, payload), mac)
 }

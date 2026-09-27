@@ -242,6 +242,21 @@ type inviteAcceptanceVector struct {
 	SignatureHex         string `json:"signature_hex"`
 }
 
+// inviteMACVector proves DeriveInviteMACKey/ComputeInviteMAC's exact
+// encoding (PR #146 round-1 review's blocking finding #1) -- the per-invite
+// MAC that closes the gap plain signature verification leaves open. See
+// crypto.DeriveInviteMACKey's own doc comment for the full reasoning.
+type inviteMACVector struct {
+	Name                 string `json:"name"`
+	InviterSeedHex       string `json:"inviter_seed_hex"`
+	InviteID             string `json:"invite_id"`
+	InvitedEd25519PubHex string `json:"invited_ed25519_pub_hex"`
+	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
+	MACKeyHex            string `json:"mac_key_hex"`
+	PayloadHex           string `json:"payload_hex"`
+	MACHex               string `json:"mac_hex"`
+}
+
 type vectorFile struct {
 	Version          int                      `json:"version"`
 	KDF              []kdfVector              `json:"kdf"`
@@ -260,6 +275,7 @@ type vectorFile struct {
 	GroupName        []groupNameVector        `json:"group_name_aad"`
 	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
 	InviteAcceptance []inviteAcceptanceVector `json:"invite_acceptance"`
+	InviteMAC        []inviteMACVector        `json:"invite_mac"`
 }
 
 func main() {
@@ -692,6 +708,33 @@ func main() {
 			InvitedX25519PubHex:  hex.EncodeToString(invitedX25519Pub),
 			PayloadHex:           hex.EncodeToString(payload),
 			SignatureHex:         hex.EncodeToString(sig),
+		})
+	}
+
+	// --- Invite MAC (PR #146 round-1 review's blocking finding #1) ---
+	{
+		inviterSeed := fixedSeed("invite-mac-inviter-1")[:ed25519.SeedSize]
+		invitedEd25519Pub, _ := fixedEd25519Key("invite-mac-invited-ed25519-1")
+		invitedX25519Priv := fixedX25519Key("invite-mac-invited-x25519-1")
+		invitedX25519Pub := invitedX25519Priv.PublicKey().Bytes()
+		inviteID := "invite-uuid-mac-1"
+
+		macKey, err := crypto.DeriveInviteMACKey(inviterSeed, inviteID)
+		if err != nil {
+			panic(err)
+		}
+		payload := crypto.InviteAcceptancePayload(inviteID, invitedEd25519Pub, invitedX25519Pub)
+		mac := crypto.ComputeInviteMAC(macKey, payload)
+
+		out.InviteMAC = append(out.InviteMAC, inviteMACVector{
+			Name:                 "basic",
+			InviterSeedHex:       hex.EncodeToString(inviterSeed),
+			InviteID:             inviteID,
+			InvitedEd25519PubHex: hex.EncodeToString(invitedEd25519Pub),
+			InvitedX25519PubHex:  hex.EncodeToString(invitedX25519Pub),
+			MACKeyHex:            hex.EncodeToString(macKey),
+			PayloadHex:           hex.EncodeToString(payload),
+			MACHex:               hex.EncodeToString(mac),
 		})
 	}
 

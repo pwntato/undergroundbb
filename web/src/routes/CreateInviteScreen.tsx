@@ -66,11 +66,38 @@ function isLiveKeysError(error: unknown): boolean {
   )
 }
 
+// EXPIRY_OPTIONS' days are OFFSETS from today, not literal durations --
+// endOfUTCDay below always rounds up to "T23:59:59Z", so "1 day" actually
+// means "expires at the end of tomorrow (UTC)," never less than
+// minInviteTTL (1 hour) away no matter what time of day this is submitted.
+// See endOfUTCDay's own doc comment for why this rounding happens on the
+// client at all, rather than only being enforced server-side.
 const EXPIRY_OPTIONS = [
-  { label: '1 day', hours: 24 },
-  { label: '7 days', hours: 24 * 7 },
-  { label: '30 days', hours: 24 * 30 },
+  { label: '1 day', days: 1 },
+  { label: '7 days', days: 7 },
+  { label: '30 days', days: 30 },
 ] as const
+
+/**
+ * Rounds "days from today" to that day's end in UTC ("...T23:59:59Z",
+ * exactly, no milliseconds) -- issue #38's own createInviteRequest now
+ * REJECTS any expiresAt that isn't exactly this shape (see that handler's
+ * own doc comment). Rounding here, not just validating server-side, is
+ * what keeps a rejection from ever reaching this form in the first place:
+ * a raw Date.now() + N*24h offset would almost never land on an exact UTC
+ * midnight boundary, and every real toISOString() call carries
+ * milliseconds regardless. This also permanently forecloses the
+ * verbatim-string/millisecond mismatch bug db.CreateInviteInput.ExpiresAt's
+ * own doc comment describes, since a value with no milliseconds in the
+ * first place cannot suffer from a reformatting that silently drops them.
+ */
+function endOfUTCDay(daysFromToday: number): string {
+  const d = new Date(Date.now() + daysFromToday * 24 * 60 * 60 * 1000)
+  const year = d.getUTCFullYear()
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}T23:59:59Z`
+}
 
 interface PendingAttempt {
   readonly inviteId: string
@@ -79,7 +106,7 @@ interface PendingAttempt {
 
 export function CreateInviteScreen() {
   const { groupId } = useParams<{ groupId: string }>()
-  const [expiryHours, setExpiryHours] = useState<number>(EXPIRY_OPTIONS[1].hours)
+  const [expiryDays, setExpiryDays] = useState<number>(EXPIRY_OPTIONS[1].days)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingAttempt | undefined>(undefined)
@@ -111,9 +138,7 @@ export function CreateInviteScreen() {
     void (async () => {
       const resuming = pending !== undefined
       const inviteId = resuming ? pending.inviteId : generateUUID()
-      const expiresAt = resuming
-        ? pending.expiresAt
-        : new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
+      const expiresAt = resuming ? pending.expiresAt : endOfUTCDay(expiryDays)
 
       const outcome = await runCreateInvite(
         { signInviteCreation, createInvite, userId },
@@ -150,6 +175,7 @@ export function CreateInviteScreen() {
       <InviteCreatedStep
         inviteId={result.response.inviteId}
         inviterFingerprint={result.inviterFingerprint}
+        inviteMACKey={result.inviteMACKey}
       />
     )
   }
@@ -167,13 +193,13 @@ export function CreateInviteScreen() {
         <select
           id="expiry"
           className="border-input bg-transparent flex h-9 w-full rounded-md border px-3 py-1 text-sm shadow-xs"
-          value={expiryHours}
+          value={expiryDays}
           onChange={(e) => {
-            setExpiryHours(Number(e.target.value))
+            setExpiryDays(Number(e.target.value))
           }}
         >
           {EXPIRY_OPTIONS.map((opt) => (
-            <option key={opt.hours} value={opt.hours}>
+            <option key={opt.days} value={opt.days}>
               {opt.label}
             </option>
           ))}
@@ -188,23 +214,32 @@ export function CreateInviteScreen() {
 
 /**
  * Shown once an invite is successfully created -- displays the link
- * (embedding inviterFingerprint in the URL FRAGMENT, per docs/DESIGN.md:
- * "the generated link carries the inviter's key fingerprint in the URL
- * fragment, which browsers never transmit") and the fingerprint itself in
- * plain text, "while the user is paying attention" (issue #38's own
- * wording) -- this is the one moment the inviter is looking at this
- * screen specifically to hand the link to someone, so it is also the
- * moment they're most likely to actually read and relay the fingerprint
- * out of band if they choose to.
+ * (embedding inviterFingerprint AND inviteMACKey in the URL FRAGMENT,
+ * separated by ".", per docs/DESIGN.md: "the generated link carries the
+ * inviter's key fingerprint in the URL fragment, which browsers never
+ * transmit") and the fingerprint itself in plain text, "while the user is
+ * paying attention" (issue #38's own wording) -- this is the one moment
+ * the inviter is looking at this screen specifically to hand the link to
+ * someone, so it is also the moment they're most likely to actually read
+ * and relay the fingerprint out of band if they choose to.
+ *
+ * inviteMACKey never appears in this screen's own display -- unlike the
+ * fingerprint, it is not something a person compares, it is a secret the
+ * invitee's client alone must carry forward into its own accept request.
+ * "." is safe as a separator: the fingerprint's alphabet is decimal digits
+ * and hyphens (fingerprint.ts), inviteMACKey's is base64url
+ * (bytesToBase64Url), and neither alphabet contains ".".
  */
 function InviteCreatedStep({
   inviteId,
   inviterFingerprint,
+  inviteMACKey,
 }: {
   inviteId: string
   inviterFingerprint: string
+  inviteMACKey: string
 }) {
-  const link = `${window.location.origin}/invites/${inviteId}#${inviterFingerprint}`
+  const link = `${window.location.origin}/invites/${inviteId}#${inviterFingerprint}.${inviteMACKey}`
   return (
     <div className="flex w-full max-w-sm flex-col gap-4">
       <h1 className="text-lg font-semibold">Invite created</h1>
