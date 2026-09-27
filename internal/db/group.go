@@ -382,14 +382,23 @@ func (c *Client) ListGroups(ctx context.Context, userID string) ([]models.Member
 //
 // The query is restricted to GSI1SK begins_with "GROUP#" -- GSI1PK
 // "USER#<uuid>" is NOT membership-exclusive. Per DESIGN.md's data-model
-// table, Invite ("SENT#<iid>") and Join request ("REQ#...") rows share this
-// same partition ("the three user reverse-lookups"). Without this filter, a
-// pending join request -- PK "GROUP#<gid>", GSI1SK "REQ#..." -- would
-// unmarshal as a Membership: groupIDFromMembership still recovers a real
-// gid from its PK, so the requester (not a member at all) would get that
-// group back with Role == "" (PR #144 review, reproduced live against
-// DynamoDB Local: a REQ# row put alongside a real group made a non-member
-// requester's own ListGroups return it). An invite row's PK is
+// table, Invite (PK "INVITE#<iid>", GSI1PK "USER#<invitee>", GSI1SK
+// "INVITE#<YYYY-MM-DD, UTC>#<rand>") and Join request (PK "GROUP#<gid>",
+// GSI1PK "USER#<requester>", GSI1SK "REQ#...") rows share this same
+// partition ("the three user reverse-lookups"). PR #144 round 2 review
+// corrected an earlier version of this comment that wrongly attributed
+// "SENT#<iid>" here -- that IS an Invite-related sort key, but it belongs
+// to a different row entirely (the Invite row's PK "INVITE#<iid>" /
+// "SENT#<iid>", the inviter's own copy, GSI1PK "USER#<inviter>"), which has
+// no GSI1 entry at all (blank GSI1PK/GSI1SK in DESIGN.md's own table) and
+// so was never actually relevant to this filter.
+//
+// Without this filter, a pending join request -- PK "GROUP#<gid>", GSI1SK
+// "REQ#..." -- would unmarshal as a Membership: groupIDFromMembership still
+// recovers a real gid from its PK, so the requester (not a member at all)
+// would get that group back with Role == "" (PR #144 review, reproduced
+// live against DynamoDB Local: a REQ# row put alongside a real group made a
+// non-member requester's own ListGroups return it). An invite row's PK is
 // "INVITE#<iid>", so it would instead miss the META BatchGetItem entirely
 // (wasted RCUs, but not a correctness bug) -- begins_with saves that read
 // too. Neither invites nor join requests are built yet (#38-40 are next in
@@ -479,6 +488,15 @@ func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map
 			c.table: {Keys: keys},
 		}
 		for attempt := 0; len(requestItems) > 0; attempt++ {
+			// The cap check comes BEFORE the sleep (PR #144 round 2 review):
+			// checking after would mean the exhausting pass (attempt ==
+			// maxUnprocessedKeysRetries) waits out a full delay -- 800ms at
+			// the default constants -- for a BatchGetItem call it then never
+			// makes, adding dead latency to the already-throttled path for
+			// no benefit.
+			if attempt >= maxUnprocessedKeysRetries {
+				return nil, errBatchGetGroupMetasExhausted
+			}
 			if attempt > 0 {
 				delay := unprocessedKeysBaseDelay * time.Duration(1<<(attempt-1))
 				select {
@@ -486,9 +504,6 @@ func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
-			}
-			if attempt >= maxUnprocessedKeysRetries {
-				return nil, errBatchGetGroupMetasExhausted
 			}
 			out, err := c.ddb.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
 				RequestItems: requestItems,

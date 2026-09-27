@@ -10,7 +10,7 @@
 // touches a group key.
 
 import { useEffect, useState } from 'react'
-import { Link, useLocation } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { listGroups } from '@/lib/api/groups'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
@@ -23,6 +23,7 @@ import { runListGroups } from './runListGroups'
 export function Home() {
   const session = useSession()
   const location = useLocation()
+  const navigate = useNavigate()
   const locationState = location.state as unknown
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
 
@@ -36,6 +37,23 @@ export function Home() {
     // a dependency would re-run this effect on every unrelated render;
     // locationState itself only changes on a real navigation.
     const newGroup = readNewGroupState(locationState)
+    if (newGroup !== undefined) {
+      // Consume the state once, immediately after reading it (PR #144
+      // round 2 review) -- react-router's history state does NOT clear
+      // itself on reload or back/forward the way this file used to claim
+      // (newGroupNavigationState.ts's own header comment was wrong: it
+      // persists in window.history.state.usr for as long as this "/"
+      // history entry exists, which CreateGroupScreen's replace: true
+      // navigation makes indefinite). Harmless today only because the
+      // merge dedupes by groupId against an already-caught-up fetch --
+      // once leave/remove-member exists, a reload or back/forward to this
+      // exact entry would resurrect a group the user actually left, with a
+      // stale role and a wrapped key nobody can use anymore. Replacing the
+      // history entry with state: null clears it for good, so this only
+      // ever fires once per real creation, not on every future visit to
+      // this same entry.
+      navigate(location.pathname, { replace: true, state: null })
+    }
     let cancelled = false
     // Reset to 'loading' from inside the async callback, not synchronously
     // at the top of the effect -- an oxlint react/set-state-in-effect rule
@@ -77,8 +95,13 @@ export function Home() {
     // navigates to this SAME route ("/") with { replace: true }, carrying a
     // new state object, so without this dependency the effect would never
     // re-run to pick up the just-created group on that navigation
-    // (session.userId doesn't change across it).
-  }, [session.userId, locationState])
+    // (session.userId doesn't change across it). navigate/location.pathname
+    // are also listed for exhaustive-deps -- react-router v7's useNavigate()
+    // is already a stable reference and Home is only ever mounted at "/"
+    // today, so neither actually changes across renders in practice; the
+    // state:null replace above keeps the same pathname, so it does not
+    // itself re-trigger this effect a second time.
+  }, [session.userId, locationState, location.pathname, navigate])
 
   // Renders nothing rather than the logged-out view while the #32 bootstrap
   // is still checking -- otherwise an authenticated visitor reloading this
