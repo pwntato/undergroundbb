@@ -509,9 +509,8 @@ type listGroupsResponse struct {
 // (M7+). Shipping a fabricated or always-zero count here would be worse
 // than omitting the field -- a client cannot tell "genuinely zero unread"
 // from "this deployment hasn't built unread tracking yet." Filed as a
-// separate follow-up (#144) once that infrastructure exists; today's
-// omitempty-free field set is additive-only from here, not a breaking
-// change to this response shape.
+// separate follow-up (#145) once that infrastructure exists; adding it
+// later is additive to this response shape, not a breaking change.
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {

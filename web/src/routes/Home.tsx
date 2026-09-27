@@ -10,23 +10,32 @@
 // touches a group key.
 
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { listGroups } from '@/lib/api/groups'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { useSession } from '@/lib/session/useSession'
 import { GroupList, type LoadState } from './GroupList'
+import { readNewGroupState } from './newGroupNavigationState'
 import { runListGroups } from './runListGroups'
 
 export function Home() {
   const session = useSession()
+  const location = useLocation()
+  const locationState = location.state as unknown
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
 
   useEffect(() => {
     if (!session.userId) {
       return
     }
+    // Read fresh from locationState (the actual dependency below) rather
+    // than a value computed at component-body scope -- readNewGroupState
+    // returns a new object reference every render, so using ITS result as
+    // a dependency would re-run this effect on every unrelated render;
+    // locationState itself only changes on a real navigation.
+    const newGroup = readNewGroupState(locationState)
     let cancelled = false
     // Reset to 'loading' from inside the async callback, not synchronously
     // at the top of the effect -- an oxlint react/set-state-in-effect rule
@@ -46,6 +55,7 @@ export function Home() {
           getCachedGroupName,
           setCachedGroupName,
           userId: session.userId as string,
+          ...(newGroup !== undefined && { newGroup }),
         })
         if (!cancelled) {
           setLoad({ status: 'ready', groups })
@@ -63,7 +73,12 @@ export function Home() {
     return () => {
       cancelled = true
     }
-  }, [session.userId])
+    // locationState, not just session.userId -- CreateGroupScreen
+    // navigates to this SAME route ("/") with { replace: true }, carrying a
+    // new state object, so without this dependency the effect would never
+    // re-run to pick up the just-created group on that navigation
+    // (session.userId doesn't change across it).
+  }, [session.userId, locationState])
 
   // Renders nothing rather than the logged-out view while the #32 bootstrap
   // is still checking -- otherwise an authenticated visitor reloading this

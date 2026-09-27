@@ -231,14 +231,23 @@ describe('runListGroups', () => {
 
     const results = await runListGroups(deps)
 
-    expect(results).toEqual([
-      expect.objectContaining({
-        groupId: 'priv-good',
-        displayName: 'Good Group',
-        nameStatus: 'decrypted',
-      }),
-      expect.objectContaining({ groupId: 'priv-bad', displayName: null, nameStatus: 'unreadable' }),
-    ])
+    // Order-independent -- this test is about the batch not failing, not
+    // about final list order (sortByLabel's own tests cover ordering).
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          groupId: 'priv-good',
+          displayName: 'Good Group',
+          nameStatus: 'decrypted',
+        }),
+        expect.objectContaining({
+          groupId: 'priv-bad',
+          displayName: null,
+          nameStatus: 'unreadable',
+        }),
+      ]),
+    )
+    expect(results).toHaveLength(2)
   })
 
   it('renders a private group missing a required field as unreadable, without calling decryptGroupNames for it', async () => {
@@ -253,5 +262,164 @@ describe('runListGroups', () => {
       expect.objectContaining({ displayName: null, nameStatus: 'unreadable' }),
     ])
     expect(deps.decryptGroupNames).not.toHaveBeenCalled()
+  })
+
+  it('does not cache a failed decrypt, so the next call retries it instead of staying unreadable forever', async () => {
+    // PR #144 review: caching a null result would mean a group that failed
+    // once (transient, or fixed server-side at the same generation) never
+    // gets retried for the rest of the tab session.
+    const cache = fakeCache()
+    const firstDecrypt = vi
+      .fn()
+      .mockResolvedValue([{ groupId: 'priv-1', name: null, description: null }])
+    const firstDeps = makeDeps({
+      listGroups: vi.fn().mockResolvedValue({ groups: [privateGroup()] }),
+      decryptGroupNames: firstDecrypt,
+      getCachedGroupName: cache.getCachedGroupName,
+      setCachedGroupName: cache.setCachedGroupName,
+    })
+
+    const firstResults = await runListGroups(firstDeps)
+    expect(firstResults).toEqual([
+      expect.objectContaining({ groupId: 'priv-1', displayName: null, nameStatus: 'unreadable' }),
+    ])
+    expect(cache.setCachedGroupName).not.toHaveBeenCalled()
+
+    // A second call reusing the same cache must NOT hit a cached failure --
+    // it must call decryptGroupNames again, same as a cold cache would.
+    const secondDecrypt = vi
+      .fn()
+      .mockResolvedValue([{ groupId: 'priv-1', name: 'Fixed Now', description: 'Fixed' }])
+    const secondDeps = makeDeps({
+      listGroups: vi.fn().mockResolvedValue({ groups: [privateGroup()] }),
+      decryptGroupNames: secondDecrypt,
+      getCachedGroupName: cache.getCachedGroupName,
+      setCachedGroupName: cache.setCachedGroupName,
+    })
+
+    const secondResults = await runListGroups(secondDeps)
+    expect(secondDecrypt).toHaveBeenCalledTimes(1)
+    expect(secondResults).toEqual([
+      expect.objectContaining({ displayName: 'Fixed Now', nameStatus: 'decrypted' }),
+    ])
+  })
+
+  // PR #144 review non-blocking #5: GET /api/groups reads GSI1, which is
+  // eventually consistent on real DynamoDB. A group just created and
+  // immediately navigated to can be transiently missing from the very next
+  // fetch -- these pin the merge that covers it (newGroup, passed through
+  // router state by CreateGroupScreen).
+  describe('newGroup merge (GSI1 eventual-consistency mitigation)', () => {
+    it('merges in newGroup when the fetched list does not include it yet', async () => {
+      const newGroup = publicGroup({ groupId: 'brand-new', namePlaintext: 'Brand New Group' })
+      const deps = makeDeps({
+        listGroups: vi.fn().mockResolvedValue({ groups: [publicGroup({ groupId: 'existing' })] }),
+        newGroup,
+      })
+
+      const results = await runListGroups(deps)
+
+      // Order-independent -- the merge happens before sortByLabel runs, so
+      // final position depends on alphabetical order, not merge order
+      // (sortByLabel's own tests cover ordering specifically).
+      expect(results.map((g) => g.groupId).sort()).toEqual(['brand-new', 'existing'])
+      expect(results).toContainEqual(
+        expect.objectContaining({ groupId: 'brand-new', displayName: 'Brand New Group' }),
+      )
+    })
+
+    it('does not duplicate newGroup once the fetched list actually includes it', async () => {
+      const newGroup = publicGroup({ groupId: 'now-present', namePlaintext: 'Now Present' })
+      const deps = makeDeps({
+        // The server has already caught up -- the fetched list includes
+        // the group for real, with its actual (possibly different) data.
+        listGroups: vi.fn().mockResolvedValue({
+          groups: [publicGroup({ groupId: 'now-present', namePlaintext: 'Server Copy' })],
+        }),
+        newGroup,
+      })
+
+      const results = await runListGroups(deps)
+
+      expect(results).toHaveLength(1)
+      expect(results[0]?.displayName).toBe('Server Copy')
+    })
+
+    it('decrypts a merged-in private newGroup exactly like a fetched one', async () => {
+      const newGroup = privateGroup({ groupId: 'brand-new-private' })
+      const decryptGroupNames = vi
+        .fn()
+        .mockResolvedValue([
+          { groupId: 'brand-new-private', name: 'New Private Group', description: 'Fresh' },
+        ])
+      const deps = makeDeps({
+        listGroups: vi.fn().mockResolvedValue({ groups: [] }),
+        decryptGroupNames,
+        newGroup,
+      })
+
+      const results = await runListGroups(deps)
+
+      expect(results).toEqual([
+        expect.objectContaining({
+          groupId: 'brand-new-private',
+          displayName: 'New Private Group',
+          nameStatus: 'decrypted',
+        }),
+      ])
+    })
+
+    it('does nothing when newGroup is undefined (the ordinary case)', async () => {
+      const deps = makeDeps({
+        listGroups: vi.fn().mockResolvedValue({ groups: [publicGroup()] }),
+      })
+
+      const results = await runListGroups(deps)
+
+      expect(results).toHaveLength(1)
+    })
+  })
+
+  // PR #144 review non-blocking #6: the server's own order (GSI1SK, i.e.
+  // random gid) means nothing to a user -- sorting by what's actually
+  // rendered reads better and is stable across reloads (unlike gid order,
+  // which is also effectively random from a user's perspective).
+  describe('sorting', () => {
+    it('sorts public groups alphabetically by name, case-insensitively', async () => {
+      const deps = makeDeps({
+        listGroups: vi.fn().mockResolvedValue({
+          groups: [
+            publicGroup({ groupId: 'z', namePlaintext: 'zebra group' }),
+            publicGroup({ groupId: 'a', namePlaintext: 'Apple Group' }),
+            publicGroup({ groupId: 'm', namePlaintext: 'mango group' }),
+          ],
+        }),
+      })
+
+      const results = await runListGroups(deps)
+
+      expect(results.map((g) => g.groupId)).toEqual(['a', 'm', 'z'])
+    })
+
+    it('sorts a fallback label (unreadable/coldKeys) into its own alphabetical position, not always first or last', async () => {
+      const deps = makeDeps({
+        listGroups: vi.fn().mockResolvedValue({
+          groups: [
+            publicGroup({ groupId: 'z-named', namePlaintext: 'Zephyr Group' }),
+            publicGroup({ groupId: 'a-named', namePlaintext: 'Apple Group' }),
+            privateGroup({ groupId: 'cold' }), // no cache, no decrypt call configured below -> stays coldKeys
+          ],
+        }),
+        decryptGroupNames: vi.fn().mockRejectedValue(new Error('worker: no live keys cached')),
+      })
+
+      const results = await runListGroups(deps)
+
+      // groupLabel('coldKeys') is "(private group)" -- "(" sorts before
+      // any letter in locale order, so it lands first here. The point of
+      // this test is that it sorts BY that label like any other entry,
+      // not that it's pinned to a fixed position by nameStatus.
+      expect(results.map((g) => g.groupId)).toEqual(['cold', 'a-named', 'z-named'])
+    })
   })
 })

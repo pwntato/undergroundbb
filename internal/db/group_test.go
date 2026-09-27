@@ -5,6 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -432,5 +436,56 @@ func TestListGroupsIgnoresOtherUsersGroups(t *testing.T) {
 	}
 	if groups[0].CreatorUserID != ownUserID {
 		t.Errorf("returned group CreatorUserID = %q, want %q", groups[0].CreatorUserID, ownUserID)
+	}
+}
+
+// TestListGroupsExcludesNonMembershipRows pins PR #144 review's blocking
+// finding: GSI1PK "USER#<uuid>" is not membership-exclusive. Per
+// docs/DESIGN.md's data-model table, a Join request row
+// (PK "GROUP#<gid>", SK "REQ#<uuid>", GSI1PK "USER#<requester>") shares
+// this same partition. Before queryMembershipsByUser filtered on
+// GSI1SK begins_with "GROUP#", that row's PK still recovered a real gid
+// (groupIDFromMembership doesn't care about SK), so a pending REQUESTER --
+// not a member at all -- got the group back from ListGroups with
+// Role == "". Neither invites nor join requests are modeled yet (#38-40),
+// so this row is built directly here rather than through a real db.Client
+// method, matching the reviewer's own repro shape.
+func TestListGroupsExcludesNonMembershipRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	groupID := "test-group-" + randomSuffix(t)
+	creatorUserID := "test-creator-" + randomSuffix(t)
+	in := testCreateGroupInput(t, groupID, creatorUserID)
+	in.Visibility = models.VisibilityPublic
+	in.NameCiphertext = nil
+	in.DescriptionCiphertext = nil
+	in.NamePlaintext = "Public Group"
+	if _, err := c.CreateGroup(ctx, in); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	requesterUserID := "test-requester-" + randomSuffix(t)
+	_, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(c.table),
+		Item: map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK":     &types.AttributeValueMemberS{Value: "REQ#" + requesterUserID},
+			"Type":   &types.AttributeValueMemberS{Value: "JoinRequest"},
+			"GSI1PK": &types.AttributeValueMemberS{Value: "USER#" + requesterUserID},
+			"GSI1SK": &types.AttributeValueMemberS{Value: "REQ#2026-09-27#deadbeef"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PutItem (join request row): %v", err)
+	}
+
+	memberships, groups, err := c.ListGroups(ctx, requesterUserID)
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	if len(memberships) != 0 || len(groups) != 0 {
+		t.Fatalf("ListGroups(requester) = %d memberships, %d groups; want 0, 0 -- a pending join request must not appear as a membership (got %+v / %+v)",
+			len(memberships), len(groups), memberships, groups)
 	}
 }

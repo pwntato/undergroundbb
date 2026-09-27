@@ -15,6 +15,7 @@
 
 import type { GroupListEntry, ListGroupsResponse } from '@/lib/api/groups'
 import type { DecryptedGroupName } from '@/lib/crypto/worker-protocol'
+import { groupLabel } from './groupLabel'
 
 /**
  * One group ready to render. For a public group, name/description are
@@ -38,6 +39,17 @@ export type DisplayGroup = GroupListEntry & {
 
 export interface ListGroupsDeps {
   readonly listGroups: () => Promise<ListGroupsResponse>
+  /**
+   * A group CreateGroupScreen just created, passed through router state
+   * (newGroupNavigationState.ts) -- merged into the fetched list if
+   * GET /api/groups doesn't already include it, since that read goes
+   * through GSI1, which is eventually consistent (PR #144 review): a group
+   * created and then immediately navigated to can be transiently missing
+   * from the very next fetch on real DynamoDB. Undefined on every ordinary
+   * visit to Home (a plain reload, or navigating here some other way) --
+   * only CreateGroupScreen's own navigate() call ever sets this.
+   */
+  readonly newGroup?: GroupListEntry
   readonly decryptGroupNames: (req: {
     readonly userId: string
     readonly groups: readonly {
@@ -100,7 +112,18 @@ export function isLiveKeysError(error: unknown): boolean {
  * temporarily unreadable.
  */
 export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[]> {
-  const { groups } = await deps.listGroups()
+  const { groups: fetched } = await deps.listGroups()
+
+  // Merge in a just-created group the fetched list doesn't have yet (GSI1
+  // eventual consistency, this function's own header comment) -- appended
+  // rather than prepended, so a freshly created group doesn't jump ahead of
+  // an existing one in whatever order the server returned; ordering is a
+  // separate concern (PR #144 review non-blocking #6) this merge doesn't
+  // need to solve.
+  const groups =
+    deps.newGroup && !fetched.some((g) => g.groupId === deps.newGroup?.groupId)
+      ? [...fetched, deps.newGroup]
+      : fetched
 
   const results: DisplayGroup[] = []
   const toDecrypt: {
@@ -164,7 +187,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
   }
 
   if (toDecrypt.length === 0) {
-    return results
+    return sortByLabel(results)
   }
 
   let decrypted: readonly DecryptedGroupName[]
@@ -174,7 +197,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
     if (isLiveKeysError(err)) {
       // Every pending entry stays 'coldKeys' -- already the initial value
       // set above, so there is nothing further to do here.
-      return results
+      return sortByLabel(results)
     }
     throw err
   }
@@ -194,14 +217,35 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       displayDescription: result.description,
       nameStatus: result.name === null ? 'unreadable' : 'decrypted',
     }
-    deps.setCachedGroupName(
-      deps.userId,
-      result.groupId,
-      group.generation,
-      result.name,
-      result.description,
-    )
+    // Only cache a SUCCESSFUL decrypt (PR #144 review) -- caching a failure
+    // too would mean a group that failed once (a transient issue, or a
+    // server-side data fix at the same generation) stays 'unreadable' for
+    // the rest of the tab session, never retried. The cost of not caching a
+    // failure is one extra worker call per bad group on the next load,
+    // which is cheap next to getting stuck permanently wrong.
+    if (result.name !== null) {
+      deps.setCachedGroupName(
+        deps.userId,
+        result.groupId,
+        group.generation,
+        result.name,
+        result.description,
+      )
+    }
   }
 
-  return results
+  return sortByLabel(results)
+}
+
+// sortByLabel orders the final list by what the user actually sees
+// (groupLabel's own rendered text) -- PR #144 review non-blocking #6: the
+// unsorted order is GSI1SK order, i.e. by random gid, which is stable but
+// means nothing to a user. Sorting by the same string groupLabel produces
+// (rather than raw displayName) means an unreadable/coldKeys entry's own
+// fallback label sorts predictably by its own text too, instead of by a
+// null displayName that would need its own special-casing here. A locale-
+// aware compare (not <) handles case and diacritics the way a user expects
+// alphabetical order to work.
+function sortByLabel(groups: DisplayGroup[]): DisplayGroup[] {
+  return [...groups].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
 }

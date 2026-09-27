@@ -20,7 +20,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { createGroup } from '@/lib/api/groups'
+import { createGroup, type GroupListEntry } from '@/lib/api/groups'
 import { encrypt } from '@/lib/crypto/aesgcm'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { groupNameAAD } from '@/lib/crypto/group'
@@ -29,7 +29,13 @@ import { signGroupCreation } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { ReauthenticateStep } from './ReauthenticateStep'
-import { runCreateGroup, type CreateGroupErrorKind, type GroupFormInput } from './runCreateGroup'
+import {
+  runCreateGroup,
+  type CreateGroupErrorKind,
+  type CreateGroupResult,
+  type GroupFormInput,
+} from './runCreateGroup'
+import { NEW_GROUP_STATE_KEY } from './newGroupNavigationState'
 
 const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
 const AMBIGUOUS_ERROR =
@@ -149,9 +155,14 @@ export function CreateGroupScreen() {
 
       setPending(undefined)
       setSubmitting(false)
-      // #35 (list groups) is what will actually show the new group; for now
-      // this just returns Home, matching Home.tsx's own placeholder state.
-      navigate('/', { replace: true })
+      // Passes the just-created group to Home via router state so it can
+      // render immediately even if GET /api/groups' GSI1 read hasn't caught
+      // up yet -- see newGroupNavigationState.ts's own header comment for
+      // the full reasoning (PR #144 review).
+      navigate('/', {
+        replace: true,
+        state: { [NEW_GROUP_STATE_KEY]: buildGroupListEntry(groupId, form, result) },
+      })
     })()
   }
 
@@ -190,6 +201,48 @@ export function CreateGroupScreen() {
       {...(pending !== undefined && { initialValues: pending.values })}
     />
   )
+}
+
+/**
+ * Builds the GroupListEntry-shaped object passed to Home via router state
+ * (newGroupNavigationState.ts) -- everything a GET /api/groups response
+ * would carry for this exact group, built from data this screen already
+ * has: groupId, the request's own form (visibility + plaintext/ciphertext +
+ * revocationMode -- expirationDays/revocationMode aren't part of
+ * GroupListEntry itself, so they're not carried here), and
+ * result.groupKeyWrapped from the just-completed signGroupCreation call.
+ * The creator is always role "admin" at generation 0 -- CreateGroup's own
+ * Go side writes the creator's MEMBER# item with exactly those values (see
+ * db.CreateGroup), so this isn't a guess.
+ */
+function buildGroupListEntry(
+  groupId: string,
+  form: GroupFormInput,
+  result: Extract<CreateGroupResult, { ok: true }>,
+): GroupListEntry {
+  if (form.visibility === 'public') {
+    return {
+      groupId,
+      visibility: 'public',
+      role: 'admin',
+      generation: 0,
+      ...(form.namePlaintext !== undefined && { namePlaintext: form.namePlaintext }),
+      ...(form.descriptionPlaintext !== undefined && {
+        descriptionPlaintext: form.descriptionPlaintext,
+      }),
+    }
+  }
+  return {
+    groupId,
+    visibility: 'private',
+    role: 'admin',
+    generation: 0,
+    ...(form.nameCiphertext !== undefined && { nameCiphertext: form.nameCiphertext }),
+    ...(form.descriptionCiphertext !== undefined && {
+      descriptionCiphertext: form.descriptionCiphertext,
+    }),
+    wrappedGroupKey: result.groupKeyWrapped,
+  }
 }
 
 /** Structural comparison of the plaintext form values a pending attempt was built from -- deliberately excludes derived ciphertext, which is always freshly re-encrypted under a fresh nonce even for identical plaintext (see buildFormInput). */

@@ -304,6 +304,27 @@ func (c *Client) isOwnGroupCreation(ctx context.Context, in CreateGroupInput) (s
 // ValidationException, not something the client silently retries around.
 const batchGetItemLimit = 100
 
+// maxUnprocessedKeysRetries and unprocessedKeysBaseDelay bound
+// batchGetGroupMetas' UnprocessedKeys retry loop (PR #144 review): retrying
+// immediately with no backoff is the pattern AWS's own BatchGetItem docs
+// advise against, since UnprocessedKeys often means the request is already
+// being throttled. Capped exponential backoff (base * 2^attempt, doubling
+// each retry) gives a transient throttle room to clear; the attempt cap
+// keeps this from being bounded only by ctx/the Lambda timeout, and a
+// caller that exhausts it gets a real error instead of a request that
+// silently hangs until the function times out.
+const (
+	maxUnprocessedKeysRetries = 5
+	unprocessedKeysBaseDelay  = 50 * time.Millisecond
+)
+
+// errBatchGetGroupMetasExhausted is returned when
+// maxUnprocessedKeysRetries is reached with keys still unprocessed --
+// DynamoDB has been sufficiently overloaded that continuing to retry this
+// specific call isn't the right response; a fresh top-level request should
+// go through normal Lambda/client retry behavior instead.
+var errBatchGetGroupMetasExhausted = errors.New("db: batchGetGroupMetas: exhausted retries with UnprocessedKeys still outstanding")
+
 // ListGroups implements issue #35: the one GSI1 Query that makes "list my
 // groups" a bounded read, plus the per-group META fan-out docs/DESIGN.md
 // names as the actual cost ("Rendering a user's group list is the one
@@ -358,6 +379,22 @@ func (c *Client) ListGroups(ctx context.Context, userID string) ([]models.Member
 // actually grows in use"), so a heavy user's memberships could exceed one
 // Query page in principle even though none exist yet to prove it in
 // practice.
+//
+// The query is restricted to GSI1SK begins_with "GROUP#" -- GSI1PK
+// "USER#<uuid>" is NOT membership-exclusive. Per DESIGN.md's data-model
+// table, Invite ("SENT#<iid>") and Join request ("REQ#...") rows share this
+// same partition ("the three user reverse-lookups"). Without this filter, a
+// pending join request -- PK "GROUP#<gid>", GSI1SK "REQ#..." -- would
+// unmarshal as a Membership: groupIDFromMembership still recovers a real
+// gid from its PK, so the requester (not a member at all) would get that
+// group back with Role == "" (PR #144 review, reproduced live against
+// DynamoDB Local: a REQ# row put alongside a real group made a non-member
+// requester's own ListGroups return it). An invite row's PK is
+// "INVITE#<iid>", so it would instead miss the META BatchGetItem entirely
+// (wasted RCUs, but not a correctness bug) -- begins_with saves that read
+// too. Neither invites nor join requests are built yet (#38-40 are next in
+// M4), so this was silent until those land; TestListGroupsExcludesNonMembershipRows
+// pins it before that happens.
 func (c *Client) queryMembershipsByUser(ctx context.Context, userID string) ([]models.Membership, error) {
 	var memberships []models.Membership
 	var startKey map[string]types.AttributeValue
@@ -365,9 +402,10 @@ func (c *Client) queryMembershipsByUser(ctx context.Context, userID string) ([]m
 		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
 			TableName:              aws.String(c.table),
 			IndexName:              aws.String("GSI1"),
-			KeyConditionExpression: aws.String("GSI1PK = :pk"),
+			KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
+				":sk": &types.AttributeValueMemberS{Value: "GROUP#"},
 			},
 			ExclusiveStartKey: startKey,
 		})
@@ -440,7 +478,18 @@ func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map
 		requestItems := map[string]types.KeysAndAttributes{
 			c.table: {Keys: keys},
 		}
-		for len(requestItems) > 0 {
+		for attempt := 0; len(requestItems) > 0; attempt++ {
+			if attempt > 0 {
+				delay := unprocessedKeysBaseDelay * time.Duration(1<<(attempt-1))
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			if attempt >= maxUnprocessedKeysRetries {
+				return nil, errBatchGetGroupMetasExhausted
+			}
 			out, err := c.ddb.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
 				RequestItems: requestItems,
 			})
