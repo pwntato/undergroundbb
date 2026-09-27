@@ -80,6 +80,8 @@ function acceptErrorMessageFor(kind: AcceptInviteErrorKind, error: unknown): str
       return AUTH_REQUIRED_ERROR
     case 'alreadyAccepted':
       return 'This invite has already been used -- possibly by you, in another tab.'
+    case 'alreadyMember':
+      return "You're already a member of this group."
     case 'expired':
       return 'This invite has expired.'
   }

@@ -12,6 +12,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type { PendingInviteCompletion, PendingInviteCompletionsResponse } from '@/lib/api/invites'
 import { base64ToBytes } from '@/lib/crypto/base64'
+import { InviteMACError } from '@/lib/crypto/credential-material'
 import * as ed25519 from '@/lib/crypto/ed25519'
 import { inviteAcceptancePayload } from '@/lib/crypto/invite'
 import type { CompleteInviteResult } from '@/lib/crypto/worker-protocol'
@@ -187,6 +188,28 @@ async function completeOne(
     // pending-completions on every future login.
     if (err instanceof ApiError && err.code === 'already_member') {
       return { inviteId: invite.inviteId, ok: true }
+    }
+    // InviteMACError means one of two things (PR #146 round-2 review):
+    // either the server just attempted the exact key-substitution this
+    // MAC exists to block, or -- the legitimate, permanent case -- the
+    // inviter's OWN signing key has since rotated, so the seed
+    // deriveInviteMACKey re-derives k from no longer matches the one used
+    // at creation, and this invite can never complete (no key-rotation
+    // superseded-seed fallback exists yet, since rotation itself, #78,
+    // doesn't exist). Either way, this must not look like an ordinary
+    // transient failure that a future login might silently resolve on its
+    // own: logged loudly (console.error, not console.warn -- this is
+    // exactly the failure mode a malicious server would try to hide
+    // among ordinary noise) and given its own reason so a caller
+    // surfacing per-invite outcomes (none does yet -- #83's own
+    // surfacing is the natural home for this) can tell it apart from a
+    // plain network hiccup.
+    if (err instanceof InviteMACError) {
+      console.error(
+        `runCompleteInvites: invite ${invite.inviteId} failed its MAC check -- either a malicious server substituted its own keys, or the inviter's signing key has rotated since this invite was created`,
+        err,
+      )
+      return { inviteId: invite.inviteId, ok: false, reason: 'invite MAC does not verify' }
     }
     return { inviteId: invite.inviteId, ok: false, reason: describeError(err) }
   }

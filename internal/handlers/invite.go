@@ -39,9 +39,20 @@ const (
 // completionDeadlineDuration's own order of magnitude, since a much longer
 // unaccepted-link lifetime would extend the invite disclosure window
 // THREAT_MODEL treats as the more sensitive half for no real benefit.
+//
+// maxInviteTTL is 31 days, not a flat 30 -- PR #146 round-2 review's own
+// catch: expiresAt must now be exactly the end of a UTC day
+// ("...T23:59:59Z", this file's own createInvite doc comment), and
+// CreateInviteScreen.tsx's "30 days" option means "the end of the UTC day
+// 30 DAYS FROM NOW," which is itself up to just under 24h MORE than a flat
+// 30*24h away depending on what time of day the invite is created. A
+// literal 30*24h cap rejected that option on every submission except one
+// created at exactly 23:59:59Z. The extra day of slack absorbs exactly
+// that rounding, without meaningfully loosening the policy the ceiling
+// exists to enforce.
 const (
 	minInviteTTL = 1 * time.Hour
-	maxInviteTTL = 30 * 24 * time.Hour
+	maxInviteTTL = 31 * 24 * time.Hour
 )
 
 // createInviteRequest is the wire shape of POST /api/groups/{groupId}/invites
@@ -141,7 +152,7 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ttl := time.Until(expiresAt); ttl < minInviteTTL || ttl > maxInviteTTL {
-		WriteError(w, http.StatusBadRequest, "expiresAt: must be between 1 hour and 30 days from now")
+		WriteError(w, http.StatusBadRequest, "expiresAt: must be between 1 hour and 31 days from now")
 		return
 	}
 
@@ -652,7 +663,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The SENT# row alone only proves the caller WAS an admin or
-	// ambassador at CREATE time, up to 30 days earlier (maxInviteTTL) plus
+	// ambassador at CREATE time, up to maxInviteTTL earlier, plus
 	// the 7-day completion deadline -- it says nothing about whether they
 	// still hold that role now. Without this check, an inviter demoted to
 	// Member or removed from the group entirely (#36/#37, next in M4)
@@ -711,12 +722,13 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// the 7-day completion deadline TTL eventually sweeps it. Run
 			// a follow-up cleanup transaction (no membership write, since
 			// there is nothing left to write) so this invite stops
-			// showing up as pending, and report success either way --
-			// ErrInviteAlreadyCompleted from the cleanup itself just means
-			// another racing completion attempt already cleared these
-			// same rows, which is exactly as fine.
-			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil &&
-				!errors.Is(cleanupErr, db.ErrInviteAlreadyCompleted) {
+			// showing up as pending. CleanupAlreadyMemberInvite's own
+			// deletes are unconditional (its own doc comment explains
+			// why -- a racing second cleanup/completion attempt having
+			// already cleared one or both rows first is simply a no-op,
+			// never an error), so any error it does return here is a
+			// genuine infra failure, not "already cleaned up."
+			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
 				WriteError(w, http.StatusInternalServerError, "could not complete invite")
 				return
 			}

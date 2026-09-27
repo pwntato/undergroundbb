@@ -104,7 +104,12 @@ export function verifyInvite(
 }
 
 export type AcceptInviteErrorKind =
-  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'alreadyAccepted' | 'expired'
+  | 'definitelyUncommitted'
+  | 'ambiguous'
+  | 'authRequired'
+  | 'alreadyAccepted'
+  | 'alreadyMember'
+  | 'expired'
 
 export type RunAcceptInviteResult =
   | { readonly ok: true; readonly response: AcceptInviteResponse }
@@ -173,6 +178,17 @@ export async function runAcceptInvite(
     }
     if (err instanceof ApiError && err.code === 'invite_already_accepted') {
       return { ok: false, kind: 'alreadyAccepted', error: err }
+    }
+    // 409 already_member -- the caller (possibly the inviter themselves)
+    // already holds a membership in this invite's own group, per
+    // acceptInvite's own existing-membership check. Also a real,
+    // non-retriable committed state on the server side, like
+    // invite_already_accepted, and must be checked before
+    // isDefinitelyUncommitted below, which excludes every 409 (including
+    // this one) and would otherwise fall through to 'ambiguous' --
+    // telling the caller to retry a request that will just 409 again.
+    if (err instanceof ApiError && err.code === 'already_member') {
+      return { ok: false, kind: 'alreadyMember', error: err }
     }
     if (err instanceof ApiError && err.status === 410) {
       return { ok: false, kind: 'expired', error: err }

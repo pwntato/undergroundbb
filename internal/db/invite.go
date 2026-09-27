@@ -701,11 +701,20 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 // "nothing left to do" outcome CompleteInvite's own sentDeleteIndex check
 // gives, rather than a confusing partial-delete error.
 func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, inviterUserID string) error {
-	const (
-		inviteDeleteIndex = 0
-		sentDeleteIndex   = 1
-	)
-
+	// Deliberately UNCONDITIONAL -- PR #146 round-2 review's own catch: a
+	// ConditionExpression on either Delete meant that if ONE row was
+	// already gone (e.g. a racing second cleanup/completion attempt
+	// deleted it first) but the OTHER still existed, TransactWriteItems
+	// cancels the ENTIRE transaction on the failed condition -- including
+	// the delete that would have succeeded. The still-existing row then
+	// survives as a genuine zombie: this function's own caller treats the
+	// resulting error as "nothing left to do" and reports success, so
+	// nothing ever retries the half that didn't get cleaned up, and it
+	// would otherwise linger until the 7-day deadline TTL. DynamoDB's
+	// plain Delete on an already-missing key is already a no-op (no
+	// error, nothing to condition against), so dropping both conditions
+	// makes this cleanup idempotent and complete in every ordering,
+	// rather than only when both rows happen to still exist together.
 	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
@@ -715,7 +724,6 @@ func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, invit
 						"PK": &types.AttributeValueMemberS{Value: "INVITE#" + inviteID},
 						"SK": &types.AttributeValueMemberS{Value: "META"},
 					},
-					ConditionExpression: aws.String("attribute_exists(PK)"),
 				},
 			},
 			{
@@ -725,19 +733,11 @@ func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, invit
 						"PK": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
 						"SK": &types.AttributeValueMemberS{Value: "SENT#" + inviteID},
 					},
-					ConditionExpression: aws.String("attribute_exists(PK)"),
 				},
 			},
 		},
 	})
 	if err != nil {
-		// Either condition failing means the same thing here -- one or
-		// both rows are already gone (a racing second cleanup/completion
-		// attempt), so there is nothing left to clean up. Any OTHER error
-		// (throttling, a network failure) is returned as-is, not masked.
-		if isConditionalCheckFailure(err, inviteDeleteIndex) || isConditionalCheckFailure(err, sentDeleteIndex) {
-			return ErrInviteAlreadyCompleted
-		}
 		return err
 	}
 	return nil

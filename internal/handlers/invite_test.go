@@ -187,6 +187,28 @@ func TestCreateInviteRejectsExpiryOutOfBounds(t *testing.T) {
 	}
 }
 
+// TestCreateInviteAccepts30DayOption is the exact regression PR #146 round-2
+// review caught: CreateInviteScreen.tsx's "30 days" option means "the end
+// of the UTC day 30 days from now" (endOfUTCDayStr(time.Now().Add(30*24h))),
+// which is itself up to just under 24h MORE than a flat 30*24h away
+// depending on what time of day the invite is created -- a literal
+// 30*24h maxInviteTTL rejected this option on every real submission except
+// one made at exactly 23:59:59Z. Pinning this exact client-shaped value
+// against the server's own bound is what keeps the two from drifting apart
+// again, which a bound expressed only as "30 * 24 * time.Hour" cannot
+// catch on its own.
+func TestCreateInviteAccepts30DayOption(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+
+	req := signedCreateInviteRequest(t, creator, groupID, time.Now().Add(30*24*time.Hour))
+	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+groupID+"/invites", creatorCookie, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("30-day option: status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
 // TestCreateInviteRejectsForgedSignature mutation-verifies that a signature
 // which does not actually match the payload is rejected -- if this test
 // passed with a tampered signature, createInvite's crypto.Verify call would

@@ -37,8 +37,14 @@ public keys, but a signature alone only proves those keys are mutually consisten
 is checked against arrives in the same server response, so a signature by itself does not rule out
 the server minting its own keypair and self-signing. What actually blocks that is `invite_mac`: an
 HMAC keyed by a secret (`k`) derived from the inviter's own long-term signing key and carried only in
-the invite link's URL fragment, which the server never sees and therefore cannot reproduce. See
-`docs/DESIGN.md`, "Invites — the signed handshake," for the full mechanism.
+the invite link's URL fragment, which the server never sees and therefore cannot reproduce. **This
+protection has a precondition: the link itself must reach the invitee out of band, never through this
+server.** `k` rides in the fragment specifically because browsers never transmit it — but that
+guarantee is about the literal link, not about UBB in general. If a future feature ever relays an
+invite link through the server (pasted into a post or DM in another group, or a server-mediated
+invite-by-email/notification feature), the operator sees `k` and the substitution this section
+describes as blocked becomes possible again. See `docs/DESIGN.md`, "Invites — the signed handshake,"
+for the full mechanism and this same caveat stated for anyone building such a feature.
 
 **Role claims.** Role grants are signed by the granting admin, forming a verifiable chain back to
 the group creator. A server cannot fabricate a role.
@@ -319,7 +325,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | Database dump stolen | Content safe. Social graph, usernames, day-level timing (no finer — sort-key ids are random, not time-ordered), volume, and **currently outstanding invitations** — who approached whom, even where nobody joined, bounded by the completion deadline rather than kept as history, and undated on the inviter's side — exposed. Also exposed: **offline-cracking material for every account** — the salt and password-wrapped keys, and the recovery-wrapped copy, which is released online only against a presented recovery code and is otherwise reachable only in a dump. Encrypted emails are not readable without the server's key. |
 | Server compromised, database only | Same as above, **plus email addresses** if the compromise reaches the server-held email key, which a database-only dump does not. |
 | Server compromised, attacker serves modified JS | **Total compromise.** See Limitation 1. |
-| Malicious operator swaps a public key at invite time | Blocked — `invite_mac`, keyed by a secret the operator never sees, not the invitee's signature alone (which proves the keys are self-consistent but not who holds them). See "Key substitution during invites" above. |
+| Malicious operator swaps a public key at invite time | Blocked, provided the invite link reaches the invitee out of band (not through UBB itself) — `invite_mac`, keyed by a secret the operator never sees, not the invitee's signature alone (which proves the keys are self-consistent but not who holds them). See "Key substitution during invites" above. |
 | Malicious operator fabricates a role grant | Blocked — clients verify the signature chain back to a **stored, creator-signed anchor** on the group's `META` (the creator's uuid and the Ed25519 key current at creation), checking each grant against the key that was current when it was signed. Without a stored anchor the operator could nominate a root of its own, so the anchor is what makes this row true. |
 | Malicious operator deletes a pin, then substitutes that key | **Possible.** A pin's signature authenticates its contents, not its existence, and nothing binds the pin *set* — so a withheld pin is indistinguishable from genuine first contact and the hard-block never fires. Fingerprint verification is the only control. See the pinning section in [DESIGN.md](DESIGN.md). |
 | Malicious operator lies about a key on first contact | **Possible.** TOFU pins the key from that point on, and fingerprints are displayed for out-of-band verification, but a first sighting has nothing to compare against. |

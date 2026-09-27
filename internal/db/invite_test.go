@@ -511,11 +511,67 @@ func TestCleanupAlreadyMemberInviteDeletesBothRows(t *testing.T) {
 		t.Error("SENT# item still exists after CleanupAlreadyMemberInvite, want deleted")
 	}
 
-	// A second cleanup attempt on the same, now-gone invite must fail
-	// loudly, not silently succeed a second time.
-	err = c.CleanupAlreadyMemberInvite(ctx, inviteID, inviterUserID)
-	if !errors.Is(err, ErrInviteAlreadyCompleted) {
-		t.Fatalf("second CleanupAlreadyMemberInvite: err = %v, want ErrInviteAlreadyCompleted", err)
+	// A second cleanup attempt on the same, now-gone invite must succeed
+	// as a no-op -- PR #146 round-2 review's own fix: CleanupAlreadyMemberInvite's
+	// deletes are deliberately unconditional now, so a racing second
+	// cleanup (or completion) attempt finding both rows already gone is
+	// simply nothing left to do, not an error.
+	if err := c.CleanupAlreadyMemberInvite(ctx, inviteID, inviterUserID); err != nil {
+		t.Fatalf("second CleanupAlreadyMemberInvite: err = %v, want nil (no-op)", err)
+	}
+}
+
+// TestCleanupAlreadyMemberInviteHalfGoneStillDeletesBothRows is the exact
+// regression PR #146 round-2 review caught: with a ConditionExpression on
+// EACH delete, if one row was already gone but the other still existed,
+// TransactWriteItems canceled the WHOLE transaction on the failed
+// condition -- including the delete that would have succeeded -- leaving
+// the still-existing row as a genuine zombie no caller ever retried.
+// Simulated here by deleting the SENT# row directly before ever calling
+// CleanupAlreadyMemberInvite, so only the INVITE# row is left for it to
+// find.
+func TestCleanupAlreadyMemberInviteHalfGoneStillDeletesBothRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, expiresAt)); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+
+	// SENT# is already gone BEFORE cleanup ever runs -- only INVITE# is
+	// left for CleanupAlreadyMemberInvite to find.
+	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
+			"SK": &types.AttributeValueMemberS{Value: "SENT#" + inviteID},
+		},
+	}); err != nil {
+		t.Fatalf("DeleteItem SENT#: %v", err)
+	}
+
+	if err := c.CleanupAlreadyMemberInvite(ctx, inviteID, inviterUserID); err != nil {
+		t.Fatalf("CleanupAlreadyMemberInvite: %v", err)
+	}
+
+	// The bug this test pins: with per-item conditions, this INVITE# row
+	// would have SURVIVED (the transaction canceled on SENT#'s failed
+	// condition), even though cleanup reported no error.
+	metaOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "INVITE#"+inviteID, "META"))
+	if err != nil {
+		t.Fatalf("GetItem META: %v", err)
+	}
+	if metaOut.Item != nil {
+		t.Error("INVITE# META item still exists after CleanupAlreadyMemberInvite with SENT# already gone, want deleted (half-zombie regression)")
 	}
 }
 

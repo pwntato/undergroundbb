@@ -536,6 +536,30 @@ that cannot compute `k` cannot produce a `invite_mac` that verifies, no matter w
 or signs with. This binds the acceptance to whoever holds the actual invite link, which is exactly
 the model the single-use rule already assumes but plain Ed25519 verification alone did not enforce.
 
+**`k` is derived from the inviter's *current* signing seed, so key rotation between creation and
+completion permanently breaks the invite.** If the inviter's Ed25519 identity key is ever rotated
+(key-supersession is designed elsewhere in this document but not yet implemented) after creating an
+invite but before it completes, step 3 re-derives `k` from the NEW seed, `invite_mac` no longer
+verifies against a payload accepted under the OLD seed's `k`, and the invite fails permanently — not
+transiently, and not distinguishable client-side from a real substitution attempt, since both produce
+the identical `InviteMACError`. This is an accepted trade-off for now (rotation itself does not exist
+yet), but it is a real constraint any future rotation design must account for: either rotation must
+carry forward every outstanding invite's `k` (recomputing and re-storing `invite_mac` under the
+inviter's own client before the old seed is discarded, the same "re-sign before discarding" ordering
+key pinning already requires elsewhere in this document), or completion must be able to try every
+seed in the superseded-key retention window, not just the current one.
+
+**The MAC's guarantee also has a precondition worth stating explicitly: it protects the invite only
+if the link itself reaches the invitee without passing through this server.** `k` travels in the URL
+fragment specifically because browsers never transmit a fragment to any server — but that guarantee
+only holds for the *literal* link. If a future feature ever relays an invite link through the server
+itself (pasting it into a post or DM within another group, or a server-mediated invite-by-email/
+notification feature), the operator would see `k` in the relayed content and the substitution this
+section exists to block becomes possible again. **Any future feature must never deliver an invite
+link through this server** — out-of-band delivery (a message the inviter sends outside the app, or
+copy/pasting the link directly) is a load-bearing part of this guarantee, not an implementation
+detail.
+
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.
 
@@ -557,7 +581,7 @@ links are a different object — they would need one row per acceptor — and ar
 **An invite can also be revoked**, via `DELETE /api/invites/:id` (inviter only), which deletes the
 `INVITE#` row and the inviter's own `SENT#` row: before acceptance that is the only remedy for a link
 sent to the wrong address or known to have leaked, since the TTL is otherwise the only bound and
-acceptance replaces it with a completion deadline. Conditional on `attribute_not_exists(invited_user_id)`
+acceptance replaces it with a completion deadline. Conditional on `attribute_not_exists(InvitedUserID)`
 on both rows — deleting them out from under an invitee who has already been told "you're in" (step 2
 succeeded; the group key arrives via step 3, not this write) would silently strand them with no
 membership and no remaining record anything was ever accepted, so revocation after acceptance is

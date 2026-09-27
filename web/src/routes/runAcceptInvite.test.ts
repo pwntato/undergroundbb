@@ -176,6 +176,23 @@ describe('runAcceptInvite', () => {
     }
   })
 
+  // Regression for PR #146 round-2 review: this 409 was falling through to
+  // 'ambiguous' (isDefinitelyUncommitted excludes every 409, including
+  // this one), telling the caller to retry a request that would just 409
+  // again with the same code.
+  it('a 409 already_member from acceptInvite is its own kind, not ambiguous', async () => {
+    const deps = makeDeps({
+      acceptInvite: vi
+        .fn()
+        .mockRejectedValue(new ApiError(409, 'already a member', 'already_member')),
+    })
+    const result = await runAcceptInvite(deps, INVITE_ID, MAC_KEY)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('alreadyMember')
+    }
+  })
+
   it('a 410 from acceptInvite is expired', async () => {
     const deps = makeDeps({
       acceptInvite: vi.fn().mockRejectedValue(new ApiError(410, 'invite has expired')),

@@ -8,6 +8,7 @@
 // this app needs more than one crypto call in flight at a time.
 
 import { DecryptionFailedError } from './aesgcm.js'
+import { InviteMACError } from './credential-material.js'
 import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
@@ -53,6 +54,9 @@ import type {
 function reconstructWorkerError(msg: WorkerErrorResponse): Error {
   if (msg.errorName === 'DecryptionFailedError') {
     return new DecryptionFailedError()
+  }
+  if (msg.errorName === 'InviteMACError') {
+    return new InviteMACError()
   }
   return new Error(msg.message)
 }
