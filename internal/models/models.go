@@ -471,10 +471,13 @@ type RoleGrant struct {
 // InvitedUserID's own doc comment for why the write that adds it also names
 // this field.
 //
-// TTL is the signed ExpiresAt before acceptance, and a completion deadline
-// (rounded to the end of its UTC day, per the global TTL-rounding rule)
-// after it -- see docs/DESIGN.md, "Invites -- the signed handshake," #38's
-// own issue comments, and RoundUpToEndOfUTCDay. This package stores
+// TTL is the signed ExpiresAt before acceptance, and after it the completion
+// deadline PLUS a grace window (db.abandonedGraceDuration), both rounded to
+// the end of their UTC day per the global TTL-rounding rule. It must never be
+// set to the deadline itself: that would sweep the rows the moment it passes,
+// the silent abandonment #83 prevents. The deadline is CompletionDeadline. See
+// docs/DESIGN.md, "Invites -- the signed handshake," #38's own issue comments,
+// and RoundUpToEndOfUTCDay. This package stores
 // whichever the caller computed; the rounding and deadline arithmetic live
 // in the db layer (db.AcceptInvite), matching this schema's usual "db
 // computes storage values, models just holds them" split.
@@ -482,10 +485,20 @@ type Invite struct {
 	Record
 
 	// TTL is the DynamoDB TTL attribute -- the signed ExpiresAt (as a Unix
-	// epoch) before acceptance, replaced at acceptance with a completion
-	// deadline rounded up to the end of its UTC day (db.RoundUpToEndOfUTCDay,
-	// db.AcceptInvite). See this struct's own doc comment.
+	// epoch) before acceptance, replaced at acceptance with the completion
+	// deadline plus db.abandonedGraceDuration, rounded up to the end of its UTC
+	// day (db.RoundUpToEndOfUTCDay, db.AcceptInvite). It is NOT the deadline
+	// after acceptance -- that is CompletionDeadline. See this struct's own
+	// doc comment.
 	TTL int64 `dynamodbav:"TTL"`
+	// CompletionDeadline is set at acceptance (Unix seconds, rounded to the
+	// end of a UTC day like every stored TTL). It is the DEADLINE, kept apart
+	// from TTL so that passing it surfaces the invite as overdue instead of
+	// deleting it: TTL is the deadline plus db.abandonedGraceDuration, the
+	// window in which both parties see it as overdue. Zero on an unaccepted
+	// invite and on rows written before this field existed; use
+	// EffectiveCompletionDeadline.
+	CompletionDeadline int64 `dynamodbav:"CompletionDeadline,omitempty"`
 
 	GroupID string `dynamodbav:"GroupID"`
 
@@ -574,6 +587,8 @@ type SentInvite struct {
 	// TTL mirrors Invite.TTL -- both rows take their lifetime from the same
 	// signed ExpiresAt and are updated together at acceptance.
 	TTL int64 `dynamodbav:"TTL"`
+	// CompletionDeadline mirrors Invite.CompletionDeadline.
+	CompletionDeadline int64 `dynamodbav:"CompletionDeadline,omitempty"`
 
 	GroupID string `dynamodbav:"GroupID"`
 	// InviteID recovers the INVITE#<iid> row's address -- duplicated off
@@ -597,4 +612,22 @@ type SentInvite struct {
 	// scans), so the inviter's client can re-derive k and verify it before
 	// ever wrapping the group key.
 	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
+}
+
+// EffectiveCompletionDeadline is the accepted invite's completion deadline as
+// Unix seconds. Rows accepted before CompletionDeadline existed carried the
+// deadline in TTL, so fall back to it.
+func (i Invite) EffectiveCompletionDeadline() int64 {
+	if i.CompletionDeadline != 0 {
+		return i.CompletionDeadline
+	}
+	return i.TTL
+}
+
+// EffectiveCompletionDeadline: see Invite.EffectiveCompletionDeadline.
+func (s SentInvite) EffectiveCompletionDeadline() int64 {
+	if s.CompletionDeadline != 0 {
+		return s.CompletionDeadline
+	}
+	return s.TTL
 }

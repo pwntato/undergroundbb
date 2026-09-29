@@ -1022,8 +1022,8 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Post | `GROUP#<gid>` | `POST#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 | Comment | `POST#<pid>` | `CMT#<path>` | | | group policy |
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
-| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`; completion deadline once accepted |
-| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; completion deadline once accepted |
+| Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
+| Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
@@ -1334,6 +1334,18 @@ deleting it silently at the deadline would reintroduce the round-22 bug on a lon
 visible to them rather than resolving into silence. Expiry after the deadline is therefore a
 deliberate, surfaced abandonment rather than a TTL sweep, and the row's lifetime is bounded by the
 deadline rather than by whether one particular person logs in again.
+
+**How the surfacing is built.** The deadline and the TTL are two different attributes. At
+acceptance both rows get `CompletionDeadline` (the deadline, rounded to the end of its UTC day) and a
+`TTL` one week *after* it. Passing the deadline therefore deletes nothing: `GET /api/invites/sent`
+and `GET /api/invites/received` keep returning the invite with `overdue: true` and a `removalDate`,
+so the inviter sees an acceptance they still owe and the invitee sees "not completed, you have not
+joined" for a week instead of silence. Rows accepted before the attribute existed carried the
+deadline in `TTL` and are read that way. **This narrows the round-22 failure rather than removing
+it:** once the grace window ends the TTL sweeps both rows and the acceptance does disappear, with no
+tombstone, because a tombstone would be the permanent who-approached-whom record the paragraph above
+rules out. The week is the price of the bound, and the point of it is that the invitee has had a
+real chance to be told.
 
 What a dump yields is therefore still **work genuinely outstanding**, bounded by the completion
 deadline — not a history of every approach the user has ever made.

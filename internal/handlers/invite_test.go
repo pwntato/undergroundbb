@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -994,5 +995,117 @@ func TestSentAndReceivedInvitesRequireSession(t *testing.T) {
 		if rec := doJSON(t, h, http.MethodGet, path, nil, nil); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s status = %d, want %d", path, rec.Code, http.StatusUnauthorized)
 		}
+	}
+}
+
+// setInviteDeadline rewrites an accepted invite's stored deadline on both
+// rows, to simulate time passing. clearField drops CompletionDeadline to
+// mimic a row written before that attribute existed (deadline then lives in
+// TTL).
+func setInviteDeadline(t *testing.T, inviterID, inviteID string, deadline time.Time, clearField bool) {
+	t.Helper()
+	ddb := rawDDB(t)
+	expr := "SET CompletionDeadline = :d"
+	if clearField {
+		expr = "REMOVE CompletionDeadline SET #T = :d"
+	}
+	for _, key := range []struct{ pk, sk string }{
+		{"INVITE#" + inviteID, "META"},
+		{"USER#" + inviterID, "SENT#" + inviteID},
+	} {
+		in := &dynamodb.UpdateItemInput{
+			TableName: aws.String(testTableName()),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: key.pk},
+				"SK": &types.AttributeValueMemberS{Value: key.sk},
+			},
+			UpdateExpression: aws.String(expr),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":d": &types.AttributeValueMemberN{Value: strconv.FormatInt(deadline.Unix(), 10)},
+			},
+		}
+		if clearField {
+			in.ExpressionAttributeNames = map[string]string{"#T": "TTL"}
+		}
+		if _, err := ddb.UpdateItem(context.Background(), in); err != nil {
+			t.Fatalf("setInviteDeadline %s: %v", key.pk, err)
+		}
+	}
+}
+
+// TestOverdueAcceptedInviteStaysVisibleToBothParties pins #83: an accepted
+// invite whose completion deadline has passed is flagged overdue to the
+// inviter and the invitee, and is still listed, not swept or hidden.
+func TestOverdueAcceptedInviteStaysVisibleToBothParties(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		clearField  bool
+		wantOverdue bool
+		deadline    time.Duration
+	}{
+		{"fresh", false, false, 24 * time.Hour},
+		{"overdue", false, true, -24 * time.Hour},
+		{"overdue legacy row with deadline only in TTL", true, true, -24 * time.Hour},
+		{"not-yet-due legacy row with deadline only in TTL", true, false, 24 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(config.FromEnv(), testDB(t))
+			creator, creatorCookie := loggedInUser(t, h)
+			groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+			inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+			invitee, inviteeCookie := loggedInUser(t, h)
+			if rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID)); rec.Code != http.StatusOK {
+				t.Fatalf("accept status = %d, body: %s", rec.Code, rec.Body.String())
+			}
+			setInviteDeadline(t, creator.userID, inviteID, time.Now().Add(tc.deadline), tc.clearField)
+
+			var sent sentInvitesResponse
+			rec := doJSON(t, h, http.MethodGet, "/api/invites/sent", creatorCookie, nil)
+			if err := json.Unmarshal(rec.Body.Bytes(), &sent); err != nil || len(sent.Invites) != 1 {
+				t.Fatalf("sent = %s (err %v), want exactly the accepted invite", rec.Body.String(), err)
+			}
+			if e := sent.Invites[0]; !e.Accepted || e.Overdue != tc.wantOverdue {
+				t.Errorf("sent entry = %+v, want accepted, overdue=%v", e, tc.wantOverdue)
+			} else {
+				checkRemovalDate(t, tc.clearField, e.CompletionDeadline, e.RemovalDate)
+			}
+
+			var recv receivedInvitesResponse
+			rec = doJSON(t, h, http.MethodGet, "/api/invites/received", inviteeCookie, nil)
+			if err := json.Unmarshal(rec.Body.Bytes(), &recv); err != nil || len(recv.Invites) != 1 {
+				t.Fatalf("received = %s (err %v), want exactly the accepted invite", rec.Body.String(), err)
+			}
+			if e := recv.Invites[0]; e.Overdue != tc.wantOverdue {
+				t.Errorf("received entry = %+v, want overdue=%v", e, tc.wantOverdue)
+			} else {
+				checkRemovalDate(t, tc.clearField, e.CompletionDeadline, e.RemovalDate)
+			}
+		})
+	}
+}
+
+// checkRemovalDate pins removalDate's VALUE, not just its presence: for a
+// current row it is the TTL, strictly after the deadline (a removalDate equal
+// to the deadline would tell users the notice vanishes the day it goes
+// overdue; the test backdates only CompletionDeadline, so only the ordering
+// is fixed, not the exact grace); for a legacy row the deadline lives in TTL, so the two coincide.
+func checkRemovalDate(t *testing.T, legacy bool, deadline, removal string) {
+	t.Helper()
+	d, err := time.Parse(time.RFC3339, deadline)
+	if err != nil {
+		t.Fatalf("completionDeadline %q: %v", deadline, err)
+	}
+	r, err := time.Parse(time.RFC3339, removal)
+	if err != nil {
+		t.Fatalf("removalDate %q: %v", removal, err)
+	}
+	if legacy {
+		if !r.Equal(d) {
+			t.Errorf("legacy removalDate = %s, want it equal to completionDeadline %s", removal, deadline)
+		}
+		return
+	}
+	if !r.After(d) {
+		t.Errorf("removalDate = %s, want it strictly after completionDeadline %s", removal, deadline)
 	}
 }

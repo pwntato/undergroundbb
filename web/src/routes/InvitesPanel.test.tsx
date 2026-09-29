@@ -25,11 +25,15 @@ const received: ReceivedInvite = {
   groupId: 'g3',
   inviterUserId: 'abcd1234-0000-4000-8000-000000000000',
   completionDeadline: '2026-10-09T23:59:59Z',
+  removalDate: '2026-10-16T23:59:59Z',
 }
+
+const NOW = Date.parse('2026-10-10T00:00:00Z')
 
 function render(
   view: { sent?: SentInvite[]; received?: ReceivedInvite[] },
   busyInviteId: string | null = null,
+  now: number = NOW,
 ): string {
   return renderToStaticMarkup(
     createElement(InvitesPanel, {
@@ -37,6 +41,7 @@ function render(
       groupLabels: new Map([['g1', 'Book Club']]),
       busyInviteId,
       onRevoke: () => undefined,
+      now,
     }),
   )
 }
@@ -69,6 +74,39 @@ describe('InvitesPanel', () => {
     expect(html).toContain('abcd1234')
     expect(html).toContain('2026-10-09')
     expect(html).toContain('You join once they next log in')
+  })
+
+  it('flags an overdue sent invite, with when it disappears, and does not offer Revoke', () => {
+    const html = render({
+      sent: [{ ...accepted, overdue: true, removalDate: '2026-10-15T23:59:59Z' }],
+    })
+    expect(html).toContain('Overdue')
+    expect(html).toContain('2026-10-08')
+    expect(html).toContain('after 2026-10-15')
+    expect(html).not.toContain('Revoke')
+    expect(html).not.toContain('Completes the next time you log in')
+  })
+
+  it('tells an invitee their overdue acceptance was not completed and that they have not joined', () => {
+    const html = render({ received: [{ ...received, overdue: true }] })
+    expect(html).toContain('have not completed it')
+    expect(html).toContain('You have not joined')
+    expect(html).toContain('after 2026-10-16')
+    expect(html).not.toContain('You join once they next log in')
+  })
+
+  it('drops the "disappears after" sentence once the removal date has passed', () => {
+    const late = Date.parse('2026-10-20T00:00:00Z')
+    const sentHtml = render(
+      { sent: [{ ...accepted, overdue: true, removalDate: '2026-10-15T23:59:59Z' }] },
+      null,
+      late,
+    )
+    expect(sentHtml).toContain('Overdue')
+    expect(sentHtml).not.toContain('disappears')
+    const recvHtml = render({ received: [{ ...received, overdue: true }] }, null, late)
+    expect(recvHtml).toContain('have not completed it')
+    expect(recvHtml).not.toContain('disappears')
   })
 
   it('locks every revoke button while one is in flight and labels the busy one', () => {

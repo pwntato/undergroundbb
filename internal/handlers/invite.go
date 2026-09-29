@@ -664,7 +664,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 
 	// The SENT# row alone only proves the caller WAS an admin or
 	// ambassador at CREATE time, up to maxInviteTTL earlier, plus
-	// the 7-day completion deadline -- it says nothing about whether they
+	// the completion deadline and its grace week -- it says nothing about whether they
 	// still hold that role now. Without this check, an inviter demoted to
 	// Member or removed from the group entirely (#36/#37, next in M4)
 	// could still complete a pending invite and have the server write a
@@ -719,7 +719,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// and would otherwise become a zombie: pending-completions
 			// keeps returning this same invite, and every future login
 			// re-unwraps, re-wraps, and hits this exact 409 again, until
-			// the 7-day completion deadline TTL eventually sweeps it. Run
+			// the row's TTL (completion deadline plus a grace week) eventually sweeps it. Run
 			// a follow-up cleanup transaction (no membership write, since
 			// there is nothing left to write) so this invite stops
 			// showing up as pending. CleanupAlreadyMemberInvite's own
@@ -750,11 +750,14 @@ type sentInviteEntry struct {
 	GroupID   string `json:"groupId"`
 	ExpiresAt string `json:"expiresAt"`
 	// Accepted is true once an invitee has completed step 2 and the invite
-	// is awaiting the inviter's own step 3 (#40). CompletionDeadline is set
-	// only then, and is the row's TTL: the deadline after which the
-	// acceptance is abandoned (#83 surfaces a passed one).
+	// is awaiting the inviter's own step 3 (#40). CompletionDeadline,
+	// Overdue and RemovalDate are set only then. Overdue means the deadline
+	// has passed with step 3 still not done (#83); the row stays visible
+	// until RemovalDate, when DynamoDB's TTL may sweep it.
 	Accepted           bool   `json:"accepted"`
 	CompletionDeadline string `json:"completionDeadline,omitempty"`
+	Overdue            bool   `json:"overdue,omitempty"`
+	RemovalDate        string `json:"removalDate,omitempty"`
 }
 
 type sentInvitesResponse struct {
@@ -771,7 +774,8 @@ func (h *Handler) sentInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	views, err := h.db.ListSentInvites(r.Context(), userID, time.Now())
+	now := time.Now()
+	views, err := h.db.ListSentInvites(r.Context(), userID, now)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not list sent invites")
 		return
@@ -786,7 +790,10 @@ func (h *Handler) sentInvites(w http.ResponseWriter, r *http.Request) {
 			Accepted:  v.InvitedUserID != "",
 		}
 		if e.Accepted {
-			e.CompletionDeadline = time.Unix(v.TTL, 0).UTC().Format(time.RFC3339)
+			deadline := v.EffectiveCompletionDeadline()
+			e.CompletionDeadline = time.Unix(deadline, 0).UTC().Format(time.RFC3339)
+			e.Overdue = now.Unix() > deadline
+			e.RemovalDate = time.Unix(v.TTL, 0).UTC().Format(time.RFC3339)
 		}
 		entries = append(entries, e)
 	}
@@ -801,6 +808,11 @@ type receivedInviteEntry struct {
 	GroupID            string `json:"groupId"`
 	InviterUserID      string `json:"inviterUserId"`
 	CompletionDeadline string `json:"completionDeadline"`
+	// Overdue and RemovalDate: see sentInviteEntry. An overdue entry is the
+	// invitee's only signal that the inviter never completed, since the
+	// acceptance was already reported to them as a success (#83).
+	Overdue     bool   `json:"overdue,omitempty"`
+	RemovalDate string `json:"removalDate"`
 }
 
 type receivedInvitesResponse struct {
@@ -817,6 +829,7 @@ func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
 	invites, err := h.db.ListReceivedInvites(r.Context(), userID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not list received invites")
@@ -829,7 +842,9 @@ func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
 			InviteID:           strings.TrimPrefix(inv.PK, "INVITE#"),
 			GroupID:            inv.GroupID,
 			InviterUserID:      inv.InviterUserID,
-			CompletionDeadline: time.Unix(inv.TTL, 0).UTC().Format(time.RFC3339),
+			CompletionDeadline: time.Unix(inv.EffectiveCompletionDeadline(), 0).UTC().Format(time.RFC3339),
+			Overdue:            now.Unix() > inv.EffectiveCompletionDeadline(),
+			RemovalDate:        time.Unix(inv.TTL, 0).UTC().Format(time.RFC3339),
 		})
 	}
 	WriteJSON(w, http.StatusOK, receivedInvitesResponse{Invites: entries})
