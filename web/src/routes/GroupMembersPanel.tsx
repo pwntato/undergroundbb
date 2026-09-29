@@ -28,8 +28,6 @@ export function GroupMembersPanel({
   view,
   userId,
   busyUserId,
-  message,
-  error,
   onChangeRole,
 }: {
   readonly view: MembersView
@@ -37,8 +35,6 @@ export function GroupMembersPanel({
   readonly userId: string
   /** The member whose role change is in flight, if any; all controls lock while one is. */
   readonly busyUserId: string | null
-  readonly message: string | null
-  readonly error: string | null
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
 }) {
   const isAdmin = view.myRole === 'admin'
@@ -48,16 +44,6 @@ export function GroupMembersPanel({
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
-      {message !== null && (
-        <Alert>
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
-      )}
-      {error !== null && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
       <ul className="flex flex-col gap-2">
         {view.members.map((m) => {
           const isSelf = m.userId === userId
@@ -101,5 +87,34 @@ export function GroupMembersPanel({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * The outcome of the last change attempt. Rendered by the screen, outside the
+ * panel, so it survives the panel unmounting when a reload fails -- which is
+ * likeliest right after an ambiguous network failure, the very case where the
+ * user most needs to read the message.
+ */
+export function MembersFeedback({
+  message,
+  error,
+}: {
+  readonly message: string | null
+  readonly error: string | null
+}) {
+  return (
+    <>
+      {message !== null && (
+        <Alert>
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
+      )}
+      {error !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </>
   )
 }

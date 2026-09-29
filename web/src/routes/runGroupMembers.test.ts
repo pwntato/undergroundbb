@@ -7,8 +7,10 @@ import type { GroupDetail, MemberEntry } from '@/lib/api/groups'
 import {
   changeRole,
   loadMembers,
+  shouldReloadAfter,
   type ChangeRoleDeps,
   type LoadMembersDeps,
+  type ChangeRoleResult,
   type MembersView,
 } from './runGroupMembers'
 
@@ -251,5 +253,23 @@ describe('changeRole', () => {
     const result = await changeRole(deps, view(), BOB, 'admin')
     expect(result).toMatchObject({ ok: false, kind: 'rejected' })
     expect(deps.changeMemberRole).not.toHaveBeenCalled()
+  })
+})
+
+describe('shouldReloadAfter', () => {
+  it.each<[string, ChangeRoleResult, boolean]>([
+    ['success', { ok: true }, true],
+    ['stale', { ok: false, kind: 'stale' }, true],
+    ['ambiguous', { ok: false, kind: 'ambiguous' }, true],
+    ['rejected', { ok: false, kind: 'rejected', message: 'x' }, true],
+    // The view is stale (demoted by another admin / member removed), and
+    // without a reload every button keeps failing the same way.
+    ['forbidden', { ok: false, kind: 'forbidden' }, true],
+    ['notFound', { ok: false, kind: 'notFound' }, true],
+    // A reload cannot help either of these.
+    ['coldKeys', { ok: false, kind: 'coldKeys' }, false],
+    ['authRequired', { ok: false, kind: 'authRequired' }, false],
+  ])('%s -> %s', (_label, outcome, want) => {
+    expect(shouldReloadAfter(outcome)).toBe(want)
   })
 })

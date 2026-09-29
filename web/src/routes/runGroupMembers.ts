@@ -187,3 +187,15 @@ export async function changeRole(
   }
   return { ok: false, kind: 'ambiguous' }
 }
+
+/**
+ * Whether the roster should be reloaded after a change attempt. Everything
+ * except the two outcomes a reload cannot help: 'coldKeys' (log in again) and
+ * 'authRequired' (session gone). In particular 'forbidden' and 'notFound'
+ * reload, because they mean the view is stale (another admin demoted us, or
+ * removed the member), and without a reload every button on screen keeps
+ * failing the same way.
+ */
+export function shouldReloadAfter(outcome: ChangeRoleResult): boolean {
+  return outcome.ok || (outcome.kind !== 'coldKeys' && outcome.kind !== 'authRequired')
+}

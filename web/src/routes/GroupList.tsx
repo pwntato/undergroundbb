@@ -41,10 +41,6 @@ export function GroupList({ load }: { readonly load: LoadState }) {
             >
               <span className="font-medium">{groupLabel(group)}</span>
               <span className="flex items-center gap-2">
-                {/* Issue #38: only an Admin or Ambassador may create an
-                    invite (the server's own 403 is the real check --
-                    this is just not offering the link to a plain Member,
-                    who would only see it fail). */}
                 <Link
                   to={`/groups/${group.groupId}/members`}
                   className="text-xs text-primary underline-offset-4 hover:underline"
@@ -58,6 +54,9 @@ export function GroupList({ load }: { readonly load: LoadState }) {
                   Settings
                 </Link>
                 {(group.role === 'admin' || group.role === 'ambassador') && (
+                  // Issue #38: only an Admin or Ambassador may create an invite (the
+                  // server's own 403 is the real check -- this is just not offering
+                  // the link to a plain Member, who would only see it fail).
                   <Link
                     to={`/groups/${group.groupId}/invite`}
                     className="text-xs text-primary underline-offset-4 hover:underline"

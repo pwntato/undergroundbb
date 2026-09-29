@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MemberEntry } from '@/lib/api/groups'
-import { GroupMembersPanel } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { memberLabel } from './memberLabel'
 import type { MembersView } from './runGroupMembers'
 
@@ -18,10 +18,7 @@ const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
   generation: 0,
 })
 
-function render(
-  view: Partial<MembersView>,
-  extra: { busyUserId?: string | null; message?: string | null; error?: string | null } = {},
-): string {
+function render(view: Partial<MembersView>, extra: { busyUserId?: string | null } = {}): string {
   return renderToStaticMarkup(
     createElement(GroupMembersPanel, {
       view: {
@@ -33,8 +30,6 @@ function render(
       },
       userId: ME,
       busyUserId: extra.busyUserId ?? null,
-      message: extra.message ?? null,
-      error: extra.error ?? null,
       onChangeRole: () => undefined,
     }),
   )
@@ -85,10 +80,20 @@ describe('GroupMembersPanel', () => {
     expect(render({ myGrantSortKey: undefined })).toContain('not on record')
     expect(render({})).not.toContain('not on record')
   })
+})
 
+describe('MembersFeedback', () => {
   it('shows a message and an error', () => {
-    const html = render({}, { message: 'It worked.', error: 'It failed.' })
+    const html = renderToStaticMarkup(
+      createElement(MembersFeedback, { message: 'It worked.', error: 'It failed.' }),
+    )
     expect(html).toContain('It worked.')
     expect(html).toContain('It failed.')
+  })
+
+  it('renders nothing when there is neither', () => {
+    expect(
+      renderToStaticMarkup(createElement(MembersFeedback, { message: null, error: null })),
+    ).toBe('')
   })
 })

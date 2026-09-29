@@ -12,9 +12,15 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { changeMemberRole, getGroup, listMembers, type MemberRole } from '@/lib/api/groups'
 import { signRoleGrant } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
-import { GroupMembersPanel } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { memberLabel } from './memberLabel'
-import { changeRole, loadMembers, type ChangeRoleResult, type MembersView } from './runGroupMembers'
+import {
+  changeRole,
+  loadMembers,
+  shouldReloadAfter,
+  type ChangeRoleResult,
+  type MembersView,
+} from './runGroupMembers'
 
 type LoadState =
   | { readonly status: 'loading' }
@@ -94,17 +100,9 @@ export function GroupMembersScreen() {
       } else {
         setError(outcome.kind === 'rejected' ? outcome.message : CHANGE_ERRORS[outcome.kind])
       }
-      // Reload after a success (new role and new grant ref) and after any
-      // outcome that says the roster or our own standing moved; the next
-      // change must sign on the CURRENT grant, never the one this view holds.
-      // 'rejected' reloads too: another admin may already have set this exact
-      // role (a 400, not a 409), and the roster must stop showing the old one.
-      if (
-        outcome.ok ||
-        outcome.kind === 'stale' ||
-        outcome.kind === 'ambiguous' ||
-        outcome.kind === 'rejected'
-      ) {
+      // Reload so the roster and the grant this view signs on are current
+      // (see shouldReloadAfter for the outcomes that skip it).
+      if (shouldReloadAfter(outcome)) {
         await reload(() => false)
       }
       setBusyUserId(null)
@@ -132,11 +130,10 @@ export function GroupMembersScreen() {
           view={load.view}
           userId={userId}
           busyUserId={busyUserId}
-          message={message}
-          error={error}
           onChangeRole={handleChangeRole}
         />
       )}
+      <MembersFeedback message={message} error={error} />
       <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
         Back to your groups
       </Link>
