@@ -408,6 +408,16 @@ type Membership struct {
 	// META would go stale at the first rotation while still looking current
 	// to anyone who fetched it).
 	WrappedGroupKey WrappedKey `dynamodbav:"WrappedGroupKey"`
+
+	// GrantSortKey is the sort key of the GRANT# row that most recently set
+	// this member's Role -- exact "current grant" bookkeeping, since two
+	// grants signed on the same UTC day sort by their random suffix, not by
+	// order of issue. It is what a grantor's next grant must reference as
+	// its grantorGrantRef (RoleGrant.GrantorGrantRef). Absent for a member
+	// who has never been granted anything (an invited plain Member), and
+	// for a group creator on groups created before this field existed --
+	// there the current grant is Group.RootGrantSortKey.
+	GrantSortKey string `dynamodbav:"GrantSortKey,omitempty"`
 }
 
 // RoleGrant is a GROUP#<gid> / GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand> item --
@@ -435,6 +445,11 @@ type RoleGrant struct {
 	// SubjectUserID/GrantedRole's subject.
 	GrantorUserID           string `dynamodbav:"GrantorUserID"`
 	GrantorSigningPublicKey []byte `dynamodbav:"GrantorSigningPublicKey"`
+	// GrantorGrantRef is the sort key of the grantor's own current grant when
+	// this one was signed -- the grantorGrantRef input to
+	// crypto.RoleGrantPayload, stored so a verifier can rebuild the signed
+	// bytes. Empty for the root grant.
+	GrantorGrantRef string `dynamodbav:"GrantorGrantRef,omitempty"`
 
 	// Signature is the grantor's Ed25519 signature (under
 	// crypto.ContextRoleGrant) over the grant's content -- group id, subject

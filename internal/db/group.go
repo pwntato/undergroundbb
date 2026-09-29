@@ -161,6 +161,7 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 		Role:            models.RoleAdmin,
 		Generation:      0,
 		WrappedGroupKey: in.GenerationKeyWrapped,
+		GrantSortKey:    in.RootGrantSortKey,
 	}
 
 	grant := models.RoleGrant{
