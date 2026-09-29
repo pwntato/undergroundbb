@@ -3,17 +3,17 @@
 // renderToStaticMarkup (see GroupList.tsx's header for why that is this
 // codebase's pattern).
 //
-// The roster carries ids only until the users projection (GET
-// /api/users/:id) exists, so members are labeled by a shortened id, with the
-// signed-in user marked "you". Only an admin sees role controls, and never
-// on their own row: the server refuses a self-change, which is also what
+// Members are labeled by username (read from the users projection, GET
+// /api/users/:id, by the screen and passed in), falling back to a shortened
+// id while it loads or if it fails, with the signed-in user marked "you".
+// Only an admin sees role controls, and never on their own row: the server refuses a self-change, which is also what
 // keeps a group from ending up with no admin. Demote/remove of an admin
 // beyond a plain role change is M6 (#55-#58).
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
-import { memberLabel } from './memberLabel'
+import { memberLabel, unresolvedClass } from './memberLabel'
 import type { MembersView } from './runGroupMembers'
 
 const ROLES: readonly MemberRole[] = ['admin', 'ambassador', 'member']
@@ -29,6 +29,7 @@ export function GroupMembersPanel({
   userId,
   busyUserId,
   onChangeRole,
+  usernames,
 }: {
   readonly view: MembersView
   /** The signed-in user's own id. */
@@ -36,6 +37,8 @@ export function GroupMembersPanel({
   /** The member whose role change is in flight, if any; all controls lock while one is. */
   readonly busyUserId: string | null
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
+  /** userId to username; anything missing renders as a short id. */
+  readonly usernames?: ReadonlyMap<string, string> | undefined
 }) {
   const isAdmin = view.myRole === 'admin'
   // Without our own grant on record a change can't be signed, so the buttons
@@ -53,8 +56,11 @@ export function GroupMembersPanel({
               className="flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
             >
               <span className="flex items-baseline gap-2">
-                <span className="font-mono text-sm" title={m.userId}>
-                  {memberLabel(m.userId)}
+                <span
+                  className={`${unresolvedClass(m.userId, usernames)} text-sm`}
+                  title={m.userId}
+                >
+                  {memberLabel(m.userId, usernames)}
                 </span>
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>

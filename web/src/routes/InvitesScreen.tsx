@@ -14,6 +14,7 @@ import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCa
 import { useSession } from '@/lib/session/useSession'
 import { groupLabel } from './groupLabel'
 import { InvitesPanel } from './InvitesPanel'
+import { useUsernames } from './useUsernames'
 import { loadInvites, revokePending, type InvitesView, type RevokeResult } from './runInvites'
 import { runListGroups } from './runListGroups'
 
@@ -42,6 +43,10 @@ export function InvitesScreen() {
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const usernames = useUsernames(
+    load.status === 'ready' ? load.view.received.map((inv) => inv.inviterUserId) : [],
+  )
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -131,6 +136,7 @@ export function InvitesScreen() {
           view={load.view}
           groupLabels={load.groupLabels}
           now={load.loadedAt}
+          usernames={usernames}
           busyInviteId={busyInviteId}
           onRevoke={handleRevoke}
         />

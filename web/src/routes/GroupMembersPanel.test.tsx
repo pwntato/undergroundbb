@@ -18,7 +18,10 @@ const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
   generation: 0,
 })
 
-function render(view: Partial<MembersView>, extra: { busyUserId?: string | null } = {}): string {
+function render(
+  view: Partial<MembersView>,
+  extra: { busyUserId?: string | null; usernames?: ReadonlyMap<string, string> } = {},
+): string {
   return renderToStaticMarkup(
     createElement(GroupMembersPanel, {
       view: {
@@ -31,6 +34,7 @@ function render(view: Partial<MembersView>, extra: { busyUserId?: string | null 
       userId: ME,
       busyUserId: extra.busyUserId ?? null,
       onChangeRole: () => undefined,
+      ...(extra.usernames !== undefined && { usernames: extra.usernames }),
     }),
   )
 }
@@ -42,6 +46,20 @@ describe('GroupMembersPanel', () => {
     expect(html).toContain('bbbbbbbb')
     expect(html.match(/>you</g)).toHaveLength(1)
     expect(memberLabel(ME)).toBe('aaaaaaaa')
+  })
+
+  it('labels members by username once the projection has resolved, and by short id otherwise', () => {
+    const usernames = new Map([[BOB, 'bob_the_member']])
+    const html = render({}, { usernames })
+    expect(html).toContain('bob_the_member')
+    // ME is not in the map yet: falls back rather than going blank.
+    expect(html).toContain('aaaaaaaa')
+    expect(html).not.toContain('>bbbbbbbb<')
+    expect(memberLabel(BOB, usernames)).toBe('bob_the_member')
+    expect(memberLabel(BOB)).toBe('bbbbbbbb')
+    // Mono marks only the unresolved fallback.
+    expect(html).toMatch(/font-mono[^>]*>aaaaaaaa</)
+    expect(html).not.toMatch(/font-mono[^>]*>bob_the_member</)
   })
 
   it("offers an admin the roles a member doesn't already have, and none on their own row", () => {
