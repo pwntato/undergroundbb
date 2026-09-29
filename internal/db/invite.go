@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -741,4 +742,136 @@ func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, invit
 		return err
 	}
 	return nil
+}
+
+// SentInviteView is one row of the inviter's own invite list (issue #41):
+// the SENT#<iid> row joined with the INVITE#<iid>/META row it points at,
+// because only the latter carries the signed ExpiresAt the pre-acceptance
+// expiry check needs (SentInvite.TTL is rounded up to the end of a UTC
+// day, so on its own it would keep an expired invite listed for up to a
+// day past its signed expiry).
+type SentInviteView struct {
+	models.SentInvite
+	// ExpiresAt is the invite's signed expires_at, verbatim.
+	ExpiresAt string
+}
+
+// ListSentInvites implements GET /api/invites/sent's read: the inviter's
+// own outstanding invites, pending and accepted-awaiting-completion alike.
+//
+// Expiry is enforced on read, since TTL deletion is eventual: a
+// not-yet-accepted invite whose signed ExpiresAt has passed is dropped, as
+// is one whose INVITE# row is already gone (revoked or swept between the
+// two reads). An accepted invite is never dropped here -- its TTL is the
+// completion deadline, and a passed deadline is exactly the thing #83 must
+// surface to the inviter rather than hide, so it stays listed.
+func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now time.Time) ([]SentInviteView, error) {
+	var sent []models.SentInvite
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(c.table),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "USER#" + inviterUserID},
+				":sk": &types.AttributeValueMemberS{Value: "SENT#"},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("db: query sent invites: %w", err)
+		}
+		var page []models.SentInvite
+		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
+			return nil, fmt.Errorf("db: unmarshal sent invites: %w", err)
+		}
+		sent = append(sent, page...)
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+
+	keys := make([]map[string]types.AttributeValue, 0, len(sent))
+	for _, s := range sent {
+		keys = append(keys, map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "INVITE#" + s.InviteID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		})
+	}
+	items, err := c.batchGetItems(ctx, keys)
+	if err != nil {
+		return nil, fmt.Errorf("db: batch get invites: %w", err)
+	}
+	expiresAt := make(map[string]string, len(items))
+	for _, item := range items {
+		var invite models.Invite
+		if err := attributevalue.UnmarshalMap(item, &invite); err != nil {
+			return nil, fmt.Errorf("db: unmarshal invite: %w", err)
+		}
+		expiresAt[strings.TrimPrefix(invite.PK, "INVITE#")] = invite.ExpiresAt
+	}
+
+	views := make([]SentInviteView, 0, len(sent))
+	for _, s := range sent {
+		exp, ok := expiresAt[s.InviteID]
+		if !ok {
+			continue
+		}
+		if s.InvitedUserID == "" {
+			// An unparseable ExpiresAt cannot have passed the handler's own
+			// RFC3339 check at creation; drop rather than list an invite
+			// whose expiry cannot be established.
+			t, err := time.Parse(time.RFC3339, exp)
+			if err != nil || !t.After(now) {
+				continue
+			}
+		}
+		views = append(views, SentInviteView{SentInvite: s, ExpiresAt: exp})
+	}
+	return views, nil
+}
+
+// ListReceivedInvites implements GET /api/invites/received's read: invites
+// the caller has ACCEPTED and that are still awaiting the inviter's step 3
+// -- the "waiting on the inviter" state an invitee must always be able to
+// see (issue #83's invitee half). It is one GSI1 Query on the entry
+// AcceptInvite adds. An invitee has no row of any kind before accepting
+// (the invite is a link, with no invitee identity until step 2), so there
+// is nothing "received" and unaccepted to list.
+//
+// Completion deletes the INVITE# row, so a completed invite drops out of
+// this list by itself. A row whose completion deadline (TTL) has passed is
+// still returned, for the same reason ListSentInvites keeps it: the
+// invitee must see an abandoned acceptance, not have it vanish.
+func (c *Client) ListReceivedInvites(ctx context.Context, inviteeUserID string) ([]models.Invite, error) {
+	var invites []models.Invite
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(c.table),
+			IndexName:              aws.String("GSI1"),
+			KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
+			// GSI1PK USER#<uuid> is shared with memberships (GROUP#) and, later,
+			// join requests; the INVITE# prefix keeps only invite entries.
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "USER#" + inviteeUserID},
+				":sk": &types.AttributeValueMemberS{Value: "INVITE#"},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("db: query received invites: %w", err)
+		}
+		var page []models.Invite
+		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
+			return nil, fmt.Errorf("db: unmarshal received invites: %w", err)
+		}
+		invites = append(invites, page...)
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return invites, nil
 }

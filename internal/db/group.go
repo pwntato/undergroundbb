@@ -475,20 +475,39 @@ func membershipGroupIDs(memberships []models.Membership) []string {
 // since ListGroups needs to look up by id to rejoin with the membership
 // each META belongs to, and BatchGetItem does not preserve request order.
 func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map[string]models.Group, error) {
+	keys := make([]map[string]types.AttributeValue, 0, len(groupIDs))
+	for _, gid := range groupIDs {
+		keys = append(keys, map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		})
+	}
+	items, err := c.batchGetItems(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
 	result := make(map[string]models.Group, len(groupIDs))
-
-	for start := 0; start < len(groupIDs); start += batchGetItemLimit {
-		end := min(start+batchGetItemLimit, len(groupIDs))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, gid := range groupIDs[start:end] {
-			keys = append(keys, map[string]types.AttributeValue{
-				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
-				"SK": &types.AttributeValueMemberS{Value: "META"},
-			})
+	for _, item := range items {
+		var group models.Group
+		if err := attributevalue.UnmarshalMap(item, &group); err != nil {
+			return nil, err
 		}
+		result[strings.TrimPrefix(group.PK, "GROUP#")] = group
+	}
+	return result, nil
+}
 
+// batchGetItems reads every key via BatchGetItem, chunked to
+// batchGetItemLimit keys per call with the UnprocessedKeys retry/backoff
+// described on maxUnprocessedKeysRetries. Keys must be distinct (BatchGetItem
+// rejects duplicates); results come back in no particular order.
+func (c *Client) batchGetItems(ctx context.Context, allKeys []map[string]types.AttributeValue) ([]map[string]types.AttributeValue, error) {
+	var result []map[string]types.AttributeValue
+
+	for start := 0; start < len(allKeys); start += batchGetItemLimit {
+		end := min(start+batchGetItemLimit, len(allKeys))
 		requestItems := map[string]types.KeysAndAttributes{
-			c.table: {Keys: keys},
+			c.table: {Keys: allKeys[start:end]},
 		}
 		for attempt := 0; len(requestItems) > 0; attempt++ {
 			// The cap check comes BEFORE the sleep (PR #144 round 2 review):
@@ -514,13 +533,7 @@ func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map
 			if err != nil {
 				return nil, err
 			}
-			for _, item := range out.Responses[c.table] {
-				var group models.Group
-				if err := attributevalue.UnmarshalMap(item, &group); err != nil {
-					return nil, err
-				}
-				result[strings.TrimPrefix(group.PK, "GROUP#")] = group
-			}
+			result = append(result, out.Responses[c.table]...)
 			requestItems = out.UnprocessedKeys
 		}
 	}

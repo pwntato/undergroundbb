@@ -741,3 +741,96 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "completed"})
 }
+
+// sentInviteEntry is one invite in GET /api/invites/sent -- issue #41. The
+// group is named by id only: a private group's name is ciphertext the
+// server cannot render, so the client resolves it from its own group list.
+type sentInviteEntry struct {
+	InviteID  string `json:"inviteId"`
+	GroupID   string `json:"groupId"`
+	ExpiresAt string `json:"expiresAt"`
+	// Accepted is true once an invitee has completed step 2 and the invite
+	// is awaiting the inviter's own step 3 (#40). CompletionDeadline is set
+	// only then, and is the row's TTL: the deadline after which the
+	// acceptance is abandoned (#83 surfaces a passed one).
+	Accepted           bool   `json:"accepted"`
+	CompletionDeadline string `json:"completionDeadline,omitempty"`
+}
+
+type sentInvitesResponse struct {
+	Invites []sentInviteEntry `json:"invites"`
+}
+
+// sentInvites implements GET /api/invites/sent -- issue #41: the caller's
+// own outstanding invites, so an inviter can see (and revoke, via DELETE
+// /api/invites/{id}) links they have handed out.
+func (h *Handler) sentInvites(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	views, err := h.db.ListSentInvites(r.Context(), userID, time.Now())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list sent invites")
+		return
+	}
+
+	entries := make([]sentInviteEntry, 0, len(views))
+	for _, v := range views {
+		e := sentInviteEntry{
+			InviteID:  v.InviteID,
+			GroupID:   v.GroupID,
+			ExpiresAt: v.ExpiresAt,
+			Accepted:  v.InvitedUserID != "",
+		}
+		if e.Accepted {
+			e.CompletionDeadline = time.Unix(v.TTL, 0).UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, e)
+	}
+	WriteJSON(w, http.StatusOK, sentInvitesResponse{Invites: entries})
+}
+
+// receivedInviteEntry is one invite in GET /api/invites/received -- issue
+// #41. Every entry is one the caller has already accepted and that is
+// waiting on its inviter, so the only state to report is the deadline.
+type receivedInviteEntry struct {
+	InviteID           string `json:"inviteId"`
+	GroupID            string `json:"groupId"`
+	InviterUserID      string `json:"inviterUserId"`
+	CompletionDeadline string `json:"completionDeadline"`
+}
+
+type receivedInvitesResponse struct {
+	Invites []receivedInviteEntry `json:"invites"`
+}
+
+// receivedInvites implements GET /api/invites/received -- issue #41, and
+// the invitee half of #83: an accepted invite stays visible as "waiting on
+// the inviter" until step 3 completes.
+func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	invites, err := h.db.ListReceivedInvites(r.Context(), userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list received invites")
+		return
+	}
+
+	entries := make([]receivedInviteEntry, 0, len(invites))
+	for _, inv := range invites {
+		entries = append(entries, receivedInviteEntry{
+			InviteID:           strings.TrimPrefix(inv.PK, "INVITE#"),
+			GroupID:            inv.GroupID,
+			InviterUserID:      inv.InviterUserID,
+			CompletionDeadline: time.Unix(inv.TTL, 0).UTC().Format(time.RFC3339),
+		})
+	}
+	WriteJSON(w, http.StatusOK, receivedInvitesResponse{Invites: entries})
+}
