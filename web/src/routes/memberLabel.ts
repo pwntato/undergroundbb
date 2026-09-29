@@ -7,3 +7,8 @@
 export function memberLabel(userId: string, usernames?: ReadonlyMap<string, string>): string {
   return usernames?.get(userId) ?? userId.split('-')[0] ?? userId
 }
+
+/** Monospace only for the uuid-fragment fallback, so an unresolved row is visibly so. */
+export function unresolvedClass(userId: string, usernames?: ReadonlyMap<string, string>): string {
+  return usernames?.has(userId) === true ? '' : 'font-mono'
+}

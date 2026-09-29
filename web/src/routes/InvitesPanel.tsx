@@ -9,7 +9,7 @@
 
 import { Button } from '@/components/ui/button'
 import type { ReceivedInvite, SentInvite } from '@/lib/api/invites'
-import { memberLabel } from './memberLabel'
+import { memberLabel, unresolvedClass } from './memberLabel'
 import type { InvitesView } from './runInvites'
 
 /** A calendar date for an RFC 3339 instant, or the raw string if it does not parse. */
@@ -177,16 +177,20 @@ function ReceivedRow({
       {invite.overdue === true ? (
         <span className="text-xs text-destructive">
           You accepted an invite from{' '}
-          <span className="font-mono">{memberLabel(invite.inviterUserId, usernames)}</span>, but
-          they have not completed it, and it was due {formatDate(invite.completionDeadline)}. You
-          have not joined. Ask them to log in, or ask for a new invite.
+          <span className={unresolvedClass(invite.inviterUserId, usernames)}>
+            {memberLabel(invite.inviterUserId, usernames)}
+          </span>
+          , but they have not completed it, and it was due {formatDate(invite.completionDeadline)}.
+          You have not joined. Ask them to log in, or ask for a new invite.
           {showRemoval && ` This notice disappears after ${formatDate(invite.removalDate)}.`}
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">
           You accepted an invite from{' '}
-          <span className="font-mono">{memberLabel(invite.inviterUserId, usernames)}</span>. You
-          join once they next log in, by {formatDate(invite.completionDeadline)}.
+          <span className={unresolvedClass(invite.inviterUserId, usernames)}>
+            {memberLabel(invite.inviterUserId, usernames)}
+          </span>
+          . You join once they next log in, by {formatDate(invite.completionDeadline)}.
         </span>
       )}
     </li>

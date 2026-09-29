@@ -57,6 +57,9 @@ describe('GroupMembersPanel', () => {
     expect(html).not.toContain('>bbbbbbbb<')
     expect(memberLabel(BOB, usernames)).toBe('bob_the_member')
     expect(memberLabel(BOB)).toBe('bbbbbbbb')
+    // Mono marks only the unresolved fallback.
+    expect(html).toMatch(/font-mono[^>]*>aaaaaaaa</)
+    expect(html).not.toMatch(/font-mono[^>]*>bob_the_member</)
   })
 
   it("offers an admin the roles a member doesn't already have, and none on their own row", () => {

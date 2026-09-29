@@ -8,21 +8,27 @@ import { getUser } from '@/lib/api/users'
 
 const cache = new Map<string, string>()
 
+/** Reads in flight at once; a large roster must not fire one request per member in a burst. */
+export const MAX_CONCURRENT_READS = 8
+
 /** Reads and caches every id not already known; returns the ids it resolved. Never throws. */
 export async function resolveUsernames(
   ids: readonly string[],
   fetchUser: typeof getUser = getUser,
 ): Promise<ReadonlyMap<string, string>> {
   const wanted = [...new Set(ids)].filter((id) => !cache.has(id))
-  await Promise.all(
-    wanted.map(async (id) => {
+  let next = 0
+  const worker = async () => {
+    while (next < wanted.length) {
+      const id = wanted[next++] as string
       try {
         cache.set(id, (await fetchUser(id)).username)
       } catch {
         // Leave it unresolved; the label falls back to the short id.
       }
-    }),
-  )
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_READS, wanted.length) }, worker))
   return new Map(
     ids.flatMap((id) => (cache.has(id) ? [[id, cache.get(id) as string] as const] : [])),
   )
