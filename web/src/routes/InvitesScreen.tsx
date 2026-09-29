@@ -23,6 +23,8 @@ type LoadState =
       readonly status: 'ready'
       readonly view: InvitesView
       readonly groupLabels: ReadonlyMap<string, string>
+      /** When this data was fetched (epoch ms); what removal dates are judged against. */
+      readonly loadedAt: number
     }
   | { readonly status: 'authRequired' | 'failed' }
 
@@ -73,7 +75,7 @@ export function InvitesScreen() {
       if (isCancelled()) {
         return
       }
-      setLoad({ status: 'ready', view: result.view, groupLabels })
+      setLoad({ status: 'ready', view: result.view, groupLabels, loadedAt: Date.now() })
     },
     [userId],
   )
@@ -128,6 +130,7 @@ export function InvitesScreen() {
         <InvitesPanel
           view={load.view}
           groupLabels={load.groupLabels}
+          now={load.loadedAt}
           busyInviteId={busyInviteId}
           onRevoke={handleRevoke}
         />

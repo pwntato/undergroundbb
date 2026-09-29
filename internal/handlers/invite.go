@@ -664,7 +664,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 
 	// The SENT# row alone only proves the caller WAS an admin or
 	// ambassador at CREATE time, up to maxInviteTTL earlier, plus
-	// the 7-day completion deadline -- it says nothing about whether they
+	// the completion deadline and its grace week -- it says nothing about whether they
 	// still hold that role now. Without this check, an inviter demoted to
 	// Member or removed from the group entirely (#36/#37, next in M4)
 	// could still complete a pending invite and have the server write a
@@ -719,7 +719,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// and would otherwise become a zombie: pending-completions
 			// keeps returning this same invite, and every future login
 			// re-unwraps, re-wraps, and hits this exact 409 again, until
-			// the 7-day completion deadline TTL eventually sweeps it. Run
+			// the row's TTL (completion deadline plus a grace week) eventually sweeps it. Run
 			// a follow-up cleanup transaction (no membership write, since
 			// there is nothing left to write) so this invite stops
 			// showing up as pending. CleanupAlreadyMemberInvite's own

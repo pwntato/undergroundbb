@@ -18,11 +18,25 @@ function formatDate(iso: string): string {
   return Number.isNaN(t.getTime()) ? iso : t.toISOString().slice(0, 10)
 }
 
+/**
+ * True when an RFC 3339 removal date is still ahead. DynamoDB's TTL sweep is
+ * lazy, so a row can outlive its removalDate; then "disappears after <past
+ * date>" would read as nonsense and the sentence is left out.
+ */
+function isUpcoming(iso: string | undefined, now: number): boolean {
+  if (iso === undefined) {
+    return false
+  }
+  const t = new Date(iso).getTime()
+  return !Number.isNaN(t) && t > now
+}
+
 export function InvitesPanel({
   view,
   groupLabels,
   busyInviteId,
   onRevoke,
+  now,
 }: {
   readonly view: InvitesView
   /** groupId to a display name, for groups the caller belongs to. Anything missing renders generically. */
@@ -30,6 +44,8 @@ export function InvitesPanel({
   /** The invite whose revoke is in flight, if any; all revoke buttons lock while one is. */
   readonly busyInviteId: string | null
   readonly onRevoke: (inviteId: string) => void
+  /** Epoch ms to compare removal dates against; the screen passes the time its data was loaded. */
+  readonly now: number
 }) {
   const label = (groupId: string) => groupLabels.get(groupId) ?? 'a group'
   return (
@@ -47,6 +63,7 @@ export function InvitesPanel({
                 key={inv.inviteId}
                 invite={inv}
                 groupName={label(inv.groupId)}
+                showRemoval={isUpcoming(inv.removalDate, now)}
                 busy={busyInviteId === inv.inviteId}
                 locked={busyInviteId !== null}
                 onRevoke={onRevoke}
@@ -65,7 +82,12 @@ export function InvitesPanel({
         ) : (
           <ul className="flex flex-col gap-2">
             {view.received.map((inv) => (
-              <ReceivedRow key={inv.inviteId} invite={inv} groupName={label(inv.groupId)} />
+              <ReceivedRow
+                key={inv.inviteId}
+                invite={inv}
+                groupName={label(inv.groupId)}
+                showRemoval={isUpcoming(inv.removalDate, now)}
+              />
             ))}
           </ul>
         )}
@@ -77,12 +99,15 @@ export function InvitesPanel({
 function SentRow({
   invite,
   groupName,
+  showRemoval,
   busy,
   locked,
   onRevoke,
 }: {
   readonly invite: SentInvite
   readonly groupName: string
+  /** Whether removalDate is still ahead; see isUpcoming. */
+  readonly showRemoval: boolean
   readonly busy: boolean
   readonly locked: boolean
   readonly onRevoke: (inviteId: string) => void
@@ -97,7 +122,8 @@ function SentRow({
               Overdue. This acceptance was due {formatDate(invite.completionDeadline ?? '')} and has
               not completed. It finishes when you log in; if it keeps failing, the invitee will need
               a new invite.
-              {invite.removalDate !== undefined &&
+              {showRemoval &&
+                invite.removalDate !== undefined &&
                 ` It disappears from here after ${formatDate(invite.removalDate)}.`}
             </span>
           ) : (
@@ -132,9 +158,12 @@ function SentRow({
 function ReceivedRow({
   invite,
   groupName,
+  showRemoval,
 }: {
   readonly invite: ReceivedInvite
   readonly groupName: string
+  /** Whether removalDate is still ahead; see isUpcoming. */
+  readonly showRemoval: boolean
 }) {
   return (
     <li className="flex flex-col rounded-md border px-3 py-2">
@@ -144,8 +173,8 @@ function ReceivedRow({
           You accepted an invite from{' '}
           <span className="font-mono">{memberLabel(invite.inviterUserId)}</span>, but they have not
           completed it, and it was due {formatDate(invite.completionDeadline)}. You have not joined.
-          Ask them to log in, or ask for a new invite. This notice disappears after{' '}
-          {formatDate(invite.removalDate)}.
+          Ask them to log in, or ask for a new invite.
+          {showRemoval && ` This notice disappears after ${formatDate(invite.removalDate)}.`}
         </span>
       ) : (
         <span className="text-xs text-muted-foreground">

@@ -1064,8 +1064,10 @@ func TestOverdueAcceptedInviteStaysVisibleToBothParties(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &sent); err != nil || len(sent.Invites) != 1 {
 				t.Fatalf("sent = %s (err %v), want exactly the accepted invite", rec.Body.String(), err)
 			}
-			if e := sent.Invites[0]; !e.Accepted || e.Overdue != tc.wantOverdue || e.RemovalDate == "" {
-				t.Errorf("sent entry = %+v, want accepted, overdue=%v, removalDate set", e, tc.wantOverdue)
+			if e := sent.Invites[0]; !e.Accepted || e.Overdue != tc.wantOverdue {
+				t.Errorf("sent entry = %+v, want accepted, overdue=%v", e, tc.wantOverdue)
+			} else {
+				checkRemovalDate(t, tc.clearField, e.CompletionDeadline, e.RemovalDate)
 			}
 
 			var recv receivedInvitesResponse
@@ -1073,9 +1075,37 @@ func TestOverdueAcceptedInviteStaysVisibleToBothParties(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &recv); err != nil || len(recv.Invites) != 1 {
 				t.Fatalf("received = %s (err %v), want exactly the accepted invite", rec.Body.String(), err)
 			}
-			if e := recv.Invites[0]; e.Overdue != tc.wantOverdue || e.RemovalDate == "" {
-				t.Errorf("received entry = %+v, want overdue=%v, removalDate set", e, tc.wantOverdue)
+			if e := recv.Invites[0]; e.Overdue != tc.wantOverdue {
+				t.Errorf("received entry = %+v, want overdue=%v", e, tc.wantOverdue)
+			} else {
+				checkRemovalDate(t, tc.clearField, e.CompletionDeadline, e.RemovalDate)
 			}
 		})
+	}
+}
+
+// checkRemovalDate pins removalDate's VALUE, not just its presence: for a
+// current row it is the TTL, strictly after the deadline (a removalDate equal
+// to the deadline would tell users the notice vanishes the day it goes
+// overdue; the test backdates only CompletionDeadline, so only the ordering
+// is fixed, not the exact grace); for a legacy row the deadline lives in TTL, so the two coincide.
+func checkRemovalDate(t *testing.T, legacy bool, deadline, removal string) {
+	t.Helper()
+	d, err := time.Parse(time.RFC3339, deadline)
+	if err != nil {
+		t.Fatalf("completionDeadline %q: %v", deadline, err)
+	}
+	r, err := time.Parse(time.RFC3339, removal)
+	if err != nil {
+		t.Fatalf("removalDate %q: %v", removal, err)
+	}
+	if legacy {
+		if !r.Equal(d) {
+			t.Errorf("legacy removalDate = %s, want it equal to completionDeadline %s", removal, deadline)
+		}
+		return
+	}
+	if !r.After(d) {
+		t.Errorf("removalDate = %s, want it strictly after completionDeadline %s", removal, deadline)
 	}
 }

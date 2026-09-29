@@ -501,7 +501,7 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 // acceptance (now), not the completion deadline -- the GSI1SK's day is meant
 // to disclose (at day resolution) when the invitee was invited/accepted, the
 // same "association" timing THREAT_MODEL discusses, which is a distinct
-// moment from the deadline the TTL attribute separately tracks.
+// moment from the deadline stored in CompletionDeadline.
 func inviteDaySuffix(now time.Time) string {
 	s, err := idgen.DaySuffix(now)
 	if err != nil {
@@ -707,8 +707,8 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 // group some other way, so there is no membership left for this call to
 // create, but the two invite rows would otherwise become a zombie --
 // pending-completions keeps returning them, and every login re-unwraps,
-// re-wraps, and gets ErrAlreadyMember again, until the 7-day deadline TTL
-// eventually sweeps them. Deleting both rows here, the moment
+// re-wraps, and gets ErrAlreadyMember again, until their TTL (the completion
+// deadline plus a grace week) eventually sweeps them. Deleting both rows here, the moment
 // ErrAlreadyMember is first seen, is what actually clears that, rather
 // than waiting out the TTL.
 //
@@ -727,7 +727,8 @@ func (c *Client) CleanupAlreadyMemberInvite(ctx context.Context, inviteID, invit
 	// survives as a genuine zombie: this function's own caller treats the
 	// resulting error as "nothing left to do" and reports success, so
 	// nothing ever retries the half that didn't get cleaned up, and it
-	// would otherwise linger until the 7-day deadline TTL. DynamoDB's
+	// would otherwise linger until their TTL (the completion deadline plus a
+	// grace week). DynamoDB's
 	// plain Delete on an already-missing key is already a no-op (no
 	// error, nothing to condition against), so dropping both conditions
 	// makes this cleanup idempotent and complete in every ordering,
