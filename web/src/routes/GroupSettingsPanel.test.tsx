@@ -95,6 +95,10 @@ describe('validateSettingsForm', () => {
     expect(validateSettingsForm(ok)).toBeNull()
     expect(validateSettingsForm({ ...ok, expirationDays: 0 })).toBeNull()
   })
+  it('accepts a name at exactly the byte limit', () => {
+    expect(validateSettingsForm({ ...ok, name: 'é'.repeat(100) })).toBeNull()
+    expect(validateSettingsForm({ ...ok, name: 'a'.repeat(200) })).toBeNull()
+  })
   it.each([
     [{ name: '   ' }],
     [{ name: 'x'.repeat(201) }],
@@ -103,6 +107,9 @@ describe('validateSettingsForm', () => {
     [{ expirationDays: 3651 }],
     [{ expirationDays: 1.5 }],
     [{ expirationDays: Number.NaN }],
+    // 101 two-byte characters: 101 UTF-16 units but 202 UTF-8 bytes.
+    [{ name: 'é'.repeat(101) }],
+    [{ description: 'é'.repeat(1001) }],
   ])('rejects %j', (bad) => {
     expect(validateSettingsForm({ ...ok, ...bad })).not.toBeNull()
   })

@@ -15,6 +15,7 @@
 
 import type { GroupListEntry, ListGroupsResponse } from '@/lib/api/groups'
 import type { DecryptedGroupName } from '@/lib/crypto/worker-protocol'
+import { nameStamp } from '@/lib/groups/groupNameCache'
 import { groupLabel } from './groupLabel'
 
 /**
@@ -76,11 +77,13 @@ export interface ListGroupsDeps {
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
   ) => { name: string | null; description: string | null } | null
   readonly setCachedGroupName: (
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
     name: string | null,
     description: string | null,
   ) => void
@@ -166,7 +169,8 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       continue
     }
 
-    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.nameGeneration)
+    const stamp = nameStamp(group.nameCiphertext, group.descriptionCiphertext)
+    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.nameGeneration, stamp)
     if (cached) {
       results.push({
         ...group,
@@ -231,6 +235,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
         deps.userId,
         result.groupId,
         group.nameGeneration,
+        stampOf(group),
         result.name,
         result.description,
       )
@@ -251,4 +256,13 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
 // alphabetical order to work.
 function sortByLabel(groups: DisplayGroup[]): DisplayGroup[] {
   return [...groups].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
+}
+
+// The stamp of the ciphertext a fetched group entry carries. Only called for
+// entries that reached the decrypt step, which by construction have both.
+function stampOf(group: GroupListEntry): string {
+  if (!group.nameCiphertext || !group.descriptionCiphertext) {
+    return ''
+  }
+  return nameStamp(group.nameCiphertext, group.descriptionCiphertext)
 }

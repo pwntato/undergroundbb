@@ -21,11 +21,28 @@ const STORAGE_KEY_PREFIX = 'undergroundbb:groupNameCache:'
 
 interface CachedEntry {
   readonly generation: number
+  /** See nameStamp: binds the entry to the exact ciphertext it was decrypted from. */
+  readonly stamp?: string
   readonly name: string | null
   readonly description: string | null
 }
 
 type CacheShape = Record<string, CachedEntry>
+
+/**
+ * Identifies the exact name/description ciphertext an entry was decrypted
+ * from: the two AES-GCM nonces, which are fresh for every encryption. A
+ * settings edit does NOT change a group's nameGeneration, so the generation
+ * alone cannot tell a cached name from one another admin has since replaced
+ * (PR #151 review: a stale hit silently reverted that admin's rename). Any
+ * edit re-seals under new nonces, so a stamp mismatch is a miss.
+ */
+export function nameStamp(
+  nameCiphertext: { readonly nonce: string },
+  descriptionCiphertext: { readonly nonce: string },
+): string {
+  return `${nameCiphertext.nonce}:${descriptionCiphertext.nonce}`
+}
 
 /**
  * Reads userId's cache. Returns an empty object on anything short of a
@@ -62,7 +79,8 @@ function writeCache(userId: string, cache: CacheShape): void {
 
 /**
  * Looks up a previously cached decrypt for (userId, groupId), returning
- * null on a cache miss OR a generation mismatch -- the latter is what a
+ * null on a cache miss, a stamp mismatch (the ciphertext has changed since),
+ * OR a generation mismatch -- the latter is what a
  * future rotation (#78) will actually produce: a cached entry from before a
  * rotation is stale, not merely absent, and must not be served as if it
  * still matches the member's current generation.
@@ -71,9 +89,10 @@ export function getCachedGroupName(
   userId: string,
   groupId: string,
   generation: number,
+  stamp: string,
 ): { name: string | null; description: string | null } | null {
   const entry = readCache(userId)[groupId]
-  if (!entry || entry.generation !== generation) {
+  if (!entry || entry.generation !== generation || entry.stamp !== stamp) {
     return null
   }
   return { name: entry.name, description: entry.description }
@@ -84,11 +103,12 @@ export function setCachedGroupName(
   userId: string,
   groupId: string,
   generation: number,
+  stamp: string,
   name: string | null,
   description: string | null,
 ): void {
   const cache = readCache(userId)
-  cache[groupId] = { generation, name, description }
+  cache[groupId] = { generation, stamp, name, description }
   writeCache(userId, cache)
 }
 

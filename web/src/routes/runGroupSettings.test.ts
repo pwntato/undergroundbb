@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { nameStamp } from '@/lib/groups/groupNameCache'
 import type { GroupDetail } from '@/lib/api/groups'
 import {
   loadGroupSettings,
@@ -91,6 +92,7 @@ describe('loadGroupSettings', () => {
       'user-1',
       'priv-1',
       1,
+      nameStamp(NAME_CT, DESC_CT),
       'Roof Group',
       'The roof',
     )
@@ -195,6 +197,7 @@ describe('saveGroupSettings', () => {
       'user-1',
       'priv-1',
       3,
+      nameStamp(NEW_NAME_CT, NEW_DESC_CT),
       'New Name',
       'New description',
     )
@@ -238,5 +241,86 @@ describe('saveGroupSettings', () => {
     const deps = saveDeps({ updateGroup: vi.fn().mockRejectedValue(new ApiError(409, 'other')) })
     const result = await saveGroupSettings(deps, view(publicDetail(), 'a', 'b'), FORM)
     expect(result).toMatchObject({ ok: false, kind: 'rejected' })
+  })
+})
+
+// The lost-update scenario from PR #151 review. Admin B has the group cached
+// from before admin A renamed it. An edit keeps nameGeneration, so a cache
+// keyed only on generation would hand B the NEW version with the OLD name, and
+// B saving anything would silently revert A's rename. This runs the real
+// load and save against an in-memory cache keyed like groupNameCache.ts.
+describe('a rename by another admin (same nameGeneration, new ciphertext)', () => {
+  function memoryCache() {
+    const store = new Map<
+      string,
+      { generation: number; stamp: string; name: string | null; description: string | null }
+    >()
+    return {
+      getCachedGroupName: (u: string, g: string, generation: number, stamp: string) => {
+        const e = store.get(`${u}:${g}`)
+        return e && e.generation === generation && e.stamp === stamp
+          ? { name: e.name, description: e.description }
+          : null
+      },
+      setCachedGroupName: (
+        u: string,
+        g: string,
+        generation: number,
+        stamp: string,
+        name: string | null,
+        description: string | null,
+      ) => {
+        store.set(`${u}:${g}`, { generation, stamp, name, description })
+      },
+    }
+  }
+
+  it('shows the new name, so a later save does not revert it', async () => {
+    const cache = memoryCache()
+    const decrypt = vi
+      .fn()
+      .mockResolvedValueOnce([{ name: 'Old', description: 'Old desc' }])
+      .mockResolvedValueOnce([{ name: 'Renamed by A', description: 'A desc' }])
+    const load = (detail: GroupDetail) =>
+      loadGroupSettings({ ...loadDeps(detail), ...cache, decryptGroupNames: decrypt }, 'priv-1')
+
+    const first = await load(privateDetail({ version: 1 }))
+    expect(first).toMatchObject({ ok: true, view: { name: 'Old' } })
+
+    // Admin A renamed it: version 2, fresh ciphertext, same nameGeneration.
+    const second = await load(
+      privateDetail({
+        version: 2,
+        nameCiphertext: NEW_NAME_CT,
+        descriptionCiphertext: NEW_DESC_CT,
+      }),
+    )
+    expect(decrypt).toHaveBeenCalledTimes(2)
+    expect(second).toMatchObject({
+      ok: true,
+      view: { name: 'Renamed by A', detail: { version: 2 } },
+    })
+
+    // B changes only the expiry; the form is prefilled from the loaded view,
+    // so what gets sealed is A's name, not the stale one.
+    if (!second.ok) throw new Error('unreachable')
+    const deps = saveDeps()
+    await saveGroupSettings(deps, second.view, {
+      name: second.view.name ?? '',
+      description: second.view.description ?? '',
+      expirationDays: 7,
+    })
+    expect(deps.encryptGroupText).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Renamed by A', description: 'A desc' }),
+    )
+  })
+
+  it('still serves an unchanged group from cache', async () => {
+    const cache = memoryCache()
+    const decrypt = vi.fn().mockResolvedValue([{ name: 'Same', description: 'Same desc' }])
+    const deps = { ...loadDeps(privateDetail()), ...cache, decryptGroupNames: decrypt }
+    await loadGroupSettings(deps, 'priv-1')
+    await loadGroupSettings(deps, 'priv-1')
+    expect(decrypt).toHaveBeenCalledTimes(1)
   })
 })

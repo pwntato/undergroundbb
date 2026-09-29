@@ -6,6 +6,7 @@
 
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail, UpdateGroupRequest } from '@/lib/api/groups'
+import { nameStamp } from '@/lib/groups/groupNameCache'
 import { isLiveKeysError } from './runListGroups'
 
 type Blob = { nonce: string; ciphertext: string }
@@ -41,11 +42,13 @@ export interface LoadSettingsDeps {
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
   ) => { name: string | null; description: string | null } | null
   readonly setCachedGroupName: (
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
     name: string | null,
     description: string | null,
   ) => void
@@ -102,7 +105,12 @@ export async function loadGroupSettings(
     return { ok: true, view: unreadable }
   }
 
-  const cached = deps.getCachedGroupName(deps.userId, groupId, detail.nameGeneration)
+  // Keyed on the ciphertext as well as the generation: an edit keeps the
+  // generation, so without the stamp a cache hit here would hand back an
+  // older name under the newer version, and a save would silently revert
+  // another admin's rename (PR #151 review).
+  const stamp = nameStamp(detail.nameCiphertext, detail.descriptionCiphertext)
+  const cached = deps.getCachedGroupName(deps.userId, groupId, detail.nameGeneration, stamp)
   if (cached) {
     return {
       ok: true,
@@ -136,6 +144,7 @@ export async function loadGroupSettings(
       deps.userId,
       groupId,
       detail.nameGeneration,
+      stamp,
       result.name,
       result.description,
     )
@@ -200,6 +209,8 @@ export async function saveGroupSettings(
   const base = { version: detail.version, expirationDays: form.expirationDays }
 
   let req: UpdateGroupRequest
+  // Stamp of the ciphertext this save writes, for the post-save cache entry.
+  let savedStamp = ''
   if (detail.visibility === 'public') {
     req = { ...base, namePlaintext: form.name, descriptionPlaintext: form.description }
   } else {
@@ -218,6 +229,7 @@ export async function saveGroupSettings(
         name: form.name,
         description: form.description,
       })
+      savedStamp = nameStamp(sealed.nameCiphertext, sealed.descriptionCiphertext)
       req = {
         ...base,
         nameCiphertext: sealed.nameCiphertext,
@@ -239,6 +251,7 @@ export async function saveGroupSettings(
         deps.userId,
         detail.groupId,
         detail.generation,
+        savedStamp,
         form.name,
         form.description,
       )
