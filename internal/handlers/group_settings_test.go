@@ -2,11 +2,15 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
@@ -256,5 +260,51 @@ func TestUpdateGroupExpirationOffAllowedWhenConfigured(t *testing.T) {
 	req.ExpirationDays = 0
 	if rec := doGroupRequest(t, h, cookie, http.MethodPut, gid, req); rec.Code != http.StatusOK {
 		t.Fatalf("PUT: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The list entry must carry nameGeneration (PR #148 review): the name's AAD
+// uses it, not the member's generation, once rotation makes them differ.
+func TestListGroupsIncludesNameGeneration(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	createPrivateGroup(t, h, user, cookie)
+
+	rec := doListGroups(t, h, cookie)
+	var raw struct {
+		Groups []map[string]any `json:"groups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || len(raw.Groups) != 1 {
+		t.Fatalf("decode: %v, body: %s", err, rec.Body.String())
+	}
+	if _, ok := raw.Groups[0]["nameGeneration"]; !ok {
+		t.Errorf("list entry has no nameGeneration: %v", raw.Groups[0])
+	}
+}
+
+func TestUpdateGroupRejectsDirectMessage(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, user, cookie)
+
+	_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+		UpdateExpression:          aws.String("SET GroupType = :dm"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":dm": &types.AttributeValueMemberS{Value: "dm"}},
+	})
+	if err != nil {
+		t.Fatalf("mark as dm: %v", err)
+	}
+
+	rec := doGroupRequest(t, h, cookie, http.MethodPut, gid, updateReq(0))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
+	}
+	if d := decodeDetail(t, doGroupRequest(t, h, cookie, http.MethodGet, gid, nil)); d.Version != 0 || d.ExpirationDays != 30 {
+		t.Errorf("rejected DM edit changed the group: %+v", d)
 	}
 }

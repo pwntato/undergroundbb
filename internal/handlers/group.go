@@ -477,6 +477,12 @@ type groupListEntry struct {
 	Visibility string `json:"visibility"`
 	Role       string `json:"role"`
 	Generation int64  `json:"generation"`
+	// NameGeneration is the key generation the private name/description
+	// ciphertexts are encrypted under. It is NOT the member's Generation:
+	// rotation does not re-encrypt the name (docs/DESIGN.md), so once
+	// rotation exists the two diverge, and the name's AAD must be built
+	// from this value.
+	NameGeneration int64 `json:"nameGeneration"`
 
 	NamePlaintext        string `json:"namePlaintext,omitempty"`
 	DescriptionPlaintext string `json:"descriptionPlaintext,omitempty"`
@@ -537,10 +543,11 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	for i, m := range memberships {
 		g := groups[i]
 		entry := groupListEntry{
-			GroupID:    strings.TrimPrefix(m.PK, "GROUP#"),
-			Visibility: g.Visibility,
-			Role:       m.Role,
-			Generation: m.Generation,
+			GroupID:        strings.TrimPrefix(m.PK, "GROUP#"),
+			Visibility:     g.Visibility,
+			Role:           m.Role,
+			Generation:     m.Generation,
+			NameGeneration: g.NameGeneration,
 		}
 		if g.Visibility == models.VisibilityPublic {
 			entry.NamePlaintext = g.NamePlaintext
@@ -607,7 +614,6 @@ type groupDetailResponse struct {
 	groupListEntry
 	RevocationMode string `json:"revocationMode"`
 	ExpirationDays int64  `json:"expirationDays"`
-	NameGeneration int64  `json:"nameGeneration"`
 	Version        int64  `json:"version"`
 }
 
@@ -634,13 +640,12 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Both reads happen before either 404 branch: a nonexistent group and a
+	// private group the caller is not in must cost the same two round trips,
+	// or latency alone would reveal which group ids exist.
 	g, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not load group")
-		return
-	}
-	if g == nil {
-		groupNotFound(w)
 		return
 	}
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
@@ -648,14 +653,15 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "could not load group")
 		return
 	}
-	if m == nil && g.Visibility != models.VisibilityPublic {
+	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
 		groupNotFound(w)
 		return
 	}
 
 	entry := groupListEntry{
-		GroupID:    groupID,
-		Visibility: g.Visibility,
+		GroupID:        groupID,
+		Visibility:     g.Visibility,
+		NameGeneration: g.NameGeneration,
 	}
 	if m != nil {
 		entry.Role = m.Role
@@ -681,7 +687,6 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		groupListEntry: entry,
 		RevocationMode: g.RevocationMode,
 		ExpirationDays: g.ExpirationDays,
-		NameGeneration: g.NameGeneration,
 		Version:        g.Version,
 	})
 }
@@ -730,13 +735,10 @@ func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Both reads before either 404 branch -- see getGroup.
 	g, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not update group")
-		return
-	}
-	if g == nil {
-		groupNotFound(w)
 		return
 	}
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
@@ -744,7 +746,7 @@ func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, "could not update group")
 		return
 	}
-	if m == nil && g.Visibility != models.VisibilityPublic {
+	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
 		groupNotFound(w)
 		return
 	}

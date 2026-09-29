@@ -321,10 +321,10 @@ type Group struct {
 	DescriptionPlaintext string `dynamodbav:"DescriptionPlaintext,omitempty"`
 
 	// NameCiphertext and DescriptionCiphertext hold a PRIVATE group's name
-	// and description, AES-256-GCM under the group key at Generation 0 (the
-	// only generation that exists at creation) -- see the AAD table in
-	// DESIGN.md, "Group name/description" (AAD: group id + generation
-	// number). Absent for a public group.
+	// and description, AES-256-GCM under the group key at NameGeneration
+	// (0 at creation) -- see the AAD table in DESIGN.md, "Group
+	// name/description" (AAD: group id + field + generation number). Absent
+	// for a public group.
 	NameCiphertext        *WrappedBlob `dynamodbav:"NameCiphertext,omitempty"`
 	DescriptionCiphertext *WrappedBlob `dynamodbav:"DescriptionCiphertext,omitempty"`
 
