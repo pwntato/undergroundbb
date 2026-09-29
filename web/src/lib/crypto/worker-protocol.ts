@@ -213,6 +213,33 @@ export interface SignGroupCreationResponse {
 }
 
 /**
+ * Signs a role grant for another member (issue #37) -- relies on the
+ * worker's own liveKeys like every other signing request. grantorGrantRef is
+ * the caller's OWN current grant (GroupDetail.myGrantSortKey); the worker
+ * generates the subject's new grantSortKey and returns it with the signature.
+ */
+export interface SignRoleGrantRequest {
+  readonly kind: 'signRoleGrant'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly subjectUserId: string
+  readonly role: 'admin' | 'ambassador' | 'member'
+  readonly grantorGrantRef: string
+}
+
+export interface SignRoleGrantResult {
+  readonly grantSortKey: string
+  readonly signature: string
+}
+
+export interface SignRoleGrantResponse {
+  readonly kind: 'signRoleGrantDone'
+  readonly id: string
+  readonly result: SignRoleGrantResult
+}
+
+/**
  * Signs step 1 of the invite handshake (issue #38) -- the inviter's own
  * Ed25519 signature over the invite's creation payload. Like
  * SignGroupCreationRequest, relies entirely on the worker's own liveKeys
@@ -448,6 +475,7 @@ export type WorkerRequest =
   | CompleteRecoveryRequest
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
+  | SignRoleGrantRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SignInviteCreationRequest
@@ -462,6 +490,7 @@ export type WorkerResponse =
   | CompleteRecoveryResponse
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
+  | SignRoleGrantResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SignInviteCreationResponse

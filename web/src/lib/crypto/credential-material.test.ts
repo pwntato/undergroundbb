@@ -24,6 +24,7 @@ import {
   signGroupCreation,
   signInviteAcceptance,
   signInviteCreation,
+  signRoleGrant,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import { groupNameAAD, memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
@@ -860,5 +861,56 @@ describe('invite handshake round trip', () => {
         forgedMAC,
       ),
     ).rejects.toThrow(InviteMACError)
+  })
+})
+
+describe('signRoleGrant', () => {
+  const GROUP_ID = '44444444-4444-4444-8444-444444444444'
+  const SUBJECT_ID = '55555555-5555-4555-8555-555555555555'
+  const GRANTOR_REF = 'GRANT#11111111-1111-4111-8111-111111111111#2026-09-29#aaaaaaaaaaaaaaaa'
+
+  async function grantorKeys() {
+    const signup = await generateSignupMaterial(USER_ID, 'grantor-password', () => {})
+    const { keys } = await completeLogin({
+      password: 'grantor-password',
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId: USER_ID,
+      nonce: Buffer.from([5, 5, 5, 5]).toString('base64'),
+    })
+    return keys
+  }
+
+  it('signs a verifiable payload binding the subject, role, its own address and the grantor ref', async () => {
+    const keys = await grantorKeys()
+    const { grantSortKey, signature } = signRoleGrant(
+      keys,
+      GROUP_ID,
+      SUBJECT_ID,
+      'ambassador',
+      GRANTOR_REF,
+    )
+
+    expect(grantSortKey.startsWith(`GRANT#${SUBJECT_ID}#`)).toBe(true)
+    const verifies = (role: string, ref: string, sortKey: string) =>
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ed25519.SigningContext.RoleGrant,
+        roleGrantPayload(GROUP_ID, SUBJECT_ID, role, sortKey, ref),
+        base64ToBytes(signature),
+      )
+    expect(verifies('ambassador', GRANTOR_REF, grantSortKey)).toBe(true)
+    // Each bound field really is bound: change any one and it must not verify.
+    expect(verifies('admin', GRANTOR_REF, grantSortKey)).toBe(false)
+    expect(verifies('ambassador', 'GRANT#other', grantSortKey)).toBe(false)
+    expect(verifies('ambassador', GRANTOR_REF, `${grantSortKey}x`)).toBe(false)
+  })
+
+  it('generates a fresh grant address on every call', async () => {
+    const keys = await grantorKeys()
+    const a = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
+    const b = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
+    expect(a.grantSortKey).not.toBe(b.grantSortKey)
   })
 })
