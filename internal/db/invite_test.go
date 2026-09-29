@@ -819,3 +819,37 @@ func TestListReceivedInvitesOnlyCallersAcceptedInvites(t *testing.T) {
 		t.Errorf("received invite = %+v, want inviter/group carried through", invites[0])
 	}
 }
+
+// DynamoDB sweeps the two rows of an accepted invite independently once the
+// shared completion-deadline TTL passes, so the sent list must not depend on
+// the INVITE# row for an accepted invite (PR #154 review).
+func TestListSentInvitesKeepsAcceptedWhenInviteRowSwept(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	inviteID := "test-invite-" + randomSuffix(t)
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, "test-group-"+randomSuffix(t), inviterUserID, time.Now().Add(7*24*time.Hour))); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, "test-invitee-"+randomSuffix(t))); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "INVITE#" + inviteID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+	}); err != nil {
+		t.Fatalf("simulating INVITE# sweep: %v", err)
+	}
+
+	views, err := c.ListSentInvites(ctx, inviterUserID, time.Now())
+	if err != nil {
+		t.Fatalf("ListSentInvites: %v", err)
+	}
+	if len(views) != 1 || views[0].InviteID != inviteID || views[0].InvitedUserID == "" {
+		t.Fatalf("ListSentInvites = %+v, want the accepted invite still listed", views)
+	}
+}

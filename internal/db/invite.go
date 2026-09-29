@@ -761,10 +761,11 @@ type SentInviteView struct {
 //
 // Expiry is enforced on read, since TTL deletion is eventual: a
 // not-yet-accepted invite whose signed ExpiresAt has passed is dropped, as
-// is one whose INVITE# row is already gone (revoked or swept between the
-// two reads). An accepted invite is never dropped here -- its TTL is the
-// completion deadline, and a passed deadline is exactly the thing #83 must
-// surface to the inviter rather than hide, so it stays listed.
+// is a not-yet-accepted one whose INVITE# row is already gone (revoked or
+// swept between the two reads). An accepted invite is never dropped here,
+// even if its INVITE# row is gone: its TTL is the completion deadline, the
+// two rows are swept independently after it, and a passed deadline is
+// exactly the thing #83 must surface to the inviter rather than hide.
 func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now time.Time) ([]SentInviteView, error) {
 	var sent []models.SentInvite
 	var startKey map[string]types.AttributeValue
@@ -815,17 +816,24 @@ func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now 
 	views := make([]SentInviteView, 0, len(sent))
 	for _, s := range sent {
 		exp, ok := expiresAt[s.InviteID]
+		if s.InvitedUserID != "" {
+			// Accepted: the SENT# row alone is enough. Both rows carry the
+			// same completion-deadline TTL but DynamoDB sweeps them
+			// independently, so a missing INVITE# row must not hide an
+			// acceptance the inviter still owes (PendingInviteCompletions
+			// still returns it). exp may be empty here; the UI falls back
+			// to the completion deadline.
+			views = append(views, SentInviteView{SentInvite: s, ExpiresAt: exp})
+			continue
+		}
 		if !ok {
 			continue
 		}
-		if s.InvitedUserID == "" {
-			// An unparseable ExpiresAt cannot have passed the handler's own
-			// RFC3339 check at creation; drop rather than list an invite
-			// whose expiry cannot be established.
-			t, err := time.Parse(time.RFC3339, exp)
-			if err != nil || !t.After(now) {
-				continue
-			}
+		// An unparseable ExpiresAt cannot have passed the handler's own
+		// RFC3339 check at creation; drop rather than list an invite whose
+		// expiry cannot be established.
+		if t, err := time.Parse(time.RFC3339, exp); err != nil || !t.After(now) {
+			continue
 		}
 		views = append(views, SentInviteView{SentInvite: s, ExpiresAt: exp})
 	}
