@@ -55,6 +55,7 @@ export interface ListGroupsDeps {
     readonly groups: readonly {
       readonly groupId: string
       readonly generation: number
+      readonly nameGeneration: number
       readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
       readonly nameCiphertext: { nonce: string; ciphertext: string }
       readonly descriptionCiphertext: { nonce: string; ciphertext: string }
@@ -129,6 +130,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
   const toDecrypt: {
     groupId: string
     generation: number
+    nameGeneration: number
     wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
     nameCiphertext: { nonce: string; ciphertext: string }
     descriptionCiphertext: { nonce: string; ciphertext: string }
@@ -164,7 +166,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       continue
     }
 
-    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.generation)
+    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.nameGeneration)
     if (cached) {
       results.push({
         ...group,
@@ -180,6 +182,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
     toDecrypt.push({
       groupId: group.groupId,
       generation: group.generation,
+      nameGeneration: group.nameGeneration,
       wrappedGroupKey: group.wrappedGroupKey,
       nameCiphertext: group.nameCiphertext,
       descriptionCiphertext: group.descriptionCiphertext,
@@ -227,7 +230,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       deps.setCachedGroupName(
         deps.userId,
         result.groupId,
-        group.generation,
+        group.nameGeneration,
         result.name,
         result.description,
       )

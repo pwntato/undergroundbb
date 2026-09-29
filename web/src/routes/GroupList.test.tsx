@@ -24,6 +24,7 @@ function displayGroup(overrides: Partial<DisplayGroup> = {}): DisplayGroup {
     visibility: 'public',
     role: 'member',
     generation: 0,
+    nameGeneration: 0,
     displayName: 'Book Club',
     displayDescription: 'We read books',
     nameStatus: 'plaintext',
@@ -132,5 +133,17 @@ describe('GroupList', () => {
       groups: [displayGroup({ visibility: 'private', displayName: null, nameStatus: 'coldKeys' })],
     })
     expect(withColdKeys).toContain('Log in again to see private group names')
+  })
+
+  it('links every group to its settings screen, whatever the role', () => {
+    const html = render({
+      status: 'ready',
+      groups: [
+        displayGroup({ groupId: 'a', role: 'member' }),
+        displayGroup({ groupId: 'b', role: 'admin' }),
+      ],
+    })
+    expect(html).toContain('href="/groups/a/settings"')
+    expect(html).toContain('href="/groups/b/settings"')
   })
 })

@@ -18,6 +18,7 @@ import {
   completeLogin,
   completeRecovery,
   decryptGroupNames,
+  encryptGroupText,
   generateSignupMaterial,
   InviteMACError,
   signGroupCreation,
@@ -413,6 +414,7 @@ describe('decryptGroupNames', () => {
       {
         groupId,
         generation,
+        nameGeneration: generation,
         wrappedGroupKey,
         nameCiphertext: {
           nonce: bytesToBase64(nameEnc.nonce),
@@ -428,6 +430,88 @@ describe('decryptGroupNames', () => {
     expect(results).toEqual([
       { groupId, name: 'Roof Group', description: 'Talking about the roof' },
     ])
+  })
+
+  it('binds the name AAD to nameGeneration, not the member generation', async () => {
+    // Once rotation exists a member's generation (what their wrap is for)
+    // and the name's generation (what its AAD binds) differ. The wrap here
+    // is at generation 0; the name is sealed at generation 3.
+    const groupId = 'group-uuid-test-namegen'
+    const groupKey = new Uint8Array(32).fill(8)
+    const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+    const enc = async (field: 'NAME' | 'DESC', text: string) => {
+      const sealed = await encrypt(
+        groupKey,
+        new TextEncoder().encode(text),
+        groupNameAAD(groupId, field, 3),
+      )
+      return { nonce: bytesToBase64(sealed.nonce), ciphertext: bytesToBase64(sealed.ciphertext) }
+    }
+    const entry = {
+      groupId,
+      generation: 0,
+      wrappedGroupKey,
+      nameCiphertext: await enc('NAME', 'Renamed'),
+      descriptionCiphertext: await enc('DESC', 'Described'),
+    }
+
+    expect(await decryptGroupNames(keys, [{ ...entry, nameGeneration: 3 }])).toEqual([
+      { groupId, name: 'Renamed', description: 'Described' },
+    ])
+    // Using the member generation as the AAD generation (the old behavior)
+    // must fail this entry, not silently succeed.
+    expect(await decryptGroupNames(keys, [{ ...entry, nameGeneration: 0 }])).toEqual([
+      { groupId, name: null, description: null },
+    ])
+  })
+
+  it('encryptGroupText output round-trips through decryptGroupNames', async () => {
+    const groupId = 'group-uuid-test-edit'
+    const groupKey = new Uint8Array(32).fill(9)
+    const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+
+    const sealed = await encryptGroupText(keys, {
+      groupId,
+      generation: 0,
+      nameGeneration: 0,
+      wrappedGroupKey,
+      name: 'New Name',
+      description: 'New description',
+    })
+    expect(
+      await decryptGroupNames(keys, [
+        { groupId, generation: 0, nameGeneration: 0, wrappedGroupKey, ...sealed },
+      ]),
+    ).toEqual([{ groupId, name: 'New Name', description: 'New description' }])
+
+    // Fresh nonce per call: identical plaintext must not reuse one.
+    const again = await encryptGroupText(keys, {
+      groupId,
+      generation: 0,
+      nameGeneration: 0,
+      wrappedGroupKey,
+      name: 'New Name',
+      description: 'New description',
+    })
+    expect(again.nameCiphertext.nonce).not.toEqual(sealed.nameCiphertext.nonce)
+  })
+
+  it('encryptGroupText rejects rather than returning half a result on a bad wrap', async () => {
+    const groupId = 'group-uuid-test-edit-bad'
+    const { keys } = await setUpMemberWithGroup(groupId, new Uint8Array(32).fill(10))
+    const other = await setUpMemberWithGroup('some-other-group', new Uint8Array(32).fill(11), keys)
+
+    // A wrap made for a different group id fails the member-wrap AAD.
+    await expect(
+      encryptGroupText(keys, {
+        groupId,
+        generation: 0,
+        nameGeneration: 0,
+        wrappedGroupKey: other.wrappedGroupKey,
+        name: 'x',
+        description: 'y',
+      }),
+    ).rejects.toThrow()
   })
 
   it('returns null fields for one bad entry without failing the rest of the batch', async () => {
@@ -474,6 +558,7 @@ describe('decryptGroupNames', () => {
       {
         groupId: goodGroupId,
         generation,
+        nameGeneration: generation,
         wrappedGroupKey: good.wrappedGroupKey,
         nameCiphertext: {
           nonce: bytesToBase64(goodNameEnc.nonce),
@@ -487,6 +572,7 @@ describe('decryptGroupNames', () => {
       {
         groupId: badGroupId,
         generation,
+        nameGeneration: generation,
         wrappedGroupKey: bad.wrappedGroupKey,
         nameCiphertext: {
           nonce: bytesToBase64(badNameEnc.nonce),

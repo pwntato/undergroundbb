@@ -351,7 +351,10 @@ export interface DecryptGroupNamesRequest {
   readonly userId: string
   readonly groups: readonly {
     readonly groupId: string
+    /** The member's own generation -- what wrappedGroupKey is wrapped for. */
     readonly generation: number
+    /** The generation the name/description ciphertext was encrypted under (the AAD). */
+    readonly nameGeneration: number
     readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
     readonly nameCiphertext: { nonce: string; ciphertext: string }
     readonly descriptionCiphertext: { nonce: string; ciphertext: string }
@@ -389,6 +392,31 @@ export interface DecryptGroupNamesResponse {
 }
 
 /**
+ * #36: seals an edited private-group name and description under the group
+ * key. See credential-material.ts's encryptGroupText. Same userId/liveKeys
+ * guards as DecryptGroupNamesRequest, but a failure REJECTS (there is no
+ * per-entry null for a write).
+ */
+export interface EncryptGroupTextRequest {
+  readonly kind: 'encryptGroupText'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly generation: number
+  readonly nameGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly name: string
+  readonly description: string
+}
+
+export interface EncryptGroupTextResponse {
+  readonly kind: 'encryptGroupTextDone'
+  readonly id: string
+  readonly nameCiphertext: { nonce: string; ciphertext: string }
+  readonly descriptionCiphertext: { nonce: string; ciphertext: string }
+}
+
+/**
  * Clears the worker's cached liveKeys -- posted on logout so a worker
  * instance reused across a logout/login in the same tab cannot sign
  * anything under the previous account's keys. See worker.ts's own doc
@@ -421,6 +449,7 @@ export type WorkerRequest =
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
   | DecryptGroupNamesRequest
+  | EncryptGroupTextRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
@@ -434,6 +463,7 @@ export type WorkerResponse =
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
   | DecryptGroupNamesResponse
+  | EncryptGroupTextResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse

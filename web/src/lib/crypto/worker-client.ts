@@ -24,6 +24,8 @@ import type {
   DecryptedGroupName,
   DecryptGroupNamesRequest,
   DecryptGroupNamesResponse,
+  EncryptGroupTextRequest,
+  EncryptGroupTextResponse,
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
   RecoveryMaterial,
@@ -448,6 +450,45 @@ export function decryptGroupNames(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for decryptGroupNames`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Seals an edited private-group name/description under the group key --
+ * issue #36. Rejects if liveKeys is cold or the wrap/encrypt fails; see
+ * credential-material.ts's encryptGroupText.
+ */
+export function encryptGroupText(req: Omit<EncryptGroupTextRequest, 'kind' | 'id'>): Promise<{
+  nameCiphertext: { nonce: string; ciphertext: string }
+  descriptionCiphertext: { nonce: string; ciphertext: string }
+}> {
+  const id = nextRequestID()
+  const fullReq: EncryptGroupTextRequest = { kind: 'encryptGroupText', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'encryptGroupTextDone') {
+        resolve({
+          nameCiphertext: (msg as EncryptGroupTextResponse).nameCiphertext,
+          descriptionCiphertext: (msg as EncryptGroupTextResponse).descriptionCiphertext,
+        })
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for encryptGroupText`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
