@@ -44,9 +44,13 @@ export function GroupList({ load }: { readonly load: LoadState }) {
                 {/* Issue #38: only an Admin or Ambassador may create an
                     invite (the server's own 403 is the real check --
                     this is just not offering the link to a plain Member,
-                    who would only see it fail). No group-detail screen
-                    exists yet (a later milestone), so this list is the
-                    only place in the whole app to reach it. */}
+                    who would only see it fail). */}
+                <Link
+                  to={`/groups/${group.groupId}/settings`}
+                  className="text-xs text-primary underline-offset-4 hover:underline"
+                >
+                  Settings
+                </Link>
                 {(group.role === 'admin' || group.role === 'ambassador') && (
                   <Link
                     to={`/groups/${group.groupId}/invite`}

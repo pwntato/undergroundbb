@@ -15,6 +15,7 @@
 
 import type { GroupListEntry, ListGroupsResponse } from '@/lib/api/groups'
 import type { DecryptedGroupName } from '@/lib/crypto/worker-protocol'
+import { nameStamp } from '@/lib/groups/groupNameCache'
 import { groupLabel } from './groupLabel'
 
 /**
@@ -55,6 +56,7 @@ export interface ListGroupsDeps {
     readonly groups: readonly {
       readonly groupId: string
       readonly generation: number
+      readonly nameGeneration: number
       readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
       readonly nameCiphertext: { nonce: string; ciphertext: string }
       readonly descriptionCiphertext: { nonce: string; ciphertext: string }
@@ -75,11 +77,13 @@ export interface ListGroupsDeps {
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
   ) => { name: string | null; description: string | null } | null
   readonly setCachedGroupName: (
     userId: string,
     groupId: string,
     generation: number,
+    stamp: string,
     name: string | null,
     description: string | null,
   ) => void
@@ -129,6 +133,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
   const toDecrypt: {
     groupId: string
     generation: number
+    nameGeneration: number
     wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
     nameCiphertext: { nonce: string; ciphertext: string }
     descriptionCiphertext: { nonce: string; ciphertext: string }
@@ -164,7 +169,8 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       continue
     }
 
-    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.generation)
+    const stamp = nameStamp(group.nameCiphertext, group.descriptionCiphertext)
+    const cached = deps.getCachedGroupName(deps.userId, group.groupId, group.nameGeneration, stamp)
     if (cached) {
       results.push({
         ...group,
@@ -180,6 +186,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
     toDecrypt.push({
       groupId: group.groupId,
       generation: group.generation,
+      nameGeneration: group.nameGeneration,
       wrappedGroupKey: group.wrappedGroupKey,
       nameCiphertext: group.nameCiphertext,
       descriptionCiphertext: group.descriptionCiphertext,
@@ -227,7 +234,8 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
       deps.setCachedGroupName(
         deps.userId,
         result.groupId,
-        group.generation,
+        group.nameGeneration,
+        stampOf(group),
         result.name,
         result.description,
       )
@@ -248,4 +256,13 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
 // alphabetical order to work.
 function sortByLabel(groups: DisplayGroup[]): DisplayGroup[] {
   return [...groups].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
+}
+
+// The stamp of the ciphertext a fetched group entry carries. Only called for
+// entries that reached the decrypt step, which by construction have both.
+function stampOf(group: GroupListEntry): string {
+  if (!group.nameCiphertext || !group.descriptionCiphertext) {
+    return ''
+  }
+  return nameStamp(group.nameCiphertext, group.descriptionCiphertext)
 }

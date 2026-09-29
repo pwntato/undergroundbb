@@ -7,6 +7,7 @@ const VALID_ENTRY: GroupListEntry = {
   visibility: 'public',
   role: 'admin',
   generation: 0,
+  nameGeneration: 0,
   namePlaintext: 'Book Club',
 }
 

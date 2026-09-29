@@ -108,6 +108,12 @@ export interface GroupListEntry {
   readonly visibility: 'private' | 'public'
   readonly role: 'admin' | 'ambassador' | 'member'
   readonly generation: number
+  /**
+   * The key generation the private name/description ciphertext is encrypted
+   * under -- what its AAD binds. Not the member's own `generation` once
+   * rotation exists (rotation does not re-encrypt the name).
+   */
+  readonly nameGeneration: number
 
   readonly namePlaintext?: string
   readonly descriptionPlaintext?: string
@@ -146,4 +152,59 @@ export async function listGroups(): Promise<ListGroupsResponse> {
  */
 export async function createGroup(req: CreateGroupRequest): Promise<CreateGroupResponse> {
   return putOrPostJSON<CreateGroupResponse>('POST', '/api/groups', req)
+}
+
+/**
+ * GET /api/groups/{id}'s response -- internal/handlers/group.go's
+ * groupDetailResponse: a GroupListEntry plus the settings a detail screen
+ * shows. `role` is '' (absent from any real role) for a non-member viewing a
+ * public group, who also gets no wrappedGroupKey. `version` is what a
+ * subsequent PUT must echo back.
+ */
+export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
+  readonly role: GroupListEntry['role'] | ''
+  readonly revocationMode: 'rotating' | 'open'
+  /** 0 means "never expire". */
+  readonly expirationDays: number
+  readonly version: number
+}
+
+/**
+ * PUT /api/groups/{id}'s body -- a full replacement of name, description and
+ * expiration policy; revocation mode and visibility are not editable. Exactly
+ * one pair per visibility, like CreateGroupRequest. For a private group,
+ * nameGeneration must be the caller's own current generation.
+ */
+export interface UpdateGroupRequest {
+  readonly version: number
+  readonly namePlaintext?: string
+  readonly descriptionPlaintext?: string
+  readonly nameCiphertext?: WireWrappedBlob
+  readonly descriptionCiphertext?: WireWrappedBlob
+  readonly nameGeneration?: number
+  readonly expirationDays: number
+}
+
+/** GET /api/groups/{id} -- issue #36. A 404 covers "no such group" and "private and you are not in it" alike. */
+export async function getGroup(groupId: string): Promise<GroupDetail> {
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<GroupDetail>(res)
+}
+
+/**
+ * PUT /api/groups/{id} -- issue #36. Admin only. Throws ApiError(409, code:
+ * 'version_conflict') when another admin saved first: reload and reapply,
+ * do not resend unchanged.
+ */
+export async function updateGroup(
+  groupId: string,
+  req: UpdateGroupRequest,
+): Promise<{ version: number }> {
+  return putOrPostJSON<{ version: number }>(
+    'PUT',
+    `/api/groups/${encodeURIComponent(groupId)}`,
+    req,
+  )
 }

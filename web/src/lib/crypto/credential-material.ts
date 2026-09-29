@@ -42,7 +42,7 @@ import {
   type Wrapped,
   type WrappingKey,
 } from './x25519.js'
-import { decrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
+import { decrypt, encrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesgcm.js'
 import type {
   DecryptedGroupName,
   DecryptGroupNamesRequest,
@@ -539,14 +539,13 @@ export async function completeInvite(
  * decrypt nameCiphertext/descriptionCiphertext under
  * groupNameAAD(groupId, 'NAME'|'DESC', generation).
  *
- * Generation is always 0 for now -- #78 (key rotation) is what will ever
- * make it otherwise, at which point a GENKEY# chain walk (not yet built)
- * would need to run first for a member who joined after a rotation. This
- * function does not know about that chain; it decrypts directly against
- * whatever generation the caller passed, which GET /api/groups always
- * reports as this member's OWN current generation (their WrappedGroupKey's
- * generation, not necessarily the group's latest) -- correct today because
- * the two are always equal before rotation exists.
+ * Two generations are involved and must not be conflated: `generation` is
+ * the member's own (what their WrappedGroupKey is wrapped for, used to
+ * unwrap), `nameGeneration` is the one the name/description ciphertext was
+ * encrypted under (used for the AAD). They are both 0 until #78 (key
+ * rotation) exists; after it they diverge, and a member who joined after a
+ * rotation would additionally need a GENKEY# chain walk (not yet built) to
+ * reach an older nameGeneration's key.
  *
  * One group's failure (a stale cache entry, corrupt ciphertext, a
  * generation mismatch) does not throw and does not fail the batch -- see
@@ -580,18 +579,22 @@ async function decryptOneGroupName(
     const unwrapAAD = memberWrapAAD(group.groupId, keys.userId, group.generation)
     const groupKey = await unwrap(keys.wrappingKey.privateKey, wrappedGroupKey, unwrapAAD)
 
+    // The name/description AAD binds nameGeneration -- the generation they
+    // were encrypted under -- NOT the member's own generation used to
+    // unwrap above. Rotation does not re-encrypt the name (DESIGN.md), so
+    // once rotation exists the two diverge.
     const name = await decryptGroupText(
       groupKey,
       group.groupId,
       'NAME',
-      group.generation,
+      group.nameGeneration,
       group.nameCiphertext,
     )
     const description = await decryptGroupText(
       groupKey,
       group.groupId,
       'DESC',
-      group.generation,
+      group.nameGeneration,
       group.descriptionCiphertext,
     )
     return { groupId: group.groupId, name, description }
@@ -714,4 +717,56 @@ export async function completeChangePassword(
   onProgress({ step: 1, totalSteps: TOTAL_STEPS, label: 'Current password confirmed' })
 
   return wrapNewCredentials(req.userId, req.newPassword, bundle, onProgress, 1, TOTAL_STEPS)
+}
+
+/**
+ * #36: encrypts a private group's edited name and description for
+ * PUT /api/groups/{id}. Unwraps the caller's own WrappedGroupKey exactly as
+ * decryptOneGroupName does, then seals both fields under
+ * groupNameAAD(groupId, 'NAME'|'DESC', nameGeneration) with fresh nonces.
+ * Unlike decryptGroupNames this THROWS on failure: there is no useful
+ * partial result for a write, and the caller must not send half a pair.
+ *
+ * The server requires nameGeneration to equal the caller's own generation
+ * (handlers.updateGroup), so the caller passes the member's current
+ * generation for both; they are separate parameters only because they are
+ * separate concepts.
+ */
+export async function encryptGroupText(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly generation: number
+    readonly nameGeneration: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly name: string
+    readonly description: string
+  },
+): Promise<{
+  nameCiphertext: { nonce: string; ciphertext: string }
+  descriptionCiphertext: { nonce: string; ciphertext: string }
+}> {
+  const wrapped: Wrapped = {
+    ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+    nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+    ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+  }
+  const groupKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    wrapped,
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  const encoder = new TextEncoder()
+  const seal = async (field: 'NAME' | 'DESC', text: string) => {
+    const sealed = await encrypt(
+      groupKey,
+      encoder.encode(text),
+      groupNameAAD(req.groupId, field, req.nameGeneration),
+    )
+    return { nonce: bytesToBase64(sealed.nonce), ciphertext: bytesToBase64(sealed.ciphertext) }
+  }
+  return {
+    nameCiphertext: await seal('NAME', req.name),
+    descriptionCiphertext: await seal('DESC', req.description),
+  }
 }

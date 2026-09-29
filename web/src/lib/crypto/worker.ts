@@ -23,6 +23,7 @@ import {
   completeLogin as completeLoginPure,
   completeRecovery as completeRecoveryPure,
   decryptGroupNames as decryptGroupNamesPure,
+  encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
@@ -38,6 +39,7 @@ import type {
   CompleteLoginRequest,
   CompleteRecoveryRequest,
   DecryptGroupNamesRequest,
+  EncryptGroupTextRequest,
   GenerateSignupMaterialRequest,
   RecoveryMaterial,
   SignGroupCreationRequest,
@@ -99,6 +101,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
+      return
+    case 'encryptGroupText':
+      await encryptGroupText(req)
       return
     case 'signInviteCreation':
       await signInviteCreation(req)
@@ -180,6 +185,24 @@ async function decryptGroupNames(req: DecryptGroupNamesRequest): Promise<void> {
   }
   const results = await decryptGroupNamesPure(liveKeys, req.groups)
   post({ kind: 'decryptGroupNamesDone', id: req.id, results })
+}
+
+/**
+ * Seals an edited private-group name/description -- issue #36. Same
+ * liveKeys-unset/wrong-account guards as decryptGroupNames; any failure
+ * inside the pure function propagates as a rejection (top-level try/catch).
+ */
+async function encryptGroupText(req: EncryptGroupTextRequest): Promise<void> {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again to edit private group settings (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const { nameCiphertext, descriptionCiphertext } = await encryptGroupTextPure(liveKeys, req)
+  post({ kind: 'encryptGroupTextDone', id: req.id, nameCiphertext, descriptionCiphertext })
 }
 
 /**

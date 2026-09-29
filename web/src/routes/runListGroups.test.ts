@@ -11,6 +11,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { GroupListEntry } from '@/lib/api/groups'
+import { nameStamp } from '@/lib/groups/groupNameCache'
 import { isLiveKeysError, runListGroups, type ListGroupsDeps } from './runListGroups'
 
 const USER_ID = 'user-1'
@@ -18,6 +19,7 @@ const USER_ID = 'user-1'
 const WRAPPED_KEY = { ephemeralPub: 'ZXBoZW1lcmFs', nonce: 'bm9uY2U=', ciphertext: 'Y2lwaGVy' }
 const NAME_CT = { nonce: 'bm9uY2Ux', ciphertext: 'bmFtZS1jdA==' }
 const DESC_CT = { nonce: 'bm9uY2Uy', ciphertext: 'ZGVzYy1jdA==' }
+const STAMP = nameStamp(NAME_CT, DESC_CT)
 
 function publicGroup(overrides: Partial<GroupListEntry> = {}): GroupListEntry {
   return {
@@ -25,6 +27,7 @@ function publicGroup(overrides: Partial<GroupListEntry> = {}): GroupListEntry {
     visibility: 'public',
     role: 'admin',
     generation: 0,
+    nameGeneration: 0,
     namePlaintext: 'Book Club',
     descriptionPlaintext: 'We read books',
     ...overrides,
@@ -37,6 +40,7 @@ function privateGroup(overrides: Partial<GroupListEntry> = {}): GroupListEntry {
     visibility: 'private',
     role: 'member',
     generation: 0,
+    nameGeneration: 0,
     nameCiphertext: NAME_CT,
     descriptionCiphertext: DESC_CT,
     wrappedGroupKey: WRAPPED_KEY,
@@ -48,7 +52,7 @@ function privateGroup(overrides: Partial<GroupListEntry> = {}): GroupListEntry {
 function fakeCache() {
   const store = new Map<
     string,
-    { generation: number; name: string | null; description: string | null }
+    { generation: number; stamp: string; name: string | null; description: string | null }
   >()
   return {
     getCachedGroupName: vi.fn(
@@ -56,9 +60,10 @@ function fakeCache() {
         userId: string,
         groupId: string,
         generation: number,
+        stamp: string,
       ): { name: string | null; description: string | null } | null => {
         const entry = store.get(`${userId}:${groupId}`)
-        if (!entry || entry.generation !== generation) {
+        if (!entry || entry.generation !== generation || entry.stamp !== stamp) {
           return null
         }
         return { name: entry.name, description: entry.description }
@@ -69,10 +74,11 @@ function fakeCache() {
         userId: string,
         groupId: string,
         generation: number,
+        stamp: string,
         name: string | null,
         description: string | null,
       ): void => {
-        store.set(`${userId}:${groupId}`, { generation, name, description })
+        store.set(`${userId}:${groupId}`, { generation, stamp, name, description })
       },
     ),
   }
@@ -148,6 +154,7 @@ describe('runListGroups', () => {
         {
           groupId: 'priv-1',
           generation: 0,
+          nameGeneration: 0,
           wrappedGroupKey: WRAPPED_KEY,
           nameCiphertext: NAME_CT,
           descriptionCiphertext: DESC_CT,
@@ -172,14 +179,14 @@ describe('runListGroups', () => {
     expect(secondDecrypt).not.toHaveBeenCalled()
   })
 
-  it('does not serve a cached entry from a different generation', async () => {
+  it('does not serve a cached entry from a different name generation', async () => {
     const cache = fakeCache()
-    cache.setCachedGroupName(USER_ID, 'priv-1', 0, 'Stale Name', 'Stale Desc')
+    cache.setCachedGroupName(USER_ID, 'priv-1', 0, STAMP, 'Stale Name', 'Stale Desc')
     const decryptGroupNames = vi
       .fn()
       .mockResolvedValue([{ groupId: 'priv-1', name: 'Fresh Name', description: 'Fresh Desc' }])
     const deps = makeDeps({
-      listGroups: vi.fn().mockResolvedValue({ groups: [privateGroup({ generation: 1 })] }),
+      listGroups: vi.fn().mockResolvedValue({ groups: [privateGroup({ nameGeneration: 1 })] }),
       decryptGroupNames,
       getCachedGroupName: cache.getCachedGroupName,
       setCachedGroupName: cache.setCachedGroupName,
@@ -189,6 +196,65 @@ describe('runListGroups', () => {
 
     expect(results).toEqual([expect.objectContaining({ displayName: 'Fresh Name' })])
     expect(decryptGroupNames).toHaveBeenCalledTimes(1)
+  })
+
+  it('keys the cache and the decrypt on nameGeneration, not the member generation', async () => {
+    // Once rotation exists a member's generation moves on while the name
+    // stays sealed under its original generation: an entry cached at
+    // nameGeneration 0 must still hit, and decrypt must be handed both.
+    const cache = fakeCache()
+    cache.setCachedGroupName(USER_ID, 'priv-1', 0, STAMP, 'Cached Name', 'Cached Desc')
+    const decryptGroupNames = vi.fn()
+    const hit = await runListGroups(
+      makeDeps({
+        listGroups: vi
+          .fn()
+          .mockResolvedValue({ groups: [privateGroup({ generation: 4, nameGeneration: 0 })] }),
+        decryptGroupNames,
+        getCachedGroupName: cache.getCachedGroupName,
+        setCachedGroupName: cache.setCachedGroupName,
+      }),
+    )
+    expect(hit).toEqual([expect.objectContaining({ displayName: 'Cached Name' })])
+    expect(decryptGroupNames).not.toHaveBeenCalled()
+
+    const miss = vi.fn().mockResolvedValue([{ groupId: 'priv-1', name: 'N', description: 'D' }])
+    await runListGroups(
+      makeDeps({
+        listGroups: vi
+          .fn()
+          .mockResolvedValue({ groups: [privateGroup({ generation: 4, nameGeneration: 2 })] }),
+        decryptGroupNames: miss,
+        getCachedGroupName: cache.getCachedGroupName,
+        setCachedGroupName: cache.setCachedGroupName,
+      }),
+    )
+    expect(miss).toHaveBeenCalledWith({
+      userId: USER_ID,
+      groups: [expect.objectContaining({ generation: 4, nameGeneration: 2 })],
+    })
+  })
+
+  it('treats a cache entry for older ciphertext at the same generation as a miss', async () => {
+    // Another admin renamed the group: same nameGeneration, fresh nonces.
+    // Serving the cached entry would show the old name for the whole tab
+    // session (PR #151 review).
+    const cache = fakeCache()
+    cache.setCachedGroupName(USER_ID, 'priv-1', 0, 'oldnonce:oldnonce2', 'Old Name', 'Old Desc')
+    const decryptGroupNames = vi
+      .fn()
+      .mockResolvedValue([{ groupId: 'priv-1', name: 'New Name', description: 'New Desc' }])
+    const results = await runListGroups(
+      makeDeps({
+        listGroups: vi.fn().mockResolvedValue({ groups: [privateGroup()] }),
+        decryptGroupNames,
+        getCachedGroupName: cache.getCachedGroupName,
+        setCachedGroupName: cache.setCachedGroupName,
+      }),
+    )
+    expect(results).toEqual([expect.objectContaining({ displayName: 'New Name' })])
+    expect(decryptGroupNames).toHaveBeenCalledTimes(1)
+    expect(cache.getCachedGroupName(USER_ID, 'priv-1', 0, STAMP)?.name).toBe('New Name')
   })
 
   it('marks every private group coldKeys, without throwing, when liveKeys is cold', async () => {

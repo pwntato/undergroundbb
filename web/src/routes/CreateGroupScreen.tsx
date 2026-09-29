@@ -226,6 +226,7 @@ function buildGroupListEntry(
       visibility: 'public',
       role: 'admin',
       generation: 0,
+      nameGeneration: 0,
       ...(form.namePlaintext !== undefined && { namePlaintext: form.namePlaintext }),
       ...(form.descriptionPlaintext !== undefined && {
         descriptionPlaintext: form.descriptionPlaintext,
@@ -237,6 +238,7 @@ function buildGroupListEntry(
     visibility: 'private',
     role: 'admin',
     generation: 0,
+    nameGeneration: 0,
     ...(form.nameCiphertext !== undefined && { nameCiphertext: form.nameCiphertext }),
     ...(form.descriptionCiphertext !== undefined && {
       descriptionCiphertext: form.descriptionCiphertext,
