@@ -64,6 +64,9 @@ var (
 	ErrSubjectRoleChanged = errors.New("db: subject's role changed")
 	// ErrGrantKeyTaken: a GRANT# row already exists at the chosen sort key.
 	ErrGrantKeyTaken = errors.New("db: grant sort key taken")
+	// ErrRoleChangeConflict: a concurrent transaction touched one of the
+	// rows (DynamoDB's TransactionConflict). Nothing was written; retry.
+	ErrRoleChangeConflict = errors.New("db: concurrent role change, retry")
 )
 
 // ChangeMemberRoleInput is one signed role change. The handler has already
@@ -171,6 +174,8 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 			return ErrSubjectRoleChanged
 		case isConditionalCheckFailure(err, grantIndex):
 			return ErrGrantKeyTaken
+		case isTransactionConflict(err):
+			return ErrRoleChangeConflict
 		}
 		return err
 	}

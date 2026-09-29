@@ -314,3 +314,21 @@ func isConditionalCheckFailure(err error, itemIndex int) bool {
 	reason := txErr.CancellationReasons[itemIndex]
 	return reason.Code != nil && *reason.Code == "ConditionalCheckFailed"
 }
+
+// isTransactionConflict reports whether err is a TransactWriteItems
+// cancellation caused by a concurrent transaction touching the same item
+// (reason TransactionConflict), which real DynamoDB raises where DynamoDB
+// Local usually raises ConditionalCheckFailed. Unlike a condition failure it
+// says nothing about the data, only that the attempt should be retried.
+func isTransactionConflict(err error) bool {
+	var txErr *types.TransactionCanceledException
+	if !errors.As(err, &txErr) {
+		return false
+	}
+	for _, reason := range txErr.CancellationReasons {
+		if reason.Code != nil && *reason.Code == "TransactionConflict" {
+			return true
+		}
+	}
+	return false
+}

@@ -259,6 +259,8 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "your own role changed; reload and re-sign", "grantor_changed")
 		case errors.Is(err, db.ErrSubjectRoleChanged):
 			WriteErrorWithCode(w, http.StatusConflict, "the member's role changed; reload and retry", "subject_role_changed")
+		case errors.Is(err, db.ErrRoleChangeConflict):
+			WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
 		case errors.Is(err, db.ErrGrantKeyTaken):
 			WriteErrorWithCode(w, http.StatusConflict, "grantSortKey is taken; generate a new one and re-sign", "grant_key_taken")
 		default:

@@ -689,3 +689,15 @@ func TestChangeMemberRoleRaces(t *testing.T) {
 		t.Errorf("role = %q after rejected change, want member", m.Role)
 	}
 }
+
+func TestIsTransactionConflict(t *testing.T) {
+	code := func(c string) types.CancellationReason { return types.CancellationReason{Code: aws.String(c)} }
+	conflict := &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{code("None"), code("TransactionConflict"), code("None")}}
+	condFail := &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{code("ConditionalCheckFailed"), code("None")}}
+	if !isTransactionConflict(conflict) {
+		t.Error("TransactionConflict cancellation not recognized")
+	}
+	if isTransactionConflict(condFail) || isTransactionConflict(errors.New("other")) || isTransactionConflict(nil) {
+		t.Error("non-conflict error recognized as TransactionConflict")
+	}
+}
