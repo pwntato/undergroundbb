@@ -341,6 +341,8 @@ func TestCompleteInviteWritesMembershipAndDeletesBothRows(t *testing.T) {
 	inviteID := "test-invite-" + randomSuffix(t)
 	groupID := "test-group-" + randomSuffix(t)
 	inviterUserID := "test-inviter-" + randomSuffix(t)
+	putGroupMeta(t, c, groupID)
+	putTestMember(t, c, groupID, inviterUserID, "admin")
 	invitedUserID := "test-invitee-" + randomSuffix(t)
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 
@@ -406,6 +408,8 @@ func TestCompleteInviteAlreadyCompletedFails(t *testing.T) {
 	inviteID := "test-invite-" + randomSuffix(t)
 	groupID := "test-group-" + randomSuffix(t)
 	inviterUserID := "test-inviter-" + randomSuffix(t)
+	putGroupMeta(t, c, groupID)
+	putTestMember(t, c, groupID, inviterUserID, "admin")
 	invitedUserID := "test-invitee-" + randomSuffix(t)
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 
@@ -436,6 +440,8 @@ func TestCompleteInviteAlreadyMemberFails(t *testing.T) {
 	inviteID := "test-invite-" + randomSuffix(t)
 	groupID := "test-group-" + randomSuffix(t)
 	inviterUserID := "test-inviter-" + randomSuffix(t)
+	putGroupMeta(t, c, groupID)
+	putTestMember(t, c, groupID, inviterUserID, "admin")
 	invitedUserID := "test-invitee-" + randomSuffix(t)
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 
@@ -859,5 +865,78 @@ func TestListSentInvitesKeepsAcceptedWhenInviteRowSwept(t *testing.T) {
 	}
 	if len(views) != 1 || views[0].InviteID != inviteID || views[0].InvitedUserID == "" {
 		t.Fatalf("ListSentInvites = %+v, want the accepted invite still listed", views)
+	}
+}
+
+func TestCompleteInviteFailsWhenGroupDeleted(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	// No group META: the state after the last member left (#66).
+
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, time.Now().Add(7*24*time.Hour))); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+	err := c.CompleteInvite(ctx, testCompleteInviteInput(inviteID, groupID, inviterUserID, invitedUserID))
+	if !errors.Is(err, ErrGroupGone) {
+		t.Fatalf("err = %v, want ErrGroupGone", err)
+	}
+	out, err := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+groupID, "MEMBER#"+invitedUserID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Item != nil {
+		t.Error("membership written into a deleted group")
+	}
+}
+
+// The inviter leaving or being demoted between the handler's membership read
+// and CompleteInvite's write must stop the completion, not just the read.
+func TestCompleteInviteFailsWhenInviterNoLongerEligible(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, c *Client, groupID, inviter string){
+		"inviter left":       func(t *testing.T, c *Client, g, u string) {},
+		"inviter is member":  func(t *testing.T, c *Client, g, u string) { putTestMember(t, c, g, u, "member") },
+		"inviter ambassador": func(t *testing.T, c *Client, g, u string) { putTestMember(t, c, g, u, "ambassador") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := testClient(t)
+			ctx := context.Background()
+			inviteID := "test-invite-" + randomSuffix(t)
+			groupID := "test-group-" + randomSuffix(t)
+			inviterUserID := "test-inviter-" + randomSuffix(t)
+			invitedUserID := "test-invitee-" + randomSuffix(t)
+			putGroupMeta(t, c, groupID)
+			setup(t, c, groupID, inviterUserID)
+
+			if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, time.Now().Add(7*24*time.Hour))); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+				t.Fatal(err)
+			}
+			err := c.CompleteInvite(ctx, testCompleteInviteInput(inviteID, groupID, inviterUserID, invitedUserID))
+			if name == "inviter ambassador" {
+				if err != nil {
+					t.Fatalf("an ambassador may complete: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInviterNotEligible) {
+				t.Fatalf("err = %v, want ErrInviterNotEligible", err)
+			}
+			if itemExists(t, c, "GROUP#"+groupID, "MEMBER#"+invitedUserID) {
+				t.Error("membership written despite an ineligible inviter")
+			}
+			if !itemExists(t, c, "INVITE#"+inviteID, "META") {
+				t.Error("invite rows were deleted; a re-promoted inviter could no longer complete")
+			}
+		})
 	}
 }

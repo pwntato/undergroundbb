@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -266,4 +267,51 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, changeRoleResponse{Role: req.Role, GrantSortKey: req.GrantSortKey})
+}
+
+type leaveGroupResponse struct {
+	// GroupDeleted is true when the caller was the only member, so leaving
+	// deleted the group.
+	GroupDeleted bool `json:"groupDeleted"`
+}
+
+// leaveGroup implements POST /api/groups/{groupId}/leave -- issue #66. Any
+// member may leave, with one exception: the last Admin of a group that still
+// has other members gets 409 last_admin and must promote a successor first
+// (the departing admin knows who should take over better than any
+// heuristic). The only member leaving deletes the group. A non-member gets
+// the same 404 whether or not the group exists.
+//
+// The involuntary cases (removal, account deletion, inactivity) and their
+// automatic successor choice are not here: they need a signed grant from
+// someone other than the departing admin, so they belong with removal (#58)
+// and account deletion (#77).
+func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID)
+	switch {
+	case errors.Is(err, db.ErrNotMember):
+		groupNotFound(w)
+	case errors.Is(err, db.ErrLastAdmin):
+		WriteErrorWithCode(w, http.StatusConflict, "you are the last admin; promote a successor before leaving", "last_admin")
+	case errors.Is(err, db.ErrLeaveConflict):
+		WriteErrorWithCode(w, http.StatusConflict, "the group changed; reload and retry", "conflict_retry")
+	case errors.Is(err, db.ErrGroupSweepIncomplete), errors.Is(err, db.ErrInviteCleanupIncomplete):
+		// The leave itself committed; only unreachable or expiring rows remain.
+		log.Printf("leave group %s: %v", groupID, err)
+		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
+	case err != nil:
+		WriteError(w, http.StatusInternalServerError, "could not leave group")
+	default:
+		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
+	}
 }

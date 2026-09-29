@@ -605,6 +605,16 @@ var ErrInviteAlreadyCompleted = errors.New("db: invite already completed")
 // conditional rather than a plain overwrite.
 var ErrAlreadyMember = errors.New("db: invitee is already a member")
 
+// ErrInviterNotEligible is returned by CompleteInvite when the inviter is no
+// longer an Admin or Ambassador of the group (they left or were demoted after
+// the caller's own membership read). Nothing was written; the invite rows are
+// left as they were.
+var ErrInviterNotEligible = errors.New("db: inviter is no longer an admin or ambassador")
+
+// ErrGroupGone is returned by CompleteInvite when the group was deleted
+// (its last member left, #66) before the invite could be completed.
+var ErrGroupGone = errors.New("db: group no longer exists")
+
 // CompleteInvite implements step 3 of the invite handshake (issue #40):
 // writes the invitee's GROUP#<gid>/MEMBER#<uuid> membership and deletes both
 // the INVITE#<iid> and USER#<inviter>/SENT#<iid> rows, as one
@@ -656,6 +666,8 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 	const (
 		membershipItemIndex = 0
 		sentDeleteIndex     = 2
+		groupMetaIndex      = 3
+		inviterIndex        = 4
 	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -686,9 +698,46 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 					ConditionExpression: aws.String("attribute_exists(PK)"),
 				},
 			},
+			// The group must still exist: the last member leaving deletes it
+			// (#66), and a membership written after that would be an orphan.
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+						"SK": &types.AttributeValueMemberS{Value: "META"},
+					},
+					ConditionExpression: aws.String("attribute_exists(PK)"),
+				},
+			},
+			// The inviter must still be an Admin or Ambassador. The handler
+			// checks this with a read first; this closes the window between
+			// that read and this write (the inviter leaving or being demoted
+			// in another tab).
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+						"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.InviterUserID},
+					},
+					ConditionExpression:      aws.String("#role IN (:admin, :amb)"),
+					ExpressionAttributeNames: map[string]string{"#role": "Role"},
+					ExpressionAttributeValues: map[string]types.AttributeValue{
+						":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
+						":amb":   &types.AttributeValueMemberS{Value: models.RoleAmbassador},
+					},
+				},
+			},
 		},
 	})
 	if err != nil {
+		if isConditionalCheckFailure(err, groupMetaIndex) {
+			return ErrGroupGone
+		}
+		if isConditionalCheckFailure(err, inviterIndex) {
+			return ErrInviterNotEligible
+		}
 		if isConditionalCheckFailure(err, membershipItemIndex) {
 			return ErrAlreadyMember
 		}
