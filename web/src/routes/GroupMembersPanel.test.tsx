@@ -73,6 +73,14 @@ describe('GroupMembersPanel', () => {
     expect(html.match(/<button[^>]*disabled/g)).toHaveLength(2)
   })
 
+  it('offers no buttons to an admin whose own grant is missing, and says why', () => {
+    for (const myGrantSortKey of [undefined, ''] as const) {
+      const html = render({ myGrantSortKey })
+      expect(html).not.toContain('<button')
+      expect(html).toContain('not on record')
+    }
+  })
+
   it("explains itself when an admin's own grant is missing", () => {
     expect(render({ myGrantSortKey: undefined })).toContain('not on record')
     expect(render({})).not.toContain('not on record')

@@ -97,7 +97,14 @@ export function GroupMembersScreen() {
       // Reload after a success (new role and new grant ref) and after any
       // outcome that says the roster or our own standing moved; the next
       // change must sign on the CURRENT grant, never the one this view holds.
-      if (outcome.ok || outcome.kind === 'stale' || outcome.kind === 'ambiguous') {
+      // 'rejected' reloads too: another admin may already have set this exact
+      // role (a 400, not a 409), and the roster must stop showing the old one.
+      if (
+        outcome.ok ||
+        outcome.kind === 'stale' ||
+        outcome.kind === 'ambiguous' ||
+        outcome.kind === 'rejected'
+      ) {
         await reload(() => false)
       }
       setBusyUserId(null)

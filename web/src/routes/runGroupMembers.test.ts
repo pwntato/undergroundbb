@@ -179,6 +179,21 @@ describe('changeRole', () => {
     expect(changeMemberRole).toHaveBeenCalledTimes(2)
   })
 
+  it('does not call grantor_grant_missing stale: reloading cannot fix it, so the server text is shown', async () => {
+    const deps = changeDeps({
+      changeMemberRole: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(409, 'your own admin grant is not on record', 'grantor_grant_missing'),
+        ),
+    })
+    expect(await changeRole(deps, view(), BOB, 'admin')).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'your own admin grant is not on record',
+    })
+  })
+
   it.each(['grantor_ref_stale', 'grantor_changed', 'subject_role_changed', 'conflict_retry'])(
     'maps 409 %s to stale without resending',
     async (code) => {

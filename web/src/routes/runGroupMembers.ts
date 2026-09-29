@@ -105,12 +105,13 @@ export type ChangeRoleResult =
   // Network failure or 5xx: the change may or may not have committed.
   | { readonly ok: false; readonly kind: 'ambiguous' }
 
+// 'grantor_grant_missing' is deliberately absent: reloading cannot fix it, so
+// it surfaces the server's own message instead of a "try again".
 const STALE_CODES = new Set([
   'grantor_ref_stale',
   'grantor_changed',
   'subject_role_changed',
   'conflict_retry',
-  'grantor_grant_missing',
 ])
 
 // A collision on a fresh random address is vanishingly rare; one re-sign is

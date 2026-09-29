@@ -42,6 +42,9 @@ export function GroupMembersPanel({
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
 }) {
   const isAdmin = view.myRole === 'admin'
+  // Without our own grant on record a change can't be signed, so the buttons
+  // would only fail; the note below the list says why they are absent.
+  const canChangeRoles = isAdmin && view.myGrantSortKey !== undefined && view.myGrantSortKey !== ''
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
@@ -70,7 +73,7 @@ export function GroupMembersPanel({
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
               </span>
-              {isAdmin && !isSelf && (
+              {canChangeRoles && !isSelf && (
                 <span className="flex flex-wrap gap-2">
                   {ROLES.filter((r) => r !== m.role).map((r) => (
                     <Button
@@ -92,7 +95,7 @@ export function GroupMembersPanel({
           )
         })}
       </ul>
-      {isAdmin && view.myGrantSortKey === undefined && (
+      {isAdmin && !canChangeRoles && (
         <p className="text-xs text-muted-foreground">
           Your own admin grant is not on record, so roles can&apos;t be changed from here yet.
         </p>
