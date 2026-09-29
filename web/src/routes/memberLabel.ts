@@ -1,7 +1,9 @@
-// The roster has ids only until the users projection (GET /api/users/:id)
-// exists; kept out of the panel so that file exports only its component.
-
-/** A short stand-in for a username: the first block of the member's uuid. */
-export function memberLabel(userId: string): string {
-  return userId.split('-')[0] ?? userId
+/**
+ * How a user is shown on the roster and invite rows: their username when the
+ * users projection (GET /api/users/:id) has been read, otherwise the first
+ * block of their uuid so a row is never blank while it loads or if the read
+ * fails. Kept out of the panels so those files export only components.
+ */
+export function memberLabel(userId: string, usernames?: ReadonlyMap<string, string>): string {
+  return usernames?.get(userId) ?? userId.split('-')[0] ?? userId
 }

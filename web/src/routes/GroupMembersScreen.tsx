@@ -14,6 +14,7 @@ import { signRoleGrant } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { memberLabel } from './memberLabel'
+import { useUsernames } from './useUsernames'
 import {
   changeRole,
   loadMembers,
@@ -62,6 +63,10 @@ export function GroupMembersScreen() {
     [groupId],
   )
 
+  const usernames = useUsernames(
+    load.status === 'ready' ? load.view.members.map((m) => m.userId) : [],
+  )
+
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -96,7 +101,7 @@ export function GroupMembersScreen() {
         role,
       )
       if (outcome.ok) {
-        setMessage(`${memberLabel(subjectUserId)} is now ${role}.`)
+        setMessage(`${memberLabel(subjectUserId, usernames)} is now ${role}.`)
       } else {
         setError(outcome.kind === 'rejected' ? outcome.message : CHANGE_ERRORS[outcome.kind])
       }
