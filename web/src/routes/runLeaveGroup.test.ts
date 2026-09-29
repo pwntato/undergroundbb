@@ -99,6 +99,13 @@ describe('leaveFailureMessage', () => {
     }
   })
 
+  it('does not claim the leave failed when it is unknown whether it committed', () => {
+    const msg = leaveFailureMessage('ambiguous', 'bob')
+    expect(msg).toContain("couldn't confirm")
+    expect(msg).not.toContain("didn't go through")
+    expect(leaveFailureMessage('stale', 'bob')).toContain("didn't go through")
+  })
+
   it('keeps the plain messages when no promotion happened, and for session errors', () => {
     expect(leaveFailureMessage('stale')).toContain('nothing was saved')
     expect(leaveFailureMessage('authRequired', 'bob')).toContain('session has expired')

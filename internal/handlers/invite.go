@@ -713,6 +713,10 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			WriteJSON(w, http.StatusOK, map[string]string{"status": "already completed"})
 			return
 		}
+		if errors.Is(err, db.ErrInviterNotEligible) {
+			WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group")
+			return
+		}
 		if errors.Is(err, db.ErrGroupGone) {
 			// Backstop for a narrow race: the inviter's membership read above
 			// passed, then the last member left and deleted the group before

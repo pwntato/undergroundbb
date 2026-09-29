@@ -181,11 +181,15 @@ func (c *Client) deleteGroup(ctx context.Context, groupID, userID string) (bool,
 		}
 		return false, err
 	}
-	if err := c.deleteOwnInvites(ctx, groupID, userID); err != nil {
-		return true, fmt.Errorf("%w: %v", ErrInviteCleanupIncomplete, err)
-	}
+	// The sweep is the more important cleanup (GROUP# rows have no TTL and
+	// nothing will retry once META is gone), so it runs whatever the invite
+	// cleanup did.
+	inviteErr := c.deleteOwnInvites(ctx, groupID, userID)
 	if err := c.sweepPartition(ctx, "GROUP#"+groupID); err != nil {
 		return true, fmt.Errorf("%w: %v", ErrGroupSweepIncomplete, err)
+	}
+	if inviteErr != nil {
+		return true, fmt.Errorf("%w: %v", ErrInviteCleanupIncomplete, inviteErr)
 	}
 	return true, nil
 }

@@ -79,11 +79,14 @@ export function leaveFailureMessage(
   kind: Exclude<LeaveResult, { ok: true }>['kind'],
   promotedName?: string,
 ): string {
-  if (
-    promotedName !== undefined &&
-    (kind === 'stale' || kind === 'ambiguous' || kind === 'lastAdmin')
-  ) {
-    return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
+  if (promotedName !== undefined) {
+    if (kind === 'ambiguous') {
+      // The leave may have committed; do not claim it did not.
+      return `${promotedName} is now an admin, but we couldn't confirm whether you left. Check your group list before trying again.`
+    }
+    if (kind === 'stale' || kind === 'lastAdmin') {
+      return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
+    }
   }
   return LEAVE_ERRORS[kind]
 }
