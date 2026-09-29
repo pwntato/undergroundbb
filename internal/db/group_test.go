@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
@@ -605,5 +606,86 @@ func TestUpdateGroupSettingsPublicRewritesDirectoryEntry(t *testing.T) {
 	}
 	if g.GSI1PK != "PUBLIC#0" || g.GSI1SK != "NAME#New#"+gid {
 		t.Errorf("directory entry = %q / %q", g.GSI1PK, g.GSI1SK)
+	}
+}
+
+func newTestGroupWithMember(t *testing.T, c *Client) (gid, admin, member, root string) {
+	t.Helper()
+	ctx := context.Background()
+	gid, admin, member = "test-group-"+randomSuffix(t), "test-admin-"+randomSuffix(t), "test-member-"+randomSuffix(t)
+	in := testCreateGroupInput(t, gid, admin)
+	if _, err := c.CreateGroup(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	m := models.Membership{
+		Record: models.Record{PK: "GROUP#" + gid, SK: "MEMBER#" + member, Type: "Membership", GSI1PK: "USER#" + member, GSI1SK: "GROUP#" + gid},
+		Role:   models.RoleMember,
+	}
+	item, err := attributevalue.MarshalMap(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: item}); err != nil {
+		t.Fatal(err)
+	}
+	return gid, admin, member, in.RootGrantSortKey
+}
+
+func roleChange(gid, admin, member, root, role, grantKey string) ChangeMemberRoleInput {
+	return ChangeMemberRoleInput{
+		GroupID: gid, SubjectUserID: member, OldRole: models.RoleMember, NewRole: role,
+		GrantorUserID: admin, GrantorSigningPublicKey: make([]byte, 32),
+		GrantorGrantRef: root, GrantorHasStoredGrant: true,
+		GrantSortKey: grantKey, Signature: []byte("sig"),
+	}
+}
+
+func TestChangeMemberRoleRaces(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid, admin, member, root := newTestGroupWithMember(t, c)
+	key := func() string { return "GRANT#" + member + "#2026-09-28#" + randomSuffix(t) + randomSuffix(t) }
+
+	// Grantor demoted after the handler's read: rejected, nothing written.
+	setMemberRole(t, c, gid, admin, models.RoleMember)
+	k1 := key()
+	if err := c.ChangeMemberRole(ctx, roleChange(gid, admin, member, root, models.RoleAmbassador, k1)); !errors.Is(err, ErrGrantorChanged) {
+		t.Fatalf("demoted grantor: %v, want ErrGrantorChanged", err)
+	}
+	if out, _ := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+gid, k1)); out.Item != nil {
+		t.Error("grant row written by a rejected change")
+	}
+	setMemberRole(t, c, gid, admin, models.RoleAdmin)
+
+	// Grantor's recorded grant is not the one that was signed against.
+	stale := roleChange(gid, admin, member, "GRANT#"+admin+"#2026-01-01#0000000000000000", models.RoleAmbassador, key())
+	if err := c.ChangeMemberRole(ctx, stale); !errors.Is(err, ErrGrantorChanged) {
+		t.Fatalf("stale ref: %v, want ErrGrantorChanged", err)
+	}
+
+	// Subject's role is no longer what the caller saw.
+	setMemberRole(t, c, gid, member, models.RoleAmbassador)
+	if err := c.ChangeMemberRole(ctx, roleChange(gid, admin, member, root, models.RoleAdmin, key())); !errors.Is(err, ErrSubjectRoleChanged) {
+		t.Fatalf("subject changed: %v, want ErrSubjectRoleChanged", err)
+	}
+	setMemberRole(t, c, gid, member, models.RoleMember)
+
+	// Success, then a reused grant address.
+	k2 := key()
+	if err := c.ChangeMemberRole(ctx, roleChange(gid, admin, member, root, models.RoleAmbassador, k2)); err != nil {
+		t.Fatalf("good change: %v", err)
+	}
+	setMemberRole(t, c, gid, member, models.RoleMember)
+	if err := c.ChangeMemberRole(ctx, roleChange(gid, admin, member, root, models.RoleAdmin, k2)); !errors.Is(err, ErrGrantKeyTaken) {
+		t.Fatalf("reused key: %v, want ErrGrantKeyTaken", err)
+	}
+	// The failed attempt must not have left the subject's role changed.
+	metaOut, _ := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+gid, "MEMBER#"+member))
+	var m models.Membership
+	if err := unmarshalItem(metaOut.Item, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Role != models.RoleMember {
+		t.Errorf("role = %q after rejected change, want member", m.Role)
 	}
 }
