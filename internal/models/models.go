@@ -486,6 +486,14 @@ type Invite struct {
 	// deadline rounded up to the end of its UTC day (db.RoundUpToEndOfUTCDay,
 	// db.AcceptInvite). See this struct's own doc comment.
 	TTL int64 `dynamodbav:"TTL"`
+	// CompletionDeadline is set at acceptance (Unix seconds, rounded to the
+	// end of a UTC day like every stored TTL). It is the DEADLINE, kept apart
+	// from TTL so that passing it surfaces the invite as overdue instead of
+	// deleting it: TTL is the deadline plus db.abandonedGraceDuration, the
+	// window in which both parties see it as overdue. Zero on an unaccepted
+	// invite and on rows written before this field existed; use
+	// EffectiveCompletionDeadline.
+	CompletionDeadline int64 `dynamodbav:"CompletionDeadline,omitempty"`
 
 	GroupID string `dynamodbav:"GroupID"`
 
@@ -574,6 +582,8 @@ type SentInvite struct {
 	// TTL mirrors Invite.TTL -- both rows take their lifetime from the same
 	// signed ExpiresAt and are updated together at acceptance.
 	TTL int64 `dynamodbav:"TTL"`
+	// CompletionDeadline mirrors Invite.CompletionDeadline.
+	CompletionDeadline int64 `dynamodbav:"CompletionDeadline,omitempty"`
 
 	GroupID string `dynamodbav:"GroupID"`
 	// InviteID recovers the INVITE#<iid> row's address -- duplicated off
@@ -597,4 +607,22 @@ type SentInvite struct {
 	// scans), so the inviter's client can re-derive k and verify it before
 	// ever wrapping the group key.
 	InviteMAC []byte `dynamodbav:"InviteMAC,omitempty"`
+}
+
+// EffectiveCompletionDeadline is the accepted invite's completion deadline as
+// Unix seconds. Rows accepted before CompletionDeadline existed carried the
+// deadline in TTL, so fall back to it.
+func (i Invite) EffectiveCompletionDeadline() int64 {
+	if i.CompletionDeadline != 0 {
+		return i.CompletionDeadline
+	}
+	return i.TTL
+}
+
+// EffectiveCompletionDeadline: see Invite.EffectiveCompletionDeadline.
+func (s SentInvite) EffectiveCompletionDeadline() int64 {
+	if s.CompletionDeadline != 0 {
+		return s.CompletionDeadline
+	}
+	return s.TTL
 }

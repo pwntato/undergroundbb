@@ -92,7 +92,7 @@ day-rounding rule on stored TTLs is what holds the inviter's side to day granula
 shape alone is not what buys this.
 
 This is also bounded in time: the row is deleted when the invite completes, and until then its
-lifetime is the signed `expires_at` before acceptance and a **completion deadline** after it. So
+lifetime is the signed `expires_at` before acceptance and a **completion deadline** after it (plus a one-week grace window in which a passed deadline is shown as overdue rather than swept; the deadline is stored as its own day-rounded attribute, which discloses no more than the rounded TTL does). So
 what a dump yields is **invitations currently outstanding, not a history of every approach the user
 has ever made.** The deadline is what makes that true. Completion is client-driven and runs on the
 inviter's next login, so without one an inviter who never returned would leave a permanent record of

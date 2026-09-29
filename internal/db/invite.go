@@ -311,6 +311,17 @@ func (c *Client) RevokeInvite(ctx context.Context, inviteID, inviterUserID strin
 // sensitive half.
 const completionDeadlineDuration = 7 * 24 * time.Hour
 
+// abandonedGraceDuration is how long an accepted invite outlives its
+// completion deadline before DynamoDB's TTL may sweep it. The deadline is
+// stored separately (models.Invite.CompletionDeadline) and TTL is set this
+// far past it, so passing the deadline makes the invite visibly overdue to
+// both parties for a window rather than silently deleting it (docs/DESIGN.md:
+// "surfaced, not silently enforced"). The window is a week so an invitee
+// who checks weekly still sees it. It is also the price of the bound: the
+// rows still go eventually, since keeping them would make the record of who
+// approached whom permanent (THREAT_MODEL).
+const abandonedGraceDuration = 7 * 24 * time.Hour
+
 // ErrInviteNotFound is returned by AcceptInvite when the INVITE#<iid> row
 // does not exist -- never created, or already swept by TTL.
 var ErrInviteNotFound = errors.New("db: invite not found")
@@ -376,10 +387,10 @@ type AcceptInviteInput struct {
 // "db is a pure data-access layer" split. Callers must have already done
 // both before calling this.
 //
-// The TTL swap does NOT delete either row at the deadline -- see #83
-// ("Surface invites accepted but never completed"), a separate issue that
-// covers making a passed deadline visible to both parties rather than
-// silently sweeping it, which this package has no part in.
+// The deadline is stored as CompletionDeadline and the TTL is set a grace
+// window past it (abandonedGraceDuration), so passing the deadline does NOT
+// delete either row: both lists (ListSentInvites, ListReceivedInvites) keep
+// returning it and the handlers flag it overdue (#83).
 func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 	invite, err := c.GetInvite(ctx, in.InviteID)
 	if err != nil {
@@ -391,7 +402,10 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 
 	now := time.Now()
 	deadline := RoundUpToEndOfUTCDay(now.Add(completionDeadlineDuration))
-	deadlineTTL := deadline.Unix()
+	deadlineUnix := deadline.Unix()
+	// TTL is the deadline plus a grace window, not the deadline itself: see
+	// abandonedGraceDuration.
+	sweepTTL := RoundUpToEndOfUTCDay(deadline.Add(abandonedGraceDuration)).Unix()
 
 	// TTL is a DynamoDB reserved keyword and cannot appear literally in an
 	// UpdateExpression -- aliased via ExpressionAttributeNames, matching
@@ -403,7 +417,7 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			"PK": &types.AttributeValueMemberS{Value: "INVITE#" + in.InviteID},
 			"SK": &types.AttributeValueMemberS{Value: "META"},
 		},
-		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk"),
+		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl, CompletionDeadline = :cd, GSI1PK = :gsi1pk, GSI1SK = :gsi1sk"),
 		ConditionExpression:      aws.String("attribute_not_exists(InvitedUserID)"),
 		ExpressionAttributeNames: map[string]string{"#TTL": "TTL"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -412,7 +426,8 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			":x":      &types.AttributeValueMemberB{Value: in.InvitedX25519PublicKey},
 			":sig":    &types.AttributeValueMemberB{Value: in.AcceptanceSignature},
 			":mac":    &types.AttributeValueMemberB{Value: in.InviteMAC},
-			":ttl":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineTTL)},
+			":ttl":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", sweepTTL)},
+			":cd":     &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineUnix)},
 			":gsi1pk": &types.AttributeValueMemberS{Value: "USER#" + in.InvitedUserID},
 			":gsi1sk": &types.AttributeValueMemberS{Value: "INVITE#" + inviteDaySuffix(now)},
 		},
@@ -437,7 +452,7 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			"PK": &types.AttributeValueMemberS{Value: "USER#" + invite.InviterUserID},
 			"SK": &types.AttributeValueMemberS{Value: "SENT#" + in.InviteID},
 		},
-		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl"),
+		UpdateExpression:         aws.String("SET InvitedUserID = :uid, InvitedEd25519PublicKey = :ed, InvitedX25519PublicKey = :x, AcceptanceSignature = :sig, InviteMAC = :mac, #TTL = :ttl, CompletionDeadline = :cd"),
 		ConditionExpression:      aws.String("attribute_exists(PK)"),
 		ExpressionAttributeNames: map[string]string{"#TTL": "TTL"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -446,7 +461,8 @@ func (c *Client) AcceptInvite(ctx context.Context, in AcceptInviteInput) error {
 			":x":   &types.AttributeValueMemberB{Value: in.InvitedX25519PublicKey},
 			":sig": &types.AttributeValueMemberB{Value: in.AcceptanceSignature},
 			":mac": &types.AttributeValueMemberB{Value: in.InviteMAC},
-			":ttl": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineTTL)},
+			":ttl": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", sweepTTL)},
+			":cd":  &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", deadlineUnix)},
 		},
 	}
 
@@ -763,9 +779,10 @@ type SentInviteView struct {
 // not-yet-accepted invite whose signed ExpiresAt has passed is dropped, as
 // is a not-yet-accepted one whose INVITE# row is already gone (revoked or
 // swept between the two reads). An accepted invite is never dropped here,
-// even if its INVITE# row is gone: its TTL is the completion deadline, the
-// two rows are swept independently after it, and a passed deadline is
-// exactly the thing #83 must surface to the inviter rather than hide.
+// even if its INVITE# row is gone: the two rows are swept independently
+// once their TTL (completion deadline plus grace) passes, and an overdue
+// acceptance is exactly what the inviter must be shown rather than have
+// vanish.
 func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now time.Time) ([]SentInviteView, error) {
 	var sent []models.SentInvite
 	var startKey map[string]types.AttributeValue
@@ -818,8 +835,7 @@ func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now 
 		exp, ok := expiresAt[s.InviteID]
 		if s.InvitedUserID != "" {
 			// Accepted: the SENT# row alone is enough. Both rows carry the
-			// same completion-deadline TTL but DynamoDB sweeps them
-			// independently, so a missing INVITE# row must not hide an
+			// same TTL but DynamoDB sweeps them independently, so a missing INVITE# row must not hide an
 			// acceptance the inviter still owes (PendingInviteCompletions
 			// still returns it). exp may be empty here; the UI falls back
 			// to the completion deadline.
@@ -849,9 +865,10 @@ func (c *Client) ListSentInvites(ctx context.Context, inviterUserID string, now 
 // is nothing "received" and unaccepted to list.
 //
 // Completion deletes the INVITE# row, so a completed invite drops out of
-// this list by itself. A row whose completion deadline (TTL) has passed is
-// still returned, for the same reason ListSentInvites keeps it: the
-// invitee must see an abandoned acceptance, not have it vanish.
+// this list by itself. A row whose completion deadline has passed is still
+// returned (until its TTL, a grace window later), for the same reason
+// ListSentInvites keeps it: the invitee must see an overdue acceptance, not
+// have it vanish.
 func (c *Client) ListReceivedInvites(ctx context.Context, inviteeUserID string) ([]models.Invite, error) {
 	var invites []models.Invite
 	var startKey map[string]types.AttributeValue

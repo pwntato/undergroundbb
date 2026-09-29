@@ -92,10 +92,20 @@ function SentRow({
       <span className="flex flex-col">
         <span className="font-medium">{groupName}</span>
         {invite.accepted ? (
-          <span className="text-xs text-muted-foreground">
-            Accepted. Completes the next time you log in, by{' '}
-            {formatDate(invite.completionDeadline ?? invite.expiresAt)}.
-          </span>
+          invite.overdue === true ? (
+            <span className="text-xs text-destructive">
+              Overdue. This acceptance was due {formatDate(invite.completionDeadline ?? '')} and has
+              not completed. It finishes when you log in; if it keeps failing, the invitee will need
+              a new invite.
+              {invite.removalDate !== undefined &&
+                ` It disappears from here after ${formatDate(invite.removalDate)}.`}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Accepted. Completes the next time you log in, by{' '}
+              {formatDate(invite.completionDeadline ?? invite.expiresAt)}.
+            </span>
+          )
         ) : (
           <span className="text-xs text-muted-foreground">
             Not yet accepted. Expires {formatDate(invite.expiresAt)}.
@@ -129,11 +139,21 @@ function ReceivedRow({
   return (
     <li className="flex flex-col rounded-md border px-3 py-2">
       <span className="font-medium">{groupName}</span>
-      <span className="text-xs text-muted-foreground">
-        You accepted an invite from{' '}
-        <span className="font-mono">{memberLabel(invite.inviterUserId)}</span>. You join once they
-        next log in, by {formatDate(invite.completionDeadline)}.
-      </span>
+      {invite.overdue === true ? (
+        <span className="text-xs text-destructive">
+          You accepted an invite from{' '}
+          <span className="font-mono">{memberLabel(invite.inviterUserId)}</span>, but they have not
+          completed it, and it was due {formatDate(invite.completionDeadline)}. You have not joined.
+          Ask them to log in, or ask for a new invite. This notice disappears after{' '}
+          {formatDate(invite.removalDate)}.
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">
+          You accepted an invite from{' '}
+          <span className="font-mono">{memberLabel(invite.inviterUserId)}</span>. You join once they
+          next log in, by {formatDate(invite.completionDeadline)}.
+        </span>
+      )}
     </li>
   )
 }

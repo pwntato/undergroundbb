@@ -16,6 +16,7 @@ const received: ReceivedInvite = {
   groupId: 'g2',
   inviterUserId: 'u1',
   completionDeadline: '2026-10-06T23:59:59Z',
+  removalDate: '2026-10-13T23:59:59Z',
 }
 
 describe('loadInvites', () => {

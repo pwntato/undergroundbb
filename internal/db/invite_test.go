@@ -198,12 +198,20 @@ func TestAcceptInviteSetsInviteeOnBothRows(t *testing.T) {
 		t.Error("invite.TTL unchanged after acceptance, want a new completion deadline")
 	}
 	wantDeadline := RoundUpToEndOfUTCDay(time.Now().Add(completionDeadlineDuration)).Unix()
-	// Allow a small window since "now" ticks between the deadline computed
-	// inside AcceptInvite and this assertion -- both round to the same UTC
-	// day's 23:59:59 unless the test runs across a day boundary, which
-	// RoundUpToEndOfUTCDay's own rounding absorbs entirely in practice.
-	if invite.TTL != wantDeadline {
-		t.Errorf("invite.TTL = %d, want %d (completion deadline, rounded)", invite.TTL, wantDeadline)
+	// The TTL is the deadline plus the grace window, NOT the deadline: a TTL
+	// equal to the deadline would sweep the rows the moment it passes, the
+	// silent abandonment #83 exists to prevent. The deadline itself lives in
+	// CompletionDeadline. (Both round to the same UTC day's 23:59:59 barring
+	// a run across midnight.)
+	wantSweep := RoundUpToEndOfUTCDay(time.Unix(wantDeadline, 0).Add(abandonedGraceDuration)).Unix()
+	if invite.CompletionDeadline != wantDeadline {
+		t.Errorf("invite.CompletionDeadline = %d, want %d", invite.CompletionDeadline, wantDeadline)
+	}
+	if invite.TTL != wantSweep {
+		t.Errorf("invite.TTL = %d, want %d (completion deadline + grace, rounded)", invite.TTL, wantSweep)
+	}
+	if invite.TTL <= invite.CompletionDeadline {
+		t.Errorf("invite.TTL %d must be after CompletionDeadline %d", invite.TTL, invite.CompletionDeadline)
 	}
 
 	sentOut, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+inviterUserID, "SENT#"+inviteID))
@@ -220,8 +228,8 @@ func TestAcceptInviteSetsInviteeOnBothRows(t *testing.T) {
 	if sent.InvitedUserID != invitedUserID {
 		t.Errorf("sent.InvitedUserID = %q, want %q -- SENT# row must be updated in the same transaction", sent.InvitedUserID, invitedUserID)
 	}
-	if sent.TTL != wantDeadline {
-		t.Errorf("sent.TTL = %d, want %d (both rows share the same completion deadline)", sent.TTL, wantDeadline)
+	if sent.TTL != wantSweep || sent.CompletionDeadline != wantDeadline {
+		t.Errorf("sent TTL/CompletionDeadline = %d/%d, want %d/%d (both rows share the same values)", sent.TTL, sent.CompletionDeadline, wantSweep, wantDeadline)
 	}
 }
 

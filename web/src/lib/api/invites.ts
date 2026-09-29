@@ -238,8 +238,12 @@ export interface SentInvite {
   readonly expiresAt: string
   /** True once an invitee accepted; the invite then awaits this inviter's step 3 and can no longer be revoked. */
   readonly accepted: boolean
-  /** Present only when accepted: the deadline after which the acceptance is abandoned. RFC 3339. */
+  /** Present only when accepted: the date step 3 was due by. RFC 3339. */
   readonly completionDeadline?: string
+  /** True when accepted and the deadline has passed with step 3 still undone (#83). */
+  readonly overdue?: boolean
+  /** Present only when accepted: when the server may sweep the row; until then an overdue invite stays listed. RFC 3339. */
+  readonly removalDate?: string
 }
 
 export interface SentInvitesResponse {
@@ -261,6 +265,10 @@ export interface ReceivedInvite {
   readonly groupId: string
   readonly inviterUserId: string
   readonly completionDeadline: string
+  /** True when the deadline has passed and the inviter still has not completed (#83). */
+  readonly overdue?: boolean
+  /** When the server may sweep the row; after this the acceptance silently disappears. RFC 3339. */
+  readonly removalDate: string
 }
 
 export interface ReceivedInvitesResponse {
