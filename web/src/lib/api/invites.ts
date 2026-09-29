@@ -224,3 +224,50 @@ export interface CompleteInviteRequest {
 export async function completeInvite(inviteId: string, req: CompleteInviteRequest): Promise<void> {
   await postJSON<{ status: string }>(`/api/invites/${inviteId}/complete`, req)
 }
+
+/**
+ * One invite in GET /api/invites/sent -- issue #41. See
+ * internal/handlers/invite.go's sentInviteEntry. The group is an id only (a
+ * private group's name is ciphertext); resolve it from the caller's own
+ * group list.
+ */
+export interface SentInvite {
+  readonly inviteId: string
+  readonly groupId: string
+  /** The signed expires_at, RFC 3339. */
+  readonly expiresAt: string
+  /** True once an invitee accepted; the invite then awaits this inviter's step 3 and can no longer be revoked. */
+  readonly accepted: boolean
+  /** Present only when accepted: the deadline after which the acceptance is abandoned. RFC 3339. */
+  readonly completionDeadline?: string
+}
+
+export interface SentInvitesResponse {
+  readonly invites: readonly SentInvite[]
+}
+
+/** GET /api/invites/sent -- issue #41. The caller's own outstanding invites. */
+export async function sentInvites(): Promise<SentInvitesResponse> {
+  return getJSON<SentInvitesResponse>('/api/invites/sent')
+}
+
+/**
+ * One invite in GET /api/invites/received -- issue #41. Always an invite the
+ * caller already accepted and that is waiting on its inviter (an invitee has
+ * no record of an invite before accepting).
+ */
+export interface ReceivedInvite {
+  readonly inviteId: string
+  readonly groupId: string
+  readonly inviterUserId: string
+  readonly completionDeadline: string
+}
+
+export interface ReceivedInvitesResponse {
+  readonly invites: readonly ReceivedInvite[]
+}
+
+/** GET /api/invites/received -- issue #41. */
+export async function receivedInvites(): Promise<ReceivedInvitesResponse> {
+  return getJSON<ReceivedInvitesResponse>('/api/invites/received')
+}

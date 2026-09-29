@@ -916,3 +916,83 @@ func TestRevokeInviteRequiresSession(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }
+
+func TestSentAndReceivedInvitesLifecycle(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	pendingID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+	acceptedID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	if rec := doJSON(t, h, http.MethodPost, "/api/invites/"+acceptedID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, acceptedID)); rec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	sentRec := doJSON(t, h, http.MethodGet, "/api/invites/sent", creatorCookie, nil)
+	if sentRec.Code != http.StatusOK {
+		t.Fatalf("sent status = %d, body: %s", sentRec.Code, sentRec.Body.String())
+	}
+	var sent sentInvitesResponse
+	if err := json.Unmarshal(sentRec.Body.Bytes(), &sent); err != nil {
+		t.Fatalf("decoding sent: %v", err)
+	}
+	byID := map[string]sentInviteEntry{}
+	for _, e := range sent.Invites {
+		byID[e.InviteID] = e
+	}
+	if len(byID) != 2 {
+		t.Fatalf("sent invites = %d, want 2", len(byID))
+	}
+	if e := byID[pendingID]; e.Accepted || e.CompletionDeadline != "" || e.GroupID != groupID || e.ExpiresAt == "" {
+		t.Errorf("pending entry = %+v", e)
+	}
+	if e := byID[acceptedID]; !e.Accepted || e.CompletionDeadline == "" {
+		t.Errorf("accepted entry = %+v, want accepted with a completion deadline", e)
+	}
+
+	// The invitee sees only the invite they accepted, not the inviter's other.
+	recvRec := doJSON(t, h, http.MethodGet, "/api/invites/received", inviteeCookie, nil)
+	if recvRec.Code != http.StatusOK {
+		t.Fatalf("received status = %d, body: %s", recvRec.Code, recvRec.Body.String())
+	}
+	var recv receivedInvitesResponse
+	if err := json.Unmarshal(recvRec.Body.Bytes(), &recv); err != nil {
+		t.Fatalf("decoding received: %v", err)
+	}
+	if len(recv.Invites) != 1 || recv.Invites[0].InviteID != acceptedID || recv.Invites[0].InviterUserID != creator.userID || recv.Invites[0].CompletionDeadline == "" {
+		t.Fatalf("received = %+v, want exactly the accepted invite", recv.Invites)
+	}
+
+	// The inviter has accepted nothing, so their received list is empty.
+	creatorRecv := doJSON(t, h, http.MethodGet, "/api/invites/received", creatorCookie, nil)
+	var creatorRecvResp receivedInvitesResponse
+	if err := json.Unmarshal(creatorRecv.Body.Bytes(), &creatorRecvResp); err != nil {
+		t.Fatalf("decoding creator received: %v", err)
+	}
+	if len(creatorRecvResp.Invites) != 0 {
+		t.Errorf("inviter's received = %+v, want empty", creatorRecvResp.Invites)
+	}
+
+	// Revoking the pending one removes it from the sent list.
+	if rec := doJSON(t, h, http.MethodDelete, "/api/invites/"+pendingID, creatorCookie, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	sentRec2 := doJSON(t, h, http.MethodGet, "/api/invites/sent", creatorCookie, nil)
+	var sent2 sentInvitesResponse
+	if err := json.Unmarshal(sentRec2.Body.Bytes(), &sent2); err != nil {
+		t.Fatalf("decoding sent after revoke: %v", err)
+	}
+	if len(sent2.Invites) != 1 || sent2.Invites[0].InviteID != acceptedID {
+		t.Errorf("sent after revoke = %+v, want only the accepted invite", sent2.Invites)
+	}
+}
+
+func TestSentAndReceivedInvitesRequireSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	for _, path := range []string{"/api/invites/sent", "/api/invites/received"} {
+		if rec := doJSON(t, h, http.MethodGet, path, nil, nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s status = %d, want %d", path, rec.Code, http.StatusUnauthorized)
+		}
+	}
+}

@@ -61,6 +61,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/groups/{groupId}/members/{userId}/role", h.requireSession(h.changeMemberRole))
 	mux.HandleFunc("POST /api/groups/{groupId}/invites", h.requireSession(h.createInvite))
 	mux.HandleFunc("GET /api/invites/pending-completions", h.requireSession(h.pendingInviteCompletions))
+	mux.HandleFunc("GET /api/invites/sent", h.requireSession(h.sentInvites))
+	mux.HandleFunc("GET /api/invites/received", h.requireSession(h.receivedInvites))
 	mux.HandleFunc("GET /api/invites/{id}", h.getInvite)
 	mux.HandleFunc("DELETE /api/invites/{id}", h.requireSession(h.revokeInvite))
 	mux.HandleFunc("POST /api/invites/{id}/accept", h.requireSession(h.acceptInvite))

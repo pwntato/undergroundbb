@@ -712,3 +712,144 @@ func TestAcceptInviteMissingSentRowFails(t *testing.T) {
 		t.Errorf("invite.InvitedUserID = %q after a failed accept, want empty (no partial write)", invite.InvitedUserID)
 	}
 }
+
+func TestListSentInvitesEnforcesExpiryOnRead(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	liveID := "test-invite-live-" + randomSuffix(t)
+	expiredID := "test-invite-expired-" + randomSuffix(t)
+	acceptedID := "test-invite-accepted-" + randomSuffix(t)
+	revokedID := "test-invite-revoked-" + randomSuffix(t)
+
+	future := time.Now().Add(7 * 24 * time.Hour)
+	// Expired by an hour, but the row's TTL (end of that UTC day) has not
+	// passed, so only the read-side check can drop it.
+	past := time.Now().Add(-time.Hour)
+	for id, exp := range map[string]time.Time{liveID: future, expiredID: past, acceptedID: future, revokedID: future} {
+		if err := c.CreateInvite(ctx, testCreateInviteInput(t, id, groupID, inviterUserID, exp)); err != nil {
+			t.Fatalf("CreateInvite %s: %v", id, err)
+		}
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(acceptedID, "test-invitee-"+randomSuffix(t))); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+	if err := c.RevokeInvite(ctx, revokedID, inviterUserID); err != nil {
+		t.Fatalf("RevokeInvite: %v", err)
+	}
+
+	views, err := c.ListSentInvites(ctx, inviterUserID, time.Now())
+	if err != nil {
+		t.Fatalf("ListSentInvites: %v", err)
+	}
+	got := map[string]SentInviteView{}
+	for _, v := range views {
+		got[v.InviteID] = v
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListSentInvites returned %d invites (%v), want 2 (live + accepted)", len(got), got)
+	}
+	if v, ok := got[liveID]; !ok || v.InvitedUserID != "" || v.ExpiresAt == "" {
+		t.Errorf("live invite = %+v (present %v), want pending with ExpiresAt", v, ok)
+	}
+	if v, ok := got[acceptedID]; !ok || v.InvitedUserID == "" {
+		t.Errorf("accepted invite = %+v (present %v), want accepted", v, ok)
+	}
+}
+
+func TestListSentInvitesKeepsAcceptedPastSignedExpiry(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	inviteID := "test-invite-" + randomSuffix(t)
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, "test-group-"+randomSuffix(t), inviterUserID, time.Now().Add(time.Hour))); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, "test-invitee-"+randomSuffix(t))); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+
+	// Two hours later the signed expires_at has passed, but acceptance
+	// replaced it with the completion deadline: the row must stay listed.
+	views, err := c.ListSentInvites(ctx, inviterUserID, time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("ListSentInvites: %v", err)
+	}
+	if len(views) != 1 || views[0].InviteID != inviteID {
+		t.Fatalf("ListSentInvites = %+v, want the accepted invite still listed", views)
+	}
+}
+
+func TestListReceivedInvitesOnlyCallersAcceptedInvites(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	me := "test-invitee-" + randomSuffix(t)
+	other := "test-invitee-" + randomSuffix(t)
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+
+	mineID := "test-invite-mine-" + randomSuffix(t)
+	otherID := "test-invite-other-" + randomSuffix(t)
+	unacceptedID := "test-invite-unaccepted-" + randomSuffix(t)
+	for _, id := range []string{mineID, otherID, unacceptedID} {
+		if err := c.CreateInvite(ctx, testCreateInviteInput(t, id, groupID, inviterUserID, expiresAt)); err != nil {
+			t.Fatalf("CreateInvite %s: %v", id, err)
+		}
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(mineID, me)); err != nil {
+		t.Fatalf("AcceptInvite mine: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(otherID, other)); err != nil {
+		t.Fatalf("AcceptInvite other: %v", err)
+	}
+
+	invites, err := c.ListReceivedInvites(ctx, me)
+	if err != nil {
+		t.Fatalf("ListReceivedInvites: %v", err)
+	}
+	if len(invites) != 1 || invites[0].PK != "INVITE#"+mineID {
+		t.Fatalf("ListReceivedInvites = %+v, want only INVITE#%s", invites, mineID)
+	}
+	if invites[0].InviterUserID != inviterUserID || invites[0].GroupID != groupID {
+		t.Errorf("received invite = %+v, want inviter/group carried through", invites[0])
+	}
+}
+
+// DynamoDB sweeps the two rows of an accepted invite independently once the
+// shared completion-deadline TTL passes, so the sent list must not depend on
+// the INVITE# row for an accepted invite (PR #154 review).
+func TestListSentInvitesKeepsAcceptedWhenInviteRowSwept(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	inviteID := "test-invite-" + randomSuffix(t)
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, "test-group-"+randomSuffix(t), inviterUserID, time.Now().Add(7*24*time.Hour))); err != nil {
+		t.Fatalf("CreateInvite: %v", err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, "test-invitee-"+randomSuffix(t))); err != nil {
+		t.Fatalf("AcceptInvite: %v", err)
+	}
+	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "INVITE#" + inviteID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+	}); err != nil {
+		t.Fatalf("simulating INVITE# sweep: %v", err)
+	}
+
+	views, err := c.ListSentInvites(ctx, inviterUserID, time.Now())
+	if err != nil {
+		t.Fatalf("ListSentInvites: %v", err)
+	}
+	if len(views) != 1 || views[0].InviteID != inviteID || views[0].InvitedUserID == "" {
+		t.Fatalf("ListSentInvites = %+v, want the accepted invite still listed", views)
+	}
+}

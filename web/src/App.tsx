@@ -6,6 +6,7 @@ import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
 import { GroupMembersScreen } from '@/routes/GroupMembersScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
+import { InvitesScreen } from '@/routes/InvitesScreen'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
 import { SignupScreen } from '@/routes/SignupScreen'
@@ -114,6 +115,14 @@ function App() {
               element={
                 <RequireAuth>
                   <GroupMembersScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/invites"
+              element={
+                <RequireAuth>
+                  <InvitesScreen />
                 </RequireAuth>
               }
             />

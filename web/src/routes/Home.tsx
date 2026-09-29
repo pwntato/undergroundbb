@@ -139,6 +139,9 @@ export function Home() {
           <Link to="/groups/new">Create a group</Link>
         </Button>
         <Button asChild variant="outline">
+          <Link to="/invites">Invites</Link>
+        </Button>
+        <Button asChild variant="outline">
           <Link to="/account/password">Change password</Link>
         </Button>
       </div>
