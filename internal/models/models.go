@@ -339,6 +339,17 @@ type Group struct {
 	// expiration," and config.Config.AllowGroupExpirationOff.
 	ExpirationDays int64 `dynamodbav:"ExpirationDays"`
 
+	// NameGeneration is the key generation NameCiphertext and
+	// DescriptionCiphertext are encrypted under (DESIGN.md: "META records
+	// the generation it was encrypted under"). Zero at creation, which is
+	// also what an absent attribute reads as, so groups created before this
+	// field existed need no migration. Always zero for a public group.
+	NameGeneration int64 `dynamodbav:"NameGeneration"`
+
+	// Version counts successful settings edits (PUT /api/groups/{id}), for
+	// optimistic concurrency between admins. Absent reads as zero.
+	Version int64 `dynamodbav:"Version"`
+
 	// Type is "dm" for a direct-message group, absent/empty for an ordinary
 	// group -- see DESIGN.md, "Direct messages": "type is a plaintext
 	// attribute on the group's META item, not a separate row." Not settable
