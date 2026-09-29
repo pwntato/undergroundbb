@@ -22,7 +22,7 @@ import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
-import { leavePlan, runLeave, type LeaveResult } from './runLeaveGroup'
+import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
   changeRole,
   loadMembers,
@@ -35,15 +35,6 @@ type LoadState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly view: MembersView }
   | { readonly status: 'notFound' | 'authRequired' | 'failed' }
-
-const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> = {
-  lastAdmin:
-    'You are the last admin, so you cannot leave yet. The latest roster is shown; choose a successor.',
-  stale: 'The group changed while you were working, so nothing was saved. Try again.',
-  authRequired: 'Your session has expired. Log in again and retry.',
-  notFound: 'You are no longer a member of this group.',
-  ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
-}
 
 const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], string> = {
   stale:
@@ -165,7 +156,12 @@ export function GroupMembersScreen() {
         void navigate('/', { replace: true })
         return
       }
-      setError(LEAVE_ERRORS[outcome.kind])
+      setError(
+        leaveFailureMessage(
+          outcome.kind,
+          successorUserId === undefined ? undefined : memberLabel(successorUserId, usernames),
+        ),
+      )
       setConfirmingLeave(false)
       if (outcome.kind === 'lastAdmin' || outcome.kind === 'stale') {
         await reload(() => false)

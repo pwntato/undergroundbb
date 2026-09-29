@@ -28,6 +28,10 @@ var (
 	// (its META and the caller's membership are deleted); what is left is
 	// unreachable garbage.
 	ErrGroupSweepIncomplete = errors.New("db: group deleted but leftover rows remain")
+	// ErrInviteCleanupIncomplete accompanies a successful leave when the
+	// leaver's outstanding invites to the group could not all be removed.
+	// They are unusable either way (the inviter is gone) and expire by TTL.
+	ErrInviteCleanupIncomplete = errors.New("db: left the group but some of the caller's invites remain")
 )
 
 // memberRoles reads every MEMBER# row's user id and role in the group. Only
@@ -75,8 +79,9 @@ func memberKey(groupID, userID string) map[string]types.AttributeValue {
 
 // LeaveGroup removes userID from the group -- issue #66.
 //
-//   - Anyone but the last Admin: their MEMBER# row is deleted. Grants they
-//     signed or received stay; history is append-only.
+//   - Anyone but the last Admin: their MEMBER# row is deleted, and so are
+//     their own outstanding invites to the group (see deleteOwnInvites).
+//     Grants they signed or received stay; history is append-only.
 //   - The last Admin while others remain: ErrLastAdmin, nothing written.
 //   - The only member: the group is deleted (groupDeleted true) rather than
 //     trapping the user in it.
@@ -137,6 +142,9 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string) (groupD
 		}
 		return false, err
 	}
+	if err := c.deleteOwnInvites(ctx, groupID, userID); err != nil {
+		return false, fmt.Errorf("%w: %v", ErrInviteCleanupIncomplete, err)
+	}
 	return false, nil
 }
 
@@ -173,6 +181,9 @@ func (c *Client) deleteGroup(ctx context.Context, groupID, userID string) (bool,
 		}
 		return false, err
 	}
+	if err := c.deleteOwnInvites(ctx, groupID, userID); err != nil {
+		return true, fmt.Errorf("%w: %v", ErrInviteCleanupIncomplete, err)
+	}
 	if err := c.sweepPartition(ctx, "GROUP#"+groupID); err != nil {
 		return true, fmt.Errorf("%w: %v", ErrGroupSweepIncomplete, err)
 	}
@@ -194,30 +205,85 @@ func (c *Client) sweepPartition(ctx context.Context, pk string) error {
 		if err != nil {
 			return err
 		}
-		for i := 0; i < len(out.Items); i += 25 {
-			end := min(i+25, len(out.Items))
-			reqs := make([]types.WriteRequest, 0, end-i)
-			for _, it := range out.Items[i:end] {
-				reqs = append(reqs, types.WriteRequest{DeleteRequest: &types.DeleteRequest{
-					Key: map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]},
-				}})
-			}
-			for attempt := 0; len(reqs) > 0; attempt++ {
-				if attempt == 5 {
-					return errors.New("unprocessed deletes after retries")
-				}
-				res, err := c.ddb.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
-					RequestItems: map[string][]types.WriteRequest{c.table: reqs},
-				})
-				if err != nil {
-					return err
-				}
-				reqs = res.UnprocessedItems[c.table]
-			}
+		keys := make([]map[string]types.AttributeValue, 0, len(out.Items))
+		for _, it := range out.Items {
+			keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+		}
+		if err := c.batchDelete(ctx, keys); err != nil {
+			return err
 		}
 		if out.LastEvaluatedKey == nil {
 			return nil
 		}
 		start = out.LastEvaluatedKey
 	}
+}
+
+// batchDelete deletes the given keys, 25 per BatchWriteItem, retrying
+// unprocessed items a bounded number of times.
+func (c *Client) batchDelete(ctx context.Context, keys []map[string]types.AttributeValue) error {
+	for i := 0; i < len(keys); i += 25 {
+		end := min(i+25, len(keys))
+		reqs := make([]types.WriteRequest, 0, end-i)
+		for _, k := range keys[i:end] {
+			reqs = append(reqs, types.WriteRequest{DeleteRequest: &types.DeleteRequest{Key: k}})
+		}
+		for attempt := 0; len(reqs) > 0; attempt++ {
+			if attempt == 5 {
+				return errors.New("unprocessed deletes after retries")
+			}
+			res, err := c.ddb.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+				RequestItems: map[string][]types.WriteRequest{c.table: reqs},
+			})
+			if err != nil {
+				return err
+			}
+			reqs = res.UnprocessedItems[c.table]
+		}
+	}
+	return nil
+}
+
+// deleteOwnInvites removes userID's outstanding invites to groupID: each
+// USER#<user>/SENT#<iid> row and its INVITE#<iid>/META. Once the inviter is
+// no longer a member those invites can never complete, and left in place they
+// would still be acceptable (AcceptInvite checks neither the group nor the
+// inviter's membership), so an invitee would accept and then wait forever.
+// Only the leaver's own partition is read, so only their own invite ids can
+// be named here. Other members' invites to the group are untouched.
+func (c *Client) deleteOwnInvites(ctx context.Context, groupID, userID string) error {
+	var keys []map[string]types.AttributeValue
+	var start map[string]types.AttributeValue
+	for {
+		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(c.table),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+			FilterExpression:       aws.String("GroupID = :g"),
+			ProjectionExpression:   aws.String("PK, SK, InviteID"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
+				":sk": &types.AttributeValueMemberS{Value: "SENT#"},
+				":g":  &types.AttributeValueMemberS{Value: groupID},
+			},
+			ExclusiveStartKey: start,
+			ConsistentRead:    aws.Bool(true),
+		})
+		if err != nil {
+			return err
+		}
+		for _, it := range out.Items {
+			keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+			if iid, ok := it["InviteID"].(*types.AttributeValueMemberS); ok && iid.Value != "" {
+				keys = append(keys, map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "INVITE#" + iid.Value},
+					"SK": &types.AttributeValueMemberS{Value: "META"},
+				})
+			}
+		}
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		start = out.LastEvaluatedKey
+	}
+	return c.batchDelete(ctx, keys)
 }

@@ -714,8 +714,12 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, db.ErrGroupGone) {
-			// The group was deleted under this invite; clear the two invite
-			// rows so pending-completions stops returning it on every login.
+			// Backstop for a narrow race: the inviter's membership read above
+			// passed, then the last member left and deleted the group before
+			// this write. LeaveGroup clears a leaver's own invites, so in the
+			// ordinary case this is never reached (the membership check 403s
+			// first); clear the two invite rows so a racing invite does not
+			// linger in pending-completions.
 			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
 				WriteError(w, http.StatusInternalServerError, "could not complete invite")
 				return

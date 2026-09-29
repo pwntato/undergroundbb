@@ -305,8 +305,8 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "you are the last admin; promote a successor before leaving", "last_admin")
 	case errors.Is(err, db.ErrLeaveConflict):
 		WriteErrorWithCode(w, http.StatusConflict, "the group changed; reload and retry", "conflict_retry")
-	case errors.Is(err, db.ErrGroupSweepIncomplete):
-		// The group is gone for every purpose; only unreachable rows remain.
+	case errors.Is(err, db.ErrGroupSweepIncomplete), errors.Is(err, db.ErrInviteCleanupIncomplete):
+		// The leave itself committed; only unreachable or expiring rows remain.
 		log.Printf("leave group %s: %v", groupID, err)
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	case err != nil:

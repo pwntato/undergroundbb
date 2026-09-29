@@ -60,3 +60,30 @@ export async function runLeave(
     return { ok: false, kind: 'ambiguous' }
   }
 }
+
+const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> = {
+  lastAdmin:
+    'You are the last admin, so you cannot leave yet. The latest roster is shown; choose a successor.',
+  stale: 'The group changed while you were working, so nothing was saved. Try again.',
+  authRequired: 'Your session has expired. Log in again and retry.',
+  notFound: 'You are no longer a member of this group.',
+  ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
+}
+
+/**
+ * The message for a failed leave. When `promotedName` is set the successor's
+ * promotion had already committed, so "nothing was saved" would be false:
+ * they are an admin now and a retry is a plain leave.
+ */
+export function leaveFailureMessage(
+  kind: Exclude<LeaveResult, { ok: true }>['kind'],
+  promotedName?: string,
+): string {
+  if (
+    promotedName !== undefined &&
+    (kind === 'stale' || kind === 'ambiguous' || kind === 'lastAdmin')
+  ) {
+    return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
+  }
+  return LEAVE_ERRORS[kind]
+}

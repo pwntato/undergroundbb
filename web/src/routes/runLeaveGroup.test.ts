@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type { MemberEntry } from '@/lib/api/groups'
-import { leavePlan, runLeave } from './runLeaveGroup'
+import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import type { MembersView } from './runGroupMembers'
 
 const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -87,5 +87,20 @@ describe('runLeave', () => {
       ok: false,
       kind: 'ambiguous',
     })
+  })
+})
+
+describe('leaveFailureMessage', () => {
+  it("does not claim nothing was saved once the successor's promotion has committed", () => {
+    for (const kind of ['stale', 'ambiguous', 'lastAdmin'] as const) {
+      const msg = leaveFailureMessage(kind, 'bob')
+      expect(msg).toContain('bob is now an admin')
+      expect(msg).not.toContain('nothing was saved')
+    }
+  })
+
+  it('keeps the plain messages when no promotion happened, and for session errors', () => {
+    expect(leaveFailureMessage('stale')).toContain('nothing was saved')
+    expect(leaveFailureMessage('authRequired', 'bob')).toContain('session has expired')
   })
 })
