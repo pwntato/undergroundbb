@@ -321,10 +321,10 @@ type Group struct {
 	DescriptionPlaintext string `dynamodbav:"DescriptionPlaintext,omitempty"`
 
 	// NameCiphertext and DescriptionCiphertext hold a PRIVATE group's name
-	// and description, AES-256-GCM under the group key at Generation 0 (the
-	// only generation that exists at creation) -- see the AAD table in
-	// DESIGN.md, "Group name/description" (AAD: group id + generation
-	// number). Absent for a public group.
+	// and description, AES-256-GCM under the group key at NameGeneration
+	// (0 at creation) -- see the AAD table in DESIGN.md, "Group
+	// name/description" (AAD: group id + field + generation number). Absent
+	// for a public group.
 	NameCiphertext        *WrappedBlob `dynamodbav:"NameCiphertext,omitempty"`
 	DescriptionCiphertext *WrappedBlob `dynamodbav:"DescriptionCiphertext,omitempty"`
 
@@ -338,6 +338,17 @@ type Group struct {
 	// config.AllowGroupExpirationOff permits it. See DESIGN.md, "Message
 	// expiration," and config.Config.AllowGroupExpirationOff.
 	ExpirationDays int64 `dynamodbav:"ExpirationDays"`
+
+	// NameGeneration is the key generation NameCiphertext and
+	// DescriptionCiphertext are encrypted under (DESIGN.md: "META records
+	// the generation it was encrypted under"). Zero at creation, which is
+	// also what an absent attribute reads as, so groups created before this
+	// field existed need no migration. Always zero for a public group.
+	NameGeneration int64 `dynamodbav:"NameGeneration"`
+
+	// Version counts successful settings edits (PUT /api/groups/{id}), for
+	// optimistic concurrency between admins. Absent reads as zero.
+	Version int64 `dynamodbav:"Version"`
 
 	// Type is "dm" for a direct-message group, absent/empty for an ordinary
 	// group -- see DESIGN.md, "Direct messages": "type is a plaintext

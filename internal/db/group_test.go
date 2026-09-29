@@ -489,3 +489,121 @@ func TestListGroupsExcludesNonMembershipRows(t *testing.T) {
 			len(memberships), len(groups), memberships, groups)
 	}
 }
+
+func setMemberRole(t *testing.T, c *Client, groupID, userID, role string) {
+	t.Helper()
+	_, err := c.ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+		UpdateExpression:          aws.String("SET #r = :r"),
+		ExpressionAttributeNames:  map[string]string{"#r": "Role"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: role}},
+	})
+	if err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+}
+
+// A demotion between the handler's role read and the write must be caught by
+// the in-transaction check, and must leave META untouched.
+func TestUpdateGroupSettingsRejectsNonAdmin(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid, uid := "test-group-"+randomSuffix(t), "test-admin-"+randomSuffix(t)
+	if _, err := c.CreateGroup(ctx, testCreateGroupInput(t, gid, uid)); err != nil {
+		t.Fatal(err)
+	}
+	setMemberRole(t, c, gid, uid, models.RoleMember)
+
+	err := c.UpdateGroupSettings(ctx, UpdateGroupSettingsInput{
+		GroupID: gid, AdminUserID: uid, Visibility: models.VisibilityPrivate,
+		NameCiphertext:        &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("n2")},
+		DescriptionCiphertext: &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("d2")},
+		ExpirationDays:        5,
+	})
+	if !errors.Is(err, ErrNotGroupAdmin) {
+		t.Fatalf("err = %v, want ErrNotGroupAdmin", err)
+	}
+	g, err := c.GetGroup(ctx, gid)
+	if err != nil || g == nil {
+		t.Fatalf("GetGroup: %v %v", g, err)
+	}
+	if g.ExpirationDays != 30 || g.Version != 0 {
+		t.Errorf("META changed by a rejected update: %+v", g)
+	}
+
+	// A caller with no membership row at all is rejected the same way.
+	err = c.UpdateGroupSettings(ctx, UpdateGroupSettingsInput{
+		GroupID: gid, AdminUserID: "stranger-" + randomSuffix(t), Visibility: models.VisibilityPrivate,
+		NameCiphertext:        &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("n2")},
+		DescriptionCiphertext: &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("d2")},
+		ExpirationDays:        5,
+	})
+	if !errors.Is(err, ErrNotGroupAdmin) {
+		t.Fatalf("stranger err = %v, want ErrNotGroupAdmin", err)
+	}
+}
+
+func TestUpdateGroupSettingsVersionConflict(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid, uid := "test-group-"+randomSuffix(t), "test-admin-"+randomSuffix(t)
+	if _, err := c.CreateGroup(ctx, testCreateGroupInput(t, gid, uid)); err != nil {
+		t.Fatal(err)
+	}
+	in := UpdateGroupSettingsInput{
+		GroupID: gid, AdminUserID: uid, Visibility: models.VisibilityPrivate,
+		NameCiphertext:        &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("n2")},
+		DescriptionCiphertext: &models.WrappedBlob{Nonce: make([]byte, 12), Ciphertext: []byte("d2")},
+		ExpirationDays:        5,
+	}
+	if err := c.UpdateGroupSettings(ctx, in); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := c.UpdateGroupSettings(ctx, in); !errors.Is(err, ErrGroupVersionConflict) {
+		t.Fatalf("stale version err = %v, want ErrGroupVersionConflict", err)
+	}
+	in.ExpectedVersion = 1
+	if err := c.UpdateGroupSettings(ctx, in); err != nil {
+		t.Fatalf("current version: %v", err)
+	}
+	// Editing a group that does not exist must not create one.
+	in.GroupID = "test-group-missing-" + randomSuffix(t)
+	if err := c.UpdateGroupSettings(ctx, in); err == nil {
+		t.Fatal("update of a nonexistent group succeeded")
+	}
+}
+
+func TestUpdateGroupSettingsPublicRewritesDirectoryEntry(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid, uid := "test-group-"+randomSuffix(t), "test-admin-"+randomSuffix(t)
+	create := testCreateGroupInput(t, gid, uid)
+	create.Visibility = models.VisibilityPublic
+	create.NameCiphertext, create.DescriptionCiphertext = nil, nil
+	create.NamePlaintext, create.DescriptionPlaintext = "Old", "Old description"
+	if _, err := c.CreateGroup(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.UpdateGroupSettings(ctx, UpdateGroupSettingsInput{
+		GroupID: gid, AdminUserID: uid, Visibility: models.VisibilityPublic,
+		NamePlaintext: "New", ExpirationDays: 7,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	g, err := c.GetGroup(ctx, gid)
+	if err != nil || g == nil {
+		t.Fatalf("GetGroup: %v %v", g, err)
+	}
+	if g.NamePlaintext != "New" || g.DescriptionPlaintext != "" || g.ExpirationDays != 7 || g.Version != 1 {
+		t.Errorf("unexpected META: %+v", g)
+	}
+	if g.GSI1PK != "PUBLIC#0" || g.GSI1SK != "NAME#New#"+gid {
+		t.Errorf("directory entry = %q / %q", g.GSI1PK, g.GSI1SK)
+	}
+}

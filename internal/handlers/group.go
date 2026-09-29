@@ -477,6 +477,12 @@ type groupListEntry struct {
 	Visibility string `json:"visibility"`
 	Role       string `json:"role"`
 	Generation int64  `json:"generation"`
+	// NameGeneration is the key generation the private name/description
+	// ciphertexts are encrypted under. It is NOT the member's Generation:
+	// rotation does not re-encrypt the name (docs/DESIGN.md), so once
+	// rotation exists the two diverge, and the name's AAD must be built
+	// from this value.
+	NameGeneration int64 `json:"nameGeneration"`
 
 	NamePlaintext        string `json:"namePlaintext,omitempty"`
 	DescriptionPlaintext string `json:"descriptionPlaintext,omitempty"`
@@ -537,10 +543,11 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	for i, m := range memberships {
 		g := groups[i]
 		entry := groupListEntry{
-			GroupID:    strings.TrimPrefix(m.PK, "GROUP#"),
-			Visibility: g.Visibility,
-			Role:       m.Role,
-			Generation: m.Generation,
+			GroupID:        strings.TrimPrefix(m.PK, "GROUP#"),
+			Visibility:     g.Visibility,
+			Role:           m.Role,
+			Generation:     m.Generation,
+			NameGeneration: g.NameGeneration,
 		}
 		if g.Visibility == models.VisibilityPublic {
 			entry.NamePlaintext = g.NamePlaintext
@@ -595,4 +602,230 @@ func validateExpirationDays(days int64, allowOff bool) (int64, error) {
 		return 0, nil
 	}
 	return days, nil
+}
+
+// groupDetailResponse is the wire shape of GET /api/groups/{groupId} -- issue
+// #36. It is a groupListEntry plus the settings a detail screen shows:
+// revocation mode (always displayed, never editable), the expiration policy,
+// and the Version and NameGeneration a later PUT must echo back. Role is
+// empty for a non-member viewing a public group, who also gets no
+// WrappedGroupKey.
+type groupDetailResponse struct {
+	groupListEntry
+	RevocationMode string `json:"revocationMode"`
+	ExpirationDays int64  `json:"expirationDays"`
+	Version        int64  `json:"version"`
+}
+
+// groupNotFound is the one response for "no such group" and "a private group
+// you are not in" alike: docs/DESIGN.md wants a private group invisible to
+// non-members, which a distinct 403 would betray.
+func groupNotFound(w http.ResponseWriter) {
+	WriteError(w, http.StatusNotFound, "group not found")
+}
+
+// getGroup implements GET /api/groups/{groupId} -- issue #36. Members of any
+// group see it; anyone signed in sees a public group; a private group is 404
+// to non-members. The response carries no CreatedAt (issue #147) and no
+// roster (issue #37 is members-only, always).
+func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+
+	// Both reads happen before either 404 branch: a nonexistent group and a
+	// private group the caller is not in must cost the same two round trips,
+	// or latency alone would reveal which group ids exist.
+	g, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not load group")
+		return
+	}
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not load group")
+		return
+	}
+	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
+		groupNotFound(w)
+		return
+	}
+
+	entry := groupListEntry{
+		GroupID:        groupID,
+		Visibility:     g.Visibility,
+		NameGeneration: g.NameGeneration,
+	}
+	if m != nil {
+		entry.Role = m.Role
+		entry.Generation = m.Generation
+	}
+	if g.Visibility == models.VisibilityPublic {
+		entry.NamePlaintext = g.NamePlaintext
+		entry.DescriptionPlaintext = g.DescriptionPlaintext
+	} else {
+		if g.NameCiphertext != nil {
+			nc := encodeWrappedBlob(*g.NameCiphertext)
+			entry.NameCiphertext = &nc
+		}
+		if g.DescriptionCiphertext != nil {
+			dc := encodeWrappedBlob(*g.DescriptionCiphertext)
+			entry.DescriptionCiphertext = &dc
+		}
+		wk := encodeWrappedKey(m.WrappedGroupKey)
+		entry.WrappedGroupKey = &wk
+	}
+
+	WriteJSON(w, http.StatusOK, groupDetailResponse{
+		groupListEntry: entry,
+		RevocationMode: g.RevocationMode,
+		ExpirationDays: g.ExpirationDays,
+		Version:        g.Version,
+	})
+}
+
+const maxUpdateGroupBodyBytes = 16 * 1024
+
+// updateGroupRequest is the wire shape of PUT /api/groups/{groupId}: a full
+// replacement of name, description and expiration policy, so there is no
+// partial-update ambiguity. Revocation mode and visibility are absent on
+// purpose. Version must be the value GET returned; a stale one is a 409.
+// The same one-pair-per-visibility rule as createGroupRequest applies, and a
+// private group's NameGeneration is the generation the ciphertexts were
+// encrypted under (crypto.GroupNameAAD).
+type updateGroupRequest struct {
+	Version int64 `json:"version"`
+
+	NamePlaintext         string      `json:"namePlaintext,omitempty"`
+	DescriptionPlaintext  string      `json:"descriptionPlaintext,omitempty"`
+	NameCiphertext        wrappedBlob `json:"nameCiphertext,omitempty"`
+	DescriptionCiphertext wrappedBlob `json:"descriptionCiphertext,omitempty"`
+	NameGeneration        int64       `json:"nameGeneration"`
+
+	ExpirationDays int64 `json:"expirationDays"`
+}
+
+// updateGroup implements PUT /api/groups/{groupId} -- issue #36. Admin only,
+// judged from the caller's own MEMBER# row (signed role grants are #37's
+// concern); db.UpdateGroupSettings re-checks Admin inside its transaction so
+// a concurrent demotion cannot slip through the gap.
+func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpdateGroupBodyBytes)
+	var req updateGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+
+	// Both reads before either 404 branch -- see getGroup.
+	g, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not update group")
+		return
+	}
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not update group")
+		return
+	}
+	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
+		groupNotFound(w)
+		return
+	}
+	if m == nil || m.Role != models.RoleAdmin {
+		WriteError(w, http.StatusForbidden, "only a group admin can edit group settings")
+		return
+	}
+	if g.GroupType == "dm" {
+		WriteError(w, http.StatusBadRequest, "a direct message has no editable settings")
+		return
+	}
+
+	if req.Version < 0 {
+		WriteError(w, http.StatusBadRequest, "version: must not be negative")
+		return
+	}
+	expirationDays, err := validateExpirationDays(req.ExpirationDays, h.cfg.AllowGroupExpirationOff)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	in := db.UpdateGroupSettingsInput{
+		GroupID:         groupID,
+		AdminUserID:     userID,
+		Visibility:      g.Visibility,
+		ExpectedVersion: req.Version,
+		ExpirationDays:  expirationDays,
+	}
+	if g.Visibility == models.VisibilityPublic {
+		if !wrappedBlobEmpty(req.NameCiphertext) || !wrappedBlobEmpty(req.DescriptionCiphertext) || req.NameGeneration != 0 {
+			WriteError(w, http.StatusBadRequest, "nameCiphertext/descriptionCiphertext/nameGeneration: must not be set for a public group")
+			return
+		}
+		in.NamePlaintext, err = validateGroupText(req.NamePlaintext, maxGroupNameLen, "namePlaintext", false)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		in.DescriptionPlaintext, err = validateGroupText(req.DescriptionPlaintext, maxGroupDescriptionLen, "descriptionPlaintext", true)
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		if req.NamePlaintext != "" || req.DescriptionPlaintext != "" {
+			WriteError(w, http.StatusBadRequest, "namePlaintext/descriptionPlaintext: must not be set for a private group")
+			return
+		}
+		// The admin can only have encrypted under a generation they hold,
+		// and their membership records the newest one. The stored
+		// generation must never move backward.
+		if req.NameGeneration != m.Generation || req.NameGeneration < g.NameGeneration {
+			WriteError(w, http.StatusBadRequest, "nameGeneration: must be the caller's current key generation")
+			return
+		}
+		nc, err := decodeGroupCiphertext(req.NameCiphertext, "nameCiphertext")
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		dc, err := decodeGroupCiphertext(req.DescriptionCiphertext, "descriptionCiphertext")
+		if err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		in.NameCiphertext, in.DescriptionCiphertext, in.NameGeneration = &nc, &dc, req.NameGeneration
+	}
+
+	if err := h.db.UpdateGroupSettings(r.Context(), in); err != nil {
+		switch {
+		case errors.Is(err, db.ErrGroupVersionConflict):
+			WriteErrorWithCode(w, http.StatusConflict, "the group changed since you loaded it; reload and retry", "version_conflict")
+		case errors.Is(err, db.ErrNotGroupAdmin):
+			WriteError(w, http.StatusForbidden, "only a group admin can edit group settings")
+		default:
+			WriteError(w, http.StatusInternalServerError, "could not update group")
+		}
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]int64{"version": req.Version + 1})
 }

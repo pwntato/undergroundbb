@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -522,4 +524,155 @@ func (c *Client) batchGetGroupMetas(ctx context.Context, groupIDs []string) (map
 		}
 	}
 	return result, nil
+}
+
+// GetGroup reads one group's META item, or nil if it does not exist.
+func (c *Client) GetGroup(ctx context.Context, groupID string) (*models.Group, error) {
+	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("db: get group: %w", err)
+	}
+	if out.Item == nil {
+		return nil, nil
+	}
+	var g models.Group
+	if err := attributevalue.UnmarshalMap(out.Item, &g); err != nil {
+		return nil, fmt.Errorf("db: unmarshal group: %w", err)
+	}
+	return &g, nil
+}
+
+// ErrNotGroupAdmin is returned by UpdateGroupSettings when the caller's own
+// membership is missing or is not Admin at write time.
+var ErrNotGroupAdmin = errors.New("db: caller is not a group admin")
+
+// ErrGroupVersionConflict is returned by UpdateGroupSettings when another
+// edit landed since the caller read the group.
+var ErrGroupVersionConflict = errors.New("db: group version conflict")
+
+// UpdateGroupSettingsInput is a full replacement of a group's editable
+// settings. Exactly one of the plaintext or ciphertext pairs is set,
+// matching the group's Visibility, which the handler has already checked.
+type UpdateGroupSettingsInput struct {
+	GroupID         string
+	AdminUserID     string
+	Visibility      string
+	ExpectedVersion int64
+
+	NamePlaintext         string
+	DescriptionPlaintext  string
+	NameCiphertext        *models.WrappedBlob
+	DescriptionCiphertext *models.WrappedBlob
+	NameGeneration        int64
+
+	ExpirationDays int64
+}
+
+// UpdateGroupSettings replaces a group's name, description and expiration
+// policy in one transaction: a ConditionCheck that the caller's membership
+// is still Admin (so a demotion between the handler's read and this write
+// cannot be raced), and an Update of META conditioned on Version. Revocation
+// mode and visibility are never touched here.
+//
+// A public group's directory entry (GSI1SK) is rewritten with the name.
+func (c *Client) UpdateGroupSettings(ctx context.Context, in UpdateGroupSettingsInput) error {
+	names := map[string]string{
+		"#exp": "ExpirationDays",
+		"#ver": "Version",
+	}
+	values := map[string]types.AttributeValue{
+		":exp":  &types.AttributeValueMemberN{Value: strconv.FormatInt(in.ExpirationDays, 10)},
+		":next": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.ExpectedVersion+1, 10)},
+		":cur":  &types.AttributeValueMemberN{Value: strconv.FormatInt(in.ExpectedVersion, 10)},
+	}
+	set := []string{"#exp = :exp", "#ver = :next"}
+
+	if in.Visibility == models.VisibilityPublic {
+		names["#np"] = "NamePlaintext"
+		names["#gsk"] = "GSI1SK"
+		values[":np"] = &types.AttributeValueMemberS{Value: in.NamePlaintext}
+		values[":gsk"] = &types.AttributeValueMemberS{Value: "NAME#" + in.NamePlaintext + "#" + in.GroupID}
+		set = append(set, "#np = :np", "#gsk = :gsk")
+		names["#dp"] = "DescriptionPlaintext"
+		if in.DescriptionPlaintext != "" {
+			values[":dp"] = &types.AttributeValueMemberS{Value: in.DescriptionPlaintext}
+			set = append(set, "#dp = :dp")
+		}
+		// An empty description is stored as an absent attribute (omitempty
+		// on Group), so it is REMOVEd below rather than set to "".
+	} else {
+		nc, err := attributevalue.Marshal(in.NameCiphertext)
+		if err != nil {
+			return err
+		}
+		dc, err := attributevalue.Marshal(in.DescriptionCiphertext)
+		if err != nil {
+			return err
+		}
+		names["#nc"] = "NameCiphertext"
+		names["#dc"] = "DescriptionCiphertext"
+		names["#ng"] = "NameGeneration"
+		values[":nc"] = nc
+		values[":dc"] = dc
+		values[":ng"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(in.NameGeneration, 10)}
+		set = append(set, "#nc = :nc", "#dc = :dc", "#ng = :ng")
+	}
+
+	updateExpr := "SET " + strings.Join(set, ", ")
+	if in.Visibility == models.VisibilityPublic && in.DescriptionPlaintext == "" {
+		updateExpr += " REMOVE #dp"
+	}
+
+	// A group that has never been edited has no Version attribute, which
+	// reads as zero.
+	versionCond := "#ver = :cur"
+	if in.ExpectedVersion == 0 {
+		versionCond = "(attribute_not_exists(#ver) OR #ver = :cur)"
+	}
+
+	const (
+		adminCheckIndex = 0
+		metaIndex       = 1
+	)
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(c.table),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+					"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.AdminUserID},
+				},
+				ConditionExpression:       aws.String("#role = :admin"),
+				ExpressionAttributeNames:  map[string]string{"#role": "Role"},
+				ExpressionAttributeValues: map[string]types.AttributeValue{":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin}},
+			}},
+			{Update: &types.Update{
+				TableName: aws.String(c.table),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+					"SK": &types.AttributeValueMemberS{Value: "META"},
+				},
+				UpdateExpression:          aws.String(updateExpr),
+				ConditionExpression:       aws.String("attribute_exists(PK) AND " + versionCond),
+				ExpressionAttributeNames:  names,
+				ExpressionAttributeValues: values,
+			}},
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailure(err, adminCheckIndex) {
+			return ErrNotGroupAdmin
+		}
+		if isConditionalCheckFailure(err, metaIndex) {
+			return ErrGroupVersionConflict
+		}
+		return err
+	}
+	return nil
 }
