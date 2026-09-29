@@ -268,3 +268,14 @@ export async function changeMemberRole(
     req,
   )
 }
+
+/**
+ * POST /api/groups/{id}/leave -- issue #66. 409 `last_admin` means the
+ * caller is the only Admin of a group that still has other members and must
+ * promote a successor first; 409 `conflict_retry` means the roster moved,
+ * reload and try again. `groupDeleted` is true when the caller was the only
+ * member, so leaving deleted the group.
+ */
+export async function leaveGroup(groupId: string): Promise<{ groupDeleted: boolean }> {
+  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, {})
+}

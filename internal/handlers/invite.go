@@ -713,6 +713,16 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			WriteJSON(w, http.StatusOK, map[string]string{"status": "already completed"})
 			return
 		}
+		if errors.Is(err, db.ErrGroupGone) {
+			// The group was deleted under this invite; clear the two invite
+			// rows so pending-completions stops returning it on every login.
+			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
+				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				return
+			}
+			WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
+			return
+		}
 		if errors.Is(err, db.ErrAlreadyMember) {
 			// The membership this call would have created already exists
 			// some other way -- but the two invite rows are still there,

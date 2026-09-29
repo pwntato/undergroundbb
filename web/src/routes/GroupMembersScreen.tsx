@@ -7,14 +7,22 @@
 // state and effects, and GroupMembersPanel owns rendering.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { changeMemberRole, getGroup, listMembers, type MemberRole } from '@/lib/api/groups'
+import {
+  changeMemberRole,
+  getGroup,
+  leaveGroup,
+  listMembers,
+  type MemberRole,
+} from '@/lib/api/groups'
 import { signRoleGrant } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
+import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
+import { leavePlan, runLeave, type LeaveResult } from './runLeaveGroup'
 import {
   changeRole,
   loadMembers,
@@ -27,6 +35,15 @@ type LoadState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly view: MembersView }
   | { readonly status: 'notFound' | 'authRequired' | 'failed' }
+
+const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> = {
+  lastAdmin:
+    'You are the last admin, so you cannot leave yet. The latest roster is shown; choose a successor.',
+  stale: 'The group changed while you were working, so nothing was saved. Try again.',
+  authRequired: 'Your session has expired. Log in again and retry.',
+  notFound: 'You are no longer a member of this group.',
+  ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
+}
 
 const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], string> = {
   stale:
@@ -43,11 +60,13 @@ const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], str
 export function GroupMembersScreen() {
   const { groupId } = useParams<{ groupId: string }>()
   const session = useSession()
+  const navigate = useNavigate()
   const userId = session.userId
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busyUserId, setBusyUserId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmingLeave, setConfirmingLeave] = useState(false)
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -114,6 +133,47 @@ export function GroupMembersScreen() {
     })()
   }
 
+  const handleLeave = (successorUserId?: string) => {
+    if (load.status !== 'ready' || userId === null || busyUserId !== null) {
+      return
+    }
+    const { view } = load
+    setBusyUserId(userId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      if (successorUserId !== undefined) {
+        // Promote first; only a confirmed promotion lets the leave proceed.
+        const promoted = await changeRole(
+          { signRoleGrant, changeMemberRole, userId },
+          view,
+          successorUserId,
+          'admin',
+        )
+        if (!promoted.ok) {
+          setError(promoted.kind === 'rejected' ? promoted.message : CHANGE_ERRORS[promoted.kind])
+          if (shouldReloadAfter(promoted)) {
+            await reload(() => false)
+          }
+          setBusyUserId(null)
+          return
+        }
+      }
+      const outcome = await runLeave({ leaveGroup }, view.groupId)
+      if (outcome.ok || outcome.kind === 'notFound') {
+        // Gone from this group either way; nothing left to show here.
+        void navigate('/', { replace: true })
+        return
+      }
+      setError(LEAVE_ERRORS[outcome.kind])
+      setConfirmingLeave(false)
+      if (outcome.kind === 'lastAdmin' || outcome.kind === 'stale') {
+        await reload(() => false)
+      }
+      setBusyUserId(null)
+    })()
+  }
+
   return (
     <>
       {load.status === 'loading' && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -136,6 +196,21 @@ export function GroupMembersScreen() {
           userId={userId}
           busyUserId={busyUserId}
           onChangeRole={handleChangeRole}
+        />
+      )}
+      {load.status === 'ready' && userId !== null && (
+        <LeaveGroupPanel
+          plan={leavePlan(load.view, userId)}
+          confirming={confirmingLeave}
+          busy={busyUserId !== null}
+          usernames={usernames}
+          onStart={() => {
+            setConfirmingLeave(true)
+          }}
+          onCancel={() => {
+            setConfirmingLeave(false)
+          }}
+          onConfirm={handleLeave}
         />
       )}
       <MembersFeedback message={message} error={error} />

@@ -605,6 +605,10 @@ var ErrInviteAlreadyCompleted = errors.New("db: invite already completed")
 // conditional rather than a plain overwrite.
 var ErrAlreadyMember = errors.New("db: invitee is already a member")
 
+// ErrGroupGone is returned by CompleteInvite when the group was deleted
+// (its last member left, #66) before the invite could be completed.
+var ErrGroupGone = errors.New("db: group no longer exists")
+
 // CompleteInvite implements step 3 of the invite handshake (issue #40):
 // writes the invitee's GROUP#<gid>/MEMBER#<uuid> membership and deletes both
 // the INVITE#<iid> and USER#<inviter>/SENT#<iid> rows, as one
@@ -656,6 +660,7 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 	const (
 		membershipItemIndex = 0
 		sentDeleteIndex     = 2
+		groupMetaIndex      = 3
 	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -686,9 +691,24 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 					ConditionExpression: aws.String("attribute_exists(PK)"),
 				},
 			},
+			// The group must still exist: the last member leaving deletes it
+			// (#66), and a membership written after that would be an orphan.
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+						"SK": &types.AttributeValueMemberS{Value: "META"},
+					},
+					ConditionExpression: aws.String("attribute_exists(PK)"),
+				},
+			},
 		},
 	})
 	if err != nil {
+		if isConditionalCheckFailure(err, groupMetaIndex) {
+			return ErrGroupGone
+		}
 		if isConditionalCheckFailure(err, membershipItemIndex) {
 			return ErrAlreadyMember
 		}
