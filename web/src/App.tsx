@@ -3,6 +3,7 @@ import { AcceptInviteScreen } from '@/routes/AcceptInviteScreen'
 import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
 import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
 import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
+import { GroupMembersScreen } from '@/routes/GroupMembersScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { LoginScreen } from '@/routes/LoginScreen'
@@ -17,7 +18,7 @@ import { SessionProvider } from '@/lib/session/SessionContext'
  * screens (signup, login) on top of the placeholder scaffold; #128 adds
  * recovery; #131 adds the logged-in change-password/new-recovery-code
  * screen; #32 adds the session bootstrap and the guards below; #34 adds
- * group creation; #36 adds the group detail/settings screen; #38/#39 add the invite handshake's two screens (#40's
+ * group creation; #36 adds the group detail/settings screen; #37 adds the member list and role management screen; #38/#39 add the invite handshake's two screens (#40's
  * own step 3 has no screen at all -- it runs automatically on login, see
  * LoginScreen's own runCompleteInvites call); everything else this
  * milestone needs (the board views, etc.) arrives with the features that
@@ -105,6 +106,14 @@ function App() {
               element={
                 <RequireAuth>
                   <GroupSettingsScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/:groupId/members"
+              element={
+                <RequireAuth>
+                  <GroupMembersScreen />
                 </RequireAuth>
               }
             />

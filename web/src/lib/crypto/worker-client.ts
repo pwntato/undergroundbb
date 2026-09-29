@@ -32,6 +32,9 @@ import type {
   SignGroupCreationRequest,
   SignGroupCreationResponse,
   SignGroupCreationResult,
+  SignRoleGrantRequest,
+  SignRoleGrantResponse,
+  SignRoleGrantResult,
   SignInviteAcceptanceRequest,
   SignInviteAcceptanceResponse,
   SignInviteAcceptanceResult,
@@ -307,6 +310,40 @@ export function signGroupCreation(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signGroupCreation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Signs a role grant for another member -- issue #37. Relies entirely on the
+ * worker's own cached liveKeys, matching signGroupCreation's own reasoning.
+ */
+export function signRoleGrant(
+  req: Omit<SignRoleGrantRequest, 'kind' | 'id'>,
+): Promise<SignRoleGrantResult> {
+  const id = nextRequestID()
+  const fullReq: SignRoleGrantRequest = { kind: 'signRoleGrant', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signRoleGrantDone') {
+        resolve((msg as SignRoleGrantResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signRoleGrant`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

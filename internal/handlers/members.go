@@ -200,10 +200,7 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 
 	// The caller's own current grant: recorded on their membership, or for a
 	// creator on a group made before that field existed, the root grant.
-	currentRef, hasStored := caller.GrantSortKey, caller.GrantSortKey != ""
-	if !hasStored && group.CreatorUserID == userID {
-		currentRef = group.RootGrantSortKey
-	}
+	currentRef, hasStored := currentGrantRef(caller, group, userID)
 	if currentRef == "" {
 		WriteErrorWithCode(w, http.StatusConflict, "your own admin grant is not on record", "grantor_grant_missing")
 		return

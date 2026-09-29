@@ -46,6 +46,12 @@ export function GroupList({ load }: { readonly load: LoadState }) {
                     this is just not offering the link to a plain Member,
                     who would only see it fail). */}
                 <Link
+                  to={`/groups/${group.groupId}/members`}
+                  className="text-xs text-primary underline-offset-4 hover:underline"
+                >
+                  Members
+                </Link>
+                <Link
                   to={`/groups/${group.groupId}/settings`}
                   className="text-xs text-primary underline-offset-4 hover:underline"
                 >

@@ -28,6 +28,7 @@ import {
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
+  signRoleGrant as signRoleGrantPure,
   type LiveKeys,
 } from './credential-material.js'
 import { base64ToBytes, base64UrlToBytes } from './base64.js'
@@ -45,6 +46,7 @@ import type {
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
+  SignRoleGrantRequest,
   SignupMaterial,
   WorkerRequest,
   WorkerResponse,
@@ -98,6 +100,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signGroupCreation':
       await signGroupCreation(req)
+      return
+    case 'signRoleGrant':
+      signRoleGrant(req)
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
@@ -203,6 +208,26 @@ async function encryptGroupText(req: EncryptGroupTextRequest): Promise<void> {
   }
   const { nameCiphertext, descriptionCiphertext } = await encryptGroupTextPure(liveKeys, req)
   post({ kind: 'encryptGroupTextDone', id: req.id, nameCiphertext, descriptionCiphertext })
+}
+
+/** Signs a role grant -- issue #37. Same liveKeys-unset/wrong-account guards as signGroupCreation. */
+function signRoleGrant(req: SignRoleGrantRequest): void {
+  if (liveKeys === null) {
+    throw new Error(
+      'worker: no live keys cached -- log in again before changing a role (this can happen after a page reload)',
+    )
+  }
+  if (liveKeys.userId !== req.userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  const result = signRoleGrantPure(
+    liveKeys,
+    req.groupId,
+    req.subjectUserId,
+    req.role,
+    req.grantorGrantRef,
+  )
+  post({ kind: 'signRoleGrantDone', id: req.id, result })
 }
 
 /**

@@ -167,6 +167,11 @@ export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
   /** 0 means "never expire". */
   readonly expirationDays: number
   readonly version: number
+  /**
+   * The caller's OWN current grant address -- what a role change must sign as
+   * grantorGrantRef. Present for members only.
+   */
+  readonly myGrantSortKey?: string
 }
 
 /**
@@ -205,6 +210,61 @@ export async function updateGroup(
   return putOrPostJSON<{ version: number }>(
     'PUT',
     `/api/groups/${encodeURIComponent(groupId)}`,
+    req,
+  )
+}
+
+export type MemberRole = 'admin' | 'ambassador' | 'member'
+
+/**
+ * One row of GET /api/groups/{id}/members -- ids and roles only. A member's
+ * username and keys belong to the users projection (GET /api/users/:id),
+ * which does not exist yet, so the roster shows ids until it does.
+ */
+export interface MemberEntry {
+  readonly userId: string
+  readonly role: MemberRole
+  readonly generation: number
+}
+
+export interface ListMembersResponse {
+  readonly members: readonly MemberEntry[]
+  /** Empty on the last page; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+/** GET /api/groups/{id}/members -- issue #37. Members only; a non-member gets the same 404 as a missing group. */
+export async function listMembers(groupId: string, cursor?: string): Promise<ListMembersResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/members${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ListMembersResponse>(res)
+}
+
+export interface ChangeMemberRoleRequest {
+  readonly role: MemberRole
+  /** The new grant's own address, signed as part of the payload. */
+  readonly grantSortKey: string
+  /** The caller's own current grant (GroupDetail.myGrantSortKey). */
+  readonly grantorGrantRef: string
+  readonly signature: string
+}
+
+/**
+ * PUT /api/groups/{id}/members/{uid}/role -- issue #37. Admin only, never
+ * for oneself. 409 codes: grantor_ref_stale / grantor_changed /
+ * subject_role_changed / conflict_retry mean "reload and decide again";
+ * grant_key_taken means "sign again with a fresh grantSortKey".
+ */
+export async function changeMemberRole(
+  groupId: string,
+  userId: string,
+  req: ChangeMemberRoleRequest,
+): Promise<{ role: MemberRole; grantSortKey: string }> {
+  return putOrPostJSON(
+    'PUT',
+    `/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}/role`,
     req,
   )
 }

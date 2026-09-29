@@ -131,6 +131,26 @@ func TestGetGroupPublicVisibleToNonMember(t *testing.T) {
 	}
 }
 
+// The client signs a role change over this value, so it must be exactly the
+// grant the server will demand as grantorGrantRef -- and only members get it.
+func TestGetGroupReturnsCallersOwnGrantRef(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	_, otherCookie := loggedInUser(t, h)
+	gid := createPublicGroup(t, h, owner, ownerCookie)
+
+	want := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID), "GrantSortKey")
+	if want == "" {
+		t.Fatal("creator membership has no GrantSortKey")
+	}
+	if got := decodeDetail(t, doGroupRequest(t, h, ownerCookie, http.MethodGet, gid, nil)).MyGrantSortKey; got != want {
+		t.Errorf("member MyGrantSortKey = %q, want %q", got, want)
+	}
+	if got := decodeDetail(t, doGroupRequest(t, h, otherCookie, http.MethodGet, gid, nil)).MyGrantSortKey; got != "" {
+		t.Errorf("non-member MyGrantSortKey = %q, want empty", got)
+	}
+}
+
 func updateReq(version int64) updateGroupRequest {
 	return updateGroupRequest{
 		Version:               version,

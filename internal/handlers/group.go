@@ -615,6 +615,24 @@ type groupDetailResponse struct {
 	RevocationMode string `json:"revocationMode"`
 	ExpirationDays int64  `json:"expirationDays"`
 	Version        int64  `json:"version"`
+	// MyGrantSortKey is the caller's OWN current grant address -- what a role
+	// change must sign as grantorGrantRef (changeRoleRequest). Members only;
+	// empty when the server has no grant on record for the caller.
+	MyGrantSortKey string `json:"myGrantSortKey,omitempty"`
+}
+
+// currentGrantRef is a member's own current grant address: the one recorded
+// on their membership, or for a creator on a group made before that field
+// existed, the group's root grant. Shared by getGroup and changeMemberRole so
+// the value the client is told to sign is the value the server will demand.
+func currentGrantRef(m *models.Membership, g *models.Group, userID string) (ref string, stored bool) {
+	if m.GrantSortKey != "" {
+		return m.GrantSortKey, true
+	}
+	if g.CreatorUserID == userID {
+		return g.RootGrantSortKey, false
+	}
+	return "", false
 }
 
 // groupNotFound is the one response for "no such group" and "a private group
@@ -683,12 +701,16 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		entry.WrappedGroupKey = &wk
 	}
 
-	WriteJSON(w, http.StatusOK, groupDetailResponse{
+	resp := groupDetailResponse{
 		groupListEntry: entry,
 		RevocationMode: g.RevocationMode,
 		ExpirationDays: g.ExpirationDays,
 		Version:        g.Version,
-	})
+	}
+	if m != nil {
+		resp.MyGrantSortKey, _ = currentGrantRef(m, g, userID)
+	}
+	WriteJSON(w, http.StatusOK, resp)
 }
 
 const maxUpdateGroupBodyBytes = 16 * 1024

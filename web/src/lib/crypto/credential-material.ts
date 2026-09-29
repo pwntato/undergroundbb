@@ -349,6 +349,30 @@ export async function signGroupCreation(
 }
 
 /**
+ * #37: signs a role grant for another member -- the grantor's own Ed25519
+ * signature over crypto.RoleGrantPayload (Go)/roleGrantPayload (TS), the
+ * same payload and context signGroupCreation uses for the root grant, with
+ * the grantor's own CURRENT grant (grantorGrantRef) as its predecessor so
+ * the chain of trust can be walked back to the root. grantSortKey is
+ * generated here, for the subject, and signed as part of the payload for the
+ * reason roleGrantPayload's doc comment gives; the caller sends it back
+ * unchanged. A retry after a 'grant_key_taken' conflict must call this again
+ * for a fresh key rather than resend.
+ */
+export function signRoleGrant(
+  keys: LiveKeys,
+  groupId: string,
+  subjectUserId: string,
+  role: string,
+  grantorGrantRef: string,
+): { grantSortKey: string; signature: string } {
+  const grantSortKey = generateGrantSortKey(subjectUserId)
+  const payload = roleGrantPayload(groupId, subjectUserId, role, grantSortKey, grantorGrantRef)
+  const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.RoleGrant, payload)
+  return { grantSortKey, signature: bytesToBase64(signature) }
+}
+
+/**
  * #38: signs step 1 of the invite handshake -- the inviter's own
  * Ed25519 signature over crypto.InviteCreationPayload (Go)/
  * inviteCreationPayload (TS), binding the invite id, group id, the

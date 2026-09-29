@@ -1,0 +1,86 @@
+// Markup tests for GroupMembersPanel (renderToStaticMarkup, per
+// GroupList.test.tsx's reasoning).
+
+import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { MemberEntry } from '@/lib/api/groups'
+import { GroupMembersPanel } from './GroupMembersPanel'
+import { memberLabel } from './memberLabel'
+import type { MembersView } from './runGroupMembers'
+
+const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
+const BOB = 'bbbbbbbb-2222-4222-8222-222222222222'
+
+const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
+  userId,
+  role,
+  generation: 0,
+})
+
+function render(
+  view: Partial<MembersView>,
+  extra: { busyUserId?: string | null; message?: string | null; error?: string | null } = {},
+): string {
+  return renderToStaticMarkup(
+    createElement(GroupMembersPanel, {
+      view: {
+        groupId: 'g1',
+        members: [member(ME, 'admin'), member(BOB, 'member')],
+        myRole: 'admin',
+        myGrantSortKey: 'GRANT#x',
+        ...view,
+      },
+      userId: ME,
+      busyUserId: extra.busyUserId ?? null,
+      message: extra.message ?? null,
+      error: extra.error ?? null,
+      onChangeRole: () => undefined,
+    }),
+  )
+}
+
+describe('GroupMembersPanel', () => {
+  it('labels members by the first block of their id and marks the caller', () => {
+    const html = render({})
+    expect(html).toContain('aaaaaaaa')
+    expect(html).toContain('bbbbbbbb')
+    expect(html.match(/>you</g)).toHaveLength(1)
+    expect(memberLabel(ME)).toBe('aaaaaaaa')
+  })
+
+  it("offers an admin the roles a member doesn't already have, and none on their own row", () => {
+    const html = render({})
+    expect(html).toContain('Make admin')
+    expect(html).toContain('Make ambassador')
+    // Bob is a member, so "Make member" is not offered for him; the admin's
+    // own row has no controls at all.
+    expect(html).not.toContain('Make member')
+    expect(html.match(/<button/g)).toHaveLength(2)
+  })
+
+  it('offers no controls to an ambassador or a member', () => {
+    for (const myRole of ['ambassador', 'member'] as const) {
+      const html = render({ myRole })
+      expect(html).not.toContain('<button')
+      expect(html).toContain('bbbbbbbb')
+    }
+  })
+
+  it('disables every control while a change is in flight and marks the row', () => {
+    const html = render({}, { busyUserId: BOB })
+    expect(html).toContain('Saving…')
+    expect(html.match(/<button[^>]*disabled/g)).toHaveLength(2)
+  })
+
+  it("explains itself when an admin's own grant is missing", () => {
+    expect(render({ myGrantSortKey: undefined })).toContain('not on record')
+    expect(render({})).not.toContain('not on record')
+  })
+
+  it('shows a message and an error', () => {
+    const html = render({}, { message: 'It worked.', error: 'It failed.' })
+    expect(html).toContain('It worked.')
+    expect(html).toContain('It failed.')
+  })
+})
