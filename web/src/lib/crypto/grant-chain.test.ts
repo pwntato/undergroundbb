@@ -312,6 +312,51 @@ describe('verifyGrantChain: wholesale anchor swap', () => {
     )
   })
 
+  it('reports a mismatched pin at the top level, even when the root row is absent', () => {
+    const w = world()
+    const mismatched = { ...pin(w.anchor), creatorUserId: EVE }
+    const withRoot = verifyGrantChain({ ...w.input, pinnedAnchor: mismatched })
+    expect(withRoot.anchorPinned).toBe(false)
+    expect(withRoot.anchorValid).toBe(false)
+    // No root row served: the per-grant comparison never runs, the flags must.
+    const noRoot = verifyGrantChain({
+      ...w.input,
+      grants: [w.aliceAdmin],
+      pinnedAnchor: mismatched,
+    })
+    expect(noRoot.anchorPinned).toBe(false)
+    expect(noRoot.anchorValid).toBe(false)
+  })
+
+  it('reports a matched pin as pinned and valid', () => {
+    const w = world()
+    const r = verifyGrantChain({ ...w.input, pinnedAnchor: pin(w.anchor) })
+    expect(r.anchorPinned).toBe(true)
+    expect(r.anchorValid).toBe(true)
+  })
+
+  it('matches a pin on the key bytes, not its base64 spelling', () => {
+    const w = world()
+    const unpadded = w.anchor.creatorSigningPublicKey.replace(/=+$/, '')
+    expect(unpadded).not.toBe(w.anchor.creatorSigningPublicKey)
+    const r = verifyGrantChain({
+      ...w.input,
+      pinnedAnchor: { ...pin(w.anchor), creatorSigningPublicKey: unpadded },
+    })
+    expect(r.anchorPinned).toBe(true)
+    expect(r.verdicts.get(w.root.sortKey)).toEqual({ valid: true })
+  })
+
+  it('treats an undecodable pin key as a mismatch', () => {
+    const w = world()
+    const r = verifyGrantChain({
+      ...w.input,
+      pinnedAnchor: { ...pin(w.anchor), creatorSigningPublicKey: '!!!' },
+    })
+    expect(r.anchorPinned).toBe(false)
+    expect(r.anchorValid).toBe(false)
+  })
+
   it('reports an unpinned run as such, so callers can say the anchor came from the server', () => {
     expect(verifyGrantChain(world().input).anchorPinned).toBe(false)
   })

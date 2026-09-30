@@ -1,8 +1,10 @@
 // Client-side verification of a group's role-grant chain (#55, #56), against
 // the data GET /api/groups/{id}/grants and GET /api/users/{id} serve. Pure:
-// no fetching, no clock. The server is the party this protects against, so
-// grants and keys are checked rather than believed. The ANCHOR is the one
-// input this module cannot vouch for by itself: see the pin note below.
+// no fetching, no clock. The server is the party this protects against, and
+// this module checks GRANTS, not the inputs it is handed: the anchor and the
+// key histories are taken as given. A history the server substituted is
+// indistinguishable here from a real one, so this module is only as good as
+// the checks the caller ran on those inputs first (see "Caller obligations").
 //
 // Rules (docs/DESIGN.md, "Roles and the chain of trust"):
 //   - The anchor's own signature (TrustAnchor context) must verify, and the
@@ -30,14 +32,19 @@
 //     walking the history covers #56 with no separate row.
 //   - A member with no GRANT# row (added by invite) is baseline `member`.
 //
+// Caller obligations. "verified" here means "consistent with the anchor and
+// key histories supplied", and is proof against the server only if BOTH held:
+//   1. pinnedAnchor was supplied and matched (result.anchorPinned), and
+//   2. every entry in keyHistories was already checked against the caller's
+//      signed PIN# rows for that user (docs/DESIGN.md, "Key pinning and
+//      verification"; TOFU for a user seen for the first time, with the usual
+//      first-contact limit).
+// Otherwise a server can invent a creator, a keypair, an anchor and that
+// user's history, or substitute any grantor's history with a key it holds
+// (e.g. Alice's history = key E, E signs "Alice -> Mallory admin" citing
+// Alice's real admin grant) and the chain verifies.
+//
 // Known limits:
-//   - Without pinnedAnchor, the anchor and the creator's key history are
-//     both served by the same server, so a server that invents a creator, a
-//     keypair, an anchor and that user's key history can still produce a
-//     chain that verifies. The result reports anchorPinned=false in that
-//     case; callers must not present an unpinned "verified" as proof against
-//     the server. Where the pin comes from (e.g. per group, at join, like
-//     PIN#) is decided by the caller.
 //   - Leaving a group appends no grant, so a departed admin's last grant
 //     still says admin. Grants alone cannot show that they left. The same
 //     gap makes a member who leaves and rejoins by invite (baseline member,
@@ -97,16 +104,29 @@ export interface PinnedAnchor {
 export interface GrantChainInput {
   readonly groupId: string
   readonly anchor: GrantAnchor
-  /** When set, the served anchor must match it exactly. */
+  /** When set, the served anchor must match it exactly (compared as bytes). */
   readonly pinnedAnchor?: PinnedAnchor
   readonly grants: readonly GrantRecord[]
-  /** Key history per user id. A grantor missing here fails closed. */
+  /**
+   * Key history per user id. A grantor missing here fails closed. These are
+   * TRUSTED AS GIVEN: the caller must already have checked each against the
+   * user's signed PIN# rows, because the verifier cannot tell a substituted
+   * history from a real one.
+   */
   readonly keyHistories: ReadonlyMap<string, UserKeyHistory>
 }
 
 export interface GrantChainResult {
+  /**
+   * The anchor's own signature verifies and, if a pin was supplied, the
+   * anchor matches it. A pin mismatch makes this false.
+   */
   readonly anchorValid: boolean
-  /** True only when the run checked the anchor against a caller-held pin. */
+  /**
+   * A pin was supplied AND the anchor matched it. This says nothing about
+   * key histories: pinned + verified is proof against the server only if the
+   * caller also pin-checked keyHistories (see "Caller obligations").
+   */
   readonly anchorPinned: boolean
   readonly verdicts: ReadonlyMap<string, GrantVerdict>
   readonly grantsBySubject: ReadonlyMap<string, readonly GrantRecord[]>
@@ -182,7 +202,17 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
 
   const anchorKey = decode(anchor.creatorSigningPublicKey)
   const anchorSig = decode(anchor.trustAnchorSignature)
+  const pin = input.pinnedAnchor
+  const pinKey = pin ? decode(pin.creatorSigningPublicKey) : null
+  const pinMatched =
+    pin !== undefined &&
+    pinKey !== null &&
+    anchorKey !== null &&
+    pin.creatorUserId === anchor.creatorUserId &&
+    bytesEqual(pinKey, anchorKey)
+  const pinMismatch = pin !== undefined && !pinMatched
   const anchorValid =
+    !pinMismatch &&
     anchorKey !== null &&
     anchorSig !== null &&
     verify(
@@ -231,15 +261,8 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
     const payload = roleGrantPayload(groupId, g.subjectUserId, g.grantedRole, g.sortKey, ref)
 
     if (g.sortKey === anchor.rootGrantSortKey) {
+      if (pinMismatch) return reject('anchor does not match the pinned anchor')
       if (!anchorValid || anchorKey === null) return reject('trust anchor does not verify')
-      const pin = input.pinnedAnchor
-      if (
-        pin &&
-        (pin.creatorUserId !== anchor.creatorUserId ||
-          pin.creatorSigningPublicKey !== anchor.creatorSigningPublicKey)
-      ) {
-        return reject('anchor does not match the pinned anchor')
-      }
       if (g.subjectUserId !== anchor.creatorUserId || g.grantorUserId !== anchor.creatorUserId) {
         return reject('root grant is not self-signed by the creator')
       }
@@ -293,7 +316,7 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
   }
 
   for (const g of input.grants) verifyOne(g)
-  return { anchorValid, anchorPinned: input.pinnedAnchor !== undefined, verdicts, grantsBySubject }
+  return { anchorValid, anchorPinned: pinMatched, verdicts, grantsBySubject }
 }
 
 /**
