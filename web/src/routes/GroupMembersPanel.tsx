@@ -13,7 +13,9 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
+import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import { memberLabel, unresolvedClass } from './memberLabel'
+import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
 
 const ROLES: readonly MemberRole[] = ['admin', 'ambassador', 'member']
@@ -30,6 +32,7 @@ export function GroupMembersPanel({
   busyUserId,
   onChangeRole,
   usernames,
+  check,
 }: {
   readonly view: MembersView
   /** The signed-in user's own id. */
@@ -39,7 +42,13 @@ export function GroupMembersPanel({
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
   /** userId to username; anything missing renders as a short id. */
   readonly usernames?: ReadonlyMap<string, string> | undefined
+  /**
+   * The signed-grant-history check, once it has run. Absent while it loads
+   * and 'unavailable' when it could not run; either way no marks are shown.
+   */
+  readonly check?: GrantCheck | null | undefined
 }) {
+  const checked = check?.state === 'checked' ? check : null
   const isAdmin = view.myRole === 'admin'
   // Without our own grant on record a change can't be signed, so the buttons
   // would only fail; the note below the list says why they are absent.
@@ -47,6 +56,22 @@ export function GroupMembersPanel({
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
+      {checked?.anchor === 'root-unverified' && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          This group&apos;s root grant couldn&apos;t be checked, so no role below is confirmed. This
+          can be a temporary lookup failure, so try reloading; if it persists, don&apos;t rely on
+          roles or invites here until you&apos;ve checked with the group another way.
+        </p>
+      )}
+      {checked?.anchor === 'changed' && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            This group&apos;s trust anchor is different from the one this browser first saw, so no
+            role below is confirmed. Don&apos;t rely on roles or invites here until you&apos;ve
+            checked with the group another way.
+          </AlertDescription>
+        </Alert>
+      )}
       <ul className="flex flex-col gap-2">
         {view.members.map((m) => {
           const isSelf = m.userId === userId
@@ -64,6 +89,7 @@ export function GroupMembersPanel({
                 </span>
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
+                <RoleMark status={checked?.statuses.get(m.userId)} />
               </span>
               {canChangeRoles && !isSelf && (
                 <span className="flex flex-wrap gap-2">
@@ -87,12 +113,48 @@ export function GroupMembersPanel({
           )
         })}
       </ul>
+      {checked !== null && (
+        <p className="text-xs text-muted-foreground">
+          Roles are checked against the group&apos;s signed grant history. Keys are not yet checked
+          against pinned copies, so this can&apos;t rule out a dishonest server.
+          {checked.anchor === 'unpinned' &&
+            " This browser couldn't remember the group's creator, so a later swap wouldn't be noticed."}
+        </p>
+      )}
       {isAdmin && !canChangeRoles && (
         <p className="text-xs text-muted-foreground">
           Your own admin grant is not on record, so roles can&apos;t be changed from here yet.
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * Deliberately never says "verified": a consistent chain is only as good as
+ * the key histories it was checked against, which are not pinned yet.
+ */
+function RoleMark({ status }: { readonly status: RoleStatus | undefined }) {
+  if (status === undefined) {
+    return null
+  }
+  if (status.status === 'verified') {
+    return (
+      <span
+        className="text-xs text-muted-foreground"
+        title="This role matches the group's signed grant history."
+      >
+        ✓ chain consistent
+      </span>
+    )
+  }
+  return (
+    <span
+      className="text-xs text-amber-700 dark:text-amber-400"
+      title={`Not confirmed: ${status.reason}.`}
+    >
+      Role not confirmed
+    </span>
   )
 }
 

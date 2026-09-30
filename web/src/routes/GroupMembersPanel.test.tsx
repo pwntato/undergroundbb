@@ -115,3 +115,98 @@ describe('MembersFeedback', () => {
     ).toBe('')
   })
 })
+
+describe('GroupMembersPanel grant check marks', () => {
+  const checkedWith = (
+    anchor: 'pinned' | 'first-seen' | 'unpinned' | 'changed' | 'root-unverified',
+    statuses: [string, import('@/lib/crypto/grant-chain').RoleStatus][],
+  ): import('./runGrantCheck').GrantCheck => ({
+    state: 'checked',
+    anchor,
+    statuses: new Map(statuses),
+  })
+  const renderChecked = (check: import('./runGrantCheck').GrantCheck | null | undefined) =>
+    renderToStaticMarkup(
+      createElement(GroupMembersPanel, {
+        view: {
+          groupId: 'g1',
+          members: [member(ME, 'admin'), member(BOB, 'member')],
+          myRole: 'admin',
+          myGrantSortKey: 'GRANT#x',
+        },
+        userId: ME,
+        busyUserId: null,
+        onChangeRole: () => undefined,
+        check,
+      }),
+    )
+
+  it('shows no marks and no footnote while the check is loading or unavailable', () => {
+    for (const check of [null, undefined, { state: 'unavailable' } as const]) {
+      const html = renderChecked(check)
+      expect(html).not.toContain('chain consistent')
+      expect(html).not.toContain('not confirmed')
+      expect(html).not.toContain('signed grant history')
+    }
+  })
+
+  it('marks a backed role as consistent and never as verified', () => {
+    const html = renderChecked(
+      checkedWith('pinned', [
+        [ME, { status: 'verified' }],
+        [BOB, { status: 'verified' }],
+      ]),
+    )
+    expect(html.match(/chain consistent/g)).toHaveLength(2)
+    expect(html.toLowerCase()).not.toContain('verified')
+    expect(html).toContain('can&#x27;t rule out a dishonest server')
+  })
+
+  it('marks an unbacked role as not confirmed, with the reason in the tooltip', () => {
+    const html = renderChecked(
+      checkedWith('pinned', [
+        [ME, { status: 'verified' }],
+        [BOB, { status: 'unverified', reason: 'no grant backs role admin' }],
+      ]),
+    )
+    expect(html.match(/Role not confirmed/g)).toHaveLength(1)
+    expect(html).toContain('Not confirmed: no grant backs role admin.')
+  })
+
+  it('shows a destructive anchor-changed alert when the anchor differs from the pin', () => {
+    const html = renderChecked(
+      checkedWith('changed', [
+        [ME, { status: 'unverified', reason: 'the group anchor changed since you first saw it' }],
+        [BOB, { status: 'unverified', reason: 'the group anchor changed since you first saw it' }],
+      ]),
+    )
+    expect(html).toContain('trust anchor is different')
+    expect(html.match(/Role not confirmed/g)).toHaveLength(2)
+  })
+
+  it('says when the browser could not remember the creator, and only then', () => {
+    const statuses: [string, import('@/lib/crypto/grant-chain').RoleStatus][] = [
+      [ME, { status: 'verified' }],
+    ]
+    expect(renderChecked(checkedWith('unpinned', statuses))).toContain('couldn&#x27;t remember')
+    expect(renderChecked(checkedWith('first-seen', statuses))).not.toContain('remember')
+    expect(renderChecked(checkedWith('pinned', statuses))).not.toContain('remember')
+  })
+
+  it('explains an unchecked root as a possibly temporary failure, not a storage problem or a tamper alert', () => {
+    const reason = "the group's root grant could not be checked (not served)"
+    const html = renderChecked(
+      checkedWith('root-unverified', [
+        [ME, { status: 'unverified', reason }],
+        [BOB, { status: 'unverified', reason }],
+      ]),
+    )
+    expect(html).toContain('root grant couldn&#x27;t be checked')
+    expect(html).toContain('try reloading')
+    expect(html.match(/Role not confirmed/g)).toHaveLength(2)
+    expect(html).not.toContain('chain consistent')
+    expect(html).not.toContain('remember')
+    expect(html).not.toContain('trust anchor is different')
+    expect(html).not.toContain('role="alert"')
+  })
+})
