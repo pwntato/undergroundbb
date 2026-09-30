@@ -458,6 +458,16 @@ Until it exists, **fingerprint verification is the only control that detects a d
 is the same answer the design already gives for first contact — and that is the honest way to read
 this: pin deletion returns a counterparty to the first-contact case, silently.
 
+**A superseded pin can be replayed, and that is worse than deletion.** A pin carries no version or freshness,
+and writing one replaces the previous row. Once a user re-pins (after a key change), the server can keep the old
+row and serve it later, together with the old key set: the client verifies its own signature, finds the served set
+equal to it, and reports `match` for keys the user has already moved off, which is exactly when those keys may be
+compromised. Deletion only drops the client to first contact, which the roster does not label "verified"; a replay
+passes as a genuine pin. It is unreachable today, because nothing changes the keys of an existing uuid, so no
+re-pin ever replaces a pin. It becomes reachable with key rotation (#62) or any same-uuid re-invitation re-pin, so
+those must not treat `match` as fresh. The pin-set digest above would close it only if it covers each pin's
+contents (or a per-pin counter), not merely the pinned usernames.
+
 **What a pin covers, and what counts as a match.** A pin signs the pinned user's current X25519 wrapping key and
 their Ed25519 signing keys as a *set* (current plus every superseded key, order not significant), together with
 both uuids and the pinner's own signing key. A served key set matches only if it is **exactly equal** to the pinned
