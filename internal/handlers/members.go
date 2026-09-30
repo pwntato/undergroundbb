@@ -324,7 +324,9 @@ const (
 
 // grantAnchor is the group's stored chain anchor: the creator's uuid and the
 // Ed25519 key that was current at creation, with the creator's signature over
-// them (crypto.TrustAnchorPayload). A verifier checks that signature before
+// them (crypto.TrustAnchorPayload). The signature is over the contextualized
+// message: verify it under crypto.ContextTrustAnchor, not as a plain Ed25519
+// check over the payload, which rejects every row. A verifier checks it before
 // trusting either field, and that the root grant is self-signed by this key.
 type grantAnchor struct {
 	CreatorUserID           string `json:"creatorUserId"`
@@ -334,7 +336,16 @@ type grantAnchor struct {
 }
 
 // grantEntry is one signed role grant, with everything a verifier needs to
-// rebuild the signed bytes (crypto.RoleGrantPayload) and check the signature.
+// rebuild the signed bytes (crypto.RoleGrantPayload) and check the signature
+// under crypto.ContextRoleGrant (the signature is over the contextualized
+// message, not the bare payload).
+//
+// "Needs" is not "can trust". GrantorSigningPublicKey is the server's own row
+// and nothing in RoleGrantPayload binds it, so a verifier that checks Signature
+// against it alone accepts anything the server writes. It is safe only for the
+// root grant, whose key the anchor pins. For every other grant, resolve the
+// grantor's key for the grant's day from their key history (superseded keys)
+// and treat this field as a hint at most.
 type grantEntry struct {
 	SortKey                 string `json:"sortKey"`
 	SubjectUserID           string `json:"subjectUserId"`
@@ -385,6 +396,9 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, "cursor: malformed")
 			return
 		}
+		// Passing the cursor's own uuid as the subject makes the subject check
+		// vacuous on purpose: any subject in this group is a valid cursor, so
+		// only the shape check does work. The PK is fixed to groupID below.
 		if _, ok := idgen.ValidGrantSortKey(cursor, cursor[subjectStart:subjectEnd]); !ok {
 			WriteError(w, http.StatusBadRequest, "cursor: malformed")
 			return
@@ -401,8 +415,13 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
-	if err != nil || group == nil {
+	if err != nil {
 		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		return
+	}
+	if group == nil {
+		// Deleted between the membership read and now (the last member left).
+		groupNotFound(w)
 		return
 	}
 	grants, next, err := h.db.ListGrants(r.Context(), groupID, cursor, limit)
