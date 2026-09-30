@@ -13,15 +13,19 @@ import {
   changeMemberRole,
   getGroup,
   leaveGroup,
+  listGrants,
   listMembers,
   type MemberRole,
 } from '@/lib/api/groups'
 import { signRoleGrant } from '@/lib/crypto/worker-client'
+import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
+import { getUser } from '@/lib/api/users'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
+import { checkGrants, type GrantCheck } from './runGrantCheck'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
   changeRole,
@@ -58,6 +62,7 @@ export function GroupMembersScreen() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
+  const [grantCheck, setGrantCheck] = useState<GrantCheck | null>(null)
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -86,6 +91,33 @@ export function GroupMembersScreen() {
       cancelled = true
     }
   }, [reload])
+
+  // Re-run whenever the roster (re)loads, since a role change appends a grant.
+  const loadedView = load.status === 'ready' ? load.view : null
+  useEffect(() => {
+    if (loadedView === null || userId === null) {
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const result = await checkGrants(
+        {
+          listGrants,
+          getUser,
+          readPin: (g) => readAnchorPin(userId, g),
+          writePin: (g, pin) => writeAnchorPin(userId, g, pin),
+        },
+        loadedView.groupId,
+        loadedView.members,
+      )
+      if (!cancelled) {
+        setGrantCheck(result)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [loadedView, userId])
 
   if (groupId === undefined) {
     return (
@@ -192,6 +224,7 @@ export function GroupMembersScreen() {
           userId={userId}
           busyUserId={busyUserId}
           onChangeRole={handleChangeRole}
+          check={grantCheck}
         />
       )}
       {load.status === 'ready' && userId !== null && (

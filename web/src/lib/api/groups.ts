@@ -3,6 +3,7 @@
 // wire as standard-padded base64, matching decodeBase64Field's own
 // expectation, the same convention auth.ts's endpoints already use.
 
+import type { GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import { ApiError } from './auth.js'
 
 export interface WireArgon2Params {
@@ -240,6 +241,26 @@ export async function listMembers(groupId: string, cursor?: string): Promise<Lis
     credentials: 'same-origin',
   })
   return handleJSON<ListMembersResponse>(res)
+}
+
+/**
+ * GET /api/groups/{id}/grants -- issue #55. The signed role-grant history and
+ * the stored chain anchor (on every page). Members only, same 404 as the
+ * roster. Nothing here is verified by the server; see lib/crypto/grant-chain.
+ */
+export interface ListGrantsResponse {
+  readonly anchor: GrantAnchor
+  readonly grants: readonly GrantRecord[]
+  /** Empty on the last page; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+export async function listGrants(groupId: string, cursor?: string): Promise<ListGrantsResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/grants${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ListGrantsResponse>(res)
 }
 
 export interface ChangeMemberRoleRequest {
