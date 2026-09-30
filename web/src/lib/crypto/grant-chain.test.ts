@@ -101,6 +101,10 @@ function world(): World {
   return { creatorKey, aliceKey, anchor, root, aliceAdmin, input }
 }
 
+function pin(a: GrantAnchor) {
+  return { creatorUserId: a.creatorUserId, creatorSigningPublicKey: a.creatorSigningPublicKey }
+}
+
 function withGrants(w: World, ...extra: GrantRecord[]): GrantChainInput {
   return { ...w.input, grants: [...w.input.grants, ...extra] }
 }
@@ -148,19 +152,168 @@ describe('verifyGrantChain: valid chains', () => {
     expect(verdictOf(input, bob).valid).toBe(true)
   })
 
-  it('verifies the creator after they rotate keys, because the anchor pins the old key', () => {
+  it('verifies the creator after they rotate keys, because the anchor key is one they held on the root day', () => {
     const w = world()
-    // The creator's current key is different; the root still verifies under
-    // the anchor key, never the creator's key history.
     const rotated = generateSigningKey()
     const input: GrantChainInput = {
       ...w.input,
       keyHistories: new Map([
-        [CREATOR, history(rotated)],
+        [
+          CREATOR,
+          {
+            signingPublicKey: b64(rotated.publicKey),
+            supersededSigningKeys: [
+              {
+                publicKey: b64(w.creatorKey.publicKey),
+                from: '2026-01-01T00:00:00Z',
+                until: '2026-04-01T00:00:00Z',
+              },
+            ],
+          },
+        ],
         [ALICE, history(w.aliceKey)],
       ]),
     }
     expect(verdictOf(input, w.root).valid).toBe(true)
+  })
+})
+
+describe('verifyGrantChain: wholesale anchor swap', () => {
+  /** The server invents a keypair and a whole chain rooted at a confederate. */
+  function swapped(w: World) {
+    const evil = generateSigningKey()
+    const rootSk = sk(EVE, '2026-03-01')
+    const anchor: GrantAnchor = {
+      creatorUserId: EVE,
+      creatorSigningPublicKey: b64(evil.publicKey),
+      trustAnchorSignature: b64(
+        sign(evil, SigningContext.TrustAnchor, trustAnchorPayload(EVE, evil.publicKey, GROUP)),
+      ),
+      rootGrantSortKey: rootSk,
+    }
+    const root = grant(evil, EVE, 'admin', EVE, '2026-03-01', '', rootSk)
+    const bob = grant(evil, BOB, 'admin', EVE, '2026-03-05', rootSk)
+    const input: GrantChainInput = {
+      groupId: GROUP,
+      anchor,
+      grants: [root, bob],
+      keyHistories: new Map([
+        [EVE, history(evil)],
+        [CREATOR, history(w.creatorKey)],
+      ]),
+    }
+    return { input, root, bob, anchor, evil }
+  }
+
+  it('does not verify a chain rooted at an invented creator with an invented key and self-signed anchor', () => {
+    // EVE's own served key history contains the invented key, and the anchor
+    // signature is valid under it, so only a pin can reject this.
+    const w = world()
+    const { input, bob } = swapped(w)
+    expect(checkMemberRole(verifyGrantChain(input), BOB, 'admin').status).toBe('verified')
+    const pinned = verifyGrantChain({ ...input, pinnedAnchor: pin(w.anchor) })
+    expect(pinned.verdicts.get(bob.sortKey)!.valid).toBe(false)
+    expect(checkMemberRole(pinned, BOB, 'admin').status).toBe('unverified')
+  })
+
+  it('rejects an invented key for the real creator uuid, which the creator never held', () => {
+    const w = world()
+    const evil = generateSigningKey()
+    const anchor: GrantAnchor = {
+      creatorUserId: CREATOR,
+      creatorSigningPublicKey: b64(evil.publicKey),
+      trustAnchorSignature: b64(
+        sign(evil, SigningContext.TrustAnchor, trustAnchorPayload(CREATOR, evil.publicKey, GROUP)),
+      ),
+      rootGrantSortKey: w.root.sortKey,
+    }
+    const root = grant(evil, CREATOR, 'admin', CREATOR, '2026-03-01', '', w.root.sortKey)
+    const bob = grant(evil, BOB, 'admin', CREATOR, '2026-03-05', w.root.sortKey)
+    const input: GrantChainInput = { ...w.input, anchor, grants: [root, bob] }
+    const r = verifyGrantChain(input)
+    expect(r.verdicts.get(root.sortKey)!.reason).toBe(
+      'anchor key is not a key the creator held on the root day',
+    )
+    expect(checkMemberRole(r, BOB, 'admin').status).toBe('unverified')
+  })
+
+  it('rejects an anchor key the creator only held after the root day', () => {
+    const w = world()
+    const later = generateSigningKey()
+    const anchor: GrantAnchor = {
+      ...w.anchor,
+      creatorSigningPublicKey: b64(later.publicKey),
+      trustAnchorSignature: b64(
+        sign(
+          later,
+          SigningContext.TrustAnchor,
+          trustAnchorPayload(CREATOR, later.publicKey, GROUP),
+        ),
+      ),
+    }
+    const root = grant(later, CREATOR, 'admin', CREATOR, '2026-03-01', '', w.root.sortKey)
+    const input: GrantChainInput = {
+      ...w.input,
+      anchor,
+      grants: [root],
+      keyHistories: new Map([
+        [
+          CREATOR,
+          {
+            signingPublicKey: b64(later.publicKey),
+            supersededSigningKeys: [
+              {
+                publicKey: b64(w.creatorKey.publicKey),
+                from: '2026-01-01T00:00:00Z',
+                until: '2026-04-01T00:00:00Z',
+              },
+            ],
+          },
+        ],
+      ]),
+    }
+    expect(verdictOf(input, root).reason).toBe(
+      'anchor key is not a key the creator held on the root day',
+    )
+  })
+
+  it('fails closed when the creator has no key history', () => {
+    const w = world()
+    const input: GrantChainInput = { ...w.input, keyHistories: new Map() }
+    expect(verdictOf(input, w.root).reason).toBe('no key history for creator')
+  })
+
+  it('accepts the real chain when it matches the pin', () => {
+    const w = world()
+    const r = verifyGrantChain({ ...w.input, pinnedAnchor: pin(w.anchor) })
+    expect(r.anchorPinned).toBe(true)
+    expect(r.verdicts.get(w.aliceAdmin.sortKey)).toEqual({ valid: true })
+  })
+
+  it('rejects when the served anchor differs from the pin, in either field', () => {
+    const w = world()
+    const { anchor: evilAnchor } = swapped(w)
+    const wrongUser = verifyGrantChain({
+      ...w.input,
+      pinnedAnchor: { ...pin(w.anchor), creatorUserId: EVE },
+    })
+    expect(wrongUser.verdicts.get(w.root.sortKey)!.reason).toBe(
+      'anchor does not match the pinned anchor',
+    )
+    const wrongKey = verifyGrantChain({
+      ...w.input,
+      pinnedAnchor: {
+        ...pin(w.anchor),
+        creatorSigningPublicKey: evilAnchor.creatorSigningPublicKey,
+      },
+    })
+    expect(wrongKey.verdicts.get(w.root.sortKey)!.reason).toBe(
+      'anchor does not match the pinned anchor',
+    )
+  })
+
+  it('reports an unpinned run as such, so callers can say the anchor came from the server', () => {
+    expect(verifyGrantChain(world().input).anchorPinned).toBe(false)
   })
 })
 
