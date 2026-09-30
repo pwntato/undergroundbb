@@ -32,6 +32,11 @@ import type {
   SignGroupCreationRequest,
   SignGroupCreationResponse,
   SignGroupCreationResult,
+  SignPinRequest,
+  SignPinResponse,
+  SignPinResult,
+  GetOwnSigningKeyRequest,
+  GetOwnSigningKeyResponse,
   SignRoleGrantRequest,
   SignRoleGrantResponse,
   SignRoleGrantResult,
@@ -344,6 +349,67 @@ export function signRoleGrant(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signRoleGrant`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Signs a pin of another user's key set -- issue #63. Relies on the worker's
+ * own cached liveKeys, like signRoleGrant.
+ */
+export function signPin(req: Omit<SignPinRequest, 'kind' | 'id'>): Promise<SignPinResult> {
+  const id = nextRequestID()
+  const fullReq: SignPinRequest = { kind: 'signPin', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signPinDone') {
+        resolve((msg as SignPinResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signPin`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** The caller's own current signing public key (base64) from the worker's liveKeys -- issue #63. */
+export function getOwnSigningKey(userId: string): Promise<string> {
+  const id = nextRequestID()
+  const fullReq: GetOwnSigningKeyRequest = { kind: 'getOwnSigningKey', id, userId }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'getOwnSigningKeyDone') {
+        resolve((msg as GetOwnSigningKeyResponse).signingPublicKey)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for getOwnSigningKey`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

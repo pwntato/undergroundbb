@@ -27,6 +27,7 @@ import {
   verifyInviteMAC,
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
+import { pinPayload } from './pin.js'
 import {
   deriveRecoveryVerifier,
   deriveRecoveryWrapKey,
@@ -370,6 +371,33 @@ export function signRoleGrant(
   const payload = roleGrantPayload(groupId, subjectUserId, role, grantSortKey, grantorGrantRef)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.RoleGrant, payload)
   return { grantSortKey, signature: bytesToBase64(signature) }
+}
+
+/**
+ * #63: signs a pin of another user's key set under the caller's own current
+ * signing key. signingPublicKeys is a set (pinPayload sorts it). The result
+ * carries the signing key used, which is what the server checks against the
+ * caller's profile and what evaluatePin later requires to be the caller's
+ * current key.
+ */
+export function signPin(
+  keys: LiveKeys,
+  pinnedUserId: string,
+  signingPublicKeys: readonly Uint8Array[],
+  wrappingPublicKey: Uint8Array,
+): { pinnerSigningPublicKey: string; signature: string } {
+  const payload = pinPayload(
+    keys.userId,
+    pinnedUserId,
+    keys.signingKey.publicKey,
+    wrappingPublicKey,
+    signingPublicKeys,
+  )
+  const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Pin, payload)
+  return {
+    pinnerSigningPublicKey: bytesToBase64(keys.signingKey.publicKey),
+    signature: bytesToBase64(signature),
+  }
 }
 
 /**

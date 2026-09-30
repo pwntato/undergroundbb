@@ -24,6 +24,7 @@ import {
   signGroupCreation,
   signInviteAcceptance,
   signInviteCreation,
+  signPin,
   signRoleGrant,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -36,6 +37,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
+import { evaluatePin } from './pin.js'
 import { unwrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
@@ -912,5 +914,45 @@ describe('signRoleGrant', () => {
     const a = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
     const b = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
     expect(a.grantSortKey).not.toBe(b.grantSortKey)
+  })
+})
+
+describe('signPin', () => {
+  const PINNER = '66666666-6666-4666-8666-666666666666'
+  const PINNED = '77777777-7777-4777-8777-777777777777'
+
+  // Uses a hand-built LiveKeys: signPin only reads userId and signingKey, and
+  // skipping Argon2 keeps this off the slow path (#163).
+  it('signs a pin that evaluatePin accepts under the same key, and only that key', () => {
+    const signingKey = ed25519.generateSigningKey()
+    const keys = { userId: PINNER, signingKey, wrappingKey: undefined as never }
+    const bob = ed25519.generateSigningKey()
+    const wrapping = new Uint8Array(32).fill(8)
+    const { pinnerSigningPublicKey, signature } = signPin(keys, PINNED, [bob.publicKey], wrapping)
+    expect(pinnerSigningPublicKey).toBe(bytesToBase64(signingKey.publicKey))
+
+    const pin = {
+      pinnedUserId: PINNED,
+      signingPublicKeys: [bytesToBase64(bob.publicKey)],
+      wrappingPublicKey: bytesToBase64(wrapping),
+      pinnerSigningPublicKey,
+      signature,
+    }
+    const served = {
+      signingPublicKey: bytesToBase64(bob.publicKey),
+      supersededSigningKeys: [],
+      wrappingPublicKey: bytesToBase64(wrapping),
+    }
+    const run = (own: Uint8Array, id = PINNER) =>
+      evaluatePin({
+        pinnerUserId: id,
+        pinnerSigningPublicKey: own,
+        pinnedUserId: PINNED,
+        pin,
+        served,
+      })
+    expect(run(signingKey.publicKey)).toBe('match')
+    expect(run(ed25519.generateSigningKey().publicKey)).toBe('bad-signature')
+    expect(run(signingKey.publicKey, PINNED)).toBe('bad-signature')
   })
 })

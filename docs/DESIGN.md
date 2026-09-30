@@ -477,6 +477,11 @@ signed continuity link from the old key, which arrives with key rotation (#62). 
 user hard-blocks and resolves through re-invitation like any other change. Implemented as `PUT /api/pins/{userId}`
 (the server checks the signature under the caller's current key, for hygiene only) and `GET /api/pins` (the caller's
 own pins, unverified by the server); the verdict logic is `evaluatePin` in `web/src/lib/crypto/pin.ts`.
+The roster check (`runGrantCheck.ts`) pin-checks every grantor's served key set before the grant-chain verifier sees
+it: a match passes, a first sighting is pinned and reported as first-seen, and a mismatch or bad signature is
+**withheld** (the verifier then fails closed on that person) and named to the user, never re-pinned over. The roster
+says "verified" only when the group anchor and every grantor's keys all matched something saved earlier. A pin covers
+the key *set*, not the intervals of superseded keys, so rotation (#62) has to sign intervals as well.
 
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador

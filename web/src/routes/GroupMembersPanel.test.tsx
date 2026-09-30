@@ -120,9 +120,13 @@ describe('GroupMembersPanel grant check marks', () => {
   const checkedWith = (
     anchor: 'pinned' | 'first-seen' | 'unpinned' | 'changed' | 'root-unverified',
     statuses: [string, import('@/lib/crypto/grant-chain').RoleStatus][],
+    keys: import('./runGrantCheck').KeyState = 'first-seen',
+    blockedKeyUsers: string[] = [],
   ): import('./runGrantCheck').GrantCheck => ({
     state: 'checked',
     anchor,
+    keys,
+    blockedKeyUsers,
     statuses: new Map(statuses),
   })
   const renderChecked = (check: import('./runGrantCheck').GrantCheck | null | undefined) =>
@@ -150,16 +154,52 @@ describe('GroupMembersPanel grant check marks', () => {
     }
   })
 
-  it('marks a backed role as consistent and never as verified', () => {
+  const both: [string, import('@/lib/crypto/grant-chain').RoleStatus][] = [
+    [ME, { status: 'verified' }],
+    [BOB, { status: 'verified' }],
+  ]
+
+  it('marks a backed role as consistent, not verified, when any key was only just saved', () => {
+    for (const [anchor, keys] of [
+      ['pinned', 'first-seen'],
+      ['first-seen', 'pinned'],
+      ['first-seen', 'first-seen'],
+      ['pinned', 'unchecked'],
+    ] as const) {
+      const html = renderChecked(checkedWith(anchor, both, keys))
+      expect(html.match(/chain consistent/g)).toHaveLength(2)
+      expect(html.toLowerCase()).not.toContain('verified')
+      expect(html).toContain('can&#x27;t rule out')
+    }
+  })
+
+  it('says verified only when both the anchor and every key matched something saved earlier', () => {
+    const html = renderChecked(checkedWith('pinned', both, 'pinned'))
+    expect(html.match(/✓ verified/g)).toHaveLength(2)
+    expect(html).not.toContain('chain consistent')
+    expect(html).toContain('matched the copy this browser saved earlier')
+  })
+
+  it('explains an unchecked run instead of implying the keys were checked', () => {
+    const html = renderChecked(checkedWith('pinned', both, 'unchecked'))
+    expect(html).toContain('couldn&#x27;t be checked against your saved copies')
+  })
+
+  it('warns by name when a key was blocked, and never says verified', () => {
     const html = renderChecked(
-      checkedWith('pinned', [
-        [ME, { status: 'verified' }],
-        [BOB, { status: 'verified' }],
-      ]),
+      checkedWith(
+        'pinned',
+        [
+          [ME, { status: 'verified' }],
+          [BOB, { status: 'unverified', reason: 'no key history' }],
+        ],
+        'blocked',
+        [BOB],
+      ),
     )
-    expect(html.match(/chain consistent/g)).toHaveLength(2)
-    expect(html.toLowerCase()).not.toContain('verified')
-    expect(html).toContain('can&#x27;t rule out a dishonest server')
+    expect(html).toContain('don&#x27;t')
+    expect(html).toContain('match the copy you saved earlier')
+    expect(html.toLowerCase()).not.toContain('✓ verified')
   })
 
   it('marks an unbacked role as not confirmed, with the reason in the tooltip', () => {

@@ -72,6 +72,17 @@ export function GroupMembersPanel({
           </AlertDescription>
         </Alert>
       )}
+      {checked !== null && checked.blockedKeyUsers.length > 0 && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            The keys the server shows for{' '}
+            {checked.blockedKeyUsers.map((id) => memberLabel(id, usernames)).join(', ')} don&apos;t
+            match the copy you saved earlier (or that saved copy failed its own check), so roles
+            they vouch for are not confirmed. Don&apos;t rely on roles or invites here until
+            you&apos;ve checked with them another way.
+          </AlertDescription>
+        </Alert>
+      )}
       <ul className="flex flex-col gap-2">
         {view.members.map((m) => {
           const isSelf = m.userId === userId
@@ -89,7 +100,7 @@ export function GroupMembersPanel({
                 </span>
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
-                <RoleMark status={checked?.statuses.get(m.userId)} />
+                <RoleMark status={checked?.statuses.get(m.userId)} verified={isVerified(checked)} />
               </span>
               {canChangeRoles && !isSelf && (
                 <span className="flex flex-wrap gap-2">
@@ -115,8 +126,11 @@ export function GroupMembersPanel({
       </ul>
       {checked !== null && (
         <p className="text-xs text-muted-foreground">
-          Roles are checked against the group&apos;s signed grant history. Keys are not yet checked
-          against pinned copies, so this can&apos;t rule out a dishonest server.
+          {isVerified(checked)
+            ? "Roles match the group's signed grant history, and every key matched the copy this browser saved earlier. A server that lied the very first time you saw someone isn't caught by that."
+            : checked.keys === 'unchecked'
+              ? "Roles are checked against the group's signed grant history, but the keys behind it couldn't be checked against your saved copies, so this can't rule out a dishonest server."
+              : "Roles are checked against the group's signed grant history. Some keys or the group's creator were saved just now on first sight, so this can't rule out a server that lied to you at first contact."}
           {checked.anchor === 'unpinned' &&
             " This browser couldn't remember the group's creator, so a later swap wouldn't be noticed."}
         </p>
@@ -131,10 +145,21 @@ export function GroupMembersPanel({
 }
 
 /**
- * Deliberately never says "verified": a consistent chain is only as good as
- * the key histories it was checked against, which are not pinned yet.
+ * "Verified" means the chain is consistent AND both the group's creator and
+ * every grantor's keys matched something this browser saved earlier. A first
+ * sighting is trusted and saved, so it stays "chain consistent".
  */
-function RoleMark({ status }: { readonly status: RoleStatus | undefined }) {
+function isVerified(checked: Extract<GrantCheck, { state: 'checked' }> | null): boolean {
+  return checked !== null && checked.anchor === 'pinned' && checked.keys === 'pinned'
+}
+
+function RoleMark({
+  status,
+  verified,
+}: {
+  readonly status: RoleStatus | undefined
+  readonly verified: boolean
+}) {
   if (status === undefined) {
     return null
   }
@@ -142,9 +167,13 @@ function RoleMark({ status }: { readonly status: RoleStatus | undefined }) {
     return (
       <span
         className="text-xs text-muted-foreground"
-        title="This role matches the group's signed grant history."
+        title={
+          verified
+            ? "This role matches the group's signed grant history, and every key matched what this browser saved earlier."
+            : "This role matches the group's signed grant history."
+        }
       >
-        ✓ chain consistent
+        {verified ? '✓ verified' : '✓ chain consistent'}
       </span>
     )
   }

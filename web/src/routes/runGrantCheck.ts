@@ -5,14 +5,27 @@
 //
 // What the result means: "verified" from the verifier is proof against a
 // dishonest server only if the anchor was pinned AND every key history was
-// checked against signed PIN# rows. PIN# is not built, so key histories here
-// are exactly what the server served, and the UI must not call a consistent
-// chain "verified" (see GroupMembersPanel). What this DOES catch: an anchor
-// that changed since this browser first saw it, and any role the signed
-// history does not back.
+// checked against the caller's signed PIN# rows (issue #63). This runner does
+// both, and reports how far each got (anchor, keys) so the UI can say
+// "verified" only when both matched something saved EARLIER. A first sighting
+// is trusted and pinned (TOFU), so it is reported as first-seen, never as
+// verified: a server that lied the very first time is not caught here.
+//
+// Key histories: every grantor's served history is checked with evaluatePin
+// before the verifier sees it. match and a fresh TOFU pin are passed on;
+// mismatch and bad-signature are BLOCKED (the history is withheld, so the
+// verifier fails closed on that person, and the person is reported); if the
+// pins or the caller's own key cannot be read the histories pass through
+// unchecked and the result says so. A pin covers a user's key SET, not the
+// intervals of superseded keys; that matters only once rotation (#62) exists
+// and must sign intervals then. `match` is not proof of freshness either
+// (docs/DESIGN.md, "A superseded pin can be replayed"): also #62's problem.
 
 import type { ListGrantsResponse } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
+import type { PinRecord } from '@/lib/crypto/pin'
+import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
+import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import {
   checkMemberRole,
   verifyGrantChain,
@@ -36,11 +49,26 @@ import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
  */
 export type AnchorState = 'pinned' | 'first-seen' | 'unpinned' | 'changed' | 'root-unverified'
 
+/**
+ * How the grantors' key histories relate to the caller's signed pins:
+ *  - pinned: every history matched a pin saved earlier
+ *  - first-seen: no history contradicted a pin, but at least one was pinned
+ *    just now (trusted on first use)
+ *  - unchecked: the pins or the caller's own key could not be read, or a new
+ *    pin could not be saved; some histories are exactly what the server served
+ *  - blocked: at least one history contradicted its pin (or failed to verify,
+ *    or is malformed) and was withheld; see blockedKeyUsers
+ */
+export type KeyState = 'pinned' | 'first-seen' | 'unchecked' | 'blocked'
+
 export type GrantCheck =
   | { readonly state: 'unavailable' }
   | {
       readonly state: 'checked'
       readonly anchor: AnchorState
+      readonly keys: KeyState
+      /** Users whose served keys were withheld from the verifier. */
+      readonly blockedKeyUsers: readonly string[]
       readonly statuses: ReadonlyMap<string, RoleStatus>
     }
 
@@ -65,6 +93,18 @@ export interface GrantCheckDeps {
   readonly getUser: (userId: string) => Promise<UserProjection>
   readonly readPin: (groupId: string) => StoredAnchorPin | null
   readonly writePin: (groupId: string, pin: StoredAnchorPin) => boolean
+  /** The signed-in user's id (never pinned; checked against their own key). */
+  readonly selfUserId: string
+  /** The caller's own CURRENT signing public key (base64), from the worker. */
+  readonly ownSigningKey: () => Promise<string>
+  /** Every pin the caller has stored. */
+  readonly listPins: () => Promise<readonly PinRecord[]>
+  /** Signs and stores a pin (base64 keys). Rejects if it could not be saved. */
+  readonly pinKeys: (
+    pinnedUserId: string,
+    signingPublicKeys: readonly string[],
+    wrappingPublicKey: string,
+  ) => Promise<void>
 }
 
 // A history this deep means the server is not honoring nextCursor; stop.
@@ -79,10 +119,11 @@ export async function checkGrants(
 ): Promise<GrantCheck> {
   try {
     const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
-    const keyHistories = await readKeyHistories(deps, [
+    const served = await readServedKeys(deps, [
       anchor.creatorUserId,
       ...grants.map((g) => g.grantorUserId),
     ])
+    const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served)
 
     const stored = deps.readPin(groupId)
     const result = verifyGrantChain({
@@ -129,7 +170,7 @@ export async function checkGrants(
     for (const m of members) {
       statuses.set(m.userId, blanket ?? checkMemberRole(result, m.userId, m.role))
     }
-    return { state: 'checked', anchor: anchorState, statuses }
+    return { state: 'checked', anchor: anchorState, keys, blockedKeyUsers, statuses }
   } catch {
     return { state: 'unavailable' }
   }
@@ -163,23 +204,19 @@ async function readAllGrants(
   throw new Error('grant pagination did not terminate')
 }
 
-/** A user whose history cannot be read is left out; the verifier fails closed on them. */
-async function readKeyHistories(
+/** A user whose keys cannot be read is left out; the verifier fails closed on them. */
+async function readServedKeys(
   deps: GrantCheckDeps,
   ids: readonly string[],
-): Promise<ReadonlyMap<string, UserKeyHistory>> {
+): Promise<ReadonlyMap<string, UserProjection>> {
   const wanted = [...new Set(ids)]
-  const out = new Map<string, UserKeyHistory>()
+  const out = new Map<string, UserProjection>()
   let next = 0
   const worker = async () => {
     while (next < wanted.length) {
       const id = wanted[next++] as string
       try {
-        const u = await deps.getUser(id)
-        out.set(id, {
-          signingPublicKey: u.signingPublicKey,
-          supersededSigningKeys: u.supersededSigningKeys,
-        })
+        out.set(id, await deps.getUser(id))
       } catch {
         // Fails closed in the verifier ("no key history").
       }
@@ -187,4 +224,94 @@ async function readKeyHistories(
   }
   await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_READS, wanted.length) }, worker))
   return out
+}
+
+function historyOf(u: UserProjection): UserKeyHistory {
+  return { signingPublicKey: u.signingPublicKey, supersededSigningKeys: u.supersededSigningKeys }
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i])
+}
+
+/**
+ * Checks each served key set against the caller's signed pins and returns the
+ * histories the verifier may use. Never throws.
+ */
+async function checkServedKeys(
+  deps: GrantCheckDeps,
+  served: ReadonlyMap<string, UserProjection>,
+): Promise<{
+  keyHistories: ReadonlyMap<string, UserKeyHistory>
+  keys: KeyState
+  blockedKeyUsers: string[]
+}> {
+  let own: Uint8Array | null = null
+  let pins: Map<string, PinRecord> | null = null
+  try {
+    own = base64ToBytes(await deps.ownSigningKey())
+    pins = new Map((await deps.listPins()).map((p) => [p.pinnedUserId, p]))
+  } catch {
+    // Handled below: histories pass through, reported as unchecked.
+  }
+
+  const keyHistories = new Map<string, UserKeyHistory>()
+  const blockedKeyUsers: string[] = []
+  let unchecked = false
+  let firstSeen = false
+
+  for (const [id, u] of served) {
+    if (own === null || pins === null) {
+      keyHistories.set(id, historyOf(u))
+      unchecked = true
+      continue
+    }
+    if (id === deps.selfUserId) {
+      // Your own key comes from the worker, not the server. No rotation
+      // exists yet, so a served history that differs at all is not yours.
+      const current = base64ToBytes(u.signingPublicKey)
+      if (sameBytes(current, own) && u.supersededSigningKeys.length === 0) {
+        keyHistories.set(id, historyOf(u))
+      } else {
+        blockedKeyUsers.push(id)
+      }
+      continue
+    }
+    const verdict = evaluatePin({
+      pinnerUserId: deps.selfUserId,
+      pinnerSigningPublicKey: own,
+      pinnedUserId: id,
+      pin: pins.get(id),
+      served: u,
+    })
+    if (verdict === 'match') {
+      keyHistories.set(id, historyOf(u))
+    } else if (verdict === 'first-sight') {
+      const keys = servedSigningKeySet(u)
+      if (keys === null) {
+        blockedKeyUsers.push(id)
+        continue
+      }
+      keyHistories.set(id, historyOf(u))
+      try {
+        await deps.pinKeys(id, keys.map(bytesToBase64), u.wrappingPublicKey)
+        firstSeen = true
+      } catch {
+        unchecked = true
+      }
+    } else {
+      // mismatch or bad-signature: withhold, never re-pin over it.
+      blockedKeyUsers.push(id)
+    }
+  }
+
+  const keys: KeyState =
+    blockedKeyUsers.length > 0
+      ? 'blocked'
+      : unchecked
+        ? 'unchecked'
+        : firstSeen
+          ? 'first-seen'
+          : 'pinned'
+  return { keyHistories, keys, blockedKeyUsers }
 }
