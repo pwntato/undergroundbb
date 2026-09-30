@@ -8,8 +8,11 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 func s(v string) types.AttributeValue { return &types.AttributeValueMemberS{Value: v} }
@@ -49,6 +52,18 @@ func itemExists(t *testing.T, c *Client, pk, sk string) bool {
 	return out.Item != nil
 }
 
+// testDemotion is a demotion for a test member written by putTestMember, which
+// leaves GrantSortKey unset (the fallback case). The signature is not checked
+// at this layer; the handler verifies it.
+func testDemotion(userID string) *LeaveDemotion {
+	return &LeaveDemotion{
+		GrantSortKey:     "GRANT#" + userID + "#2026-09-30#" + userID,
+		GrantorGrantRef:  "GRANT#root",
+		SigningPublicKey: []byte("k"),
+		Signature:        []byte("sig"),
+	}
+}
+
 func newLeaveGroup(t *testing.T, c *Client) string {
 	t.Helper()
 	g := "test-group-" + randomSuffix(t)
@@ -62,7 +77,7 @@ func TestLeaveGroupPlainMemberLeaves(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "bob", "member")
 
-	deleted, err := c.LeaveGroup(context.Background(), g, "bob")
+	deleted, err := c.LeaveGroup(context.Background(), g, "bob", nil)
 	if err != nil || deleted {
 		t.Fatalf("deleted=%v err=%v, want false/nil", deleted, err)
 	}
@@ -80,7 +95,7 @@ func TestLeaveGroupLastAdminBlockedWhileOthersRemain(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "amb", "ambassador")
 
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1"); !errors.Is(err, ErrLastAdmin) {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("err = %v, want ErrLastAdmin", err)
 	}
 	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
@@ -94,7 +109,7 @@ func TestLeaveGroupAdminMayLeaveWhenAnotherAdminExists(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "admin2", "admin")
 
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1"); err != nil {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") || !itemExists(t, c, "GROUP#"+g, "MEMBER#admin2") {
@@ -118,7 +133,7 @@ func TestLeaveGroupOnlyMemberDeletesWholePartition(t *testing.T) {
 		}
 	}
 
-	deleted, err := c.LeaveGroup(context.Background(), g, "solo")
+	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil)
 	if err != nil || !deleted {
 		t.Fatalf("deleted=%v err=%v, want true/nil", deleted, err)
 	}
@@ -140,10 +155,10 @@ func TestLeaveGroupNotMember(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
 	putTestMember(t, c, g, "admin1", "admin")
-	if _, err := c.LeaveGroup(context.Background(), g, "stranger"); !errors.Is(err, ErrNotMember) {
+	if _, err := c.LeaveGroup(context.Background(), g, "stranger", nil); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("err = %v, want ErrNotMember", err)
 	}
-	if _, err := c.LeaveGroup(context.Background(), "test-group-nonexistent-"+randomSuffix(t), "stranger"); !errors.Is(err, ErrNotMember) {
+	if _, err := c.LeaveGroup(context.Background(), "test-group-nonexistent-"+randomSuffix(t), "stranger", nil); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("unknown group: err = %v, want ErrNotMember", err)
 	}
 }
@@ -164,7 +179,7 @@ func TestLeaveGroupTwoAdminsLeavingNeverStrandsTheGroup(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, errs[i] = c.LeaveGroup(context.Background(), g, id)
+				_, errs[i] = c.LeaveGroup(context.Background(), g, id, testDemotion(id))
 			}()
 		}
 		wg.Wait()
@@ -178,5 +193,131 @@ func TestLeaveGroupTwoAdminsLeavingNeverStrandsTheGroup(t *testing.T) {
 		if left == 0 {
 			t.Fatalf("round %d: both admins left, group has none (errs: %v, %v)", round, errs[0], errs[1])
 		}
+	}
+}
+
+func TestLeaveGroupElevatedNeedsDemotionAndWritesIt(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "a1", "admin")
+	putTestMember(t, c, g, "a2", "admin")
+	putTestMember(t, c, g, "amb", "ambassador")
+
+	for _, id := range []string{"a1", "amb"} {
+		if _, err := c.LeaveGroup(ctx, g, id, nil); !errors.Is(err, ErrDemotionRequired) {
+			t.Fatalf("%s without demotion: err = %v, want ErrDemotionRequired", id, err)
+		}
+		if !itemExists(t, c, "GROUP#"+g, "MEMBER#"+id) {
+			t.Fatalf("%s membership deleted without a demotion", id)
+		}
+	}
+
+	for _, id := range []string{"a1", "amb"} {
+		d := testDemotion(id)
+		if _, err := c.LeaveGroup(ctx, g, id, d); err != nil {
+			t.Fatalf("%s leave: %v", id, err)
+		}
+		if itemExists(t, c, "GROUP#"+g, "MEMBER#"+id) {
+			t.Errorf("%s membership still exists", id)
+		}
+		row, err := c.ddb.GetItem(ctx, getItemInput(c.table, "GROUP#"+g, d.GrantSortKey))
+		if err != nil || row.Item == nil {
+			t.Fatalf("%s demotion grant not written (err %v)", id, err)
+		}
+		var got models.RoleGrant
+		if err := attributevalue.UnmarshalMap(row.Item, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.GrantedRole != models.RoleMember || got.SubjectUserID != id || got.GrantorUserID != id || got.GrantorGrantRef != d.GrantorGrantRef {
+			t.Errorf("%s grant = %+v", id, got)
+		}
+	}
+}
+
+// A member never carries a demotion; one arriving means their role changed
+// after the request was built.
+func TestLeaveGroupMemberWithDemotionConflicts(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "a", "admin")
+	putTestMember(t, c, g, "m", "member")
+	d := testDemotion("m")
+	if _, err := c.LeaveGroup(context.Background(), g, "m", d); !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("err = %v, want ErrLeaveConflict", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#m") || itemExists(t, c, "GROUP#"+g, d.GrantSortKey) {
+		t.Error("state changed on a rejected leave")
+	}
+}
+
+// The demotion is signed against one grant; if the membership moved to
+// another (or gained one), nothing is written.
+func TestLeaveGroupStaleGrantRefWritesNothing(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "a1", "admin")
+	putTestMember(t, c, g, "a2", "admin")
+	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(g, "a1"),
+		UpdateExpression:          aws.String("SET GrantSortKey = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":g": s("GRANT#current")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := testDemotion("a1") // HasStoredGrant false: signed against the fallback
+	if _, err := c.LeaveGroup(ctx, g, "a1", stale); !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("stale fallback: err = %v, want ErrLeaveConflict", err)
+	}
+	wrong := testDemotion("a1")
+	wrong.HasStoredGrant, wrong.GrantorGrantRef = true, "GRANT#old"
+	if _, err := c.LeaveGroup(ctx, g, "a1", wrong); !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("wrong ref: err = %v, want ErrLeaveConflict", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#a1") || itemExists(t, c, "GROUP#"+g, stale.GrantSortKey) {
+		t.Error("state changed on a rejected leave")
+	}
+
+	ok := testDemotion("a1")
+	ok.HasStoredGrant, ok.GrantorGrantRef = true, "GRANT#current"
+	if _, err := c.LeaveGroup(ctx, g, "a1", ok); err != nil {
+		t.Fatalf("matching ref: %v", err)
+	}
+}
+
+func TestLeaveGroupDemotionKeyTakenWritesNothing(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "a1", "admin")
+	putTestMember(t, c, g, "a2", "admin")
+	d := testDemotion("a1")
+	_, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(c.table),
+		Item:      map[string]types.AttributeValue{"PK": s("GROUP#" + g), "SK": s(d.GrantSortKey)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.LeaveGroup(ctx, g, "a1", d); !errors.Is(err, ErrLeaveGrantKeyTaken) {
+		t.Fatalf("err = %v, want ErrLeaveGrantKeyTaken", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#a1") {
+		t.Error("membership deleted although the grant write failed")
+	}
+}
+
+// The only member leaves with no grant at all, whatever their role.
+func TestLeaveGroupSoleAdminNeedsNoDemotion(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "solo", "admin")
+	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil)
+	if err != nil || !deleted {
+		t.Fatalf("deleted=%v err=%v", deleted, err)
 	}
 }

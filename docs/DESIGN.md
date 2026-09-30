@@ -794,6 +794,20 @@ appended row, never a delete** — a deleted grant is indistinguishable from one
 The hot path is untouched: the current role lives on the membership item and gates writes with a
 `GetItem`, so this history is read only by the chain walk, which is already the slow path.
 
+**Leaving appends a demotion.** An admin or ambassador who leaves a group that survives signs a
+grant to `member` with themselves as both grantor and subject, and the server writes it in the same
+transaction that deletes their membership. Without it a departed admin's last grant would still say
+`admin`, and a later rejoin by invite (baseline `member`, no grant) would read as a forged demotion.
+A self-grant is the one exception to "signed by an admin": lowering your own role needs no one's
+authority and raises no one's standing, so the verifier accepts it only to `member`, only from a
+signer whose current grant (strictly earlier day, verified) was elevated, and only under a key they
+held that day. It takes effect the next day, so an admin who promotes a successor and leaves the
+same day does not invalidate that promotion under the strict same-day rule. Two gaps stay: a group
+left before this shipped has no demotion, and an admin promoted and leaving on the *same* day has an
+unverifiable one (the order within a day is unknowable), so both show as unverified on rejoin. Both
+fail safe: a flag, never a false "verified". Involuntary departure (removal, account deletion) needs
+someone else's signature and belongs with #58 and #77.
+
 Note the limit: signed grants prevent the *server* from lying about roles. They do not prevent a
 legitimately-privileged member from misusing their authority. Once someone holds the group key and
 the right to share it, they are trusted. The chain records who extended trust to whom.

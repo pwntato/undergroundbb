@@ -291,12 +291,29 @@ export async function changeMemberRole(
 }
 
 /**
- * POST /api/groups/{id}/leave -- issue #66. 409 `last_admin` means the
- * caller is the only Admin of a group that still has other members and must
- * promote a successor first; 409 `conflict_retry` means the roster moved,
- * reload and try again. `groupDeleted` is true when the caller was the only
- * member, so leaving deleted the group.
+ * The signed self-demotion an admin or ambassador attaches to leaving
+ * (issue #55): a role grant to "member" with the caller as grantor and
+ * subject. A plain member sends none.
  */
-export async function leaveGroup(groupId: string): Promise<{ groupDeleted: boolean }> {
-  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, {})
+export interface LeaveGroupRequest {
+  readonly grantSortKey: string
+  readonly grantorGrantRef: string
+  readonly signature: string
+}
+
+/**
+ * POST /api/groups/{id}/leave -- issues #66, #55. 409 `last_admin` means the
+ * caller is the only Admin of a group that still has other members and must
+ * promote a successor first; 409 `conflict_retry` / `grantor_ref_stale` mean
+ * the roster or the caller's own grant moved, reload and try again; 409
+ * `grant_key_taken` means sign again with a fresh grantSortKey; 400
+ * `demotion_required` means an admin or ambassador sent no demotion (their
+ * role changed since the roster loaded). `groupDeleted` is true when the
+ * caller was the only member, so leaving deleted the group.
+ */
+export async function leaveGroup(
+  groupId: string,
+  demotion?: LeaveGroupRequest,
+): Promise<{ groupDeleted: boolean }> {
+  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, demotion ?? {})
 }
