@@ -128,9 +128,13 @@ export function GroupMembersPanel({
         <p className="text-xs text-muted-foreground">
           {isVerified(checked)
             ? "Roles match the group's signed grant history, and every key matched the copy this browser saved earlier. A server that lied the very first time you saw someone isn't caught by that."
-            : checked.keys === 'unchecked'
-              ? "Roles are checked against the group's signed grant history, but the keys behind it couldn't be checked against your saved copies, so this can't rule out a dishonest server."
-              : "Roles are checked against the group's signed grant history. Some keys or the group's creator were saved just now on first sight, so this can't rule out a server that lied to you at first contact."}
+            : checked.keys === 'blocked' ||
+                checked.anchor === 'changed' ||
+                checked.anchor === 'root-unverified'
+              ? "Roles are checked against the group's signed grant history, and this check found a problem (see the warning above)."
+              : checked.keys === 'unchecked'
+                ? "Roles are checked against the group's signed grant history, but the keys behind it couldn't be checked against your saved copies, so this can't rule out a dishonest server."
+                : "Roles are checked against the group's signed grant history. Some keys or the group's creator were saved just now on first sight, so this can't rule out a server that lied to you at first contact."}
           {checked.anchor === 'unpinned' &&
             " This browser couldn't remember the group's creator, so a later swap wouldn't be noticed."}
         </p>

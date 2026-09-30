@@ -185,6 +185,16 @@ describe('GroupMembersPanel grant check marks', () => {
     expect(html).toContain('couldn&#x27;t be checked against your saved copies')
   })
 
+  it('does not claim keys were saved on first sight when the check found a problem', () => {
+    const blocked = renderChecked(checkedWith('pinned', both, 'blocked', [BOB]))
+    const changed = renderChecked(checkedWith('changed', both, 'pinned'))
+    const rootBad = renderChecked(checkedWith('root-unverified', both, 'pinned'))
+    for (const html of [blocked, changed, rootBad]) {
+      expect(html).not.toContain('saved just now on first sight')
+      expect(html).toContain('found a problem')
+    }
+  })
+
   it('warns by name when a key was blocked, and never says verified', () => {
     const html = renderChecked(
       checkedWith(
