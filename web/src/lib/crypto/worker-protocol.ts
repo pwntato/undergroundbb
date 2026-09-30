@@ -240,6 +240,49 @@ export interface SignRoleGrantResponse {
 }
 
 /**
+ * Signs a pin of another user's key set (issue #63) with the worker's own
+ * liveKeys. Key fields are base64. The signing key set is a set; the worker
+ * does not care about its order.
+ */
+export interface SignPinRequest {
+  readonly kind: 'signPin'
+  readonly id: string
+  readonly userId: string
+  readonly pinnedUserId: string
+  readonly signingPublicKeys: readonly string[]
+  readonly wrappingPublicKey: string
+}
+
+export interface SignPinResult {
+  readonly pinnerSigningPublicKey: string
+  readonly signature: string
+}
+
+export interface SignPinResponse {
+  readonly kind: 'signPinDone'
+  readonly id: string
+  readonly result: SignPinResult
+}
+
+/**
+ * The caller's own CURRENT signing public key, from the worker's liveKeys
+ * rather than from anything the server serves (issue #63): pins and the
+ * caller's own key history are checked against this.
+ */
+export interface GetOwnSigningKeyRequest {
+  readonly kind: 'getOwnSigningKey'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface GetOwnSigningKeyResponse {
+  readonly kind: 'getOwnSigningKeyDone'
+  readonly id: string
+  /** Base64. */
+  readonly signingPublicKey: string
+}
+
+/**
  * Signs step 1 of the invite handshake (issue #38) -- the inviter's own
  * Ed25519 signature over the invite's creation payload. Like
  * SignGroupCreationRequest, relies entirely on the worker's own liveKeys
@@ -476,6 +519,8 @@ export type WorkerRequest =
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
   | SignRoleGrantRequest
+  | SignPinRequest
+  | GetOwnSigningKeyRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SignInviteCreationRequest
@@ -491,6 +536,8 @@ export type WorkerResponse =
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
   | SignRoleGrantResponse
+  | SignPinResponse
+  | GetOwnSigningKeyResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SignInviteCreationResponse

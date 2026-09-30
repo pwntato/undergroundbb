@@ -28,10 +28,11 @@ import {
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
+  signPin as signPinPure,
   signRoleGrant as signRoleGrantPure,
   type LiveKeys,
 } from './credential-material.js'
-import { base64ToBytes, base64UrlToBytes } from './base64.js'
+import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
 import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
@@ -42,10 +43,12 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   GenerateSignupMaterialRequest,
+  GetOwnSigningKeyRequest,
   RecoveryMaterial,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
+  SignPinRequest,
   SignRoleGrantRequest,
   SignupMaterial,
   WorkerRequest,
@@ -103,6 +106,12 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signRoleGrant':
       signRoleGrant(req)
+      return
+    case 'signPin':
+      signPin(req)
+      return
+    case 'getOwnSigningKey':
+      getOwnSigningKey(req)
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
@@ -228,6 +237,40 @@ function signRoleGrant(req: SignRoleGrantRequest): void {
     req.grantorGrantRef,
   )
   post({ kind: 'signRoleGrantDone', id: req.id, result })
+}
+
+/** Signs a pin -- issue #63. Same liveKeys-unset/wrong-account guards as signRoleGrant. */
+function signPin(req: SignPinRequest): void {
+  const keys = requireLiveKeys(req.userId, 'pin a key')
+  const result = signPinPure(
+    keys,
+    req.pinnedUserId,
+    req.signingPublicKeys.map((k) => base64ToBytes(k)),
+    base64ToBytes(req.wrappingPublicKey),
+  )
+  post({ kind: 'signPinDone', id: req.id, result })
+}
+
+/** Reports the caller's own current signing public key -- issue #63. */
+function getOwnSigningKey(req: GetOwnSigningKeyRequest): void {
+  const keys = requireLiveKeys(req.userId, 'check keys')
+  post({
+    kind: 'getOwnSigningKeyDone',
+    id: req.id,
+    signingPublicKey: bytesToBase64(keys.signingKey.publicKey),
+  })
+}
+
+function requireLiveKeys(userId: string, doing: string): LiveKeys {
+  if (liveKeys === null) {
+    throw new Error(
+      `worker: no live keys cached -- log in again to ${doing} (this can happen after a page reload)`,
+    )
+  }
+  if (liveKeys.userId !== userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  return liveKeys
 }
 
 /**

@@ -17,9 +17,10 @@ import {
   listMembers,
   type MemberRole,
 } from '@/lib/api/groups'
-import { signRoleGrant } from '@/lib/crypto/worker-client'
+import { getOwnSigningKey, signPin, signRoleGrant } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUser } from '@/lib/api/users'
+import { listAllPins, putPin } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
@@ -108,6 +109,18 @@ export function GroupMembersScreen() {
           getUser,
           readPin: (g) => readAnchorPin(userId, g),
           writePin: (g, pin) => writeAnchorPin(userId, g, pin),
+          selfUserId: userId,
+          ownSigningKey: () => getOwnSigningKey(userId),
+          listPins: listAllPins,
+          pinKeys: async (pinnedUserId, signingPublicKeys, wrappingPublicKey) => {
+            const signed = await signPin({
+              userId,
+              pinnedUserId,
+              signingPublicKeys,
+              wrappingPublicKey,
+            })
+            await putPin(pinnedUserId, { signingPublicKeys, wrappingPublicKey, ...signed })
+          },
         },
         loadedView.groupId,
         loadedView.members,
