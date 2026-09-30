@@ -11,7 +11,7 @@ import { SigningContext, generateSigningKey, sign, type SigningKey } from '@/lib
 import type { GrantRecord } from '@/lib/crypto/grant-chain'
 import { roleGrantPayload, trustAnchorPayload } from '@/lib/crypto/group'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
-import { checkGrants, type GrantCheckDeps } from './runGrantCheck'
+import { checkForView, checkGrants, type GrantCheck, type GrantCheckDeps } from './runGrantCheck'
 
 const GROUP = '11111111-1111-4111-8111-111111111111'
 const CREATOR = 'c0000000-0000-4000-8000-000000000001'
@@ -157,12 +157,55 @@ describe('checkGrants', () => {
     })
   })
 
-  it('does not pin an anchor whose root does not verify', async () => {
+  it('does not pin an anchor whose root does not verify, and confirms nobody, baseline members included', async () => {
     const w = world()
-    const d = deps(w, { pages: [[w.alice, w.bob]] })
-    const r = await checkGrants(d, GROUP, MEMBERS)
-    expect(r.state === 'checked' && r.anchor).toBe('unpinned')
+    // A root signed by a key the creator never held: the server's forged anchor.
+    const evil = generateSigningKey()
+    const forged = {
+      ...w.anchor,
+      creatorSigningPublicKey: b64(evil.publicKey),
+      trustAnchorSignature: b64(
+        sign(evil, SigningContext.TrustAnchor, trustAnchorPayload(CREATOR, evil.publicKey, GROUP)),
+      ),
+    }
+    const forgedRoot = grant(evil, CREATOR, 'admin', CREATOR, '2026-03-01', '', w.root.sortKey)
+    const d = deps(w, { pages: [[forgedRoot, w.alice, w.bob]] })
+    const listGrants: GrantCheckDeps['listGrants'] = async (g, c) => ({
+      ...(await d.listGrants(g, c)),
+      anchor: forged,
+    })
+    const r = await checkGrants({ ...d, listGrants }, GROUP, MEMBERS)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.anchor).toBe('root-unverified')
     expect(d.pins.size).toBe(0)
+    for (const m of MEMBERS) expect(r.statuses.get(m.userId)?.status).toBe('unverified')
+    expect(r.statuses.get(EVE)).toEqual({
+      status: 'unverified',
+      reason:
+        "the group's root grant could not be checked (anchor key is not a key the creator held on the root day)",
+    })
+  })
+
+  it('reports root-unverified when the root row is not served at all', async () => {
+    const w = world()
+    const r = await checkGrants(deps(w, { pages: [[w.alice, w.bob]] }), GROUP, MEMBERS)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.anchor).toBe('root-unverified')
+    expect(r.statuses.get(EVE)).toEqual({
+      status: 'unverified',
+      reason: "the group's root grant could not be checked (not served)",
+    })
+  })
+
+  it('reports root-unverified, not pinned, when a pinned anchor is served but the creator history cannot be read', async () => {
+    const w = world()
+    const d = deps(w)
+    await checkGrants(d, GROUP, MEMBERS)
+    w.users.delete(CREATOR)
+    const r = await checkGrants(d, GROUP, MEMBERS)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.anchor).toBe('root-unverified')
+    expect(r.statuses.get(EVE)?.status).toBe('unverified')
   })
 
   it('reports unpinned when storage refuses the write', async () => {
@@ -237,5 +280,28 @@ describe('checkGrants', () => {
       MEMBERS,
     )
     expect(r).toEqual({ state: 'unavailable' })
+  })
+})
+
+describe('checkForView', () => {
+  const result: GrantCheck = {
+    state: 'checked',
+    anchor: 'pinned',
+    statuses: new Map([[BOB, { status: 'unverified', reason: 'stale' } as const]]),
+  }
+  const viewA = { groupId: 'a' }
+  const viewB = { groupId: 'a' } // same content, a reloaded roster: a different view
+
+  it('shows the check only for the exact view it ran against', () => {
+    expect(checkForView({ view: viewA, result }, viewA)).toBe(result)
+  })
+
+  it('hides a check from a previous roster or another group', () => {
+    expect(checkForView({ view: viewA, result }, viewB)).toBeNull()
+    expect(checkForView({ view: viewA, result }, { groupId: 'other' })).toBeNull()
+  })
+
+  it('shows nothing before any check has run', () => {
+    expect(checkForView(null, viewA)).toBeNull()
   })
 })

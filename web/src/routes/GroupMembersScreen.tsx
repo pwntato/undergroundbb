@@ -25,7 +25,7 @@ import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
-import { checkGrants, type GrantCheck } from './runGrantCheck'
+import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
   changeRole,
@@ -62,7 +62,9 @@ export function GroupMembersScreen() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
-  const [grantCheck, setGrantCheck] = useState<GrantCheck | null>(null)
+  // The check is stored with the exact view it ran against, so a check that
+  // belongs to a previous roster or group is never shown against this one.
+  const [grantCheck, setGrantCheck] = useState<ViewCheck<MembersView> | null>(null)
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -111,7 +113,7 @@ export function GroupMembersScreen() {
         loadedView.members,
       )
       if (!cancelled) {
-        setGrantCheck(result)
+        setGrantCheck({ view: loadedView, result })
       }
     })()
     return () => {
@@ -224,7 +226,7 @@ export function GroupMembersScreen() {
           userId={userId}
           busyUserId={busyUserId}
           onChangeRole={handleChangeRole}
-          check={grantCheck}
+          check={checkForView(grantCheck, load.view)}
         />
       )}
       {load.status === 'ready' && userId !== null && (

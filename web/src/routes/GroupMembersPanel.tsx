@@ -56,6 +56,13 @@ export function GroupMembersPanel({
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
+      {checked?.anchor === 'root-unverified' && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          This group&apos;s root grant couldn&apos;t be checked, so no role below is confirmed. This
+          can be a temporary lookup failure, so try reloading; if it persists, don&apos;t rely on
+          roles or invites here until you&apos;ve checked with the group another way.
+        </p>
+      )}
       {checked?.anchor === 'changed' && (
         <Alert variant="destructive">
           <AlertDescription>

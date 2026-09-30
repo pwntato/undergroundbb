@@ -26,11 +26,15 @@ import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
  * How the anchor relates to this browser's pin:
  *  - pinned: matches the pin taken earlier
  *  - first-seen: no earlier pin; verified root, pin taken just now
- *  - unpinned: no pin exists and none could be taken (nothing verified, or
- *    storage unavailable)
+ *  - unpinned: the root verified but no pin could be taken (storage
+ *    unavailable or refused the write)
  *  - changed: differs from the pin (or the server served two anchors)
+ *  - root-unverified: the root grant did not verify (or was not served), so
+ *    nothing in the chain has a valid start. Takes precedence over the pin
+ *    states except 'changed'. Can be forgery or an honest lookup failure
+ *    (e.g. the creator's key history could not be read).
  */
-export type AnchorState = 'pinned' | 'first-seen' | 'unpinned' | 'changed'
+export type AnchorState = 'pinned' | 'first-seen' | 'unpinned' | 'changed' | 'root-unverified'
 
 export type GrantCheck =
   | { readonly state: 'unavailable' }
@@ -39,6 +43,22 @@ export type GrantCheck =
       readonly anchor: AnchorState
       readonly statuses: ReadonlyMap<string, RoleStatus>
     }
+
+/**
+ * A check together with the exact roster it ran against. The screen shows
+ * the check only while its view is still the current one, so marks from a
+ * previous roster (after a role change) or another group never sit against
+ * this one while the new check runs.
+ */
+export interface ViewCheck<V> {
+  readonly view: V
+  readonly result: GrantCheck
+}
+
+/** The check to display for `current`, or null if it belongs to another view. */
+export function checkForView<V>(stored: ViewCheck<V> | null, current: V): GrantCheck | null {
+  return stored !== null && stored.view === current ? stored.result : null
+}
 
 export interface GrantCheckDeps {
   readonly listGrants: (groupId: string, cursor?: string) => Promise<ListGrantsResponse>
@@ -73,30 +93,41 @@ export async function checkGrants(
       keyHistories,
     })
 
+    const rootVerdict = result.verdicts.get(anchor.rootGrantSortKey)
     let anchorState: AnchorState
     if (!anchorsAgree || (stored !== null && !result.anchorPinned)) {
       anchorState = 'changed'
+    } else if (rootVerdict?.valid !== true) {
+      // Checked before the pin states: a pinned anchor with a root that no
+      // longer verifies is still a chain with no valid start.
+      anchorState = 'root-unverified'
     } else if (stored !== null) {
       anchorState = 'pinned'
-    } else if (result.verdicts.get(anchor.rootGrantSortKey)?.valid === true) {
+    } else {
       // Trust on first use, and only for an anchor whose root verified.
       const saved = deps.writePin(groupId, {
         creatorUserId: anchor.creatorUserId,
         creatorSigningPublicKey: anchor.creatorSigningPublicKey,
       })
       anchorState = saved ? 'first-seen' : 'unpinned'
-    } else {
-      anchorState = 'unpinned'
     }
 
+    // checkMemberRole calls a grantless member "verified" without looking at
+    // the root, so a chain with no valid start is overridden for everyone.
+    const blanket: RoleStatus | null =
+      anchorState === 'changed'
+        ? { status: 'unverified', reason: 'the group anchor changed since you first saw it' }
+        : anchorState === 'root-unverified'
+          ? {
+              status: 'unverified',
+              reason: `the group's root grant could not be checked${
+                rootVerdict?.reason !== undefined ? ` (${rootVerdict.reason})` : ' (not served)'
+              }`,
+            }
+          : null
     const statuses = new Map<string, RoleStatus>()
     for (const m of members) {
-      statuses.set(
-        m.userId,
-        anchorState === 'changed'
-          ? { status: 'unverified', reason: 'the group anchor changed since you first saw it' }
-          : checkMemberRole(result, m.userId, m.role),
-      )
+      statuses.set(m.userId, blanket ?? checkMemberRole(result, m.userId, m.role))
     }
     return { state: 'checked', anchor: anchorState, statuses }
   } catch {
