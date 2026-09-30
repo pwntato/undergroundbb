@@ -185,6 +185,13 @@ describe('GroupMembersPanel grant check marks', () => {
     expect(html).toContain('couldn&#x27;t be checked against your saved copies')
   })
 
+  it("does not claim anything was saved just now when only the anchor couldn't be remembered", () => {
+    const html = renderChecked(checkedWith('unpinned', both, 'pinned'))
+    expect(html).not.toContain('saved just now')
+    expect(html).toContain('couldn&#x27;t remember the group&#x27;s creator')
+    expect(html.toLowerCase()).not.toContain('✓ verified')
+  })
+
   it('does not claim keys were saved on first sight when the check found a problem', () => {
     const blocked = renderChecked(checkedWith('pinned', both, 'blocked', [BOB]))
     const changed = renderChecked(checkedWith('changed', both, 'pinned'))
