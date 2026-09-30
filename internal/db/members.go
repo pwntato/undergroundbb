@@ -181,3 +181,41 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 	}
 	return nil
 }
+
+// ListGrants returns one page of a group's GRANT# rows in sort-key order
+// (subject uuid, then day), starting strictly after afterSortKey (empty for
+// the first page), plus the last sort key returned when more may follow. The
+// cursor is a sort key rather than a DynamoDB key, so a caller-supplied one
+// can only ever move within this group's partition.
+func (c *Client) ListGrants(ctx context.Context, groupID, afterSortKey string, limit int) ([]models.RoleGrant, string, error) {
+	in := &dynamodb.QueryInput{
+		TableName:              aws.String(c.table),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			":sk": &types.AttributeValueMemberS{Value: "GRANT#"},
+		},
+		ConsistentRead: aws.Bool(true),
+		Limit:          aws.Int32(int32(limit + 1)),
+	}
+	if afterSortKey != "" {
+		in.ExclusiveStartKey = map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: afterSortKey},
+		}
+	}
+	out, err := c.ddb.Query(ctx, in)
+	if err != nil {
+		return nil, "", fmt.Errorf("db: list grants: %w", err)
+	}
+	var grants []models.RoleGrant
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &grants); err != nil {
+		return nil, "", fmt.Errorf("db: unmarshal grants: %w", err)
+	}
+	next := ""
+	if len(grants) > limit {
+		grants = grants[:limit]
+		next = grants[limit-1].SK
+	}
+	return grants, next, nil
+}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log"
@@ -314,4 +315,122 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	}
+}
+
+const (
+	defaultGrantPageSize = 100
+	maxGrantPageSize     = 200
+)
+
+// grantAnchor is the group's stored chain anchor: the creator's uuid and the
+// Ed25519 key that was current at creation, with the creator's signature over
+// them (crypto.TrustAnchorPayload). A verifier checks that signature before
+// trusting either field, and that the root grant is self-signed by this key.
+type grantAnchor struct {
+	CreatorUserID           string `json:"creatorUserId"`
+	CreatorSigningPublicKey string `json:"creatorSigningPublicKey"`
+	TrustAnchorSignature    string `json:"trustAnchorSignature"`
+	RootGrantSortKey        string `json:"rootGrantSortKey"`
+}
+
+// grantEntry is one signed role grant, with everything a verifier needs to
+// rebuild the signed bytes (crypto.RoleGrantPayload) and check the signature.
+type grantEntry struct {
+	SortKey                 string `json:"sortKey"`
+	SubjectUserID           string `json:"subjectUserId"`
+	GrantedRole             string `json:"grantedRole"`
+	GrantorUserID           string `json:"grantorUserId"`
+	GrantorSigningPublicKey string `json:"grantorSigningPublicKey"`
+	GrantorGrantRef         string `json:"grantorGrantRef,omitempty"`
+	Signature               string `json:"signature"`
+}
+
+// listGrantsResponse is the wire shape of GET /api/groups/{id}/grants. The
+// anchor is on every page so a client can verify any page it holds.
+type listGrantsResponse struct {
+	Anchor     grantAnchor  `json:"anchor"`
+	Grants     []grantEntry `json:"grants"`
+	NextCursor string       `json:"nextCursor,omitempty"`
+}
+
+// listGrants implements GET /api/groups/{groupId}/grants -- issue #55. Members
+// only, with the same 404 as the roster for anyone else. This serves the
+// history a client needs to verify the chain of trust itself: the server is
+// the party grants protect against, so it hands over the signed rows and the
+// stored anchor and does no verification of its own here.
+func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	limit := defaultGrantPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxGrantPageSize {
+			WriteError(w, http.StatusBadRequest, "limit: must be between 1 and "+strconv.Itoa(maxGrantPageSize))
+			return
+		}
+		limit = n
+	}
+	cursor := r.URL.Query().Get("cursor")
+	if cursor != "" {
+		const subjectStart, subjectEnd = len("GRANT#"), len("GRANT#") + 36
+		if len(cursor) < subjectEnd {
+			WriteError(w, http.StatusBadRequest, "cursor: malformed")
+			return
+		}
+		if _, ok := idgen.ValidGrantSortKey(cursor, cursor[subjectStart:subjectEnd]); !ok {
+			WriteError(w, http.StatusBadRequest, "cursor: malformed")
+			return
+		}
+	}
+
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		return
+	}
+	if m == nil {
+		groupNotFound(w)
+		return
+	}
+	group, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil || group == nil {
+		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		return
+	}
+	grants, next, err := h.db.ListGrants(r.Context(), groupID, cursor, limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		return
+	}
+	enc := base64.StdEncoding.EncodeToString
+	entries := make([]grantEntry, 0, len(grants))
+	for _, g := range grants {
+		entries = append(entries, grantEntry{
+			SortKey:                 g.SK,
+			SubjectUserID:           g.SubjectUserID,
+			GrantedRole:             g.GrantedRole,
+			GrantorUserID:           g.GrantorUserID,
+			GrantorSigningPublicKey: enc(g.GrantorSigningPublicKey),
+			GrantorGrantRef:         g.GrantorGrantRef,
+			Signature:               enc(g.Signature),
+		})
+	}
+	WriteJSON(w, http.StatusOK, listGrantsResponse{
+		Anchor: grantAnchor{
+			CreatorUserID:           group.CreatorUserID,
+			CreatorSigningPublicKey: enc(group.CreatorSigningPublicKey),
+			TrustAnchorSignature:    enc(group.TrustAnchorSignature),
+			RootGrantSortKey:        group.RootGrantSortKey,
+		},
+		Grants:     entries,
+		NextCursor: next,
+	})
 }
