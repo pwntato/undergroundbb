@@ -33,6 +33,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
+import { pinPayload } from './pin.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
 
 const VECTORS_PATH = fileURLToPath(
@@ -147,6 +148,17 @@ interface VectorFile {
     role: string
     grant_sort_key: string
     grantor_grant_ref: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  pin: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    pinner_uuid: string
+    pinned_uuid: string
+    wrapping_public_key_hex: string
+    signing_keys_hex: string[]
     payload_hex: string
     signature_hex: string
   }[]
@@ -457,6 +469,29 @@ describe('role grant vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RoleGrant, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins pinPayload's exact encoding (#63), including that the signing key set
+// is order-independent: two vectors list the same keys in different orders.
+describe('pin vectors', () => {
+  for (const tc of vectors.pin) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = pinPayload(
+        tc.pinner_uuid,
+        tc.pinned_uuid,
+        key.publicKey,
+        hexToBytes(tc.wrapping_public_key_hex),
+        tc.signing_keys_hex.map(hexToBytes),
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.Pin, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

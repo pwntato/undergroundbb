@@ -458,6 +458,16 @@ Until it exists, **fingerprint verification is the only control that detects a d
 is the same answer the design already gives for first contact — and that is the honest way to read
 this: pin deletion returns a counterparty to the first-contact case, silently.
 
+**What a pin covers, and what counts as a match.** A pin signs the pinned user's current X25519 wrapping key and
+their Ed25519 signing keys as a *set* (current plus every superseded key, order not significant), together with
+both uuids and the pinner's own signing key. A served key set matches only if it is **exactly equal** to the pinned
+one. A set that merely *adds* a key is a mismatch, not an "extension": a server inventing a superseded key for
+someone looks identical, and that key would then verify backdated grants. Accepting a legitimate rotation needs a
+signed continuity link from the old key, which arrives with key rotation (#62). Until then a rotation of the pinned
+user hard-blocks and resolves through re-invitation like any other change. Implemented as `PUT /api/pins/{userId}`
+(the server checks the signature under the caller's current key, for hygiene only) and `GET /api/pins` (the caller's
+own pins, unverified by the server); the verdict logic is `evaluatePin` in `web/src/lib/crypto/pin.ts`.
+
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
 re-invites them through the same signed handshake, which forces exactly one deliberate check by

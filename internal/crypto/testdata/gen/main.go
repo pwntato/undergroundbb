@@ -180,6 +180,21 @@ type roleGrantVector struct {
 	SignatureHex    string `json:"signature_hex"`
 }
 
+// pinVector proves PinPayload's exact encoding, including that the signing
+// key set is order-independent: two cases list the same keys in different
+// orders and must produce the same payload.
+type pinVector struct {
+	Name              string   `json:"name"`
+	PrivateHex        string   `json:"private_key_hex"`
+	PublicHex         string   `json:"public_key_hex"`
+	PinnerUUID        string   `json:"pinner_uuid"`
+	PinnedUUID        string   `json:"pinned_uuid"`
+	WrappingPublicHex string   `json:"wrapping_public_key_hex"`
+	SigningKeysHex    []string `json:"signing_keys_hex"`
+	PayloadHex        string   `json:"payload_hex"`
+	SignatureHex      string   `json:"signature_hex"`
+}
+
 // memberWrapVector proves MemberWrapAAD's exact encoding -- the same
 // reasoning as credentialWrapVector: pinning the AAD string itself, plus
 // the AES-256-GCM ciphertext it produces under a fixed key/nonce/plaintext,
@@ -271,6 +286,7 @@ type vectorFile struct {
 	KeyBundle        []keyBundleVector        `json:"key_bundle"`
 	TrustAnchor      []trustAnchorVector      `json:"trust_anchor"`
 	RoleGrant        []roleGrantVector        `json:"role_grant"`
+	Pin              []pinVector              `json:"pin"`
 	MemberWrap       []memberWrapVector       `json:"member_wrap_aad"`
 	GroupName        []groupNameVector        `json:"group_name_aad"`
 	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
@@ -551,6 +567,46 @@ func main() {
 			PayloadHex:   hex.EncodeToString(payload),
 			SignatureHex: hex.EncodeToString(sig),
 		})
+	}
+
+	// --- Pin (#63): same key set listed in two orders, one payload ---
+	{
+		pub, priv := fixedEd25519Key("pin-key-1")
+		pinned1, _ := fixedEd25519Key("pin-target-key-1")
+		pinned2, _ := fixedEd25519Key("pin-target-key-2")
+		wrapping := sha256.Sum256([]byte("pin-wrapping-key"))
+		pinnerUUID := "pinner-uuid-1"
+		pinnedUUID := "pinned-uuid-1"
+		orders := []struct {
+			name string
+			keys [][]byte
+		}{
+			{"two_keys", [][]byte{pinned1, pinned2}},
+			{"two_keys_reordered", [][]byte{pinned2, pinned1}},
+			{"one_key", [][]byte{pinned1}},
+		}
+		for _, o := range orders {
+			payload := crypto.PinPayload(pinnerUUID, pinnedUUID, pub, wrapping[:], o.keys)
+			sig, err := crypto.Sign(priv, crypto.ContextPin, payload)
+			if err != nil {
+				panic(err)
+			}
+			hexKeys := make([]string, 0, len(o.keys))
+			for _, k := range o.keys {
+				hexKeys = append(hexKeys, hex.EncodeToString(k))
+			}
+			out.Pin = append(out.Pin, pinVector{
+				Name:              o.name,
+				PrivateHex:        hex.EncodeToString(priv),
+				PublicHex:         hex.EncodeToString(pub),
+				PinnerUUID:        pinnerUUID,
+				PinnedUUID:        pinnedUUID,
+				WrappingPublicHex: hex.EncodeToString(wrapping[:]),
+				SigningKeysHex:    hexKeys,
+				PayloadHex:        hex.EncodeToString(payload),
+				SignatureHex:      hex.EncodeToString(sig),
+			})
+		}
 	}
 
 	// --- Role grant (#34): root grant (empty ref) and a non-root grant ---

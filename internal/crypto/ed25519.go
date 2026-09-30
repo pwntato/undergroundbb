@@ -25,6 +25,8 @@ const (
 	ContextInvite SigningContext = "underground-bb:invite:v1"
 	// ContextTrustAnchor signs a group's creator-signed trust anchor.
 	ContextTrustAnchor SigningContext = "underground-bb:trust-anchor:v1"
+	// ContextPin signs a user's pin of another user's key set.
+	ContextPin SigningContext = "underground-bb:pin:v1"
 )
 
 // GenerateSigningKey generates a new Ed25519 keypair.
