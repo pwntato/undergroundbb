@@ -15,9 +15,10 @@ import (
 // The pinner's own uuid and the pinned uuid are both signed, so a pin cannot
 // be copied to a different pinned user's row or into someone else's
 // partition. pinnerSigningPublicKey is the key the pin is signed under: it is
-// what the "interval of the pinning key" in the design reduces to, and it lets
-// a session that finds a pin signed under a superseded key of its own tell
-// that the pin is merely stale, not forged (#62 re-signs pins on rotation).
+// what the "interval of the pinning key" in the design reduces to. It is a
+// server-served field and untrusted: a client verifies a pin only under its own
+// current key and treats any other recorded signer as tampering, never as a
+// stale pin, until #62 adds a signed continuity link.
 //
 // signingKeys is a set: it is sorted bytewise before encoding, so the same
 // keys in any order sign identically, and the caller need not agree on an

@@ -648,9 +648,9 @@ type Pin struct {
 	SigningPublicKeys [][]byte `dynamodbav:"SigningPublicKeys"`
 	// WrappingPublicKey is the pinned user's current X25519 key.
 	WrappingPublicKey []byte `dynamodbav:"WrappingPublicKey"`
-	// PinnerSigningPublicKey is the key Signature was made under, so a pin
-	// signed under a since-superseded key of the pinner's own is recognisably
-	// stale rather than forged (#62 re-signs pins on rotation).
+	// PinnerSigningPublicKey is the key Signature was made under. Untrusted on
+	// read: a client verifies only under its own current key and treats any
+	// other value as tampering, until #62 adds a signed continuity link.
 	PinnerSigningPublicKey []byte `dynamodbav:"PinnerSigningPublicKey"`
 	Signature              []byte `dynamodbav:"Signature"`
 }

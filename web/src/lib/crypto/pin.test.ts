@@ -128,8 +128,18 @@ describe('evaluatePin', () => {
     expect(run({ ...makePin(), pinnedUserId: CAROL }, served(bob, []))).toBe('bad-signature')
   })
 
-  it('a pin signed under a different key than my current one is stale-signer', () => {
-    expect(run(makePin({ signer: bobOld }), served(bob, []))).toBe('stale-signer')
+  // Mutation: report a distinct verdict for a signer mismatch -> the server
+  // turns any pin into "unverifiable" by rewriting one field. Both cases must
+  // be bad-signature: a stranger's key with a zero signature (the forgery),
+  // and a real signature under a key that is not my current one.
+  it('a recorded signer that is not my current key is bad-signature', () => {
+    const forged: PinRecord = {
+      ...makePin(),
+      pinnerSigningPublicKey: b64(bobOld.publicKey),
+      signature: b64(new Uint8Array(64)),
+    }
+    expect(run(forged, served(bob, []))).toBe('bad-signature')
+    expect(run(makePin({ signer: bobOld }), served(bob, []))).toBe('bad-signature')
   })
 
   it('an empty pinned key set is bad-signature', () => {
@@ -146,5 +156,25 @@ describe('servedSigningKeySet', () => {
   it('returns current plus superseded, null on undecodable', () => {
     expect(servedSigningKeySet(served(bob, [bobOld]))).toHaveLength(2)
     expect(servedSigningKeySet({ ...served(bob, []), signingPublicKey: '!!!' })).toBeNull()
+  })
+
+  // Mutation: return the raw list -> a server that repeats the current key as
+  // "superseded" hands the signer a duplicate that PUT /api/pins rejects.
+  it('dedupes, so what a caller signs is what the server accepts', () => {
+    const set = servedSigningKeySet(served(bob, [bob, bobOld, bobOld]))
+    expect(set).toHaveLength(2)
+    expect(set![0]).toEqual(bob.publicKey)
+  })
+
+  it('rejects a key that is not 32 bytes', () => {
+    expect(servedSigningKeySet(served(bob, []))).not.toBeNull()
+    expect(
+      servedSigningKeySet({ ...served(bob, []), signingPublicKey: b64(new Uint8Array(31)) }),
+    ).toBeNull()
+  })
+
+  it('a pin over a duplicated served list still matches', () => {
+    const pin = makePin({ keys: [bob, bobOld] })
+    expect(run(pin, served(bob, [bob, bobOld]))).toBe('match')
   })
 })

@@ -19,13 +19,17 @@
 //     invents a "superseded" key for someone would look exactly like that, so
 //     an extension is not accepted on the pin alone. Accepting a legitimate
 //     rotation needs a signed continuity link from the old key (#62).
-//   - bad-signature: the pin does not verify under the caller's own key, or
-//     is not a well-formed pin for this user pair. Treated as no pin AND as
-//     tampering; never as first-sight, or the server could reset any pin by
-//     corrupting it.
-//   - stale-signer: the pin was signed under a key other than the caller's
-//     current one (a rotation happened; #62 re-signs pins). It cannot be
-//     verified here, so the caller must not treat the user as pinned.
+//   - bad-signature: the pin does not verify under the caller's own current
+//     key, or is not a well-formed pin for this user pair. Treated as
+//     tampering; NEVER as first-sight, or the server could reset any pin by
+//     corrupting it. That includes a pin whose recorded signer is not the
+//     caller's current key: pinnerSigningPublicKey is a server-served field,
+//     so a distinct verdict for it would be a reset the server can forge for
+//     free. No code path rotates a signing key yet, so every such pin is
+//     tampering today. #62 brings a signer-rotated verdict back, together
+//     with the continuity link that makes it trustworthy (recorded signer
+//     must be in the caller's own key history and the signature must verify
+//     under it).
 //
 // Absence is indistinguishable from first contact: the server can delete a pin
 // and this returns first-sight. DESIGN.md states that limit; it is not closed
@@ -33,8 +37,10 @@
 
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
+import { lengthPrefixedConcat } from './payload.js'
 
 const encoder = new TextEncoder()
+const KEY_SIZE = 32
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {
   const n = Math.min(a.length, b.length)
@@ -49,19 +55,6 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   let diff = 0
   for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!
   return diff === 0
-}
-
-function lengthPrefixedConcat(fields: readonly Uint8Array[]): Uint8Array {
-  let size = 0
-  for (const f of fields) size += 4 + f.length
-  const out = new Uint8Array(size)
-  let offset = 0
-  for (const f of fields) {
-    new DataView(out.buffer, out.byteOffset + offset, 4).setUint32(0, f.length, false)
-    out.set(f, offset + 4)
-    offset += 4 + f.length
-  }
-  return out
 }
 
 /**
@@ -105,7 +98,7 @@ export interface ServedUserKeys {
   readonly wrappingPublicKey: string
 }
 
-export type PinVerdict = 'first-sight' | 'match' | 'mismatch' | 'bad-signature' | 'stale-signer'
+export type PinVerdict = 'first-sight' | 'match' | 'mismatch' | 'bad-signature'
 
 function decode(b64: string): Uint8Array | null {
   try {
@@ -115,12 +108,15 @@ function decode(b64: string): Uint8Array | null {
   }
 }
 
-/** Decodes and dedupes a key list; null if any entry is undecodable. */
+/**
+ * Decodes and dedupes a key list; null if any entry is undecodable or not a
+ * 32-byte key (the size PUT /api/pins accepts).
+ */
 function keySet(keys: readonly string[]): Uint8Array[] | null {
   const out: Uint8Array[] = []
   for (const k of keys) {
     const b = decode(k)
-    if (!b) return null
+    if (!b || b.length !== KEY_SIZE) return null
     if (!out.some((o) => bytesEqual(o, b))) out.push(b)
   }
   return out
@@ -130,10 +126,13 @@ function sameSet(a: readonly Uint8Array[], b: readonly Uint8Array[]): boolean {
   return a.length === b.length && a.every((x) => b.some((y) => bytesEqual(x, y)))
 }
 
-/** The signing keys a served projection claims, current plus superseded. */
-export function servedSigningKeySet(served: ServedUserKeys): string[] | null {
-  const keys = [served.signingPublicKey, ...served.supersededSigningKeys.map((k) => k.publicKey)]
-  return keySet(keys) ? keys : null
+/**
+ * The signing keys a served projection claims, current plus superseded, as a
+ * deduped set of decoded keys: exactly what a pin of this user signs and what
+ * PUT /api/pins accepts. Null if any key is malformed.
+ */
+export function servedSigningKeySet(served: ServedUserKeys): Uint8Array[] | null {
+  return keySet([served.signingPublicKey, ...served.supersededSigningKeys.map((k) => k.publicKey)])
 }
 
 export interface EvaluatePinInput {
@@ -158,12 +157,14 @@ export function evaluatePin(input: EvaluatePinInput): PinVerdict {
   if (!signer || !wrapping || !signature || !pinnedKeys || pinnedKeys.length === 0) {
     return 'bad-signature'
   }
-  if (!bytesEqual(signer, pinnerSigningPublicKey)) return 'stale-signer'
+  // The recorded signer is untrusted input: only the caller's own current key
+  // may verify a pin, whatever the row claims.
+  if (!bytesEqual(signer, pinnerSigningPublicKey)) return 'bad-signature'
 
   const payload = pinPayload(pinnerUserId, pinnedUserId, signer, wrapping, pinnedKeys)
   if (!verify(signer, SigningContext.Pin, payload, signature)) return 'bad-signature'
 
-  const servedKeys = keySet(servedSigningKeySet(served) ?? [])
+  const servedKeys = servedSigningKeySet(served)
   const servedWrapping = decode(served.wrappingPublicKey)
   if (!servedKeys || !servedWrapping) return 'mismatch'
   if (!sameSet(pinnedKeys, servedKeys) || !bytesEqual(wrapping, servedWrapping)) return 'mismatch'
