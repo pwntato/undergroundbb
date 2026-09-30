@@ -5,6 +5,7 @@
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
+import { lengthPrefixedConcat } from './payload.js'
 
 /**
  * Builds the canonical byte string the inviter signs at step 1 of the
@@ -139,18 +140,4 @@ export function verifyInviteMAC(macKey: Uint8Array, payload: Uint8Array, mac: Ui
     diff |= (computed[i] ?? 0) ^ (mac[i] ?? 0)
   }
   return diff === 0
-}
-
-function lengthPrefixedConcat(fields: readonly Uint8Array[]): Uint8Array {
-  let size = 0
-  for (const f of fields) size += 4 + f.length
-  const out = new Uint8Array(size)
-  let offset = 0
-  for (const f of fields) {
-    const view = new DataView(out.buffer, out.byteOffset + offset, 4)
-    view.setUint32(0, f.length, false)
-    out.set(f, offset + 4)
-    offset += 4 + f.length
-  }
-  return out
 }

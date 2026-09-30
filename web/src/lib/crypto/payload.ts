@@ -58,3 +58,23 @@ function appendLengthPrefixed(out: Uint8Array, offset: number, field: Uint8Array
   out.set(field, offset + 4)
   return offset + 4 + field.length
 }
+
+/**
+ * Concatenates fields, each preceded by its 4-byte big-endian length. The one
+ * shared implementation behind the group, invite and pin payloads, which must
+ * never change once real signatures exist over them (the shared vectors pin
+ * the output). Mirrors lengthPrefixedConcat in internal/crypto.
+ */
+export function lengthPrefixedConcat(fields: readonly Uint8Array[]): Uint8Array {
+  let size = 0
+  for (const f of fields) size += 4 + f.length
+  const out = new Uint8Array(size)
+  let offset = 0
+  for (const f of fields) {
+    const view = new DataView(out.buffer, out.byteOffset + offset, 4)
+    view.setUint32(0, f.length, false)
+    out.set(f, offset + 4)
+    offset += 4 + f.length
+  }
+  return out
+}

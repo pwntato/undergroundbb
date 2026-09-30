@@ -29,6 +29,7 @@ type vectorFile struct {
 	KeyBundle        []keyBundleVector        `json:"key_bundle"`
 	TrustAnchor      []trustAnchorVector      `json:"trust_anchor"`
 	RoleGrant        []roleGrantVector        `json:"role_grant"`
+	Pin              []pinVector              `json:"pin"`
 	MemberWrap       []memberWrapVector       `json:"member_wrap_aad"`
 	GroupName        []groupNameVector        `json:"group_name_aad"`
 	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
@@ -155,6 +156,18 @@ type roleGrantVector struct {
 	GrantorGrantRef string `json:"grantor_grant_ref"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
+}
+
+type pinVector struct {
+	Name              string   `json:"name"`
+	PrivateHex        string   `json:"private_key_hex"`
+	PublicHex         string   `json:"public_key_hex"`
+	PinnerUUID        string   `json:"pinner_uuid"`
+	PinnedUUID        string   `json:"pinned_uuid"`
+	WrappingPublicHex string   `json:"wrapping_public_key_hex"`
+	SigningKeysHex    []string `json:"signing_keys_hex"`
+	PayloadHex        string   `json:"payload_hex"`
+	SignatureHex      string   `json:"signature_hex"`
 }
 
 type memberWrapVector struct {
@@ -620,6 +633,49 @@ func TestVectorRoleGrant(t *testing.T) {
 				t.Fatal("Verify rejected the vector's own signature over RoleGrantPayload")
 			}
 		})
+	}
+}
+
+// TestVectorPin pins PinPayload's exact encoding, including that the signing
+// key set is order-independent (two vectors list the same keys in different
+// orders and must share a payload).
+func TestVectorPin(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.Pin) < 3 {
+		t.Fatalf("expected at least 3 pin vectors, got %d", len(v.Pin))
+	}
+	for _, tc := range v.Pin {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+			var keys [][]byte
+			for _, k := range tc.SigningKeysHex {
+				keys = append(keys, mustHex(t, k))
+			}
+
+			gotPayload := PinPayload(tc.PinnerUUID, tc.PinnedUUID, pub, mustHex(t, tc.WrappingPublicHex), keys)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("PinPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextPin, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextPin, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature over PinPayload")
+			}
+		})
+	}
+	if v.Pin[0].PayloadHex != v.Pin[1].PayloadHex {
+		t.Fatal("same key set in a different order must produce the same payload")
+	}
+	if v.Pin[0].PayloadHex == v.Pin[2].PayloadHex {
+		t.Fatal("a different key set must produce a different payload")
 	}
 }
 

@@ -631,3 +631,26 @@ func (s SentInvite) EffectiveCompletionDeadline() int64 {
 	}
 	return s.TTL
 }
+
+// Pin is the USER#<pinner> / PIN#<pinned uuid> item -- issue #63, docs/DESIGN.md
+// "Key pinning and verification". It is the pinning user's own signed record of
+// the key set they saw for another user, stored under the pinner's partition
+// and keyed by the pinned user's uuid (never their username). The server
+// verifies the signature at write and never again: the reader is the pinner's
+// client, which must verify it itself, since a stored signature the client does
+// not check protects against nothing. No CreatedAt: a full-resolution write
+// time next to a signed record is the timing leak #147 tracks.
+type Pin struct {
+	Record
+
+	// SigningPublicKeys is the pinned user's Ed25519 key set as the pinner saw
+	// it: current and superseded, as a set (order is not significant).
+	SigningPublicKeys [][]byte `dynamodbav:"SigningPublicKeys"`
+	// WrappingPublicKey is the pinned user's current X25519 key.
+	WrappingPublicKey []byte `dynamodbav:"WrappingPublicKey"`
+	// PinnerSigningPublicKey is the key Signature was made under. Untrusted on
+	// read: a client verifies only under its own current key and treats any
+	// other value as tampering, until #62 adds a signed continuity link.
+	PinnerSigningPublicKey []byte `dynamodbav:"PinnerSigningPublicKey"`
+	Signature              []byte `dynamodbav:"Signature"`
+}

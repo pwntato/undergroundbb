@@ -35,6 +35,7 @@ export const SigningContext = {
   RoleGrant: 'underground-bb:role-grant:v1',
   Invite: 'underground-bb:invite:v1',
   TrustAnchor: 'underground-bb:trust-anchor:v1',
+  Pin: 'underground-bb:pin:v1',
 } as const
 
 export type SigningContext = (typeof SigningContext)[keyof typeof SigningContext]
