@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -276,12 +278,34 @@ type leaveGroupResponse struct {
 	GroupDeleted bool `json:"groupDeleted"`
 }
 
-// leaveGroup implements POST /api/groups/{groupId}/leave -- issue #66. Any
-// member may leave, with one exception: the last Admin of a group that still
-// has other members gets 409 last_admin and must promote a successor first
-// (the departing admin knows who should take over better than any
+// leaveGroupRequest carries the signed self-demotion an admin or ambassador
+// must attach to leaving (issue #55): a role grant to "member" with the
+// leaver as both grantor and subject, signed exactly like changeRoleRequest
+// with the subject set to the caller. A plain member sends an empty body.
+type leaveGroupRequest struct {
+	GrantSortKey    string `json:"grantSortKey"`
+	GrantorGrantRef string `json:"grantorGrantRef"`
+	Signature       string `json:"signature"`
+}
+
+func (r leaveGroupRequest) empty() bool {
+	return r.GrantSortKey == "" && r.GrantorGrantRef == "" && r.Signature == ""
+}
+
+// leaveGroup implements POST /api/groups/{groupId}/leave -- issues #66, #55.
+// Any member may leave, with one exception: the last Admin of a group that
+// still has other members gets 409 last_admin and must promote a successor
+// first (the departing admin knows who should take over better than any
 // heuristic). The only member leaving deletes the group. A non-member gets
 // the same 404 whether or not the group exists.
+//
+// An Admin or Ambassador leaving a group that survives must also send a
+// signed demotion to member (400 demotion_required otherwise), which is
+// appended as a grant in the same transaction as the membership delete.
+// Leaving used to append nothing, so a departed admin's last grant still said
+// admin and a rejoin looked forged to the chain verifier. The leaver signs it
+// themselves: leaving needs no one else's authority, and a demotion cannot
+// raise anyone's standing.
 //
 // The involuntary cases (removal, account deletion, inactivity) and their
 // automatic successor choice are not here: they need a signed grant from
@@ -298,12 +322,64 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		groupNotFound(w)
 		return
 	}
-	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID)
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxChangeRoleBodyBytes)
+	var req leaveGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+
+	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not leave group")
+		return
+	}
+	group, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not leave group")
+		return
+	}
+	if caller == nil || group == nil {
+		groupNotFound(w)
+		return
+	}
+
+	var demotion *db.LeaveDemotion
+	switch {
+	case caller.Role == models.RoleMember:
+		if !req.empty() {
+			// The client signed a demotion for a role the caller no longer
+			// holds (demoted since the roster loaded): the same race
+			// db.LeaveGroup reports as ErrLeaveConflict. Nothing was written.
+			WriteErrorWithCode(w, http.StatusConflict, "your role changed; reload and retry", "conflict_retry")
+			return
+		}
+	case req.empty():
+		// db decides: the only member of a group leaves without one.
+	default:
+		d, status, code, msg := h.buildLeaveDemotion(r.Context(), groupID, userID, caller, group, req)
+		if msg != "" {
+			if code != "" {
+				WriteErrorWithCode(w, status, msg, code)
+			} else {
+				WriteError(w, status, msg)
+			}
+			return
+		}
+		demotion = d
+	}
+
+	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID, demotion)
 	switch {
 	case errors.Is(err, db.ErrNotMember):
 		groupNotFound(w)
 	case errors.Is(err, db.ErrLastAdmin):
 		WriteErrorWithCode(w, http.StatusConflict, "you are the last admin; promote a successor before leaving", "last_admin")
+	case errors.Is(err, db.ErrDemotionRequired):
+		WriteErrorWithCode(w, http.StatusBadRequest, "leaving as an admin or ambassador needs a signed demotion", "demotion_required")
+	case errors.Is(err, db.ErrLeaveGrantKeyTaken):
+		WriteErrorWithCode(w, http.StatusConflict, "grantSortKey is taken; generate a new one and re-sign", "grant_key_taken")
 	case errors.Is(err, db.ErrLeaveConflict):
 		WriteErrorWithCode(w, http.StatusConflict, "the group changed; reload and retry", "conflict_retry")
 	case errors.Is(err, db.ErrGroupSweepIncomplete), errors.Is(err, db.ErrInviteCleanupIncomplete):
@@ -315,6 +391,50 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	}
+}
+
+// buildLeaveDemotion validates a leave request's signed self-demotion the way
+// changeMemberRole validates a grant: the grantor ref must be the caller's own
+// current grant, the sort key must be a well-formed address for the caller and
+// dated near now, and the signature must verify under the caller's CURRENT
+// signing key (read from their PROFILE, never the request). A non-empty msg
+// is the error to send.
+func (h *Handler) buildLeaveDemotion(
+	ctx context.Context, groupID, userID string, caller *models.Membership, group *models.Group, req leaveGroupRequest,
+) (d *db.LeaveDemotion, status int, code, msg string) {
+	currentRef, hasStored := currentGrantRef(caller, group, userID)
+	if currentRef == "" {
+		return nil, http.StatusConflict, "grantor_grant_missing", "your own grant is not on record"
+	}
+	if req.GrantorGrantRef != currentRef {
+		return nil, http.StatusConflict, "grantor_ref_stale", "grantorGrantRef is not your current grant; reload and re-sign"
+	}
+	day, ok := idgen.ValidGrantSortKey(req.GrantSortKey, userID)
+	if !ok {
+		return nil, http.StatusBadRequest, "", "grantSortKey: must be a well-formed GRANT# sort key for your uuid"
+	}
+	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
+		return nil, http.StatusBadRequest, "", "grantSortKey: day is not within tolerance of the current UTC day"
+	}
+	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
+	if err != nil {
+		return nil, http.StatusBadRequest, "", "signature: " + err.Error()
+	}
+	self, err := h.db.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "", "could not leave group"
+	}
+	payload := crypto.RoleGrantPayload(groupID, userID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
+	if !crypto.Verify(self.SigningPublicKey, crypto.ContextRoleGrant, payload, sig) {
+		return nil, http.StatusBadRequest, "", "signature: does not verify against the caller's current signing key"
+	}
+	return &db.LeaveDemotion{
+		GrantSortKey:     req.GrantSortKey,
+		GrantorGrantRef:  req.GrantorGrantRef,
+		HasStoredGrant:   hasStored,
+		SigningPublicKey: self.SigningPublicKey,
+		Signature:        sig,
+	}, 0, "", ""
 }
 
 const (

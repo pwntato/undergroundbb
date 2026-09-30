@@ -21,8 +21,15 @@ var (
 	// remain. They must promote a successor first (issue #66).
 	ErrLastAdmin = errors.New("db: last admin cannot leave while other members remain")
 	// ErrLeaveConflict: the roster changed between the read and the write
-	// (a role change, another admin leaving). Nothing was written; retry.
+	// (a role change, another admin leaving), or the caller's role no longer
+	// matches whether a demotion was supplied. Nothing was written; retry.
 	ErrLeaveConflict = errors.New("db: roster changed during leave, retry")
+	// ErrDemotionRequired: the caller holds a role above member and leaves a
+	// group that survives, so the leave must carry their signed demotion.
+	ErrDemotionRequired = errors.New("db: an admin or ambassador must sign a demotion to leave")
+	// ErrLeaveGrantKeyTaken: a GRANT# row already exists at the demotion's
+	// sort key. Nothing was written; re-sign with a new one.
+	ErrLeaveGrantKeyTaken = errors.New("db: demotion grant sort key taken")
 	// ErrGroupSweepIncomplete accompanies groupDeleted=true when the group's
 	// remaining rows could not all be removed. The group is already gone
 	// (its META and the caller's membership are deleted); what is left is
@@ -70,6 +77,20 @@ func (c *Client) memberRoles(ctx context.Context, groupID string) (map[string]st
 	}
 }
 
+// otherAdmin returns some admin other than userID, or "" if there is none.
+func otherAdmin(roles map[string]string, userID string) string {
+	for id, r := range roles {
+		if id != userID && r == models.RoleAdmin {
+			return id
+		}
+	}
+	return ""
+}
+
+func otherAdminExists(roles map[string]string, userID string) bool {
+	return otherAdmin(roles, userID) != ""
+}
+
 func memberKey(groupID, userID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{
 		"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
@@ -77,11 +98,29 @@ func memberKey(groupID, userID string) map[string]types.AttributeValue {
 	}
 }
 
-// LeaveGroup removes userID from the group -- issue #66.
+// LeaveDemotion is the signed self-demotion an admin or ambassador attaches
+// to leaving: a role grant to "member" whose grantor and subject are both the
+// leaver. It is appended in the same transaction that deletes their
+// membership, so a departed admin's last grant no longer says admin and a
+// later rejoin (baseline member) matches the chain.
+type LeaveDemotion struct {
+	GrantSortKey    string
+	GrantorGrantRef string
+	// HasStoredGrant says whether the caller's MEMBER# row records
+	// GrantorGrantRef (Membership.GrantSortKey); when false it came from the
+	// Group.RootGrantSortKey fallback and the row must still lack the field.
+	HasStoredGrant   bool
+	SigningPublicKey []byte
+	Signature        []byte
+}
+
+// LeaveGroup removes userID from the group -- issues #66 and #55.
 //
 //   - Anyone but the last Admin: their MEMBER# row is deleted, and so are
 //     their own outstanding invites to the group (see deleteOwnInvites).
-//     Grants they signed or received stay; history is append-only.
+//     Grants they signed or received stay; history is append-only. An Admin
+//     or Ambassador also appends their signed demotion (LeaveDemotion) in
+//     the same transaction; without one, ErrDemotionRequired.
 //   - The last Admin while others remain: ErrLastAdmin, nothing written.
 //   - The only member: the group is deleted (groupDeleted true) rather than
 //     trapping the user in it.
@@ -93,7 +132,7 @@ func memberKey(groupID, userID string) map[string]types.AttributeValue {
 //
 // Leaving does not rotate keys. A member of a Rotating group keeps the
 // generation keys they already hold until #58 exists.
-func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string) (groupDeleted bool, err error) {
+func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotion *LeaveDemotion) (groupDeleted bool, err error) {
 	roles, err := c.memberRoles(ctx, groupID)
 	if err != nil {
 		return false, err
@@ -106,29 +145,75 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string) (groupD
 		return c.deleteGroup(ctx, groupID, userID)
 	}
 
-	items := []types.TransactWriteItem{{Delete: &types.Delete{
-		TableName:                aws.String(c.table),
-		Key:                      memberKey(groupID, userID),
-		ConditionExpression:      aws.String("#role = :role"),
-		ExpressionAttributeNames: map[string]string{"#role": "Role"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":role": &types.AttributeValueMemberS{Value: role},
-		},
-	}}}
 	if role == models.RoleAdmin {
-		other := ""
-		for id, r := range roles {
-			if id != userID && r == models.RoleAdmin {
-				other = id
-				break
-			}
-		}
-		if other == "" {
+		if !otherAdminExists(roles, userID) {
 			return false, ErrLastAdmin
 		}
+	}
+	elevated := role != models.RoleMember
+	if elevated && demotion == nil {
+		return false, ErrDemotionRequired
+	}
+	if !elevated && demotion != nil {
+		// The caller's role changed since the request was built.
+		return false, ErrLeaveConflict
+	}
+
+	deleteCond := "#role = :role"
+	deleteNames := map[string]string{"#role": "Role"}
+	deleteValues := map[string]types.AttributeValue{
+		":role": &types.AttributeValueMemberS{Value: role},
+	}
+	if elevated {
+		// The demotion was signed against a specific current grant.
+		deleteNames["#gsk"] = "GrantSortKey"
+		if demotion.HasStoredGrant {
+			deleteCond += " AND #gsk = :ref"
+			deleteValues[":ref"] = &types.AttributeValueMemberS{Value: demotion.GrantorGrantRef}
+		} else {
+			deleteCond += " AND attribute_not_exists(#gsk)"
+		}
+	}
+	const (
+		deleteIndex = 0
+		grantIndex  = 1 // only when elevated
+	)
+	items := []types.TransactWriteItem{{Delete: &types.Delete{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(groupID, userID),
+		ConditionExpression:       aws.String(deleteCond),
+		ExpressionAttributeNames:  deleteNames,
+		ExpressionAttributeValues: deleteValues,
+	}}}
+	adminCheckIndex := -1
+	if elevated {
+		grantItem, err := attributevalue.MarshalMap(models.RoleGrant{
+			Record: models.Record{
+				PK:   "GROUP#" + groupID,
+				SK:   demotion.GrantSortKey,
+				Type: "RoleGrant",
+			},
+			SubjectUserID:           userID,
+			GrantedRole:             models.RoleMember,
+			GrantorUserID:           userID,
+			GrantorSigningPublicKey: demotion.SigningPublicKey,
+			GrantorGrantRef:         demotion.GrantorGrantRef,
+			Signature:               demotion.Signature,
+		})
+		if err != nil {
+			return false, err
+		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{
+			TableName:           aws.String(c.table),
+			Item:                grantItem,
+			ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		}})
+	}
+	if role == models.RoleAdmin {
+		adminCheckIndex = len(items)
 		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 			TableName:                aws.String(c.table),
-			Key:                      memberKey(groupID, other),
+			Key:                      memberKey(groupID, otherAdmin(roles, userID)),
 			ConditionExpression:      aws.String("#role = :admin"),
 			ExpressionAttributeNames: map[string]string{"#role": "Role"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -137,7 +222,12 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string) (groupD
 		}})
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
-		if isConditionalCheckFailure(err, 0) || isConditionalCheckFailure(err, 1) || isTransactionConflict(err) {
+		switch {
+		case elevated && isConditionalCheckFailure(err, grantIndex):
+			return false, ErrLeaveGrantKeyTaken
+		case isConditionalCheckFailure(err, deleteIndex),
+			adminCheckIndex >= 0 && isConditionalCheckFailure(err, adminCheckIndex),
+			isTransactionConflict(err):
 			return false, ErrLeaveConflict
 		}
 		return false, err

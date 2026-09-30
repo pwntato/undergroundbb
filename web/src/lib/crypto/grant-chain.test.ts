@@ -834,3 +834,130 @@ describe('checkMemberRole', () => {
     expect(checkMemberRole(r, ALICE, 'admin').status).toBe('unverified')
   })
 })
+
+describe('verifyGrantChain: self-demotion on leave', () => {
+  // Alice is admin from 03-03 (see world()).
+  const demote = (w: World, day: string, key = w.aliceKey) =>
+    grant(key, ALICE, 'member', ALICE, day, w.aliceAdmin.sortKey)
+
+  it('verifies an admin demoting themselves and backs the rejoined member role', () => {
+    const w = world()
+    const d = demote(w, '2026-03-06')
+    const r = verifyGrantChain(withGrants(w, d))
+    expect(r.verdicts.get(d.sortKey)).toEqual({ valid: true })
+    expect(checkMemberRole(r, ALICE, 'member')).toEqual({ status: 'verified' })
+    // A roster that still showed her as admin is now the mismatch.
+    expect(checkMemberRole(r, ALICE, 'admin').status).toBe('unverified')
+  })
+
+  it('verifies an ambassador demoting themselves', () => {
+    const w = world()
+    const amb = grant(w.aliceKey, BOB, 'ambassador', ALICE, '2026-03-05', w.aliceAdmin.sortKey)
+    const bobKey = generateSigningKey()
+    const d = grant(bobKey, BOB, 'member', BOB, '2026-03-07', amb.sortKey)
+    const input: GrantChainInput = {
+      ...withGrants(w, amb, d),
+      keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+    }
+    expect(verdictOf(input, d)).toEqual({ valid: true })
+    expect(checkMemberRole(verifyGrantChain(input), BOB, 'member')).toEqual({ status: 'verified' })
+  })
+
+  it('still verifies the successor Alice promoted the same UTC day she left', () => {
+    // Pins the exemption in the same-day rule: without it this is the
+    // ordinary promote-then-leave flow being flagged.
+    const w = world()
+    const bobKey = generateSigningKey()
+    const bob = grant(w.aliceKey, BOB, 'admin', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
+    const d = demote(w, '2026-03-06')
+    const input: GrantChainInput = {
+      ...withGrants(w, bob, d),
+      keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+    }
+    const r = verifyGrantChain(input)
+    expect(r.verdicts.get(bob.sortKey)).toEqual({ valid: true })
+    expect(r.verdicts.get(d.sortKey)).toEqual({ valid: true })
+    expect(checkMemberRole(r, BOB, 'admin')).toEqual({ status: 'verified' })
+  })
+
+  it('takes effect the next day: a grant Alice signs after leaving is rejected', () => {
+    const w = world()
+    const d = demote(w, '2026-03-06')
+    const late = grant(w.aliceKey, BOB, 'member', ALICE, '2026-03-07', d.sortKey)
+    expect(verdictOf(withGrants(w, d, late), late).reason).toBe(
+      'grantor was not admin on the signing day',
+    )
+  })
+
+  it('does not let an INVALID same-day self-demotion excuse the same-day rule', () => {
+    const w = world()
+    const evil = generateSigningKey()
+    const forged = demote(w, '2026-03-06', evil)
+    const bob = grant(w.aliceKey, BOB, 'member', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
+    const r = verifyGrantChain(withGrants(w, forged, bob))
+    expect(r.verdicts.get(forged.sortKey)?.valid).toBe(false)
+    expect(r.verdicts.get(bob.sortKey)?.reason).toBe("grantor's role changed on the same UTC day")
+  })
+
+  it('rejects a self-grant to any role but member', () => {
+    const w = world()
+    const up = grant(w.aliceKey, ALICE, 'ambassador', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
+    expect(verdictOf(withGrants(w, up), up).reason).toBe('non-root self-grant')
+  })
+
+  it("rejects a demotion not signed by the leaver's key", () => {
+    const w = world()
+    const d = demote(w, '2026-03-06', generateSigningKey())
+    expect(verdictOf(withGrants(w, d), d).reason).toBe(
+      'signature does not verify under any key the signer held on that day',
+    )
+  })
+
+  it('rejects a demotion with no ref, a stale ref, or nothing elevated to give up', () => {
+    const w = world()
+    const noRef = grant(w.aliceKey, ALICE, 'member', ALICE, '2026-03-06', '')
+    expect(verdictOf(withGrants(w, noRef), noRef).reason).toBe('missing grantorGrantRef')
+
+    const stale = grant(w.aliceKey, ALICE, 'member', ALICE, '2026-03-06', w.root.sortKey)
+    expect(verdictOf(withGrants(w, stale), stale).reason).toBe(
+      "grantorGrantRef is not the signer's current grant",
+    )
+
+    // Bob is a plain member (granted member), then "demotes" himself.
+    const bobKey = generateSigningKey()
+    const bobMember = grant(w.aliceKey, BOB, 'member', ALICE, '2026-03-05', w.aliceAdmin.sortKey)
+    const bobD = grant(bobKey, BOB, 'member', BOB, '2026-03-07', bobMember.sortKey)
+    const input: GrantChainInput = {
+      ...withGrants(w, bobMember, bobD),
+      keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+    }
+    expect(verdictOf(input, bobD).reason).toBe('signer held no elevated role to give up')
+  })
+
+  it('rejects a demotion backed by a grant that does not itself verify', () => {
+    const w = world()
+    const evil = generateSigningKey()
+    const forgedAdmin = grant(evil, BOB, 'admin', ALICE, '2026-03-05', w.aliceAdmin.sortKey)
+    const bobKey = generateSigningKey()
+    const bobD = grant(bobKey, BOB, 'member', BOB, '2026-03-07', forgedAdmin.sortKey)
+    const input: GrantChainInput = {
+      ...withGrants(w, forgedAdmin, bobD),
+      keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+    }
+    expect(verdictOf(input, bobD).reason).toBe("signer's own grant does not verify")
+  })
+
+  it('fails safe when the leaver was promoted and left the same day', () => {
+    const w = world()
+    const promoted = grant(w.creatorKey, BOB, 'admin', CREATOR, '2026-03-06', w.root.sortKey)
+    const bobKey = generateSigningKey()
+    const d = grant(bobKey, BOB, 'member', BOB, '2026-03-06', promoted.sortKey)
+    const input: GrantChainInput = {
+      ...withGrants(w, promoted, d),
+      keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+    }
+    const r = verifyGrantChain(input)
+    expect(r.verdicts.get(d.sortKey)?.reason).toBe("signer's role changed on the same UTC day")
+    expect(checkMemberRole(r, BOB, 'member').status).toBe('unverified')
+  })
+})

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,14 +10,41 @@ import (
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
+	"github.com/pwntato/undergroundbb/internal/crypto"
 )
 
 func doLeave(t *testing.T, h *Handler, cookie *http.Cookie, groupID string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doLeaveWith(t, h, cookie, groupID, nil)
+}
+
+// signedLeave is the self-demotion an admin or ambassador attaches to leaving.
+func signedLeave(t *testing.T, user registeredUser, groupID, ref string) leaveGroupRequest {
+	t.Helper()
+	sk := testGrantSortKey(t, user.userID, time.Now())
+	sig, err := crypto.Sign(user.signPriv, crypto.ContextRoleGrant, crypto.RoleGrantPayload(groupID, user.userID, "member", sk, ref))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return leaveGroupRequest{GrantSortKey: sk, GrantorGrantRef: ref, Signature: base64.StdEncoding.EncodeToString(sig)}
+}
+
+func doLeaveWith(t *testing.T, h *Handler, cookie *http.Cookie, groupID string, body *leaveGroupRequest) *httptest.ResponseRecorder {
+	t.Helper()
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/groups/"+groupID+"/leave", nil)
+	var rdr *bytes.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rdr = bytes.NewReader(b)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/groups/"+groupID+"/leave", rdr)
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
@@ -81,7 +110,8 @@ func TestLeaveGroupLastAdminGets409ThenSucceedsAfterPromotion(t *testing.T) {
 	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doLeave(t, h, ownerCookie, gid); rec.Code != http.StatusOK {
+	leave := signedLeave(t, owner, gid, rootRef(t, gid, owner))
+	if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusOK {
 		t.Fatalf("leave after promotion: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -186,15 +216,26 @@ func TestLeaveGroupOnlyClearsTheLeaversInvitesToThatGroup(t *testing.T) {
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	otherGid := createPrivateGroup(t, h, owner, ownerCookie)
 	amb, ambCookie := loggedInUser(t, h)
-	addMember(t, gid, amb, "ambassador")
-	addMember(t, otherGid, amb, "ambassador")
+	addMember(t, gid, amb, "member")
+	addMember(t, otherGid, amb, "member")
+	ambRef := ""
+	for _, g := range []string{gid, otherGid} {
+		req := signedRoleRequest(t, owner, g, amb.userID, "ambassador", rootRef(t, g, owner))
+		if rec := doChangeRole(t, h, ownerCookie, g, amb.userID, req); rec.Code != http.StatusOK {
+			t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
+		}
+		if g == gid {
+			ambRef = req.GrantSortKey
+		}
+	}
 
 	future := time.Now().Add(24 * time.Hour)
 	mine := createTestInvite(t, h, amb, ambCookie, gid, future)
 	elsewhere := createTestInvite(t, h, amb, ambCookie, otherGid, future)
 	owners := createTestInvite(t, h, owner, ownerCookie, gid, future)
 
-	if rec := doLeave(t, h, ambCookie, gid); rec.Code != http.StatusOK {
+	leave := signedLeave(t, amb, gid, ambRef)
+	if rec := doLeaveWith(t, h, ambCookie, gid, &leave); rec.Code != http.StatusOK {
 		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
 	}
 	if getRow(t, "INVITE#"+mine, "META") != nil || getRow(t, "USER#"+amb.userID, "SENT#"+mine) != nil {
@@ -205,5 +246,117 @@ func TestLeaveGroupOnlyClearsTheLeaversInvitesToThatGroup(t *testing.T) {
 	}
 	if getRow(t, "INVITE#"+owners, "META") == nil || getRow(t, "USER#"+owner.userID, "SENT#"+owners) == nil {
 		t.Error("another member's invite to the same group was deleted")
+	}
+}
+
+// setupTwoAdmins: owner and bob are admins (bob promoted through the real
+// endpoint, so both have a stored current grant).
+func setupTwoAdmins(t *testing.T) (h *Handler, gid string, owner, bob registeredUser, ownerCookie, bobCookie *http.Cookie) {
+	t.Helper()
+	h = New(config.FromEnv(), testDB(t))
+	owner, ownerCookie = loggedInUser(t, h)
+	gid = createPrivateGroup(t, h, owner, ownerCookie)
+	bob, bobCookie = loggedInUser(t, h)
+	addMember(t, gid, bob, "member")
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", rootRef(t, gid, owner))
+	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
+		t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
+	}
+	return
+}
+
+func TestLeaveGroupAdminAppendsSignedDemotion(t *testing.T) {
+	h, gid, owner, _, ownerCookie, _ := setupTwoAdmins(t)
+	ref := rootRef(t, gid, owner)
+	leave := signedLeave(t, owner, gid, ref)
+	if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusOK {
+		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID) != nil {
+		t.Error("owner's membership survived")
+	}
+	row := getRow(t, "GROUP#"+gid, leave.GrantSortKey)
+	if row == nil {
+		t.Fatal("demotion grant was not written")
+	}
+	for k, want := range map[string]string{
+		"SubjectUserID": owner.userID, "GrantorUserID": owner.userID,
+		"GrantedRole": "member", "GrantorGrantRef": ref,
+	} {
+		if got := strAttr(row, k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestLeaveGroupElevatedRejections(t *testing.T) {
+	h, gid, owner, bob, ownerCookie, bobCookie := setupTwoAdmins(t)
+	ref := rootRef(t, gid, owner)
+
+	t.Run("no body", func(t *testing.T) {
+		rec := doLeave(t, h, ownerCookie, gid)
+		if rec.Code != http.StatusBadRequest || errCode(t, rec) != "demotion_required" {
+			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+		}
+	})
+	t.Run("signed by someone else", func(t *testing.T) {
+		leave := signedLeave(t, bob, gid, ref)
+		leave.GrantSortKey = testGrantSortKey(t, owner.userID, time.Now())
+		if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("signature over a different role", func(t *testing.T) {
+		leave := signedLeave(t, owner, gid, ref)
+		sig, _ := crypto.Sign(owner.signPriv, crypto.ContextRoleGrant, crypto.RoleGrantPayload(gid, owner.userID, "admin", leave.GrantSortKey, ref))
+		leave.Signature = base64.StdEncoding.EncodeToString(sig)
+		if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("sort key for another subject", func(t *testing.T) {
+		leave := signedLeave(t, owner, gid, ref)
+		leave.GrantSortKey = testGrantSortKey(t, bob.userID, time.Now())
+		if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("stale grantor ref", func(t *testing.T) {
+		leave := signedLeave(t, owner, gid, "GRANT#"+owner.userID+"#2020-01-01#x")
+		rec := doLeaveWith(t, h, ownerCookie, gid, &leave)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "grantor_ref_stale" {
+			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+		}
+	})
+	t.Run("demoted since the roster loaded", func(t *testing.T) {
+		carol, carolCookie := loggedInUser(t, h)
+		addMember(t, gid, carol, "member")
+		leave := signedLeave(t, carol, gid, "GRANT#x")
+		rec := doLeaveWith(t, h, carolCookie, gid, &leave)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "conflict_retry" {
+			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+		}
+		if getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID) == nil || getRow(t, "GROUP#"+gid, leave.GrantSortKey) != nil {
+			t.Error("a rejected leave changed state")
+		}
+	})
+	t.Run("last admin still gets last_admin", func(t *testing.T) {
+		// bob leaves first, leaving owner as the sole admin.
+		bobRef := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "GrantSortKey")
+		bl := signedLeave(t, bob, gid, bobRef)
+		if rec := doLeaveWith(t, h, bobCookie, gid, &bl); rec.Code != http.StatusOK {
+			t.Fatalf("bob leave: %d %s", rec.Code, rec.Body.String())
+		}
+		leave := signedLeave(t, owner, gid, ref)
+		rec := doLeaveWith(t, h, ownerCookie, gid, &leave)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "last_admin" {
+			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+		}
+		if getRow(t, "GROUP#"+gid, leave.GrantSortKey) != nil {
+			t.Error("a demotion grant was written for a blocked leave")
+		}
+	})
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID) == nil {
+		t.Error("a rejected leave deleted the owner's membership")
 	}
 }

@@ -45,10 +45,16 @@
 // Alice's real admin grant) and the chain verifies.
 //
 // Known limits:
-//   - Leaving a group appends no grant, so a departed admin's last grant
-//     still says admin. Grants alone cannot show that they left. The same
-//     gap makes a member who leaves and rejoins by invite (baseline member,
-//     no new grant) show as unverified when their old grant said otherwise.
+//   - Leaving as an admin or ambassador appends a self-signed demotion to
+//     member (issue #55), so a departed admin's last grant no longer says
+//     admin and a rejoin by invite (baseline member) matches the chain. Two
+//     gaps remain: a group left before this shipped has no demotion, so its
+//     old leavers still show as unverified on rejoin; and an admin promoted
+//     and leaving on the SAME UTC day has an unverifiable demotion (order
+//     within a day is unknowable), so that rejoin shows as unverified too.
+//   - A self-demotion is the only self-grant accepted. It takes effect the
+//     day after it is dated, so the leaver's promotion of a successor the same
+//     day still verifies.
 //   - The grant's day is chosen by its signer, so a superseded key that
 //     later leaks can sign grants backdated into its old interval forever.
 //     Inherent to the day in the sort key; latent until key rotation exists.
@@ -240,7 +246,9 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
 
   // Recursion terminates without a cycle guard: each hop moves to a grant on
   // a strictly earlier UTC day (the same-day rule rejects anything else), so
-  // a chain can never revisit a grant.
+  // a chain can never revisit a grant. The one same-day hop is a grantor's
+  // self-demotion, which only ever looks at its own subject's strictly earlier
+  // grants, so it cannot lead back.
   function verifyOne(g: GrantRecord): GrantVerdict {
     const cached = verdicts.get(g.sortKey)
     if (cached) return cached
@@ -280,8 +288,15 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
     }
 
     // Non-root.
-    if (g.grantorUserId === g.subjectUserId) return reject('non-root self-grant')
     if (ref === '') return reject('missing grantorGrantRef')
+    if (g.grantorUserId === g.subjectUserId) {
+      // The only self-grant is a demotion to member, written when an admin or
+      // ambassador leaves. It needs no one else's authority and raises no
+      // one's standing, so it asks only that the signer held an elevated
+      // role the day before and signed with a key they held that day.
+      if (g.grantedRole !== 'member') return reject('non-root self-grant')
+      return verifySelfDemotion(g, parsed.day, ref, payload, sig)
+    }
     const grantorGrants = grantsBySubject.get(g.grantorUserId) ?? []
 
     // The strict same-day rule, then "current on the day" = latest strictly
@@ -291,7 +306,16 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
     for (const other of grantorGrants) {
       const p = parseSortKey(other.sortKey)
       if (!p) continue
-      if (p.day === parsed.day) return reject("grantor's role changed on the same UTC day")
+      if (p.day === parsed.day) {
+        // A verified self-demotion the same day is not a change of role
+        // BEFORE this signature: the server only accepts grants from a
+        // current admin, and the demotion is what the grantor does on the
+        // way out, usually right after promoting a successor. It takes
+        // effect the next day (the strictly-earlier rule below already
+        // ignores it for today).
+        if (isSelfDemotion(other) && verifyOne(other).valid) continue
+        return reject("grantor's role changed on the same UTC day")
+      }
       if (p.day > parsed.day) continue
       if (p.day > latestDay) {
         latestDay = p.day
@@ -313,6 +337,51 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
       if (verify(key, SigningContext.RoleGrant, payload, sig)) return { valid: true }
     }
     return reject('signature does not verify under any key the grantor held on that day')
+  }
+
+  function isSelfDemotion(g: GrantRecord): boolean {
+    return g.grantorUserId === g.subjectUserId && g.grantedRole === 'member'
+  }
+
+  function verifySelfDemotion(
+    g: GrantRecord,
+    day: number,
+    ref: string,
+    payload: Uint8Array,
+    sig: Uint8Array,
+  ): GrantVerdict {
+    // The subject's grants other than this one. Any other grant the same day
+    // leaves the order unknowable, so it fails safe, as for any grantor.
+    let latestDay = -Infinity
+    let latest: GrantRecord[] = []
+    for (const other of grantsBySubject.get(g.subjectUserId) ?? []) {
+      if (other.sortKey === g.sortKey) continue
+      const p = parseSortKey(other.sortKey)
+      if (!p) continue
+      if (p.day === day) return reject("signer's role changed on the same UTC day")
+      if (p.day > day) continue
+      if (p.day > latestDay) {
+        latestDay = p.day
+        latest = [other]
+      } else if (p.day === latestDay) {
+        latest.push(other)
+      }
+    }
+    if (latest.length === 0) return reject('signer held no grant before the demotion')
+    if (latest.length > 1) return reject("signer's current grant is ambiguous (same-day tie)")
+    const current = latest[0]!
+    if (ref !== current.sortKey) return reject("grantorGrantRef is not the signer's current grant")
+    if (current.grantedRole !== 'admin' && current.grantedRole !== 'ambassador') {
+      return reject('signer held no elevated role to give up')
+    }
+    if (!verifyOne(current).valid) return reject("signer's own grant does not verify")
+
+    const history = keyHistories.get(g.subjectUserId)
+    if (!history) return reject('no key history for signer')
+    for (const key of keysOnDay(history, day)) {
+      if (verify(key, SigningContext.RoleGrant, payload, sig)) return { valid: true }
+    }
+    return reject('signature does not verify under any key the signer held on that day')
   }
 
   for (const g of input.grants) verifyOne(g)

@@ -197,7 +197,11 @@ export function GroupMembersScreen() {
           return
         }
       }
-      const outcome = await runLeave({ leaveGroup }, view.groupId)
+      const outcome = await runLeave(
+        { leaveGroup, signRoleGrant, userId },
+        view,
+        leavePlan(view, userId).kind,
+      )
       if (outcome.ok || outcome.kind === 'notFound') {
         // Gone from this group either way; nothing left to show here.
         void navigate('/', { replace: true })
