@@ -328,12 +328,16 @@ func TestLeaveGroupElevatedRejections(t *testing.T) {
 			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 		}
 	})
-	t.Run("plain member sending a grant", func(t *testing.T) {
+	t.Run("demoted since the roster loaded", func(t *testing.T) {
 		carol, carolCookie := loggedInUser(t, h)
 		addMember(t, gid, carol, "member")
 		leave := signedLeave(t, carol, gid, "GRANT#x")
-		if rec := doLeaveWith(t, h, carolCookie, gid, &leave); rec.Code != http.StatusBadRequest {
-			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		rec := doLeaveWith(t, h, carolCookie, gid, &leave)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "conflict_retry" {
+			t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+		}
+		if getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID) == nil || getRow(t, "GROUP#"+gid, leave.GrantSortKey) != nil {
+			t.Error("a rejected leave changed state")
 		}
 	})
 	t.Run("last admin still gets last_admin", func(t *testing.T) {

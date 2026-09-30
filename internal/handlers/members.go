@@ -349,7 +349,10 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case caller.Role == models.RoleMember:
 		if !req.empty() {
-			WriteError(w, http.StatusBadRequest, "a plain member leaves without a grant")
+			// The client signed a demotion for a role the caller no longer
+			// holds (demoted since the roster loaded): the same race
+			// db.LeaveGroup reports as ErrLeaveConflict. Nothing was written.
+			WriteErrorWithCode(w, http.StatusConflict, "your role changed; reload and retry", "conflict_retry")
 			return
 		}
 	case req.empty():
