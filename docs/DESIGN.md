@@ -822,8 +822,9 @@ write whatever they like, and the server cannot read a ciphertext to know otherw
 role is a server-side cache of what the signed chain says, not the chain, so a compromised server
 can also hand out or withhold these checks at will. Never treat a passing gate as evidence about
 who holds a role: that is the chain's job, verified client-side. `role_enforcement_test.go` pins
-each gate per role, with a plain Member and an Ambassador as the callers rather than only a
-non-member.
+invite creation and settings edits per role, and a plain Member's role change; an Ambassador's role
+change is pinned in `TestChangeRoleRejections`. Callers are real Members and Ambassadors, not only
+non-members.
 
 Note the limit: signed grants prevent the *server* from lying about roles. They do not prevent a
 legitimately-privileged member from misusing their authority. Once someone holds the group key and
