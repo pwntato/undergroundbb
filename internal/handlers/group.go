@@ -844,6 +844,8 @@ func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "the group changed since you loaded it; reload and retry", "version_conflict")
 		case errors.Is(err, db.ErrNotGroupAdmin):
 			WriteError(w, http.StatusForbidden, "only a group admin can edit group settings")
+		case errors.Is(err, db.ErrRotationInProgress):
+			WriteErrorWithCode(w, http.StatusConflict, "a key rotation is in progress; edit the group once it finishes", "rotation_in_progress")
 		default:
 			WriteError(w, http.StatusInternalServerError, "could not update group")
 		}

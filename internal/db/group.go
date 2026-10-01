@@ -653,35 +653,54 @@ func (c *Client) UpdateGroupSettings(ctx context.Context, in UpdateGroupSettings
 	const (
 		adminCheckIndex = 0
 		metaIndex       = 1
+		rotationIndex   = 2
 	)
-	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{ConditionCheck: &types.ConditionCheck{
-				TableName: aws.String(c.table),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
-					"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.AdminUserID},
-				},
-				ConditionExpression:       aws.String("#role = :admin"),
-				ExpressionAttributeNames:  map[string]string{"#role": "Role"},
-				ExpressionAttributeValues: map[string]types.AttributeValue{":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin}},
-			}},
-			{Update: &types.Update{
-				TableName: aws.String(c.table),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
-					"SK": &types.AttributeValueMemberS{Value: "META"},
-				},
-				UpdateExpression:          aws.String(updateExpr),
-				ConditionExpression:       aws.String("attribute_exists(PK) AND " + versionCond),
-				ExpressionAttributeNames:  names,
-				ExpressionAttributeValues: values,
-			}},
-		},
-	})
+	items := []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+				"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.AdminUserID},
+			},
+			ConditionExpression:       aws.String("#role = :admin"),
+			ExpressionAttributeNames:  map[string]string{"#role": "Role"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin}},
+		}},
+		{Update: &types.Update{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+				"SK": &types.AttributeValueMemberS{Value: "META"},
+			},
+			UpdateExpression:          aws.String(updateExpr),
+			ConditionExpression:       aws.String("attribute_exists(PK) AND " + versionCond),
+			ExpressionAttributeNames:  names,
+			ExpressionAttributeValues: values,
+		}},
+	}
+	// A private group's name is encrypted under the writer's own generation.
+	// While a rotation runs the remover is already at the new one, which
+	// members not yet re-wrapped cannot read, and the stored NameGeneration
+	// would then lock gen-0 admins out. So private edits wait for the marker
+	// to clear; the check shares the transaction, so a rotation cannot start
+	// between the handler's read and this write.
+	if in.Visibility != models.VisibilityPublic {
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+				"SK": &types.AttributeValueMemberS{Value: RotationSortKey},
+			},
+			ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		}})
+	}
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		if isConditionalCheckFailure(err, adminCheckIndex) {
 			return ErrNotGroupAdmin
+		}
+		if in.Visibility != models.VisibilityPublic && isConditionalCheckFailure(err, rotationIndex) {
+			return ErrRotationInProgress
 		}
 		if isConditionalCheckFailure(err, metaIndex) {
 			return ErrGroupVersionConflict

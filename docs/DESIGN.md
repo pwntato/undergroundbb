@@ -1484,7 +1484,8 @@ this table describes the complete design, and an item missing from it is otherwi
 from an oversight.
 
 **The rotation marker is the one item with a liveness requirement.** `ROTATION` records the
-in-progress generation, how far the batched writes have got, and when the job started. Nothing on
+in-progress generation, who started it, and when. It does not record how far the batched writes have
+got: resume is driven by member state, not a position (see the `BatchWriteItem` discussion above). Nothing on
 the server acts on it: **admin clients compare its timestamp against the staleness deadline when
 they load the group**, and surface a stalled rotation for resumption. This is deliberate — no
 server-side process can complete a rotation anyway, because the group key exists in plaintext only

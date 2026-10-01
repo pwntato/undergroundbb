@@ -24,6 +24,13 @@ const RotationSortKey = "ROTATION"
 // them would need a rotation that targets a generation nobody holds yet.
 var ErrRotationInProgress = errors.New("db: a key rotation is already in progress")
 
+// ErrRotationStaleGeneration is returned when no rotation is running but the
+// generation the removal would mint already has its chain link: the remover's
+// own entry point is behind the group's (an invite wrapped at the old
+// generation and accepted after the rotation finished). The link is never
+// overwritten; the admin has to be re-wrapped at the current generation first.
+var ErrRotationStaleGeneration = errors.New("db: the remover's key generation is behind the group's")
+
 // GenKeySortKey is the GENKEY# sort key for generation n: zero-padded to six
 // digits like every numeric sort-key component (docs/DESIGN.md).
 func GenKeySortKey(n int64) string { return fmt.Sprintf("GENKEY#%06d", n) }
@@ -226,8 +233,10 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
-		case rotating && (isConditionalCheckFailure(err, rotationIndex) || isConditionalCheckFailure(err, rotationIndex+1)):
+		case rotating && isConditionalCheckFailure(err, rotationIndex):
 			return ErrRotationInProgress
+		case rotating && isConditionalCheckFailure(err, rotationIndex+1):
+			return ErrRotationStaleGeneration
 		case isConditionalCheckFailure(err, removerIndex):
 			return ErrGrantorChanged
 		case isConditionalCheckFailure(err, deleteIndex):

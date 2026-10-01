@@ -729,6 +729,8 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, db.ErrRotationInProgress):
 		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; finish it before removing another member", "rotation_in_progress")
+	case errors.Is(err, db.ErrRotationStaleGeneration):
+		WriteErrorWithCode(w, http.StatusConflict, "your key is behind the group's current generation; reload and try again", "rotation_stale_generation")
 	case errors.Is(err, db.ErrGrantorChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "your own role changed; reload and re-sign", "grantor_changed")
 	case errors.Is(err, db.ErrSubjectRoleChanged):

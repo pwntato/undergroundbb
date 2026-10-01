@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -575,4 +577,91 @@ func errMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 		t.Fatalf("decoding error body %q: %v", rec.Body.String(), err)
 	}
 	return b.Error
+}
+
+func deleteRow(t *testing.T, pk, sk string) {
+	t.Helper()
+	if _, err := rawDDB(t).DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setMemberGeneration(t *testing.T, gid, userID string, gen int) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+		UpdateExpression:          aws.String("SET Generation = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":g": &types.AttributeValueMemberN{Value: strconv.Itoa(gen)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The GENKEY# put is the only thing stopping an admin whose own entry point is
+// behind the group's from overwriting an existing chain link. State: a
+// rotation 0->1 finished (marker gone), and an admin still at generation 0
+// (e.g. an invite wrapped at 0 and accepted after) asks for generation 1
+// again. That is not "in progress": it is a distinct error and the link, and
+// the membership, are untouched.
+func TestRemoveMemberStaleGenerationNeverOverwritesChainLink(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob, carol := registerTestUser(t, h), registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	addMember(t, gid, carol, "member")
+
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)}); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	before := getRow(t, "GROUP#"+gid, "GENKEY#000000")
+	deleteRow(t, "GROUP#"+gid, "ROTATION") // the rotation finished
+	setMemberGeneration(t, gid, owner.userID, 0)
+
+	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(1)})
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_stale_generation" {
+		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	after := getRow(t, "GROUP#"+gid, "GENKEY#000000")
+	if !reflect.DeepEqual(before, after) {
+		t.Error("existing chain link was overwritten")
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID) == nil || getRow(t, "GROUP#"+gid, "ROTATION") != nil {
+		t.Error("rejected removal changed state")
+	}
+}
+
+// While a rotation runs the remover already holds the new generation, which
+// un-re-wrapped members cannot read, so a private group's name (written at the
+// writer's own generation) cannot be edited until the marker clears.
+func TestPrivateGroupEditRefusedDuringRotation(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)}); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	req := updateReq(0)
+	req.NameGeneration = 1
+	rec := doGroupRequest(t, h, ownerCookie, http.MethodPut, gid, req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_in_progress" {
+		t.Fatalf("during rotation: %d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	deleteRow(t, "GROUP#"+gid, "ROTATION")
+	if rec := doGroupRequest(t, h, ownerCookie, http.MethodPut, gid, req); rec.Code != http.StatusOK {
+		t.Fatalf("after rotation: %d %s", rec.Code, rec.Body.String())
+	}
 }
