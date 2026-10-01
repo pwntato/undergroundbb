@@ -714,15 +714,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, db.ErrInviterNotEligible) {
-			// The check covers role AND key generation. Re-read to tell them
-			// apart: still elevated means the inviter's key moved under us
-			// (a rotation re-wrapped them), which is retryable, not a 403.
-			if now, rerr := h.db.GetMembership(r.Context(), match.GroupID, userID); rerr == nil && now != nil &&
-				(now.Role == models.RoleAdmin || now.Role == models.RoleAmbassador) {
-				WriteErrorWithCode(w, http.StatusConflict, "your group key changed; reload and retry", "conflict_retry")
-				return
-			}
-			WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group")
+			h.writeInviterNotEligible(w, r, match.GroupID, userID)
 			return
 		}
 		if errors.Is(err, db.ErrGroupGone) {
@@ -874,4 +866,17 @@ func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	WriteJSON(w, http.StatusOK, receivedInvitesResponse{Invites: entries})
+}
+
+// writeInviterNotEligible answers a CompleteInvite whose inviter check failed.
+// That check covers role AND key generation, so re-read to tell them apart:
+// an inviter who is still admin or ambassador had their key moved under them
+// (a rotation re-wrapped them), which is retryable (409), not a 403.
+func (h *Handler) writeInviterNotEligible(w http.ResponseWriter, r *http.Request, groupID, inviterID string) {
+	now, err := h.db.GetMembership(r.Context(), groupID, inviterID)
+	if err == nil && now != nil && (now.Role == models.RoleAdmin || now.Role == models.RoleAmbassador) {
+		WriteErrorWithCode(w, http.StatusConflict, "your group key changed; reload and retry", "conflict_retry")
+		return
+	}
+	WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group")
 }

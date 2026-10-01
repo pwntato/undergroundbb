@@ -98,35 +98,45 @@ func (c *Client) callerAtGenerationCheck(groupID, userID string, gen int64) type
 	}}
 }
 
-// markerAtGenerationCheck asserts a re-wrap to gen is allowed: the marker
-// names gen, OR no marker exists. The second arm is the catch-up: a member who
-// ends up behind after completion (added at an older generation in the gap
-// between completion's scan and its delete, or by an inviter re-wrapped
-// meanwhile) must still be movable, and nothing else would move them since
-// only a removal starts a rotation. It cannot be abused to rotate: the
-// caller-at-generation check pins gen to the caller's OWN entry point, so with
-// no marker this only brings a behind member up to the admin's current key,
-// and Generation <= gen means nobody is ever moved backward.
-func (c *Client) markerAtGenerationCheck(groupID string, gen int64) types.TransactWriteItem {
-	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
-		TableName:                aws.String(c.table),
-		Key:                      rotationKey(groupID),
-		ConditionExpression:      aws.String("attribute_not_exists(PK) OR #gen = :gen"),
-		ExpressionAttributeNames: map[string]string{"#gen": "Generation"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gen": genAttr(gen),
-		},
-	}}
+// markerCheck pins the marker's state to what RewrapMembers read, so a marker
+// that appears, vanishes or changes generation between the read and the write
+// fails the transaction (and the client re-reads) instead of being re-wrapped
+// under the wrong mode. With a marker it must still name gen; without one it
+// must still be absent.
+func (c *Client) markerCheck(groupID string, gen int64, markerPresent bool) types.TransactWriteItem {
+	check := &types.ConditionCheck{
+		TableName:           aws.String(c.table),
+		Key:                 rotationKey(groupID),
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	}
+	if markerPresent {
+		check.ConditionExpression = aws.String("#gen = :gen")
+		check.ExpressionAttributeNames = map[string]string{"#gen": "Generation"}
+		check.ExpressionAttributeValues = map[string]types.AttributeValue{":gen": genAttr(gen)}
+	}
+	return types.TransactWriteItem{ConditionCheck: check}
 }
 
-// RewrapMembers writes the batch in one transaction: the marker still names
-// the generation (or none exists, see markerAtGenerationCheck), the caller is an admin at it, and every member exists and is
-// not already past it. Re-wrapping a member already AT the generation is
-// allowed, so a retry after a lost response is safe (it rewrites the same key
-// under a fresh ephemeral); a client should otherwise re-wrap only members who
-// are behind, since a wrong key written over a member at the generation would
-// lock out exactly the admins able to resume. All or nothing, so there are no UnprocessedItems
-// to chase; resume is still state-driven, by re-listing members behind.
+// RewrapMembers writes the batch in one transaction, in one of two modes
+// decided by a consistent read of the marker:
+//
+//   - Rotation in progress (marker names Generation): every member must exist
+//     and be at or behind it (Generation <= N). Accepting a member already AT N
+//     is what makes a retry after a lost response safe.
+//   - No marker, the catch-up for a member left behind after completion: every
+//     member must be STRICTLY behind (Generation < N). Without that, any admin
+//     could overwrite the wrapped key of any member already at the current
+//     generation in a group that never rotates. A lost-response retry of a
+//     catch-up then reports member_changed and the client re-lists, which is
+//     the documented contract.
+//
+// In both modes the caller is an admin whose own entry point is at N (the only
+// way to hold the key, and it pins N to the current generation when there is no
+// marker), and nobody is ever moved backward. A client should re-wrap only
+// members who are behind; a wrong key written over a member at the generation
+// would lock out exactly the admins able to resume. All or nothing, so there
+// are no UnprocessedItems to chase; resume is still state-driven, by
+// re-listing members behind.
 func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error {
 	if len(in.Wraps) == 0 || len(in.Wraps) > MaxRewrapBatch {
 		return fmt.Errorf("db: rewrap batch of %d members, want 1..%d", len(in.Wraps), MaxRewrapBatch)
@@ -136,8 +146,19 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		callerIndex = 1
 		firstWrap   = 2
 	)
+	marker, err := c.GetRotation(ctx, in.GroupID)
+	if err != nil {
+		return err
+	}
+	if marker != nil && marker.Generation != in.Generation {
+		return ErrRotationNotActive
+	}
+	memberCond := "attribute_exists(PK) AND #gen < :gen" // catch-up: strictly behind
+	if marker != nil {
+		memberCond = "attribute_exists(PK) AND #gen <= :gen"
+	}
 	items := []types.TransactWriteItem{
-		c.markerAtGenerationCheck(in.GroupID, in.Generation),
+		c.markerCheck(in.GroupID, in.Generation, marker != nil),
 		c.callerAtGenerationCheck(in.GroupID, in.CallerUserID, in.Generation),
 	}
 	seen := map[string]bool{in.CallerUserID: true} // the caller's own item is checked, not written
@@ -154,7 +175,7 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, w.UserID),
 			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped"),
-			ConditionExpression:      aws.String("attribute_exists(PK) AND #gen <= :gen"),
+			ConditionExpression:      aws.String(memberCond),
 			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":gen":     genAttr(in.Generation),
@@ -162,8 +183,7 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 			},
 		}})
 	}
-	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
-	if err != nil {
+	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isConditionalCheckFailure(err, markerIndex):
 			return ErrRotationNotActive

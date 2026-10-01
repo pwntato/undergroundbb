@@ -2,10 +2,16 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 )
@@ -36,6 +42,22 @@ func loginCookie(t *testing.T, h *Handler, u registeredUser) *http.Cookie {
 		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
 	}
 	return sessionCookieFrom(rec)
+}
+
+func setMemberRole(t *testing.T, gid, userID, role string) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+		UpdateExpression:          aws.String("SET #r = :r"),
+		ExpressionAttributeNames:  map[string]string{"#r": "Role"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: role}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func rewrapReq(gen int64, users ...registeredUser) rewrapMembersRequest {
@@ -236,5 +258,54 @@ func TestRotationRewrapRejections(t *testing.T) {
 	rec = doRotationCall(t, f.h, adm2Cookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1})
 	if rec.Code != http.StatusConflict {
 		t.Errorf("complete by behind admin: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// With no marker the re-wrap is a catch-up and moves only members STRICTLY
+// behind the caller's generation. A fresh group that never rotated has everyone
+// at the current generation, so an admin must not be able to replace a peer's
+// wrapped key there (nothing outside an active rotation could do that before).
+func TestRotationNoMarkerNeverOverwritesMemberAtGeneration(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	peer := registerTestUser(t, h)
+	addMember(t, gid, peer, "admin")
+	before := getRow(t, "GROUP#"+gid, "MEMBER#"+peer.userID)
+
+	rec := doRotationCall(t, h, ownerCookie, http.MethodPut, gid, "members", rewrapReq(0, peer))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "member_changed" {
+		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if !reflect.DeepEqual(before, getRow(t, "GROUP#"+gid, "MEMBER#"+peer.userID)) {
+		t.Error("peer's membership was rewritten")
+	}
+}
+
+// The handler half of the inviter-generation guard: when CompleteInvite's check
+// fails the handler re-reads the inviter. Still elevated is a retryable 409; no
+// longer elevated stays the 403. (The race itself, the generation moving between
+// the handler's read and the write, is covered at the db layer; it cannot be
+// staged through the handler without a hook, so this calls the mapping directly.)
+func TestWriteInviterNotEligibleDistinguishesGenerationFromRole(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, cookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, cookie)
+	call := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.writeInviterNotEligible(rec, httptest.NewRequest(http.MethodPost, "/", nil), gid, owner.userID)
+		return rec
+	}
+	setMemberGeneration(t, gid, owner.userID, 1) // re-wrapped under the inviter
+	if rec := call(); rec.Code != http.StatusConflict || errCode(t, rec) != "conflict_retry" {
+		t.Errorf("still an admin: %d %s", rec.Code, rec.Body.String())
+	}
+	setMemberRole(t, gid, owner.userID, "member")
+	if rec := call(); rec.Code != http.StatusForbidden {
+		t.Errorf("demoted: %d %s", rec.Code, rec.Body.String())
+	}
+	deleteRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID)
+	if rec := call(); rec.Code != http.StatusForbidden {
+		t.Errorf("gone: %d %s", rec.Code, rec.Body.String())
 	}
 }
