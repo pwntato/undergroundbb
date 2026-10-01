@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -582,6 +583,22 @@ type removeMemberRequest struct {
 	GrantSortKey    string `json:"grantSortKey"`
 	GrantorGrantRef string `json:"grantorGrantRef"`
 	Signature       string `json:"signature"`
+
+	// Rotation is required exactly when the group is Rotating (see
+	// removeRotationRequest) and refused for an Open one.
+	Rotation *removeRotationRequest `json:"rotation"`
+}
+
+// removeRotationRequest is what a Rotating-group removal carries to start the
+// key rotation. The client minted the new group key, so the server only ever
+// sees it wrapped: Link is the OLD generation's key under the new one (the
+// GENKEY# chain link), RemoverWrappedKey is the new key for the remover.
+type removeRotationRequest struct {
+	// Generation is the generation being rotated to; it must be exactly one
+	// past the generation of the remover's own entry point.
+	Generation        int64       `json:"generation"`
+	Link              wrappedBlob `json:"link"`
+	RemoverWrappedKey wrappedKey  `json:"removerWrappedKey"`
 }
 
 // removeMember implements DELETE /api/groups/{groupId}/members/{userId} --
@@ -592,11 +609,11 @@ type removeMemberRequest struct {
 // themselves; leaving is a different endpoint), which is why this needs no
 // last-admin rule.
 //
-// Open groups only for now. Removal in a Rotating group must mint a new key
-// generation (docs/DESIGN.md, "Revocation mode"), which is the next slice;
-// until it exists the request is refused rather than half-done, because a
-// removal that does not rotate there silently leaves the removed member
-// reading every new post.
+// In a Rotating group removal must also mint a new key generation
+// (docs/DESIGN.md, "Revocation mode"): the request carries the chain link and
+// the remover's re-wrap, and this transaction starts the rotation marker. Only
+// one rotation runs at a time, so a removal while one is in progress is 409
+// rotation_in_progress. Re-wrapping everyone else is the client's job.
 func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -659,10 +676,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "member not found")
 		return
 	}
-	if group.RevocationMode != models.RevocationOpen {
-		WriteErrorWithCode(w, http.StatusConflict, "removing a member from a Rotating group needs a key rotation, which is not built yet", "rotation_unsupported")
-		return
-	}
+	rotating := group.RevocationMode != models.RevocationOpen
 
 	in := db.RemoveMemberInput{
 		GroupID:       groupID,
@@ -676,6 +690,18 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.RemoverGrantRef, in.RemoverHasStoredGrant = currentRef, hasStored
+
+	if rotating {
+		rot, msg := decodeRemoveRotation(req.Rotation, caller.Generation)
+		if msg != "" {
+			WriteErrorWithCode(w, http.StatusBadRequest, msg, "rotation_required")
+			return
+		}
+		in.Rotation = rot
+	} else if req.Rotation != nil {
+		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")
+		return
+	}
 
 	elevated := subject.Role != models.RoleMember
 	switch {
@@ -701,6 +727,8 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 
 	err = h.db.RemoveMember(r.Context(), in)
 	switch {
+	case errors.Is(err, db.ErrRotationInProgress):
+		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; finish it before removing another member", "rotation_in_progress")
 	case errors.Is(err, db.ErrGrantorChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "your own role changed; reload and re-sign", "grantor_changed")
 	case errors.Is(err, db.ErrSubjectRoleChanged):
@@ -720,8 +748,31 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// empty reports whether the DEMOTION half of the body is absent; the rotation
+// half is judged separately by the group's mode.
 func (r removeMemberRequest) empty() bool {
 	return r.GrantSortKey == "" && r.GrantorGrantRef == "" && r.Signature == ""
+}
+
+// decodeRemoveRotation validates the rotation half of a Rotating-group
+// removal. callerGeneration is the remover's own entry-point generation, which
+// the new generation must follow by exactly one. A non-empty message rejects.
+func decodeRemoveRotation(req *removeRotationRequest, callerGeneration int64) (*db.RemoveRotation, string) {
+	if req == nil {
+		return nil, "removing a member from a Rotating group needs the rotation: generation, link and removerWrappedKey"
+	}
+	if req.Generation != callerGeneration+1 {
+		return nil, fmt.Sprintf("rotation.generation: must be %d (one past your own key generation)", callerGeneration+1)
+	}
+	link, err := decodeWrappedBlob(req.Link)
+	if err != nil {
+		return nil, "rotation.link: " + err.Error()
+	}
+	wrapped, err := decodeWrappedKey(req.RemoverWrappedKey)
+	if err != nil {
+		return nil, "rotation.removerWrappedKey: " + err.Error()
+	}
+	return &db.RemoveRotation{CurrentGeneration: callerGeneration, Link: link, RemoverWrappedKey: wrapped}, ""
 }
 
 type removeRejection struct {

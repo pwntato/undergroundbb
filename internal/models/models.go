@@ -654,3 +654,38 @@ type Pin struct {
 	PinnerSigningPublicKey []byte `dynamodbav:"PinnerSigningPublicKey"`
 	Signature              []byte `dynamodbav:"Signature"`
 }
+
+// GenerationKey is one link of a group's key chain: GROUP#<gid> /
+// GENKEY#<nnnnnn> holds generation n's key wrapped under generation n+1's,
+// written once per rotation for the whole group. SK carries n zero-padded to
+// six digits. Never carries a TTL: deleting a middle link would strand every
+// older generation (docs/DESIGN.md, "GENKEY# items carry no TTL").
+//
+// Wrapped is AES-256-GCM under the new group key (a WrappedBlob, not a
+// WrappedKey: no ECDH is involved), with AAD binding group id and generation.
+type GenerationKey struct {
+	Record
+
+	Wrapped WrappedBlob `dynamodbav:"Wrapped"`
+}
+
+// Rotation is the GROUP#<gid> / ROTATION marker: a key rotation that has
+// started and not yet finished. Its existence means new posts still use
+// Generation-1 and some members may not yet hold Generation. Nothing on the
+// server acts on it; admin clients compare StartedAt to the staleness deadline
+// on group load and surface a stalled rotation (docs/DESIGN.md, "The rotation
+// marker is the one item with a liveness requirement"). Never carries a TTL.
+//
+// Progress is deliberately not recorded here: resume is driven by member
+// state (Membership.Generation behind this one), because BatchWriteItem's
+// UnprocessedItems is a subset, not a prefix.
+type Rotation struct {
+	Record
+
+	// Generation is the key generation being rotated TO.
+	Generation int64 `dynamodbav:"Generation"`
+	// StartedAt is an RFC 3339 timestamp.
+	StartedAt string `dynamodbav:"StartedAt"`
+	// StartedBy is the admin whose browser minted the new key and holds it.
+	StartedBy string `dynamodbav:"StartedBy"`
+}

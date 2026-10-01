@@ -206,22 +206,143 @@ func TestRemoveMemberRejections(t *testing.T) {
 	}
 }
 
-// A Rotating group needs a key rotation on removal, which is not built.
-// Refusing is the fail-safe: removal without rotation there would leave the
-// removed member reading every new post with nothing saying so.
-func TestRemoveMemberRefusedInRotatingGroup(t *testing.T) {
+func rotationBody(gen int64) *removeRotationRequest {
+	return &removeRotationRequest{
+		Generation:        gen,
+		Link:              wrappedBlob{Nonce: b64(12), Ciphertext: b64(48)},
+		RemoverWrappedKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+	}
+}
+
+func numAttr(item map[string]types.AttributeValue, name string) string {
+	if v, ok := item[name].(*types.AttributeValueMemberN); ok {
+		return v.Value
+	}
+	return ""
+}
+
+// Removal in a Rotating group starts the rotation in the same transaction as
+// the delete: marker, chain link for the OLD generation, remover's own entry
+// point at the new one. Everyone else stays at generation 0 until the client
+// re-wraps them.
+func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
 	gid := createPrivateGroup(t, h, owner, ownerCookie) // rotating by default
+	bob, carol := registerTestUser(t, h), registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	addMember(t, gid, carol, "member")
+
+	body := &removeMemberRequest{Rotation: rotationBody(1)}
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, body); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) != nil {
+		t.Error("subject still a member")
+	}
+	marker := getRow(t, "GROUP#"+gid, "ROTATION")
+	if marker == nil || numAttr(marker, "Generation") != "1" || strAttr(marker, "StartedBy") != owner.userID || strAttr(marker, "StartedAt") == "" {
+		t.Errorf("marker = %v", marker)
+	}
+	if _, ttl := marker["TTL"]; ttl {
+		t.Error("marker carries a TTL")
+	}
+	link := getRow(t, "GROUP#"+gid, "GENKEY#000000")
+	if link == nil {
+		t.Fatal("no GENKEY#000000 link for the old generation")
+	}
+	if _, ttl := link["TTL"]; ttl {
+		t.Error("chain link carries a TTL")
+	}
+	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID), "Generation"); g != "1" {
+		t.Errorf("remover generation = %s, want 1", g)
+	}
+	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID), "Generation"); g != "0" {
+		t.Errorf("bystander generation = %s, want 0 (the client re-wraps them)", g)
+	}
+
+	// A second removal while the rotation runs is refused and changes nothing.
+	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(2)})
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_in_progress" {
+		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID) == nil {
+		t.Error("second removal went through during a rotation")
+	}
+	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID), "Generation"); g != "1" {
+		t.Errorf("rejected removal moved remover generation to %s", g)
+	}
+}
+
+// Without the rotation payload a Rotating removal must not half-happen: that
+// would leave the removed member reading every new post with nothing saying so.
+func TestRemoveMemberRotatingRejectsBadRotation(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
 
-	rec := doRemove(t, h, ownerCookie, gid, bob.userID, nil)
-	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_unsupported" {
+	badLink := rotationBody(1)
+	badLink.Link.Nonce = "AAAA"
+	cases := map[string]*removeMemberRequest{
+		"no body":            nil,
+		"no rotation":        {},
+		"generation skips":   {Rotation: rotationBody(2)},
+		"generation repeats": {Rotation: rotationBody(0)},
+		"short link nonce":   {Rotation: badLink},
+	}
+	for name, body := range cases {
+		rec := doRemove(t, h, ownerCookie, gid, bob.userID, body)
+		if rec.Code != http.StatusBadRequest || errCode(t, rec) != "rotation_required" {
+			t.Errorf("%s: %d %q %s", name, rec.Code, errCode(t, rec), rec.Body.String())
+		}
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
+		t.Error("member removed without a rotation")
+	}
+	if getRow(t, "GROUP#"+gid, "ROTATION") != nil || getRow(t, "GROUP#"+gid, "GENKEY#000000") != nil {
+		t.Error("rejected requests wrote rotation state")
+	}
+}
+
+// Rotation is a Rotating-group concept; an Open group says so rather than
+// silently ignoring a payload that implies a guarantee it does not give.
+func TestRemoveMemberOpenGroupRefusesRotation(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+
+	rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)})
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "rotation_not_applicable" {
 		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
-		t.Error("member was removed from a Rotating group without a rotation")
+		t.Error("member removed by a rejected request")
+	}
+}
+
+// An elevated subject in a Rotating group needs BOTH halves: the remover's
+// signed demotion and the rotation, and they commit together.
+func TestRemoveMemberRotatingAdminSubjectDemotesAndRotates(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	adm := registerTestUser(t, h)
+	addMember(t, gid, adm, "admin")
+
+	body := removalGrant(t, owner, gid, adm.userID, backdatedRef(t, gid, owner))
+	body.Rotation = rotationBody(1)
+	if rec := doRemove(t, h, ownerCookie, gid, adm.userID, &body); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+adm.userID) != nil || getRow(t, "GROUP#"+gid, "ROTATION") == nil {
+		t.Error("expected the admin gone and a rotation started")
+	}
+	if getRow(t, "GROUP#"+gid, body.GrantSortKey) == nil {
+		t.Error("demotion grant not written")
 	}
 }
 
