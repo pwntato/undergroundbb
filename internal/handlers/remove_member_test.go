@@ -331,8 +331,11 @@ func TestRemoveMemberRefusedWhenRemoversGrantIsDatedToday(t *testing.T) {
 
 	req := removalGrant(t, owner, gid, adm.userID, rootRef(t, gid, owner))
 	rec := doRemove(t, h, ownerCookie, gid, adm.userID, &req)
-	if rec.Code != http.StatusConflict || errCode(t, rec) != "remover_granted_today" {
-		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", rec.Code, rec.Body.String())
+	}
+	if got := errCode(t, rec); got != "remover_granted_today" {
+		t.Fatalf("code = %q, want remover_granted_today", got)
 	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+adm.userID) == nil {
 		t.Error("admin was removed with an unverifiable demotion")
