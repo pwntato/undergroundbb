@@ -436,7 +436,7 @@ describe('checkGrants key pinning (#63)', () => {
     expect(r.keys).toBe('unchecked')
   })
 
-  it('reports unchecked, not pinned, when a grantor\'s keys cannot be fetched', async () => {
+  it("reports unchecked, not pinned, when a grantor's keys cannot be fetched", async () => {
     const w = world()
     const d = deps(w)
     // First run pins everyone, so a clean second run would read "pinned".

@@ -27,7 +27,7 @@ describe('ownSigningKey', () => {
     expect(readCachedOwnSigningKey('u1', s)).toBeNull()
   })
 
-  it('never returns another account\'s key', () => {
+  it("never returns another account's key", () => {
     const s = fakeStorage()
     cacheOwnSigningKey('u1', 'a2V5', s)
     expect(readCachedOwnSigningKey('u2', s)).toBeNull()
