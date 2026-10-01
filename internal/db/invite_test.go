@@ -940,3 +940,41 @@ func TestCompleteInviteFailsWhenInviterNoLongerEligible(t *testing.T) {
 		})
 	}
 }
+
+// The handler reads the inviter's generation, then the transaction writes. If a
+// rotation re-wraps the inviter in between, the new member would be wrapped for
+// the old generation and land one behind, so the transaction itself must
+// condition on the inviter's generation.
+func TestCompleteInviteFailsWhenInviterGenerationMoved(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	inviteID := "test-invite-" + randomSuffix(t)
+	groupID := "test-group-" + randomSuffix(t)
+	inviterUserID := "test-inviter-" + randomSuffix(t)
+	invitedUserID := "test-invitee-" + randomSuffix(t)
+	putGroupMeta(t, c, groupID)
+	putTestMember(t, c, groupID, inviterUserID, "admin")
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, groupID, inviterUserID, time.Now().Add(7*24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, invitedUserID)); err != nil {
+		t.Fatal(err)
+	}
+	// The inviter was re-wrapped to generation 1 after the handler's read.
+	if _, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(groupID, inviterUserID),
+		UpdateExpression:          aws.String("SET Generation = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":g": &types.AttributeValueMemberN{Value: "1"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The request was built for generation 0.
+	err := c.CompleteInvite(ctx, testCompleteInviteInput(inviteID, groupID, inviterUserID, invitedUserID))
+	if !errors.Is(err, ErrInviterNotEligible) {
+		t.Fatalf("err = %v, want ErrInviterNotEligible", err)
+	}
+	if itemExists(t, c, "GROUP#"+groupID, "MEMBER#"+invitedUserID) {
+		t.Error("membership written one generation behind")
+	}
+}

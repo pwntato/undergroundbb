@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -50,7 +51,7 @@ func (h *Handler) rewrapMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.Wraps) == 0 || len(req.Wraps) > db.MaxRewrapBatch {
-		WriteError(w, http.StatusBadRequest, "wraps: must hold between 1 and 25 entries")
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("wraps: must hold between 1 and %d entries", db.MaxRewrapBatch))
 		return
 	}
 	in := db.RewrapMembersInput{GroupID: groupID, CallerUserID: userID, Generation: req.Generation}

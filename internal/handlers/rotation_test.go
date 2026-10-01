@@ -124,10 +124,63 @@ func TestRotationRewrapAndComplete(t *testing.T) {
 	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_not_active" {
 		t.Errorf("second complete: %d %s", rec.Code, rec.Body.String())
 	}
-	// With the marker gone a rewrap is refused too.
-	rec = doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, f.carol))
+}
+
+// A member who ends up behind AFTER completion (an invite completed by an
+// inviter who was re-wrapped mid-request, or added in the scan/delete gap) must
+// be movable with no marker present: only a removal starts a rotation, so
+// without this nothing could ever bring them up to the group's key.
+func TestRotationCatchUpAfterCompletion(t *testing.T) {
+	f := startRotation(t)
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, f.carol, f.dave)); rec.Code != http.StatusNoContent {
+		t.Fatalf("rewrap: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
+		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
+	}
+	late := registerTestUser(t, f.h)
+	addMember(t, f.gid, late, "member") // lands at generation 0, one behind
+
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, late)); rec.Code != http.StatusNoContent {
+		t.Fatalf("catch-up: %d %s", rec.Code, rec.Body.String())
+	}
+	if g := memberGen(t, f.gid, late); g != "1" {
+		t.Errorf("late member generation = %s, want 1", g)
+	}
+	if getRow(t, "GROUP#"+f.gid, "ROTATION") != nil {
+		t.Error("catch-up created a marker")
+	}
+	// It cannot be used to rotate: the generation is pinned to the caller's own
+	// entry point, so asking for 2 is refused, and nobody is moved backward.
+	rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(2, f.carol))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_caller_behind" {
+		t.Errorf("catch-up to a generation the caller does not hold: %d %s", rec.Code, rec.Body.String())
+	}
+	setMemberGeneration(t, f.gid, f.dave.userID, 2)
+	rec = doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, f.dave))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "member_changed" {
+		t.Errorf("catch-up over a member already ahead: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A stale tab completing generation 1 after its admin has started rotation 2
+// must hear "not active" (which the client treats as done), not "caller
+// behind", the same answer RewrapMembers gives.
+func TestRotationCompleteStaleTabHearsNotActive(t *testing.T) {
+	f := startRotation(t)
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, f.carol, f.dave)); rec.Code != http.StatusNoContent {
+		t.Fatalf("rewrap: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
+		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRemove(t, f.h, f.ownerCookie, f.gid, f.carol.userID, &removeMemberRequest{Rotation: rotationBody(2)}); rec.Code != http.StatusNoContent {
+		t.Fatalf("rotation 2: %d %s", rec.Code, rec.Body.String())
+	}
+	// Now at generation 2 with marker 2; a stale tab completes generation 1.
+	rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1})
 	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_not_active" {
-		t.Errorf("rewrap after complete: %d %s", rec.Code, rec.Body.String())
+		t.Errorf("stale complete: %d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 	}
 }
 

@@ -98,12 +98,20 @@ func (c *Client) callerAtGenerationCheck(groupID, userID string, gen int64) type
 	}}
 }
 
-// markerAtGenerationCheck asserts the marker exists and names gen.
+// markerAtGenerationCheck asserts a re-wrap to gen is allowed: the marker
+// names gen, OR no marker exists. The second arm is the catch-up: a member who
+// ends up behind after completion (added at an older generation in the gap
+// between completion's scan and its delete, or by an inviter re-wrapped
+// meanwhile) must still be movable, and nothing else would move them since
+// only a removal starts a rotation. It cannot be abused to rotate: the
+// caller-at-generation check pins gen to the caller's OWN entry point, so with
+// no marker this only brings a behind member up to the admin's current key,
+// and Generation <= gen means nobody is ever moved backward.
 func (c *Client) markerAtGenerationCheck(groupID string, gen int64) types.TransactWriteItem {
 	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName:                aws.String(c.table),
 		Key:                      rotationKey(groupID),
-		ConditionExpression:      aws.String("#gen = :gen"),
+		ConditionExpression:      aws.String("attribute_not_exists(PK) OR #gen = :gen"),
 		ExpressionAttributeNames: map[string]string{"#gen": "Generation"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":gen": genAttr(gen),
@@ -112,10 +120,12 @@ func (c *Client) markerAtGenerationCheck(groupID string, gen int64) types.Transa
 }
 
 // RewrapMembers writes the batch in one transaction: the marker still names
-// the generation, the caller is an admin at it, and every member exists and is
+// the generation (or none exists, see markerAtGenerationCheck), the caller is an admin at it, and every member exists and is
 // not already past it. Re-wrapping a member already AT the generation is
 // allowed, so a retry after a lost response is safe (it rewrites the same key
-// under a fresh ephemeral). All or nothing, so there are no UnprocessedItems
+// under a fresh ephemeral); a client should otherwise re-wrap only members who
+// are behind, since a wrong key written over a member at the generation would
+// lock out exactly the admins able to resume. All or nothing, so there are no UnprocessedItems
 // to chase; resume is still state-driven, by re-listing members behind.
 func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error {
 	if len(in.Wraps) == 0 || len(in.Wraps) > MaxRewrapBatch {
@@ -174,13 +184,13 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 
 // CompleteRotation deletes the marker, only once every member's entry point is
 // at the rotation's generation. The membership scan is not atomic with the
-// delete: a member added at an older generation in between is possible, and is
-// caught the same way as any other behind member, by an admin client comparing
-// generations on load.
+// delete: a member added at an older generation in between is possible. The
+// scan is a consistent read so it cannot miss a just-written membership, and
+// such a member is moved by a catch-up RewrapMembers (no marker needed).
 func (c *Client) CompleteRotation(ctx context.Context, groupID, callerUserID string, gen int64) error {
 	after := ""
 	for {
-		page, next, err := c.ListMembers(ctx, groupID, after, 200)
+		page, next, err := c.listMembers(ctx, groupID, after, 200, true)
 		if err != nil {
 			return err
 		}
@@ -208,10 +218,13 @@ func (c *Client) CompleteRotation(ctx context.Context, groupID, callerUserID str
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
-		case isConditionalCheckFailure(err, 0):
-			return ErrRewrapCallerBehind
+		// The marker first, as RewrapMembers does: when both fail (a stale tab
+		// completing a rotation its admin has since moved past) "not active"
+		// is the answer the client treats as done.
 		case isConditionalCheckFailure(err, 1):
 			return ErrRotationNotActive
+		case isConditionalCheckFailure(err, 0):
+			return ErrRewrapCallerBehind
 		case isTransactionConflict(err):
 			return ErrRoleChangeConflict
 		}

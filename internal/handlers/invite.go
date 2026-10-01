@@ -714,6 +714,14 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, db.ErrInviterNotEligible) {
+			// The check covers role AND key generation. Re-read to tell them
+			// apart: still elevated means the inviter's key moved under us
+			// (a rotation re-wrapped them), which is retryable, not a 403.
+			if now, rerr := h.db.GetMembership(r.Context(), match.GroupID, userID); rerr == nil && now != nil &&
+				(now.Role == models.RoleAdmin || now.Role == models.RoleAmbassador) {
+				WriteErrorWithCode(w, http.StatusConflict, "your group key changed; reload and retry", "conflict_retry")
+				return
+			}
 			WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group")
 			return
 		}

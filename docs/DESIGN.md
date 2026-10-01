@@ -832,9 +832,17 @@ marker still names the generation, the caller is an admin whose own entry point 
 way to hold the key), and every member exists and is not already past it, or nothing is written
 (`member_changed`, and the client re-lists and resends). A member already *at* the generation is
 accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/complete`
-deletes the marker only when no member is behind (`members_behind`). The scan is not atomic with the
-delete, so a member added at an older generation in that gap is possible and is the same kind of
-"behind" member as any other, caught by an admin client comparing generations on load. A client
+deletes the marker only when no member is behind (`members_behind`). The scan is a consistent read
+but is not atomic with the delete, and an invite completed by an inviter who was re-wrapped
+mid-request could land a member one generation behind (the `CompleteInvite` transaction now
+conditions on the inviter's generation, which closes that), so a behind member after completion is
+unlikely but possible. They are moved by the same re-wrap call with **no marker present**: it is
+then a catch-up, allowed because the caller's own entry point pins the generation (an admin can only
+bring a member up to the admin's own current key) and nobody is ever moved backward. An admin client
+compares members' generations to its own on load to find them. A re-wrap also
+accepts a member already *at* the generation, so a retry after a lost response is safe; a client
+should otherwise re-wrap only members who are **behind**, because a wrong key written over an admin
+already at the generation would lock out exactly the admins able to resume. A client
 resuming a rotation should re-wrap the **other admins first**: only an admin already at the new
 generation can resume, and only the initiator is until someone else is re-wrapped.
 

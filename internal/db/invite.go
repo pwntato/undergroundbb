@@ -710,10 +710,12 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 					ConditionExpression: aws.String("attribute_exists(PK)"),
 				},
 			},
-			// The inviter must still be an Admin or Ambassador. The handler
-			// checks this with a read first; this closes the window between
-			// that read and this write (the inviter leaving or being demoted
-			// in another tab).
+			// The inviter must still be an Admin or Ambassador, and still at
+			// the generation the new member is wrapped for. The handler checks
+			// both with a read first; this closes the window between that read
+			// and this write (the inviter leaving, being demoted, or being
+			// re-wrapped to a newer generation by a rotation that completes in
+			// between, which would otherwise land the new member one behind).
 			{
 				ConditionCheck: &types.ConditionCheck{
 					TableName: aws.String(c.table),
@@ -721,11 +723,12 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 						"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
 						"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.InviterUserID},
 					},
-					ConditionExpression:      aws.String("#role IN (:admin, :amb)"),
-					ExpressionAttributeNames: map[string]string{"#role": "Role"},
+					ConditionExpression:      aws.String("#role IN (:admin, :amb) AND #gen = :gen"),
+					ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation"},
 					ExpressionAttributeValues: map[string]types.AttributeValue{
 						":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
 						":amb":   &types.AttributeValueMemberS{Value: models.RoleAmbassador},
+						":gen":   genAttr(in.Generation),
 					},
 				},
 			},
