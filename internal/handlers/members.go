@@ -573,3 +573,208 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 		NextCursor: next,
 	})
 }
+
+// removeMemberRequest is the optional body of DELETE
+// /api/groups/{groupId}/members/{userId}. It is the REMOVER's signed grant of
+// "member" to the subject, required exactly when the subject is an admin or
+// ambassador (see db.RemoveMemberInput.Demotion) and absent otherwise.
+type removeMemberRequest struct {
+	GrantSortKey    string `json:"grantSortKey"`
+	GrantorGrantRef string `json:"grantorGrantRef"`
+	Signature       string `json:"signature"`
+}
+
+// removeMember implements DELETE /api/groups/{groupId}/members/{userId} --
+// issue #58, first slice. Admin only; removes another member. An admin or
+// ambassador subject is demoted by the remover's signed grant in the same
+// transaction, so an involuntary removal needs no one else's signature, and
+// the group always keeps the admin who did it (an admin cannot remove
+// themselves; leaving is a different endpoint), which is why this needs no
+// last-admin rule.
+//
+// Open groups only for now. Removal in a Rotating group must mint a new key
+// generation (docs/DESIGN.md, "Revocation mode"), which is the next slice;
+// until it exists the request is refused rather than half-done, because a
+// removal that does not rotate there silently leaves the removed member
+// reading every new post.
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	subjectID := r.PathValue("userId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxChangeRoleBodyBytes)
+	var req removeMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	// No body, {} and null all mean "no demotion attached", as for leaveGroup.
+	hasBody := !req.empty()
+
+	// Same rule as getGroup: every read happens before any 404 branch.
+	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		return
+	}
+	group, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		return
+	}
+	if caller == nil || group == nil {
+		groupNotFound(w)
+		return
+	}
+	if caller.Role != models.RoleAdmin {
+		WriteError(w, http.StatusForbidden, "only a group admin can remove members")
+		return
+	}
+	if group.GroupType == "dm" {
+		WriteError(w, http.StatusBadRequest, "a direct message has no members to remove")
+		return
+	}
+	if !idgen.ValidUUID(subjectID) {
+		WriteError(w, http.StatusNotFound, "member not found")
+		return
+	}
+	if subjectID == userID {
+		WriteError(w, http.StatusBadRequest, "you cannot remove yourself; leave the group instead")
+		return
+	}
+	subject, err := h.db.GetMembership(r.Context(), groupID, subjectID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		return
+	}
+	if subject == nil {
+		WriteError(w, http.StatusNotFound, "member not found")
+		return
+	}
+	if group.RevocationMode != models.RevocationOpen {
+		WriteErrorWithCode(w, http.StatusConflict, "removing a member from a Rotating group needs a key rotation, which is not built yet", "rotation_unsupported")
+		return
+	}
+
+	in := db.RemoveMemberInput{
+		GroupID:       groupID,
+		SubjectUserID: subjectID,
+		SubjectRole:   subject.Role,
+		RemoverUserID: userID,
+	}
+	currentRef, hasStored := currentGrantRef(caller, group, userID)
+	if currentRef == "" {
+		WriteErrorWithCode(w, http.StatusConflict, "your own admin grant is not on record", "grantor_grant_missing")
+		return
+	}
+	in.RemoverGrantRef, in.RemoverHasStoredGrant = currentRef, hasStored
+
+	elevated := subject.Role != models.RoleMember
+	switch {
+	case elevated && !hasBody:
+		WriteErrorWithCode(w, http.StatusBadRequest, "removing an admin or ambassador needs your signed demotion of them", "demotion_required")
+		return
+	case !elevated && hasBody:
+		// The subject's role changed since the request was built.
+		WriteErrorWithCode(w, http.StatusConflict, "the member's role changed; reload and retry", "conflict_retry")
+		return
+	case elevated:
+		demotion, rej, msg := h.buildRemoveDemotion(r.Context(), userID, groupID, subjectID, currentRef, req)
+		if msg != "" {
+			if rej.code == "" {
+				WriteError(w, rej.status, msg)
+			} else {
+				WriteErrorWithCode(w, rej.status, msg, rej.code)
+			}
+			return
+		}
+		in.Demotion = demotion
+	}
+
+	err = h.db.RemoveMember(r.Context(), in)
+	switch {
+	case errors.Is(err, db.ErrGrantorChanged):
+		WriteErrorWithCode(w, http.StatusConflict, "your own role changed; reload and re-sign", "grantor_changed")
+	case errors.Is(err, db.ErrSubjectRoleChanged):
+		WriteErrorWithCode(w, http.StatusConflict, "the member's role changed or they are already gone; reload and retry", "subject_role_changed")
+	case errors.Is(err, db.ErrGrantKeyTaken):
+		WriteErrorWithCode(w, http.StatusConflict, "grantSortKey is taken; generate a new one and re-sign", "grant_key_taken")
+	case errors.Is(err, db.ErrRoleChangeConflict):
+		WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
+	case errors.Is(err, db.ErrInviteCleanupIncomplete):
+		// The removal committed; only unreachable or expiring rows remain.
+		log.Printf("remove member %s from %s: %v", subjectID, groupID, err)
+		w.WriteHeader(http.StatusNoContent)
+	case err != nil:
+		WriteError(w, http.StatusInternalServerError, "could not remove member")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (r removeMemberRequest) empty() bool {
+	return r.GrantSortKey == "" && r.GrantorGrantRef == "" && r.Signature == ""
+}
+
+type removeRejection struct {
+	status int
+	code   string
+}
+
+// buildRemoveDemotion validates the remover's signed demotion of the subject
+// exactly as changeMemberRole validates a grant: a well-formed sort key for
+// the SUBJECT dated near now, a well-formed signature, and a signature that
+// verifies under the remover's CURRENT key (read from their PROFILE, never
+// the request) over a grant of "member" referencing the remover's own current
+// grant. A non-empty message means the request is rejected.
+func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, subjectID, currentRef string, req removeMemberRequest) (*db.RemoveDemotion, removeRejection, string) {
+	if req.GrantorGrantRef != currentRef {
+		return nil, removeRejection{http.StatusConflict, "grantor_ref_stale"}, "grantorGrantRef is not your current grant; reload and re-sign"
+	}
+	day, ok := idgen.ValidGrantSortKey(req.GrantSortKey, subjectID)
+	if !ok {
+		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: must be a well-formed GRANT# sort key for the member's uuid"
+	}
+	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
+		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: day is not within tolerance of the current UTC day"
+	}
+	// The verifier needs the remover's own grant to be dated STRICTLY EARLIER
+	// than the demotion they sign: on the same day the order is unknowable, and
+	// a later-dated grant means they held no grant on the signing day at all.
+	// Either invalidates THIS demotion and everything the remover signs
+	// afterwards, permanently if the removed admin was the only one who could
+	// re-grant them. The later case is reachable by honest clients: the grant
+	// day tolerance (now-26h .. now+2h) lets a remover promoted just after
+	// 00:00 UTC sign for a day that is still yesterday on a slow clock. The
+	// remover's current grant is already in hand, so refuse here instead of
+	// storing something that can never verify (the removal-side half of #167).
+	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && !day.After(refDay) {
+		if day.Before(refDay) {
+			// Advice differs: waiting does not help a slow clock, which would
+			// date the retry just after midnight as refDay again.
+			return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "this removal is dated before your own admin grant, so it could never verify; check your device clock and retry"
+		}
+		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal, so it could never verify; try again after 00:00 UTC"
+	}
+	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
+	if err != nil {
+		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "signature: " + err.Error()
+	}
+	remover, err := h.db.GetUserByID(ctx, removerID)
+	if err != nil {
+		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
+	}
+	payload := crypto.RoleGrantPayload(groupID, subjectID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
+	if !crypto.Verify(remover.SigningPublicKey, crypto.ContextRoleGrant, payload, sig) {
+		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "signature: does not verify against the caller's current signing key"
+	}
+	return &db.RemoveDemotion{GrantSortKey: req.GrantSortKey, SigningPublicKey: remover.SigningPublicKey, Signature: sig}, removeRejection{}, ""
+}

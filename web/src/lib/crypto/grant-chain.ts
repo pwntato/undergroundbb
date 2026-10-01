@@ -52,6 +52,22 @@
 //     old leavers still show as unverified on rejoin; and an admin promoted
 //     and leaving on the SAME UTC day has an unverifiable demotion (order
 //     within a day is unknowable), so that rejoin shows as unverified too.
+//   - Removing an admin appends a demotion signed by the REMOVER (issue #58).
+//     It verifies like any admin grant, but the same-day exemption above is
+//     for self-demotion only, so every grant the removed admin signed on the
+//     removal's own UTC day is flagged, honest ones included, and the member
+//     they promoted shows as unverified until a later grant re-establishes
+//     them. Deliberate: order within a day is unknowable, and exempting a
+//     demotion by someone else would let a server colluding with the removed
+//     admin store a grant signed after the removal and have it verify. Pinned
+//     in grant-chain.test.ts; do not widen the exemption without a way to
+//     order within a day. The mirror case (promoted and removed the same day)
+//     leaves an ambiguous latest grant on rejoin, as for leaving. Worse: if the
+//     REMOVER's own grant is dated the removal's day OR LATER (reachable by
+//     honest clients near 00:00 UTC), the remover's grant, the removal and
+//     everything the remover signs later are all flagged, and with nobody left
+//     to re-grant them it is permanent. The server refuses that write
+//     (remover_granted_today) rather than store it; pinned in the tests.
 //   - A self-demotion is the only self-grant accepted. It takes effect the
 //     day after it is dated, so the leaver's promotion of a successor the same
 //     day still verifies.
