@@ -11,9 +11,10 @@ import (
 // Issue #57: the server's role gates, pinned per role. This is a first line,
 // not a boundary (docs/DESIGN.md, "Roles and the chain of trust", the
 // paragraph beginning "The server also enforces"): a client holding the
-// group key can ignore it, and the signed grant chain is what actually decides who holds a role. These tests catch the cheap failures,
-// a gate dropped or loosened by a refactor, for each role rather than only
-// for "not a member".
+// group key can ignore it, and the signed grant chain is what actually
+// decides who holds a role. These tests catch the cheap failures, a gate
+// dropped or loosened by a refactor, for each role rather than only for
+// "not a member".
 func TestRoleGatesPerRole(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
