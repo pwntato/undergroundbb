@@ -619,6 +619,17 @@ type groupDetailResponse struct {
 	// change must sign as grantorGrantRef (changeRoleRequest). Members only;
 	// empty when the server has no grant on record for the caller.
 	MyGrantSortKey string `json:"myGrantSortKey,omitempty"`
+	// Rotation is the group's in-progress key rotation, members only; absent
+	// when none is running. While present, new posts still use generation
+	// Rotation.Generation-1.
+	Rotation *rotationState `json:"rotation,omitempty"`
+}
+
+// rotationState is the wire shape of the ROTATION marker.
+type rotationState struct {
+	Generation int64  `json:"generation"`
+	StartedAt  string `json:"startedAt"`
+	StartedBy  string `json:"startedBy"`
 }
 
 // currentGrantRef is a member's own current grant address: the one recorded
@@ -709,6 +720,14 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if m != nil {
 		resp.MyGrantSortKey, _ = currentGrantRef(m, g, userID)
+		rot, err := h.db.GetRotation(r.Context(), groupID)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "could not load group")
+			return
+		}
+		if rot != nil {
+			resp.Rotation = &rotationState{Generation: rot.Generation, StartedAt: rot.StartedAt, StartedBy: rot.StartedBy}
+		}
 	}
 	WriteJSON(w, http.StatusOK, resp)
 }
