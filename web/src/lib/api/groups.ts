@@ -173,6 +173,15 @@ export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
    * grantorGrantRef. Present for members only.
    */
   readonly myGrantSortKey?: string
+  /**
+   * The group's in-progress key rotation, members only; absent when none is
+   * running. While present, new posts still use generation `generation - 1`.
+   */
+  readonly rotation?: {
+    readonly generation: number
+    readonly startedAt: string
+    readonly startedBy: string
+  }
 }
 
 /**
@@ -316,4 +325,55 @@ export async function leaveGroup(
   demotion?: LeaveGroupRequest,
 ): Promise<{ groupDeleted: boolean }> {
   return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, demotion ?? {})
+}
+
+/** Like putOrPostJSON for endpoints that answer 204; throws ApiError (with the server's `code`) otherwise. */
+async function sendNoContent(method: 'POST' | 'PUT', path: string, body: unknown): Promise<void> {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body),
+  })
+  if (res.ok) {
+    return
+  }
+  await handleJSON<never>(res)
+}
+
+/** One member's entry point wrapped for the rotation's generation. */
+export interface RewrapEntry {
+  readonly userId: string
+  readonly wrappedKey: WireWrappedKey
+}
+
+/** The most members PUT /rotation/members takes at once (db.MaxRewrapBatch). */
+export const MAX_REWRAP_BATCH = 25
+
+/**
+ * PUT /api/groups/{id}/rotation/members -- issue #58. Moves up to
+ * MAX_REWRAP_BATCH members' entry points to `generation` in one all-or-nothing
+ * transaction. Admin only, and the caller's own entry point must already be at
+ * `generation`. 409 codes: `rotation_not_active` (the rotation finished or was
+ * superseded; re-read the group), `rotation_caller_behind` (your own key is not
+ * at that generation), `member_changed` (a member left or is not behind; re-list
+ * and resend), `conflict_retry`.
+ */
+export function rewrapMembers(
+  groupId: string,
+  req: { readonly generation: number; readonly wraps: readonly RewrapEntry[] },
+): Promise<void> {
+  return sendNoContent('PUT', `/api/groups/${encodeURIComponent(groupId)}/rotation/members`, req)
+}
+
+/**
+ * POST /api/groups/{id}/rotation/complete -- issue #58. Clears the marker once
+ * every member is at `generation`. 409 `members_behind` means re-list and
+ * re-wrap; 409 `rotation_not_active` means someone already finished it (treat
+ * as done).
+ */
+export function completeRotation(groupId: string, generation: number): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/complete`, {
+    generation,
+  })
 }
