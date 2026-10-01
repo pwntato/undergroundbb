@@ -746,6 +746,15 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
 		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: day is not within tolerance of the current UTC day"
 	}
+	// The verifier rejects a signature on the day the signer's own role was set
+	// (order within a UTC day is unknowable), and that would invalidate THIS
+	// demotion and everything the remover signs afterwards, permanently if the
+	// removed admin was the only one who could re-grant them. The remover's
+	// current grant is already in hand, so refuse here instead of storing
+	// something that can never verify (the removal-side half of #167).
+	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && refDay.Equal(day) {
+		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal, so it could never verify; try again after 00:00 UTC"
+	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
 		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "signature: " + err.Error()

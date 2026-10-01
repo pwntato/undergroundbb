@@ -821,7 +821,20 @@ within a day is unknowable, and exempting a demotion signed by someone else woul
 colludes with the removed admin store a grant signed *after* the removal and have it verify, which
 is the one thing removal is for. It fails safe: a flag, never a false "verified". The mirror case,
 an admin promoted and removed on the same day, leaves an ambiguous latest grant on rejoin, the same
-gap leaving already has. Both are pinned in `grant-chain.test.ts`. An admin cannot remove themselves, so the
+gap leaving already has. Both are pinned in `grant-chain.test.ts`.
+
+**The worse case is refused, not stored.** If the *remover's own* grant is dated the same UTC day
+as the demotion they sign (a creator removing an admin on the day the group was made, or an admin
+promoted this morning removing someone this afternoon), the remover's grant is flagged by the same
+rule, so the removal grant and everything the remover signs afterwards fail with it. When the
+removed admin was the creator, nobody is left who could re-grant the remover, so the chain under
+them stays unverified permanently, and an honest admin can reach it. The server already holds the
+remover's current grant, so it answers 409 `remover_granted_today` ("try again after 00:00 UTC")
+instead of storing a write that can never verify. This applies to removing an **admin or
+ambassador** only, since removing a plain member signs nothing. It is the removal-side half of
+#167, which asks for the same refusal on role changes and is not built yet. The cost is a delay of
+up to a day on removing an elevated member for an admin whose own grant is that new. The verifier
+cases that make it necessary are pinned in `grant-chain.test.ts`. An admin cannot remove themselves, so the
 admin who removes someone is always still there: removal never leaves a group without an admin, and
 the successor problem (#161) is left only with account deletion (#77) and inactivity, where no
 remaining admin is acting. This slice works for **Open** groups only. In a **Rotating** group

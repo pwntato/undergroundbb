@@ -1022,6 +1022,47 @@ describe('verifyGrantChain: removal of an admin (#58)', () => {
     expect(checkMemberRole(r, ALICE, 'member')).toEqual({ status: 'verified' })
   })
 
+  // Why the SERVER refuses these (remover_granted_today): when the remover's
+  // own grant is dated the same UTC day as the demotion they sign, the strict
+  // rule flags the remover's grant, so the removal and everything the remover
+  // signs later fail with it. S3 has nobody left to re-grant the remover.
+  describe('remover promoted the same day (refused by the server, pinned here)', () => {
+    const setup = (promoter: 'alice' | 'creator') => {
+      const w = world()
+      const bobKey = generateSigningKey()
+      const eveKey = generateSigningKey()
+      const bobAdmin =
+        promoter === 'alice'
+          ? grant(w.aliceKey, BOB, 'admin', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
+          : grant(w.creatorKey, BOB, 'admin', CREATOR, '2026-03-06', w.root.sortKey)
+      // Bob removes the admin who is leaving (Alice, or the creator) the same day.
+      const removed = promoter === 'alice' ? ALICE : CREATOR
+      const removal = grant(bobKey, removed, 'member', BOB, '2026-03-06', bobAdmin.sortKey)
+      const eve = grant(bobKey, EVE, 'admin', BOB, '2026-03-09', bobAdmin.sortKey)
+      const input: GrantChainInput = {
+        ...withGrants(w, bobAdmin, removal, eve),
+        keyHistories: new Map([
+          ...w.input.keyHistories,
+          [BOB, history(bobKey)],
+          [EVE, history(eveKey)],
+        ]),
+      }
+      return { r: verifyGrantChain(input), bobAdmin, removal, eve }
+    }
+
+    for (const promoter of ['alice', 'creator'] as const) {
+      it(`${promoter} promoted Bob and Bob removes them the same day: all of it is unverified`, () => {
+        const { r, bobAdmin, removal, eve } = setup(promoter)
+        expect(r.verdicts.get(removal.sortKey)?.valid).toBe(false)
+        // Bob's own grant is flagged too: its grantor has a same-day grant (the
+        // demotion), whoever the grantor is.
+        expect(r.verdicts.get(bobAdmin.sortKey)?.valid).toBe(false)
+        expect(r.verdicts.get(eve.sortKey)?.valid).toBe(false)
+        expect(checkMemberRole(r, EVE, 'admin').status).toBe('unverified')
+      })
+    }
+  })
+
   it('does not extend the self-demotion exemption to a demotion by someone else', () => {
     // Same shape as the self-demotion promote-then-leave test, with the
     // demotion signed by the creator instead of Alice: the exemption must not

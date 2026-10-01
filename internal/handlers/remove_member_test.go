@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -57,6 +58,28 @@ func removalGrant(t *testing.T, remover registeredUser, gid, subjectID, ref stri
 	return removeMemberRequest{GrantSortKey: g.GrantSortKey, GrantorGrantRef: g.GrantorGrantRef, Signature: g.Signature}
 }
 
+// backdatedRef points the remover's current grant at an earlier UTC day, as
+// it is for any admin promoted before today. The server only reads this
+// pointer (never the row), and a group made today has a root grant dated
+// today, which removal of an elevated member now refuses (see
+// TestRemoveMemberRefusedWhenRemoversGrantIsDatedToday).
+func backdatedRef(t *testing.T, gid string, owner registeredUser) string {
+	t.Helper()
+	ref := testGrantSortKey(t, owner.userID, time.Now().AddDate(0, 0, -3))
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + owner.userID},
+		},
+		UpdateExpression:          aws.String("SET GrantSortKey = :r"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: ref}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
 func memberRole(t *testing.T, gid, userID string) string {
 	t.Helper()
 	return strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+userID), "Role")
@@ -89,7 +112,7 @@ func TestRemoveMemberElevatedAppendsRemoversDemotion(t *testing.T) {
 			gid := createOpenGroup(t, h, owner, ownerCookie)
 			bob := registerTestUser(t, h)
 			addMember(t, gid, bob, role)
-			ref := rootRef(t, gid, owner)
+			ref := backdatedRef(t, gid, owner)
 
 			req := removalGrant(t, owner, gid, bob.userID, ref)
 			if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &req); rec.Code != http.StatusNoContent {
@@ -131,7 +154,7 @@ func TestRemoveMemberRejections(t *testing.T) {
 	addMember(t, gid, amb, "ambassador")
 	addMember(t, gid, mem, "member")
 	addMember(t, gid, adm, "admin")
-	ref := rootRef(t, gid, owner)
+	ref := backdatedRef(t, gid, owner)
 
 	good := func() removeMemberRequest { return removalGrant(t, owner, gid, adm.userID, ref) }
 	wrongRole := good()
@@ -292,5 +315,81 @@ func TestRemoveMemberStaleRemoverIsAConflict(t *testing.T) {
 	})
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
 		t.Error("member was removed by a stale remover")
+	}
+}
+
+// Removing an admin whose demotion would be signed on the same UTC day the
+// remover's own role was set cannot verify (the strict same-day rule), and
+// would take the remover's later grants down with it. Reachable by an honest
+// admin: a creator's root grant is dated the day the group was made.
+func TestRemoveMemberRefusedWhenRemoversGrantIsDatedToday(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie) // root grant dated today
+	adm := registerTestUser(t, h)
+	addMember(t, gid, adm, "admin")
+
+	req := removalGrant(t, owner, gid, adm.userID, rootRef(t, gid, owner))
+	rec := doRemove(t, h, ownerCookie, gid, adm.userID, &req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "remover_granted_today" {
+		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+adm.userID) == nil {
+		t.Error("admin was removed with an unverifiable demotion")
+	}
+	if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
+		t.Error("an unverifiable demotion was written")
+	}
+
+	// Only a demotion is signed for an elevated subject: a plain member's
+	// removal signs nothing, so the same remover may do it today.
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, nil); rec.Code != http.StatusNoContent {
+		t.Errorf("plain member removal on the remover's grant day: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Removal deletes the subject's own pending invites, as leaving does: an
+// invitee must not be left holding an invite whose inviter is gone.
+func TestRemoveMemberDeletesTheirPendingInvites(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	bob, bobCookie := loggedInUser(t, h)
+	addMember(t, gid, bob, "ambassador")
+
+	inv := signedCreateInviteRequest(t, bob, gid, time.Now().Add(24*time.Hour))
+	if rec := doJSON(t, h, http.MethodPost, "/api/groups/"+gid+"/invites", bobCookie, inv); rec.Code != http.StatusCreated {
+		t.Fatalf("create invite: %d %s", rec.Code, rec.Body.String())
+	}
+	sent := func() int {
+		out, err := rawDDB(t).Query(context.Background(), &dynamodb.QueryInput{
+			TableName:              aws.String(testTableName()),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "USER#" + bob.userID},
+				":sk": &types.AttributeValueMemberS{Value: "SENT#"},
+			},
+			ConsistentRead: aws.Bool(true),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(out.Items)
+	}
+	if sent() != 1 || getRow(t, "INVITE#"+inv.InviteID, "META") == nil {
+		t.Fatal("precondition: the invite rows should exist before removal")
+	}
+
+	req := removalGrant(t, owner, gid, bob.userID, backdatedRef(t, gid, owner))
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &req); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	if sent() != 0 {
+		t.Error("the removed member's SENT# row survived")
+	}
+	if getRow(t, "INVITE#"+inv.InviteID, "META") != nil {
+		t.Error("the removed member's INVITE# row survived")
 	}
 }
