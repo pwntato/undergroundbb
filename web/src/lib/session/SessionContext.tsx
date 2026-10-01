@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getSession } from '@/lib/api/auth'
 import { clearLiveKeys } from '@/lib/crypto/worker-client'
+import { clearCachedOwnSigningKey } from './ownSigningKey'
 import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
@@ -63,6 +64,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // user-initiated logout) -- this still needs to run there too, once
         // one does, for the same reason.
         clearLiveKeys()
+        if (userId !== null) {
+          clearCachedOwnSigningKey(userId)
+        }
         // Issue #35: also clears this tab's cached decrypted group names --
         // same reasoning as clearLiveKeys, a reused worker instance/tab must
         // never show a previous account's group names, and userId is still

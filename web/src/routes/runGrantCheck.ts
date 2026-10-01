@@ -119,11 +119,11 @@ export async function checkGrants(
 ): Promise<GrantCheck> {
   try {
     const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
-    const served = await readServedKeys(deps, [
+    const { served, unreadable } = await readServedKeys(deps, [
       anchor.creatorUserId,
       ...grants.map((g) => g.grantorUserId),
     ])
-    const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served)
+    const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served, unreadable)
 
     const stored = deps.readPin(groupId)
     const result = verifyGrantChain({
@@ -204,13 +204,18 @@ async function readAllGrants(
   throw new Error('grant pagination did not terminate')
 }
 
-/** A user whose keys cannot be read is left out; the verifier fails closed on them. */
+/**
+ * A user whose keys cannot be read is left out (the verifier fails closed on
+ * them) and counted in `unreadable`, so the key state cannot claim every
+ * grantor's keys were checked.
+ */
 async function readServedKeys(
   deps: GrantCheckDeps,
   ids: readonly string[],
-): Promise<ReadonlyMap<string, UserProjection>> {
+): Promise<{ served: ReadonlyMap<string, UserProjection>; unreadable: number }> {
   const wanted = [...new Set(ids)]
   const out = new Map<string, UserProjection>()
+  let unreadable = 0
   let next = 0
   const worker = async () => {
     while (next < wanted.length) {
@@ -219,11 +224,12 @@ async function readServedKeys(
         out.set(id, await deps.getUser(id))
       } catch {
         // Fails closed in the verifier ("no key history").
+        unreadable++
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_READS, wanted.length) }, worker))
-  return out
+  return { served: out, unreadable }
 }
 
 function historyOf(u: UserProjection): UserKeyHistory {
@@ -241,6 +247,7 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
 async function checkServedKeys(
   deps: GrantCheckDeps,
   served: ReadonlyMap<string, UserProjection>,
+  unreadable: number,
 ): Promise<{
   keyHistories: ReadonlyMap<string, UserKeyHistory>
   keys: KeyState
@@ -257,7 +264,8 @@ async function checkServedKeys(
 
   const keyHistories = new Map<string, UserKeyHistory>()
   const blockedKeyUsers: string[] = []
-  let unchecked = false
+  // A grantor whose keys could not be fetched was never pin-checked.
+  let unchecked = unreadable > 0
   let firstSeen = false
 
   for (const [id, u] of served) {
