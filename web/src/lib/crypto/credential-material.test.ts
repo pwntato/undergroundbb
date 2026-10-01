@@ -1065,7 +1065,7 @@ describe('group key rotation (#58)', () => {
     expect(wraps).toHaveLength(1)
     const carolsKey = await unwrap(
       carol.wrappingKey.privateKey,
-      wire(wraps[0].wrappedKey),
+      wire(wraps[0]!.wrappedKey),
       memberWrapAAD(GROUP_ID, CAROL_ID, 1),
     )
     expect(carolsKey).toEqual(newKey)
@@ -1074,21 +1074,21 @@ describe('group key rotation (#58)', () => {
     await expect(
       unwrap(
         carol.wrappingKey.privateKey,
-        wire(wraps[0].wrappedKey),
+        wire(wraps[0]!.wrappedKey),
         memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
       ),
     ).rejects.toThrow()
     await expect(
       unwrap(
         carol.wrappingKey.privateKey,
-        wire(wraps[0].wrappedKey),
+        wire(wraps[0]!.wrappedKey),
         memberWrapAAD(GROUP_ID, CAROL_ID, 0),
       ),
     ).rejects.toThrow()
     await expect(
       unwrap(
         admin.wrappingKey.privateKey,
-        wire(wraps[0].wrappedKey),
+        wire(wraps[0]!.wrappedKey),
         memberWrapAAD(GROUP_ID, CAROL_ID, 1),
       ),
     ).rejects.toThrow()
