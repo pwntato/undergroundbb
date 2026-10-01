@@ -36,6 +36,8 @@ func putTestMember(t *testing.T, c *Client, groupID, userID, role string) {
 		Item: map[string]types.AttributeValue{
 			"PK": s("GROUP#" + groupID), "SK": s("MEMBER#" + userID), "Type": s("Membership"),
 			"GSI1PK": s("USER#" + userID), "GSI1SK": s("GROUP#" + groupID), "Role": s(role),
+			// Real memberships always carry Generation (models.Membership has no omitempty).
+			"Generation": &types.AttributeValueMemberN{Value: "0"},
 		},
 	})
 	if err != nil {

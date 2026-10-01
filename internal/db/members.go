@@ -20,8 +20,15 @@ import (
 // exhausted). The cursor is a bare user id rather than a DynamoDB key, so a
 // caller-supplied cursor can only ever move within this group's partition.
 func (c *Client) ListMembers(ctx context.Context, groupID, afterUserID string, limit int) ([]models.Membership, string, error) {
+	return c.listMembers(ctx, groupID, afterUserID, limit, false)
+}
+
+// listMembers is ListMembers with an optional strongly consistent read, for
+// the caller that must not miss a membership written moments ago.
+func (c *Client) listMembers(ctx context.Context, groupID, afterUserID string, limit int, consistent bool) ([]models.Membership, string, error) {
 	in := &dynamodb.QueryInput{
 		TableName:              aws.String(c.table),
+		ConsistentRead:         aws.Bool(consistent),
 		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":pk": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},

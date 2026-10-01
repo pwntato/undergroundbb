@@ -825,6 +825,31 @@ runs at a time: the marker and the link are both `attribute_not_exists` writes, 
 one is in progress is refused (`rotation_in_progress`, 409) and changes nothing. Re-wrapping every
 other member is the client's resumable job, not part of this request.
 
+**Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
+`startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
+points to the marker's generation in one transaction, so there is no `UnprocessedItems` to chase: the
+marker still names the generation, the caller is an admin whose own entry point is at it (the only
+way to hold the key), and every member exists and is not already past it, or nothing is written
+(`member_changed`, and the client re-lists and resends). During a rotation, a member already *at* the
+generation is accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/complete`
+deletes the marker only when no member is behind (`members_behind`). The scan is a consistent read
+but is not atomic with the delete, and an invite completed by an inviter who was re-wrapped
+mid-request could land a member one generation behind (the `CompleteInvite` transaction conditions
+on the inviter's generation, which closes that), so a behind member after completion is unlikely but
+possible. They are moved by the same re-wrap call with **no marker present**, as a catch-up. The
+server reads the marker first and picks the mode: with a marker, members at or behind its generation
+are accepted (a retry of a member already moved is safe); with none, **only members strictly behind
+the caller's generation are moved**, so no admin can replace the key of a member already at the
+current generation in a group that never rotated, and a retry of a catch-up gets `member_changed`
+once the member is no longer behind. The caller's own entry point pins the generation, so an admin
+can only bring a member up to the admin's own current key, and nobody is moved backward. An admin
+client compares members' generations to its own on load to find them. A client should
+re-wrap only members who are **behind** (the retry allowance above is for a lost response, not a
+way to refresh keys), because a wrong key written over an admin already at the generation would lock
+out exactly the admins able to resume. A client
+resuming a rotation should re-wrap the **other admins first**: only an admin already at the new
+generation can resume, and only the initiator is until someone else is re-wrapped.
+
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
 ones included, and so is the member they promoted, until a later grant re-establishes them. (A
