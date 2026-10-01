@@ -808,6 +808,24 @@ unverifiable one (the order within a day is unknowable), so both show as unverif
 fail safe: a flag, never a false "verified". Involuntary departure (removal, account deletion) needs
 someone else's signature and belongs with #58 and #77.
 
+**The server also enforces the table above, as a first line and not a boundary.** The gates that
+exist today, each judged from the caller's own `MEMBER#` row: creating an invite needs Admin or
+Ambassador; completing one re-checks that the inviter still holds that role; editing group
+settings needs Admin (and `UpdateGroupSettings` re-checks it inside its transaction, so a concurrent
+demotion cannot slip through); changing a role needs Admin. The refusal shapes differ by endpoint
+(invite creation answers a non-member and an under-privileged member both with 403, so it does not
+reveal membership; role changes and private-group edits answer a non-member with 404). Removal does
+not exist yet (#58) and will need the same gate. What this buys is catching bugs and casual misuse cheaply, and keeping
+a stale or confused client from writing rows the chain would later flag. What it does not buy is
+any protection against a malicious client: someone holding the group key can encrypt, sign and
+write whatever they like, and the server cannot read a ciphertext to know otherwise. The `MEMBER#`
+role is a server-side cache of what the signed chain says, not the chain, so a compromised server
+can also hand out or withhold these checks at will. Never treat a passing gate as evidence about
+who holds a role: that is the chain's job, verified client-side. `role_enforcement_test.go` pins
+invite creation and settings edits per role, and a plain Member's role change; an Ambassador's role
+change is pinned in `TestChangeRoleRejections`. Callers are real Members and Ambassadors, not only
+non-members.
+
 Note the limit: signed grants prevent the *server* from lying about roles. They do not prevent a
 legitimately-privileged member from misusing their authority. Once someone holds the group key and
 the right to share it, they are trusted. The chain records who extended trust to whom.
