@@ -19,8 +19,8 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getSession } from '@/lib/api/auth'
-import { clearLiveKeys } from '@/lib/crypto/worker-client'
-import { clearCachedOwnSigningKey } from './ownSigningKey'
+import { clearLiveKeys, getOwnSigningKey } from '@/lib/crypto/worker-client'
+import { cacheOwnSigningKey, clearCachedOwnSigningKey } from './ownSigningKey'
 import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
@@ -53,6 +53,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       status,
       userId,
       login: (id: string) => {
+        // Both callers (login, signup) run this only after completeLogin has
+        // populated the worker's liveKeys. Cache the PUBLIC signing key so a
+        // page reload, which drops liveKeys, does not leave the roster check
+        // unable to read the caller's own key (#171). Symmetric with logout.
+        void getOwnSigningKey(id).then(
+          (k) => cacheOwnSigningKey(id, k),
+          () => undefined,
+        )
         setUserId(id)
       },
       logout: () => {
@@ -64,9 +72,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // user-initiated logout) -- this still needs to run there too, once
         // one does, for the same reason.
         clearLiveKeys()
-        if (userId !== null) {
-          clearCachedOwnSigningKey(userId)
-        }
         // Issue #35: also clears this tab's cached decrypted group names --
         // same reasoning as clearLiveKeys, a reused worker instance/tab must
         // never show a previous account's group names, and userId is still
@@ -74,6 +79,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // it's about to be cleared below.
         if (userId !== null) {
           clearGroupNameCache(userId)
+          clearCachedOwnSigningKey(userId)
         }
         setUserId(null)
       },

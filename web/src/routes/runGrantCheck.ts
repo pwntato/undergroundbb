@@ -275,7 +275,10 @@ async function checkServedKeys(
       continue
     }
     if (id === deps.selfUserId) {
-      // Your own key comes from the worker, not the server. No rotation
+      // Your own key comes from the worker, or the copy of it cached in
+      // sessionStorage at login (lib/session/ownSigningKey.ts) when a reload
+      // dropped the worker's keys -- so sessionStorage is in this trust path;
+      // a tampered cache fails closed. Not from the server. No rotation
       // exists yet, so a served history that differs at all is not yours.
       const current = base64ToBytes(u.signingPublicKey)
       if (sameBytes(current, own) && u.supersededSigningKeys.length === 0) {

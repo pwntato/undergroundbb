@@ -17,12 +17,7 @@ import { ApiError, challenge, verify } from '@/lib/api/auth'
 import { listGroups } from '@/lib/api/groups'
 import { completeInvite as completeInviteApi, pendingInviteCompletions } from '@/lib/api/invites'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
-import {
-  completeInvite as completeInviteCrypto,
-  completeLogin,
-  getOwnSigningKey,
-} from '@/lib/crypto/worker-client'
-import { cacheOwnSigningKey } from '@/lib/session/ownSigningKey'
+import { completeInvite as completeInviteCrypto, completeLogin } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { runCompleteInvites } from './runCompleteInvites'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -92,11 +87,6 @@ export function LoginScreen() {
         })
         const result = await verify(username, ch.nonce, signature)
         session.login(result.userId)
-        // Survives a page reload, which drops the worker's live keys (#63).
-        void getOwnSigningKey(result.userId).then(
-          (k) => cacheOwnSigningKey(result.userId, k),
-          () => undefined,
-        )
         // Issue #40, step 3: "completion is driven by that query on login."
         // Deliberately NOT awaited -- this is a background chore, never a
         // precondition for reaching Home (see runCompleteInvites' own doc
