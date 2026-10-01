@@ -123,6 +123,22 @@ export function memberWrapAAD(groupId: string, memberUUID: string, generation: n
   return new TextEncoder().encode(`GROUP#${groupId}:MEMBER#${memberUUID}:GEN#${gen}`)
 }
 
+/**
+ * Builds the AAD for a GENKEY# chain link -- see docs/DESIGN.md's AAD table,
+ * "Generation key | group id + generation number." generation is the link's
+ * own index n: GENKEY#<n> holds generation n's key encrypted under generation
+ * n+1's, so n is the generation of the key the link CONTAINS and the number its
+ * sort key carries. No member in it: a link is group-wide, not per member.
+ *
+ * The encoding is `GROUP#<gid>:GENKEY#<nnnnnn>`, matching
+ * internal/crypto/group.go's GenKeyAAD byte-for-byte (and the "genkey_chain"
+ * vector). This must never change once a real chain link exists under it.
+ */
+export function genKeyAAD(groupId: string, generation: number): Uint8Array {
+  const gen = generation.toString().padStart(6, '0')
+  return new TextEncoder().encode(`GROUP#${groupId}:GENKEY#${gen}`)
+}
+
 /** Which of a group's two encrypted text fields groupNameAAD is being built for. */
 export type GroupTextField = 'NAME' | 'DESC'
 

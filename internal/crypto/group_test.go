@@ -202,3 +202,28 @@ func TestRoleGrantPayloadSignsUnderContext(t *testing.T) {
 		t.Fatal("a trust-anchor signature verified as a role-grant signature over the same payload bytes")
 	}
 }
+
+func TestGenKeyAADDistinguishesEveryField(t *testing.T) {
+	base := GenKeyAAD("group-1", 3)
+	for name, other := range map[string][]byte{
+		"groupID":    GenKeyAAD("group-2", 3),
+		"generation": GenKeyAAD("group-1", 4),
+	} {
+		if bytes.Equal(base, other) {
+			t.Errorf("changing %s did not change the AAD", name)
+		}
+	}
+	// Distinct from every other AAD built over the same group and generation, so
+	// a ciphertext cannot be replayed across item classes.
+	if bytes.Equal(GenKeyAAD("group-1", 3), MemberWrapAAD("group-1", "m", 3)) ||
+		bytes.Equal(GenKeyAAD("group-1", 3), GroupNameAAD("group-1", GroupNameField, 3)) {
+		t.Error("GenKeyAAD collides with another AAD")
+	}
+}
+
+// The sort key and the AAD must name the generation identically (six digits).
+func TestGenKeyAADZeroPadsGeneration(t *testing.T) {
+	if got, want := string(GenKeyAAD("group-1", 8)), "GROUP#group-1:GENKEY#000008"; got != want {
+		t.Errorf("GenKeyAAD(...,8) = %q, want %q", got, want)
+	}
+}

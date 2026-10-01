@@ -17,6 +17,7 @@ import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
 import {
+  genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
@@ -101,6 +102,8 @@ interface VectorFile {
   }[]
   genkey_chain: {
     name: string
+    group_id: string
+    generation: number
     gen_n_key_hex: string
     gen_n_plus_1_key_hex: string
     aad_hex: string
@@ -342,6 +345,7 @@ describe('genkey chain vectors', () => {
       const genN = hexToBytes(tc.gen_n_key_hex)
       const genNPlus1 = hexToBytes(tc.gen_n_plus_1_key_hex)
       const aad = hexToBytes(tc.aad_hex)
+      expect(bytesToHex(genKeyAAD(tc.group_id, tc.generation))).toBe(tc.aad_hex)
       const nonce = hexToBytes(tc.link_nonce_hex)
 
       const ciphertext = await encryptWithNonce(genNPlus1, nonce, genN, aad)

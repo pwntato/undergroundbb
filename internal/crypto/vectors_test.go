@@ -102,6 +102,8 @@ type wrapVector struct {
 
 type genkeyChainVector struct {
 	Name            string `json:"name"`
+	GroupID         string `json:"group_id"`
+	Generation      uint64 `json:"generation"`
 	GenNKeyHex      string `json:"gen_n_key_hex"`
 	GenNPlus1KeyHex string `json:"gen_n_plus_1_key_hex"`
 	AADHex          string `json:"aad_hex"`
@@ -424,6 +426,9 @@ func TestVectorGenkeyChain(t *testing.T) {
 			genN := mustHex(t, tc.GenNKeyHex)
 			genNPlus1 := mustHex(t, tc.GenNPlus1KeyHex)
 			aad := mustHex(t, tc.AADHex)
+			if got := GenKeyAAD(tc.GroupID, tc.Generation); !bytes.Equal(got, aad) {
+				t.Fatalf("GenKeyAAD(%q, %d) = %q, want %q", tc.GroupID, tc.Generation, got, aad)
+			}
 			nonce := mustHex(t, tc.LinkNonceHex)
 			wantCiphertext := mustHex(t, tc.LinkCiphertext)
 
