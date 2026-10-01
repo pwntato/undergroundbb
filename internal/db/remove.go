@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -11,6 +14,26 @@ import (
 
 	"github.com/pwntato/undergroundbb/internal/models"
 )
+
+// RotationSortKey is the SK of a group's rotation marker.
+const RotationSortKey = "ROTATION"
+
+// ErrRotationInProgress is returned when a removal would start a rotation but
+// one is already running (its marker exists), or its generation was already
+// minted. A second removal waits for the first rotation to finish; stacking
+// them would need a rotation that targets a generation nobody holds yet.
+var ErrRotationInProgress = errors.New("db: a key rotation is already in progress")
+
+// ErrRotationStaleGeneration is returned when no rotation is running but the
+// generation the removal would mint already has its chain link: the remover's
+// own entry point is behind the group's (an invite wrapped at the old
+// generation and accepted after the rotation finished). The link is never
+// overwritten; the admin has to be re-wrapped at the current generation first.
+var ErrRotationStaleGeneration = errors.New("db: the remover's key generation is behind the group's")
+
+// GenKeySortKey is the GENKEY# sort key for generation n: zero-padded to six
+// digits like every numeric sort-key component (docs/DESIGN.md).
+func GenKeySortKey(n int64) string { return fmt.Sprintf("GENKEY#%06d", n) }
 
 // RemoveMemberInput is one admin removing another member -- issue #58.
 type RemoveMemberInput struct {
@@ -36,6 +59,28 @@ type RemoveMemberInput struct {
 	// needs the removed admin's cooperation, which is what an involuntary
 	// removal cannot have.
 	Demotion *RemoveDemotion
+
+	// Rotation is required exactly when the group is Rotating (nil for Open):
+	// removal there starts a key rotation in the same transaction.
+	Rotation *RemoveRotation
+}
+
+// RemoveRotation is what a Rotating-group removal commits besides the delete.
+// The client minted the new group key, so everything here arrives wrapped.
+type RemoveRotation struct {
+	// CurrentGeneration is the generation the remover's own entry point is at;
+	// the rotation goes to CurrentGeneration+1. Every conditional below hangs
+	// on it, so a stale view is a conflict, not a skipped generation.
+	CurrentGeneration int64
+	// Link is generation CurrentGeneration's key wrapped under the new one,
+	// stored as GENKEY#<CurrentGeneration>. Committing it here, in the same
+	// transaction as the marker and the remover's own re-wrap, means no
+	// membership can point at the new generation without its chain link.
+	Link models.WrappedBlob
+	// RemoverWrappedKey re-wraps the new key for the remover, who then holds
+	// it durably: it is the only copy of the minted key anywhere, so a resumed
+	// rotation re-uses it rather than minting a second one.
+	RemoverWrappedKey models.WrappedKey
 }
 
 // RemoveDemotion is the signed grant a removal appends for an elevated subject.
@@ -52,17 +97,18 @@ type RemoveDemotion struct {
 // stay; history is append-only. The subject's own outstanding invites are
 // removed afterwards, as on leaving.
 //
-// This does NOT rotate keys. For an Open group that is the whole definition
-// of removal (docs/DESIGN.md, "Revocation mode"); the handler refuses a
-// Rotating group until rotation exists, because removing without rotating
-// there would leave the removed member reading every new post while nothing
-// said so.
+// For an Open group that is the whole of removal (docs/DESIGN.md, "Revocation
+// mode"). For a Rotating group (in.Rotation != nil) the same transaction also
+// starts the rotation: the ROTATION marker, the GENKEY# link for the old
+// generation, and the remover's own entry point at the new one. Re-wrapping
+// every other member is the client's resumable job, not done here.
 func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 	elevated := in.SubjectRole != models.RoleMember
 	if elevated != (in.Demotion != nil) {
 		return ErrRoleChangeConflict
 	}
 
+	rotating := in.Rotation != nil
 	removerCond := "#role = :admin AND attribute_not_exists(#gsk)"
 	removerValues := map[string]types.AttributeValue{
 		":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
@@ -77,14 +123,34 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 		deleteIndex  = 1
 		grantIndex   = 2
 	)
-	items := []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{
+	removerItem := types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(in.GroupID, in.RemoverUserID),
+		ConditionExpression:       aws.String(removerCond),
+		ExpressionAttributeNames:  map[string]string{"#role": "Role", "#gsk": "GrantSortKey"},
+		ExpressionAttributeValues: removerValues,
+	}}
+	if rotating {
+		// The remover's entry point moves to the new generation, conditioned
+		// on still being at the one the request was built against.
+		wrapped, err := attributevalue.Marshal(in.Rotation.RemoverWrappedKey)
+		if err != nil {
+			return err
+		}
+		removerValues[":cur"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Rotation.CurrentGeneration, 10)}
+		removerValues[":next"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Rotation.CurrentGeneration+1, 10)}
+		removerValues[":wrapped"] = wrapped
+		removerItem = types.TransactWriteItem{Update: &types.Update{
 			TableName:                 aws.String(c.table),
 			Key:                       memberKey(in.GroupID, in.RemoverUserID),
-			ConditionExpression:       aws.String(removerCond),
-			ExpressionAttributeNames:  map[string]string{"#role": "Role", "#gsk": "GrantSortKey"},
+			ConditionExpression:       aws.String(removerCond + " AND #gen = :cur"),
+			UpdateExpression:          aws.String("SET #gen = :next, #wrapped = :wrapped"),
+			ExpressionAttributeNames:  map[string]string{"#role": "Role", "#gsk": "GrantSortKey", "#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: removerValues,
-		}},
+		}}
+	}
+	items := []types.TransactWriteItem{
+		removerItem,
 		{Delete: &types.Delete{
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, in.SubjectUserID),
@@ -119,8 +185,58 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 		}})
 	}
 
+	rotationIndex := -1
+	if rotating {
+		now := time.Now().UTC().Format(time.RFC3339)
+		link, err := attributevalue.MarshalMap(models.GenerationKey{
+			Record: models.Record{
+				PK:        "GROUP#" + in.GroupID,
+				SK:        GenKeySortKey(in.Rotation.CurrentGeneration),
+				Type:      "GenerationKey",
+				CreatedAt: now,
+			},
+			Wrapped: in.Rotation.Link,
+		})
+		if err != nil {
+			return err
+		}
+		marker, err := attributevalue.MarshalMap(models.Rotation{
+			Record: models.Record{
+				PK:        "GROUP#" + in.GroupID,
+				SK:        RotationSortKey,
+				Type:      "Rotation",
+				CreatedAt: now,
+			},
+			Generation: in.Rotation.CurrentGeneration + 1,
+			StartedAt:  now,
+			StartedBy:  in.RemoverUserID,
+		})
+		if err != nil {
+			return err
+		}
+		// The marker's condition is the "one rotation at a time" rule; the
+		// link's is the guard that a generation is only ever minted once.
+		rotationIndex = len(items)
+		items = append(items,
+			types.TransactWriteItem{Put: &types.Put{
+				TableName:           aws.String(c.table),
+				Item:                marker,
+				ConditionExpression: aws.String("attribute_not_exists(PK)"),
+			}},
+			types.TransactWriteItem{Put: &types.Put{
+				TableName:           aws.String(c.table),
+				Item:                link,
+				ConditionExpression: aws.String("attribute_not_exists(PK)"),
+			}},
+		)
+	}
+
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
+		case rotating && isConditionalCheckFailure(err, rotationIndex):
+			return ErrRotationInProgress
+		case rotating && isConditionalCheckFailure(err, rotationIndex+1):
+			return ErrRotationStaleGeneration
 		case isConditionalCheckFailure(err, removerIndex):
 			return ErrGrantorChanged
 		case isConditionalCheckFailure(err, deleteIndex):
