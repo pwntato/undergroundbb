@@ -396,3 +396,47 @@ func TestRemoveMemberDeletesTheirPendingInvites(t *testing.T) {
 		t.Error("the removed member's INVITE# row survived")
 	}
 }
+
+// The verifier needs the remover's grant strictly EARLIER than the demotion.
+// A grant dated LATER is reachable with honest clients near 00:00 UTC (the
+// grant day window is now-26h..now+2h): the remover is promoted just after
+// midnight, and a slow client dates the removal for the day before. Stored,
+// it leaves the removal "grantor held no grant on the signing day" and
+// everything the remover signs afterwards unverified, permanently if the
+// removed admin was the creator.
+func TestRemoveMemberRefusedWhenRemoversGrantIsDatedAfterTheDemotion(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	adm := registerTestUser(t, h)
+	addMember(t, gid, adm, "admin")
+
+	// Remover's grant is dated tomorrow; the demotion is dated today.
+	tomorrow := testGrantSortKey(t, owner.userID, time.Now().AddDate(0, 0, 1))
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + owner.userID},
+		},
+		UpdateExpression:          aws.String("SET GrantSortKey = :r"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: tomorrow}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := removalGrant(t, owner, gid, adm.userID, tomorrow)
+	rec := doRemove(t, h, ownerCookie, gid, adm.userID, &req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", rec.Code, rec.Body.String())
+	}
+	if got := errCode(t, rec); got != "remover_granted_today" {
+		t.Fatalf("code = %q, want remover_granted_today", got)
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+adm.userID) == nil {
+		t.Error("admin was removed with an unverifiable demotion")
+	}
+	if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
+		t.Error("an unverifiable demotion was written")
+	}
+}

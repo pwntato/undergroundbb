@@ -63,10 +63,11 @@
 //     in grant-chain.test.ts; do not widen the exemption without a way to
 //     order within a day. The mirror case (promoted and removed the same day)
 //     leaves an ambiguous latest grant on rejoin, as for leaving. Worse: if the
-//     REMOVER's own grant is dated the removal's day, the remover's grant, the
-//     removal and everything the remover signs later are all flagged, and with
-//     nobody left to re-grant them it is permanent. The server refuses that
-//     write (remover_granted_today) rather than store it; pinned in the tests.
+//     REMOVER's own grant is dated the removal's day OR LATER (reachable by
+//     honest clients near 00:00 UTC), the remover's grant, the removal and
+//     everything the remover signs later are all flagged, and with nobody left
+//     to re-grant them it is permanent. The server refuses that write
+//     (remover_granted_today) rather than store it; pinned in the tests.
 //   - A self-demotion is the only self-grant accepted. It takes effect the
 //     day after it is dated, so the leaver's promotion of a successor the same
 //     day still verifies.

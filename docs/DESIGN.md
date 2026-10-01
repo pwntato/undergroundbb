@@ -811,7 +811,13 @@ fail safe: a flag, never a false "verified". Involuntary departure needs someone
 for an admin or ambassador subject the request carries the remover's signed grant of `member` to
 them, appended in the same transaction that deletes the membership. That is an ordinary admin
 grant, so the demotion itself needs no new rule, and it needs nothing from the removed admin, which
-is the property an involuntary departure cannot have otherwise.
+is the property an involuntary departure cannot have otherwise. An admin cannot remove themselves,
+so the admin who removes someone is always still there: removal never leaves a group without an
+admin, and the successor problem (#161) is left only with account deletion (#77) and inactivity,
+where no remaining admin is acting. This slice works for **Open** groups only. In a **Rotating**
+group removal must mint a new key generation, which is not built, and the server refuses
+(`rotation_unsupported`) rather than delete the membership and leave the removed member reading
+every new post with nothing saying so.
 
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
@@ -823,24 +829,20 @@ is the one thing removal is for. It fails safe: a flag, never a false "verified"
 an admin promoted and removed on the same day, leaves an ambiguous latest grant on rejoin, the same
 gap leaving already has. Both are pinned in `grant-chain.test.ts`.
 
-**The worse case is refused, not stored.** If the *remover's own* grant is dated the same UTC day
-as the demotion they sign (a creator removing an admin on the day the group was made, or an admin
-promoted this morning removing someone this afternoon), the remover's grant is flagged by the same
-rule, so the removal grant and everything the remover signs afterwards fail with it. When the
-removed admin was the creator, nobody is left who could re-grant the remover, so the chain under
-them stays unverified permanently, and an honest admin can reach it. The server already holds the
+**The worse case is refused, not stored.** The verifier needs the *remover's own* grant to be dated
+strictly earlier than the demotion they sign. If it is dated the same UTC day or later, the
+remover's grant is flagged by the same rule, so the removal grant and everything the remover signs
+afterwards fail with it. Honest admins reach this: a creator removing an admin on the day the group
+was made, an admin promoted this morning removing someone this afternoon, or an admin promoted just
+after 00:00 UTC whose slow client dates the removal for the day before (the grant-day tolerance is
+now-26h to now+2h). When the removed admin was the creator, nobody is left who could re-grant the
+remover, so the chain under them stays unverified permanently. The server already holds the
 remover's current grant, so it answers 409 `remover_granted_today` ("try again after 00:00 UTC")
 instead of storing a write that can never verify. This applies to removing an **admin or
 ambassador** only, since removing a plain member signs nothing. It is the removal-side half of
 #167, which asks for the same refusal on role changes and is not built yet. The cost is a delay of
 up to a day on removing an elevated member for an admin whose own grant is that new. The verifier
-cases that make it necessary are pinned in `grant-chain.test.ts`. An admin cannot remove themselves, so the
-admin who removes someone is always still there: removal never leaves a group without an admin, and
-the successor problem (#161) is left only with account deletion (#77) and inactivity, where no
-remaining admin is acting. This slice works for **Open** groups only. In a **Rotating** group
-removal must mint a new key generation, which is not built, and the server refuses
-(`rotation_unsupported`) rather than delete the membership and leave the removed member reading
-every new post with nothing saying so.
+cases that make it necessary are pinned in `grant-chain.test.ts`.
 
 **The server also enforces the table above, as a first line and not a boundary.** The gates that
 exist today, each judged from the caller's own `MEMBER#` row: creating an invite needs Admin or

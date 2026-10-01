@@ -1063,6 +1063,35 @@ describe('verifyGrantChain: removal of an admin (#58)', () => {
     }
   })
 
+  // The remover's grant dated AFTER the demotion is reachable with honest
+  // clients near 00:00 UTC (grant days may be now-26h..now+2h): Alice promotes
+  // Bob just after midnight (03-07) and Bob's slow clock dates the removal
+  // 03-06. Same permanent damage as the same-day case, so the server refuses
+  // it too (the demotion's day must be strictly after the remover's grant).
+  it('flags everything when the remover grant is dated after the demotion (refused by the server)', () => {
+    const w = world()
+    const bobKey = generateSigningKey()
+    const eveKey = generateSigningKey()
+    const bobAdmin = grant(w.aliceKey, BOB, 'admin', ALICE, '2026-03-07', w.aliceAdmin.sortKey)
+    const removal = grant(bobKey, ALICE, 'member', BOB, '2026-03-06', bobAdmin.sortKey)
+    const eve = grant(bobKey, EVE, 'admin', BOB, '2026-03-09', bobAdmin.sortKey)
+    const r = verifyGrantChain({
+      ...withGrants(w, bobAdmin, removal, eve),
+      keyHistories: new Map([
+        ...w.input.keyHistories,
+        [BOB, history(bobKey)],
+        [EVE, history(eveKey)],
+      ]),
+    })
+    expect(r.verdicts.get(removal.sortKey)).toEqual({
+      valid: false,
+      reason: 'grantor held no grant on the signing day',
+    })
+    expect(r.verdicts.get(bobAdmin.sortKey)?.valid).toBe(false)
+    expect(r.verdicts.get(eve.sortKey)?.valid).toBe(false)
+    expect(checkMemberRole(r, EVE, 'admin').status).toBe('unverified')
+  })
+
   it('does not extend the self-demotion exemption to a demotion by someone else', () => {
     // Same shape as the self-demotion promote-then-leave test, with the
     // demotion signed by the creator instead of Alice: the exemption must not

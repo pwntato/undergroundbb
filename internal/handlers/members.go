@@ -746,14 +746,18 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
 		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: day is not within tolerance of the current UTC day"
 	}
-	// The verifier rejects a signature on the day the signer's own role was set
-	// (order within a UTC day is unknowable), and that would invalidate THIS
-	// demotion and everything the remover signs afterwards, permanently if the
-	// removed admin was the only one who could re-grant them. The remover's
-	// current grant is already in hand, so refuse here instead of storing
-	// something that can never verify (the removal-side half of #167).
-	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && refDay.Equal(day) {
-		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal, so it could never verify; try again after 00:00 UTC"
+	// The verifier needs the remover's own grant to be dated STRICTLY EARLIER
+	// than the demotion they sign: on the same day the order is unknowable, and
+	// a later-dated grant means they held no grant on the signing day at all.
+	// Either invalidates THIS demotion and everything the remover signs
+	// afterwards, permanently if the removed admin was the only one who could
+	// re-grant them. The later case is reachable by honest clients: the grant
+	// day tolerance (now-26h .. now+2h) lets a remover promoted just after
+	// 00:00 UTC sign for a day that is still yesterday on a slow clock. The
+	// remover's current grant is already in hand, so refuse here instead of
+	// storing something that can never verify (the removal-side half of #167).
+	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && !day.After(refDay) {
+		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal or later, so it could never verify; try again after 00:00 UTC"
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
