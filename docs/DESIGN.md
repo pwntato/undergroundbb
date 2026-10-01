@@ -805,8 +805,19 @@ held that day. It takes effect the next day, so an admin who promotes a successo
 same day does not invalidate that promotion under the strict same-day rule. Two gaps stay: a group
 left before this shipped has no demotion, and an admin promoted and leaving on the *same* day has an
 unverifiable one (the order within a day is unknowable), so both show as unverified on rejoin. Both
-fail safe: a flag, never a false "verified". Involuntary departure (removal, account deletion) needs
-someone else's signature and belongs with #58 and #77.
+fail safe: a flag, never a false "verified". Involuntary departure needs someone else's signature.
+
+**Removal is signed by the remover.** `DELETE /api/groups/{gid}/members/{uid}` is Admin-only, and
+for an admin or ambassador subject the request carries the remover's signed grant of `member` to
+them, appended in the same transaction that deletes the membership. That is an ordinary admin
+grant, so the verifier needs no new rule, and it needs nothing from the removed admin, which is the
+property an involuntary departure cannot have otherwise. An admin cannot remove themselves, so the
+admin who removes someone is always still there: removal never leaves a group without an admin, and
+the successor problem (#161) is left only with account deletion (#77) and inactivity, where no
+remaining admin is acting. This slice works for **Open** groups only. In a **Rotating** group
+removal must mint a new key generation, which is not built, and the server refuses
+(`rotation_unsupported`) rather than delete the membership and leave the removed member reading
+every new post with nothing saying so.
 
 **The server also enforces the table above, as a first line and not a boundary.** The gates that
 exist today, each judged from the caller's own `MEMBER#` row: creating an invite needs Admin or
@@ -814,8 +825,8 @@ Ambassador; completing one re-checks that the inviter still holds that role; edi
 settings needs Admin (and `UpdateGroupSettings` re-checks it inside its transaction, so a concurrent
 demotion cannot slip through); changing a role needs Admin. The refusal shapes differ by endpoint
 (invite creation answers a non-member and an under-privileged member both with 403, so it does not
-reveal membership; role changes and private-group edits answer a non-member with 404). Removal does
-not exist yet (#58) and will need the same gate. What this buys is catching bugs and casual misuse cheaply, and keeping
+reveal membership; role changes and private-group edits answer a non-member with 404). Removal
+(`DELETE .../members/{uid}`) needs Admin too, by the same check. What this buys is catching bugs and casual misuse cheaply, and keeping
 a stale or confused client from writing rows the chain would later flag. What it does not buy is
 any protection against a malicious client: someone holding the group key can encrypt, sign and
 write whatever they like, and the server cannot read a ciphertext to know otherwise. The `MEMBER#`
