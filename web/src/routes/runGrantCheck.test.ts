@@ -436,6 +436,24 @@ describe('checkGrants key pinning (#63)', () => {
     expect(r.keys).toBe('unchecked')
   })
 
+  it("reports unchecked, not pinned, when a grantor's keys cannot be fetched", async () => {
+    const w = world()
+    const d = deps(w)
+    // First run pins everyone, so a clean second run would read "pinned".
+    expect(checked(await checkGrants(d, GROUP, MEMBERS)).keys).toBe('first-seen')
+    expect(checked(await checkGrants(d, GROUP, MEMBERS)).keys).toBe('pinned')
+    const flaky = {
+      ...d,
+      getUser: async (id: string) => {
+        if (id === ALICE) throw new Error('503')
+        return d.getUser(id)
+      },
+    }
+    const r = checked(await checkGrants(flaky, GROUP, MEMBERS))
+    expect(r.keys).toBe('unchecked')
+    expect(r.blockedKeyUsers).toEqual([])
+  })
+
   it('reports unchecked when a new pin cannot be saved, without blocking anyone', async () => {
     const w = world()
     const r = checked(

@@ -17,6 +17,7 @@ import {
   listMembers,
   type MemberRole,
 } from '@/lib/api/groups'
+import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { getOwnSigningKey, signPin, signRoleGrant } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUser } from '@/lib/api/users'
@@ -110,7 +111,7 @@ export function GroupMembersScreen() {
           readPin: (g) => readAnchorPin(userId, g),
           writePin: (g, pin) => writeAnchorPin(userId, g, pin),
           selfUserId: userId,
-          ownSigningKey: () => getOwnSigningKey(userId),
+          ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
           listPins: listAllPins,
           pinKeys: async (pinnedUserId, signingPublicKeys, wrappingPublicKey) => {
             const signed = await signPin({
