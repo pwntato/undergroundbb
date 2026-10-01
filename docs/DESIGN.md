@@ -814,10 +814,16 @@ grant, so the demotion itself needs no new rule, and it needs nothing from the r
 is the property an involuntary departure cannot have otherwise. An admin cannot remove themselves,
 so the admin who removes someone is always still there: removal never leaves a group without an
 admin, and the successor problem (#161) is left only with account deletion (#77) and inactivity,
-where no remaining admin is acting. This slice works for **Open** groups only. In a **Rotating**
-group removal must mint a new key generation, which is not built, and the server refuses
-(`rotation_unsupported`) rather than delete the membership and leave the removed member reading
-every new post with nothing saying so.
+where no remaining admin is acting. In an **Open** group that is the whole of removal. In a
+**Rotating** group the same transaction also starts the rotation: the request carries the new
+generation (exactly one past the remover's own entry point), the `GENKEY#` link wrapping the old
+generation's key under the new one, and the new key wrapped for the remover. The transaction
+writes the delete, the `ROTATION` marker, that link and the remover's re-wrap together, so no
+membership can ever point at a generation whose chain link is missing, and the remover, whose
+browser minted the key, durably holds the one copy a resumed rotation must re-use. Only one rotation
+runs at a time: the marker and the link are both `attribute_not_exists` writes, so a removal while
+one is in progress is refused (`rotation_in_progress`, 409) and changes nothing. Re-wrapping every
+other member is the client's resumable job, not part of this request.
 
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
