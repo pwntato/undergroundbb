@@ -825,6 +825,19 @@ runs at a time: the marker and the link are both `attribute_not_exists` writes, 
 one is in progress is refused (`rotation_in_progress`, 409) and changes nothing. Re-wrapping every
 other member is the client's resumable job, not part of this request.
 
+**Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
+`startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
+points to the marker's generation in one transaction, so there is no `UnprocessedItems` to chase: the
+marker still names the generation, the caller is an admin whose own entry point is at it (the only
+way to hold the key), and every member exists and is not already past it, or nothing is written
+(`member_changed`, and the client re-lists and resends). A member already *at* the generation is
+accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/complete`
+deletes the marker only when no member is behind (`members_behind`). The scan is not atomic with the
+delete, so a member added at an older generation in that gap is possible and is the same kind of
+"behind" member as any other, caught by an admin client comparing generations on load. A client
+resuming a rotation should re-wrap the **other admins first**: only an admin already at the new
+generation can resume, and only the initiator is until someone else is re-wrapped.
+
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
 ones included, and so is the member they promoted, until a later grant re-establishes them. (A
