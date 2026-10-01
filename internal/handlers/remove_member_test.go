@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -154,10 +157,10 @@ func TestRemoveMemberRejections(t *testing.T) {
 		{"subject not a member", ownerCookie, stranger.userID, nil, 404, ""},
 		{"malformed subject id", ownerCookie, "nope", nil, 404, ""},
 		{"admin subject, no demotion", ownerCookie, adm.userID, nil, 400, "demotion_required"},
-		{"demotion signed for a different role", ownerCookie, adm.userID, &wrongRole, 400, ""},
-		{"demotion signed by another key", ownerCookie, adm.userID, &forged, 400, ""},
+		{"demotion signed for a different role", ownerCookie, adm.userID, &wrongRole, 400, "bad_signature"},
+		{"demotion signed by another key", ownerCookie, adm.userID, &forged, 400, "bad_signature"},
 		{"demotion with stale grantor ref", ownerCookie, adm.userID, &stale, 409, "grantor_ref_stale"},
-		{"demotion sort key for another subject", ownerCookie, adm.userID, &otherSubject, 400, ""},
+		{"demotion sort key for another subject", ownerCookie, adm.userID, &otherSubject, 400, "bad_grant_sort_key"},
 		{"plain member with a demotion attached", ownerCookie, mem.userID, &plainWithBody, 409, "conflict_retry"},
 	}
 	for _, tc := range cases {
@@ -226,5 +229,68 @@ func TestRemoveMemberStaleSubjectRoleIsAConflict(t *testing.T) {
 	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
 		t.Error("member was removed on a stale role")
+	}
+}
+
+// {} and null mean "no demotion", exactly like no body (leaveGroup's empty()):
+// a client that always sends a body must not get a false "role changed" 409.
+func TestRemoveMemberEmptyBodyIsNoDemotion(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{}); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove with {}: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The remover is re-checked inside the transaction, not only by the handler:
+// between the handler's read and the write they may have been demoted, or
+// have had their current grant replaced. Either is a conflict that removes
+// nobody (the handler's own caller.Role check hides this everywhere else).
+func TestRemoveMemberStaleRemoverIsAConflict(t *testing.T) {
+	client := testDB(t)
+	h := New(config.FromEnv(), client)
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	ref := rootRef(t, gid, owner)
+
+	remove := func(in db.RemoveMemberInput) error {
+		in.GroupID, in.SubjectUserID, in.SubjectRole, in.RemoverUserID = gid, bob.userID, "member", owner.userID
+		return client.RemoveMember(context.Background(), in)
+	}
+	t.Run("remover on a different grant than they signed against", func(t *testing.T) {
+		err := remove(db.RemoveMemberInput{RemoverHasStoredGrant: true, RemoverGrantRef: "GRANT#" + owner.userID + "#2020-01-01#0000000000000000"})
+		if !errors.Is(err, db.ErrGrantorChanged) {
+			t.Fatalf("err = %v, want ErrGrantorChanged", err)
+		}
+	})
+	t.Run("remover no longer an admin", func(t *testing.T) {
+		// Demote the owner row directly, as a concurrent role change would.
+		if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+			TableName: aws.String(testTableName()),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+				"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + owner.userID},
+			},
+			UpdateExpression:         aws.String("SET #r = :m"),
+			ExpressionAttributeNames: map[string]string{"#r": "Role"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":m": &types.AttributeValueMemberS{Value: "member"},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		err := remove(db.RemoveMemberInput{RemoverHasStoredGrant: true, RemoverGrantRef: ref})
+		if !errors.Is(err, db.ErrGrantorChanged) {
+			t.Fatalf("err = %v, want ErrGrantorChanged", err)
+		}
+	})
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
+		t.Error("member was removed by a stale remover")
 	}
 }

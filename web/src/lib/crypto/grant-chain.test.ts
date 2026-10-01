@@ -961,3 +961,75 @@ describe('verifyGrantChain: self-demotion on leave', () => {
     expect(checkMemberRole(r, BOB, 'member').status).toBe('unverified')
   })
 })
+
+describe('verifyGrantChain: removal of an admin (#58)', () => {
+  // Alice is admin from 03-03 (see world()). The CREATOR removes her by
+  // signing "Alice -> member" under the creator's own admin grant (the root).
+  const remove = (w: World, day: string) =>
+    grant(w.creatorKey, ALICE, 'member', CREATOR, day, w.root.sortKey)
+  const bobFor = (w: World, day: string) =>
+    grant(w.aliceKey, BOB, 'admin', ALICE, day, w.aliceAdmin.sortKey)
+  const withBob = (w: World, ...extra: GrantRecord[]): GrantChainInput => ({
+    ...withGrants(w, ...extra),
+    keyHistories: new Map([...w.input.keyHistories, [BOB, history(generateSigningKey())]]),
+  })
+
+  it('verifies the remover-signed demotion and backs the removed admin as member', () => {
+    const w = world()
+    const d = remove(w, '2026-03-06')
+    const r = verifyGrantChain(withGrants(w, d))
+    expect(r.verdicts.get(d.sortKey)).toEqual({ valid: true })
+    expect(checkMemberRole(r, ALICE, 'member')).toEqual({ status: 'verified' })
+    expect(checkMemberRole(r, ALICE, 'admin').status).toBe('unverified')
+  })
+
+  it('verifies a grant the removed admin signed on an earlier day than the removal', () => {
+    const w = world()
+    const bob = bobFor(w, '2026-03-05')
+    const r = verifyGrantChain(withBob(w, bob, remove(w, '2026-03-06')))
+    expect(r.verdicts.get(bob.sortKey)).toEqual({ valid: true })
+    expect(checkMemberRole(r, BOB, 'admin')).toEqual({ status: 'verified' })
+  })
+
+  it('rejects a grant the removed admin signs the day after the removal', () => {
+    const w = world()
+    const d = remove(w, '2026-03-06')
+    const late = bobFor(w, '2026-03-07')
+    expect(verdictOf(withBob(w, d, late), late).reason).toBe(
+      "grantorGrantRef is not the grantor's current grant",
+    )
+  })
+
+  // KNOWN GAP, pinned on purpose. The same-day exemption is for SELF-demotion
+  // only. A removed admin's grants dated the SAME UTC day as the removal are
+  // rejected, including honest ones signed before the removal: the order
+  // within a day is unknowable, and accepting them would let a server
+  // colluding with the removed admin store a grant signed AFTER the removal
+  // and have it verify, which is exactly what removal exists to prevent.
+  // Fails safe (a flag, never a false "verified"). The promoted member stays
+  // unverified until a later grant re-establishes them. Do not "fix" this by
+  // extending the exemption without a way to order within a day.
+  it('flags a grant the removed admin signed the SAME day as the removal (known gap)', () => {
+    const w = world()
+    const bob = bobFor(w, '2026-03-06')
+    const r = verifyGrantChain(withBob(w, bob, remove(w, '2026-03-06')))
+    expect(r.verdicts.get(bob.sortKey)).toEqual({
+      valid: false,
+      reason: "grantor's role changed on the same UTC day",
+    })
+    expect(checkMemberRole(r, BOB, 'admin').status).toBe('unverified')
+    // The removal itself is unaffected.
+    expect(checkMemberRole(r, ALICE, 'member')).toEqual({ status: 'verified' })
+  })
+
+  it('does not extend the self-demotion exemption to a demotion by someone else', () => {
+    // Same shape as the self-demotion promote-then-leave test, with the
+    // demotion signed by the creator instead of Alice: the exemption must not
+    // apply, or the gap above would be open.
+    const w = world()
+    const bob = bobFor(w, '2026-03-06')
+    const viaSelf = grant(w.aliceKey, ALICE, 'member', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
+    expect(verdictOf(withBob(w, bob, viaSelf), bob).valid).toBe(true)
+    expect(verdictOf(withBob(w, bob, remove(w, '2026-03-06')), bob).valid).toBe(false)
+  })
+})

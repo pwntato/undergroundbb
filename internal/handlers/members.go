@@ -612,14 +612,12 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxChangeRoleBodyBytes)
 	var req removeMemberRequest
-	hasBody := true
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		if !errors.Is(err, io.EOF) {
-			WriteError(w, http.StatusBadRequest, "malformed request body")
-			return
-		}
-		hasBody = false
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
 	}
+	// No body, {} and null all mean "no demotion attached", as for leaveGroup.
+	hasBody := !req.empty()
 
 	// Same rule as getGroup: every read happens before any 404 branch.
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
@@ -691,7 +689,11 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	case elevated:
 		demotion, rej, msg := h.buildRemoveDemotion(r.Context(), userID, groupID, subjectID, currentRef, req)
 		if msg != "" {
-			WriteErrorWithCode(w, rej.status, msg, rej.code)
+			if rej.code == "" {
+				WriteError(w, rej.status, msg)
+			} else {
+				WriteErrorWithCode(w, rej.status, msg, rej.code)
+			}
 			return
 		}
 		in.Demotion = demotion
@@ -716,6 +718,10 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func (r removeMemberRequest) empty() bool {
+	return r.GrantSortKey == "" && r.GrantorGrantRef == "" && r.Signature == ""
 }
 
 type removeRejection struct {
@@ -746,7 +752,7 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
-		return nil, removeRejection{http.StatusInternalServerError, "internal"}, "could not remove member"
+		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
 	}
 	payload := crypto.RoleGrantPayload(groupID, subjectID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
 	if !crypto.Verify(remover.SigningPublicKey, crypto.ContextRoleGrant, payload, sig) {

@@ -810,8 +810,18 @@ fail safe: a flag, never a false "verified". Involuntary departure needs someone
 **Removal is signed by the remover.** `DELETE /api/groups/{gid}/members/{uid}` is Admin-only, and
 for an admin or ambassador subject the request carries the remover's signed grant of `member` to
 them, appended in the same transaction that deletes the membership. That is an ordinary admin
-grant, so the verifier needs no new rule, and it needs nothing from the removed admin, which is the
-property an involuntary departure cannot have otherwise. An admin cannot remove themselves, so the
+grant, so the demotion itself needs no new rule, and it needs nothing from the removed admin, which
+is the property an involuntary departure cannot have otherwise.
+
+**One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
+admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
+ones included, and so is the member they promoted, until a later grant re-establishes them. (A
+no-op re-grant of the same role is refused, so that means demoting and re-promoting.) The order
+within a day is unknowable, and exempting a demotion signed by someone else would let a server that
+colludes with the removed admin store a grant signed *after* the removal and have it verify, which
+is the one thing removal is for. It fails safe: a flag, never a false "verified". The mirror case,
+an admin promoted and removed on the same day, leaves an ambiguous latest grant on rejoin, the same
+gap leaving already has. Both are pinned in `grant-chain.test.ts`. An admin cannot remove themselves, so the
 admin who removes someone is always still there: removal never leaves a group without an admin, and
 the successor problem (#161) is left only with account deletion (#77) and inactivity, where no
 remaining admin is acting. This slice works for **Open** groups only. In a **Rotating** group
