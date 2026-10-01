@@ -29,6 +29,12 @@ import type {
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
   RecoveryMaterial,
+  RewrapGroupKeyRequest,
+  RewrapGroupKeyResponse,
+  RewrapGroupKeyResult,
+  StartGroupRotationRequest,
+  StartGroupRotationResponse,
+  StartGroupRotationResult,
   SignGroupCreationRequest,
   SignGroupCreationResponse,
   SignGroupCreationResult,
@@ -518,6 +524,60 @@ export function completeInvite(
     w.addEventListener('message', onMessage)
     w.postMessage(fullReq)
   })
+}
+
+function workerCall<Res extends WorkerResponse, Out>(
+  build: (id: string) => unknown,
+  doneKind: Res['kind'],
+  pick: (res: Res) => Out,
+): Promise<Out> {
+  const id = nextRequestID()
+  const fullReq = build(id)
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === doneKind) {
+        resolve(pick(msg as Res))
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for ${doneKind}`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** #58: mints a Rotating-group removal's next group key (see startGroupRotation in credential-material.ts). */
+export function startGroupRotation(
+  req: Omit<StartGroupRotationRequest, 'kind' | 'id'>,
+): Promise<StartGroupRotationResult> {
+  return workerCall<StartGroupRotationResponse, StartGroupRotationResult>(
+    (id) => ({ kind: 'startGroupRotation', id, ...req }) satisfies StartGroupRotationRequest,
+    'startGroupRotationDone',
+    (res) => res.result,
+  )
+}
+
+/** #58: re-wraps the caller's current group key to a batch of members. Recipients' keys must be pin-checked first. */
+export function rewrapGroupKey(
+  req: Omit<RewrapGroupKeyRequest, 'kind' | 'id'>,
+): Promise<RewrapGroupKeyResult> {
+  return workerCall<RewrapGroupKeyResponse, RewrapGroupKeyResult>(
+    (id) => ({ kind: 'rewrapGroupKey', id, ...req }) satisfies RewrapGroupKeyRequest,
+    'rewrapGroupKeyDone',
+    (res) => res.result,
+  )
 }
 
 /**

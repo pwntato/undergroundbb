@@ -399,6 +399,61 @@ export interface CompleteInviteResponse {
 }
 
 /**
+ * #58: mints a Rotating-group removal's next group key. Carries only the
+ * caller's own MEMBER# entry (the old key, wrapped to them); the new key is
+ * generated inside the worker and never returned. See
+ * credential-material.ts's startGroupRotation.
+ */
+export interface StartGroupRotationRequest {
+  readonly kind: 'startGroupRotation'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly ownGeneration: number
+}
+
+export interface StartGroupRotationResult {
+  readonly generation: number
+  readonly link: { nonce: string; ciphertext: string }
+  readonly removerWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+export interface StartGroupRotationResponse {
+  readonly kind: 'startGroupRotationDone'
+  readonly id: string
+  readonly result: StartGroupRotationResult
+}
+
+/**
+ * #58: re-wraps the caller's current group key to a batch of recipients. The
+ * recipients' public keys MUST already have been checked against the caller's
+ * signed pins by the caller; the worker has no pins.
+ */
+export interface RewrapGroupKeyRequest {
+  readonly kind: 'rewrapGroupKey'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly ownGeneration: number
+  readonly recipients: readonly { userId: string; x25519PublicKey: string }[]
+}
+
+export interface RewrapGroupKeyResult {
+  readonly wraps: readonly {
+    userId: string
+    wrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  }[]
+}
+
+export interface RewrapGroupKeyResponse {
+  readonly kind: 'rewrapGroupKeyDone'
+  readonly id: string
+  readonly result: RewrapGroupKeyResult
+}
+
+/**
  * Decrypts one or more private groups' name/description for the group list
  * (issue #35) -- like signGroupCreation, relies entirely on the worker's
  * own liveKeys cache and carries no key material of its own. Each entry is
@@ -526,6 +581,8 @@ export type WorkerRequest =
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
+  | StartGroupRotationRequest
+  | RewrapGroupKeyRequest
   | ClearLiveKeysRequest
 
 export type WorkerResponse =
@@ -543,4 +600,6 @@ export type WorkerResponse =
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
+  | StartGroupRotationResponse
+  | RewrapGroupKeyResponse
   | WorkerErrorResponse

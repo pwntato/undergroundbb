@@ -21,14 +21,22 @@ import {
   encryptGroupText,
   generateSignupMaterial,
   InviteMACError,
+  rewrapGroupKey,
   signGroupCreation,
   signInviteAcceptance,
   signInviteCreation,
   signPin,
   signRoleGrant,
+  startGroupRotation,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
-import { groupNameAAD, memberWrapAAD, roleGrantPayload, trustAnchorPayload } from './group.js'
+import {
+  genKeyAAD,
+  groupNameAAD,
+  memberWrapAAD,
+  roleGrantPayload,
+  trustAnchorPayload,
+} from './group.js'
 import {
   computeInviteMAC,
   deriveInviteMACKey,
@@ -954,5 +962,160 @@ describe('signPin', () => {
     expect(run(signingKey.publicKey)).toBe('match')
     expect(run(ed25519.generateSigningKey().publicKey)).toBe('bad-signature')
     expect(run(signingKey.publicKey, PINNED)).toBe('bad-signature')
+  })
+})
+
+describe('group key rotation (#58)', () => {
+  const ADMIN_ID = '44444444-4444-4444-8444-444444444444'
+  const CAROL_ID = '55555555-5555-4555-8555-555555555555'
+  const GROUP_ID = 'group-uuid-rotation-1'
+
+  async function realUserKeys(userId: string, password: string) {
+    const signup = await generateSignupMaterial(userId, password, () => {})
+    const { keys } = await completeLogin({
+      password,
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId,
+      nonce: Buffer.from([6, 6, 6, 6]).toString('base64'),
+    })
+    return keys
+  }
+
+  const wire = (w: { ephemeralPub: string; nonce: string; ciphertext: string }) => ({
+    ephemeralPub: base64ToBytes(w.ephemeralPub),
+    nonce: base64ToBytes(w.nonce),
+    ciphertext: base64ToBytes(w.ciphertext),
+  })
+
+  async function startedRotation() {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-rot')
+    const oldKey = new Uint8Array(32).fill(7)
+    const created = await signGroupCreation(admin, GROUP_ID, oldKey)
+    const started = await startGroupRotation(admin, GROUP_ID, wire(created.groupKeyWrapped), 0)
+    return { admin, oldKey, started }
+  }
+
+  it('mints generation+1 whose chain link walks back to the old key', async () => {
+    const { admin, oldKey, started } = await startedRotation()
+    expect(started.generation).toBe(1)
+
+    // The remover's own entry is at the new generation and yields the NEW key.
+    const newKey = await unwrap(
+      admin.wrappingKey.privateKey,
+      wire(started.removerWrappedKey),
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+    )
+    expect(newKey).toHaveLength(32)
+    expect(newKey).not.toEqual(oldKey)
+
+    // The link holds the OLD key under the NEW one, bound to generation 0.
+    const link = {
+      nonce: base64ToBytes(started.link.nonce),
+      ciphertext: base64ToBytes(started.link.ciphertext),
+    }
+    const walked = await decrypt(newKey, link.nonce, link.ciphertext, genKeyAAD(GROUP_ID, 0))
+    expect(walked).toEqual(oldKey)
+
+    // A holder of only the old key cannot open it (the chain only walks back),
+    // and the link is bound to its generation and group.
+    await expect(
+      decrypt(oldKey, link.nonce, link.ciphertext, genKeyAAD(GROUP_ID, 0)),
+    ).rejects.toThrow()
+    await expect(
+      decrypt(newKey, link.nonce, link.ciphertext, genKeyAAD(GROUP_ID, 1)),
+    ).rejects.toThrow()
+    await expect(
+      decrypt(newKey, link.nonce, link.ciphertext, genKeyAAD('other-group', 0)),
+    ).rejects.toThrow()
+
+    // The new key is bound to generation 1, not 0.
+    await expect(
+      unwrap(
+        admin.wrappingKey.privateKey,
+        wire(started.removerWrappedKey),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 0),
+      ),
+    ).rejects.toThrow()
+  })
+
+  it('mints a fresh key every time', async () => {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-rot-2')
+    const created = await signGroupCreation(admin, GROUP_ID, new Uint8Array(32).fill(7))
+    const own = wire(created.groupKeyWrapped)
+    const a = await startGroupRotation(admin, GROUP_ID, own, 0)
+    const b = await startGroupRotation(admin, GROUP_ID, own, 0)
+    expect(a.removerWrappedKey.ciphertext).not.toBe(b.removerWrappedKey.ciphertext)
+  })
+
+  it('re-wraps the SAME new key to a member, readable only by them at that generation', async () => {
+    const { admin, started } = await startedRotation()
+    const carol = await realUserKeys(CAROL_ID, 'carol-password-rot')
+    const newKey = await unwrap(
+      admin.wrappingKey.privateKey,
+      wire(started.removerWrappedKey),
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+    )
+
+    // A resumed run re-derives the key from the admin's OWN entry at gen 1.
+    const wraps = await rewrapGroupKey(admin, GROUP_ID, wire(started.removerWrappedKey), 1, [
+      { userId: CAROL_ID, x25519PublicKey: carol.wrappingKey.publicKey },
+    ])
+    expect(wraps).toHaveLength(1)
+    const carolsKey = await unwrap(
+      carol.wrappingKey.privateKey,
+      wire(wraps[0].wrappedKey),
+      memberWrapAAD(GROUP_ID, CAROL_ID, 1),
+    )
+    expect(carolsKey).toEqual(newKey)
+
+    // Bound to carol's identity and the generation; not readable by the admin.
+    await expect(
+      unwrap(
+        carol.wrappingKey.privateKey,
+        wire(wraps[0].wrappedKey),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      unwrap(
+        carol.wrappingKey.privateKey,
+        wire(wraps[0].wrappedKey),
+        memberWrapAAD(GROUP_ID, CAROL_ID, 0),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      unwrap(
+        admin.wrappingKey.privateKey,
+        wire(wraps[0].wrappedKey),
+        memberWrapAAD(GROUP_ID, CAROL_ID, 1),
+      ),
+    ).rejects.toThrow()
+  })
+
+  it('refuses to re-wrap to the caller or to a malformed key', async () => {
+    const { admin, started } = await startedRotation()
+    const own = wire(started.removerWrappedKey)
+    await expect(
+      rewrapGroupKey(admin, GROUP_ID, own, 1, [
+        { userId: ADMIN_ID, x25519PublicKey: admin.wrappingKey.publicKey },
+      ]),
+    ).rejects.toThrow(/caller/)
+    await expect(
+      rewrapGroupKey(admin, GROUP_ID, own, 1, [
+        { userId: CAROL_ID, x25519PublicKey: new Uint8Array(31) },
+      ]),
+    ).rejects.toThrow(/32 bytes/)
+  })
+
+  it('cannot re-wrap from an entry that is not at the stated generation', async () => {
+    const { admin, started } = await startedRotation()
+    const carol = await realUserKeys(CAROL_ID, 'carol-password-rot-2')
+    await expect(
+      rewrapGroupKey(admin, GROUP_ID, wire(started.removerWrappedKey), 0, [
+        { userId: CAROL_ID, x25519PublicKey: carol.wrappingKey.publicKey },
+      ]),
+    ).rejects.toThrow()
   })
 })
