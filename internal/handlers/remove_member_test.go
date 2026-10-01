@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -433,10 +434,24 @@ func TestRemoveMemberRefusedWhenRemoversGrantIsDatedAfterTheDemotion(t *testing.
 	if got := errCode(t, rec); got != "remover_granted_today" {
 		t.Fatalf("code = %q, want remover_granted_today", got)
 	}
+	if msg := errMessage(t, rec); !strings.Contains(msg, "clock") {
+		t.Errorf("a later-dated remover grant needs clock advice, not 'try again after 00:00 UTC': %q", msg)
+	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+adm.userID) == nil {
 		t.Error("admin was removed with an unverifiable demotion")
 	}
 	if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
 		t.Error("an unverifiable demotion was written")
 	}
+}
+
+func errMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var b struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decoding error body %q: %v", rec.Body.String(), err)
+	}
+	return b.Error
 }

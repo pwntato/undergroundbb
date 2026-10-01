@@ -757,7 +757,12 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	// remover's current grant is already in hand, so refuse here instead of
 	// storing something that can never verify (the removal-side half of #167).
 	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && !day.After(refDay) {
-		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal or later, so it could never verify; try again after 00:00 UTC"
+		if day.Before(refDay) {
+			// Advice differs: waiting does not help a slow clock, which would
+			// date the retry just after midnight as refDay again.
+			return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "this removal is dated before your own admin grant, so it could never verify; check your device clock and retry"
+		}
+		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal, so it could never verify; try again after 00:00 UTC"
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
