@@ -850,6 +850,17 @@ out exactly the admins able to resume. A client
 resuming a rotation should re-wrap the **other admins first**: only an admin already at the new
 generation can resume, and only the initiator is until someone else is re-wrapped.
 
+**The client job fails closed on pins.** Re-wrapping hands a member the new group key, so a
+server-substituted X25519 key for that member would hand the server the key and defeat the rotation.
+Before wrapping to anyone the job checks their served keys against the caller's signed pin: a match
+is wrapped to; a first sighting is pinned (trust on first use, as the roster does) and wrapped to; a
+mismatch or bad signature is skipped, reported, never wrapped to and never re-pinned over, and the
+rotation is left unfinished (`members_behind`) until a person resolves it. An unreadable pin set, or
+keys that cannot be fetched, stops the run rather than wrapping unchecked. This differs from the
+roster's grant check, which can show a mark while "unchecked": there the worst case is a missing
+badge, here it is a leaked key. The job re-lists members each pass (state, not a cursor), re-wraps
+only those behind, and runs the same way as a catch-up when no rotation is running.
+
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
 ones included, and so is the member they promoted, until a later grant re-establishes them. (A
