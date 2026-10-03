@@ -81,7 +81,7 @@ relocated ciphertext fail loudly:
 | Comment | `POST#<pid>` + `CMT#<path>` + generation number |
 | Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
 | Generation key | group id + generation number |
-| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. That guard only holds while `PROFILE` exists for every uuid ever used, though — user uuids are never reused, so account deletion (not yet built) must tombstone `PROFILE` rather than delete it, or a re-registration on a stale uuid could inherit another user's still-live memberships, invites, and other items keyed on it. |
+| Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. That guard only holds while `PROFILE` exists for every uuid ever used, though — user uuids are never reused, so account deletion (`DELETE /api/account`, below) tombstones `PROFILE` rather than deleting it, or a re-registration on a stale uuid could inherit another user's still-live memberships, invites, and other items keyed on it. |
 | Group name/description | group id + which field (name vs. description) + generation number — `GroupNameAAD` in `internal/crypto/group.go`. The field distinguishes the two ciphertexts sharing the same group id and generation, since without it an attacker with write access could swap a group's name and description with both tags still verifying. |
 | Member's wrapped group key | group id + member uuid + generation number — `MemberWrapAAD` in `internal/crypto/group.go`. Unlike the generation key row above, this wrap is **member-specific** (each member holds their own ECIES-wrapped copy on their own `MEMBER#` item, per docs/DESIGN.md's key-generations discussion), so the member uuid has to be part of the binding: without it, an attacker with write access could swap two members' wrapped entries at the same generation and both tags would still verify, silently handing each member the other's copy — harmless only when the two copies happen to unwrap to the same plaintext, which is true within one generation but not the property this table is trying to guarantee. |
 
@@ -824,6 +824,31 @@ browser minted the key, durably holds the one copy a resumed rotation must re-us
 runs at a time: the marker and the link are both `attribute_not_exists` writes, so a removal while
 one is in progress is refused (`rotation_in_progress`, 409) and changes nothing. Re-wrapping every
 other member is the client's resumable job, not part of this request.
+
+**Account deletion is a leave in every group, then a tombstone.** `DELETE /api/account` refuses with
+409 `still_member` while the account holds any membership. The client leaves each group first, which
+is the existing leave: an admin or ambassador signs their own demotion, and the last admin of a group
+that survives is refused until they promote a successor. That answers "who signs the demotion" for
+this case: the departing user does, so deletion needs no one else's signature and never chooses a
+successor. Once no membership remains, one transaction tombstones `PROFILE` (`DeletedAt` set; username,
+salt, wrapped private keys, preferences and lock state removed; the public keys stay so grants and
+signatures the user made still verify), deletes the `USERNAME#` claim (the name is free again) and
+deletes `RECOVERY`. Pins, the login challenge, invites they sent and invites addressed to them are
+swept afterwards, and a repeated call finishes any leftovers. `PROFILE` is never deleted, so the uuid
+cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tombstone with `deleted:
+true` and an empty username. `CompleteInvite` refuses a deleted invitee. Two gaps, both fail safe: a
+membership completed between the membership check and the tombstone survives, visible to the group
+as a member whose profile is deleted, and an admin removes it with the ordinary removal flow; and a
+session cookie issued earlier stays valid until it expires (there is no session store), though
+nothing it can reach works on the tombstone, and a password change from it fails because `RECOVERY`
+is gone. Content other members already decrypted cannot be recalled.
+
+**Inactivity is not built, and the open question is whether it should be.** An inactive admin who is
+not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no
+remaining admin is acting, so any automatic promotion needs a signature the group does not have.
+Candidates: the admin pre-signs a successor designation that clients accept only after a stated
+inactivity period, or the highest remaining role co-signs. Both need a verifier rule beyond the
+same-day grant rules above, so this is left to #161.
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
