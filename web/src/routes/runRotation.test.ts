@@ -333,6 +333,18 @@ describe('runRotation', () => {
     expect(out.status).toBe('cannot-resume')
   })
 
+  it('keeps the re-wrapped count across a restart', async () => {
+    const f = new Fake()
+    for (let i = 0; i < 26; i++) f.add(person())
+    f.onRewrap[1] = () => {
+      f.marker = { generation: 2 } // superseded after the first batch of 25 landed
+      f.ownGeneration = 2
+      f.members.get(ME)!.generation = 2
+    }
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toEqual({ status: 'completed', rewrapped: 25 + 26 })
+  })
+
   describe('pin checks (fail closed)', () => {
     it('never wraps to a member whose served key mismatches their pin, and does not complete', async () => {
       const f = new Fake()
@@ -348,6 +360,22 @@ describe('runRotation', () => {
       expect(f.gen(swapped)).toBe(0)
       expect(f.completed).toEqual([])
       expect(f.pinned).toEqual([]) // never re-pins over a mismatch
+    })
+
+    it('re-reads pins every pass: a retry never re-pins over a key pinned earlier in the run', async () => {
+      const f = new Fake()
+      const x = f.add(person(), 'member', 0, null) // first-sight
+      const leaver = f.add(person())
+      f.onRewrap[0] = () => {
+        f.members.delete(leaver.id) // forces member_changed on the batch
+        // the server now serves a different wrapping key for x
+        f.members.get(x.id)!.person = { ...x, wrapping: new Uint8Array(32).fill(251) }
+      }
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'blocked', blocked: [x.id], rewrapped: 0 })
+      expect(f.pinned).toEqual([x.id]) // pinned once, never re-pinned
+      expect(f.gen(x)).toBe(0)
+      expect(f.completed).toEqual([])
     })
 
     it('treats a pin with a bad signature as blocked', async () => {

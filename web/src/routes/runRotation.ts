@@ -109,19 +109,20 @@ function adminsFirst(members: readonly MemberEntry[]): MemberEntry[] {
  * admin: it does nothing and says 'none' when there is nothing to do.
  */
 export async function runRotation(deps: RotationDeps, groupId: string): Promise<RotationOutcome> {
-  return runOnce(deps, groupId, false)
+  return runOnce(deps, groupId, false, 0)
 }
 
 async function runOnce(
   deps: RotationDeps,
   groupId: string,
   restarted: boolean,
+  carried: number,
 ): Promise<RotationOutcome> {
   let detail: GroupDetail
   try {
     detail = await deps.getGroup(groupId)
   } catch (err) {
-    return { status: 'incomplete', reason: describe(err), rewrapped: 0 }
+    return { status: 'incomplete', reason: describe(err), rewrapped: carried }
   }
   if (detail.role !== 'admin' || detail.visibility !== 'private' || !detail.wrappedGroupKey) {
     return { status: 'none' }
@@ -142,23 +143,34 @@ async function runOnce(
 
   // Fail closed on the pin set: never wrap to a key that was not checked.
   let own: Uint8Array
-  let pins: Map<string, PinRecord>
   try {
     own = base64ToBytes(await deps.ownSigningKey())
-    pins = new Map((await deps.listPins()).map((p) => [p.pinnedUserId, p]))
   } catch (err) {
     return {
       status: 'incomplete',
       reason: `could not read your pins: ${describe(err)}`,
-      rewrapped: 0,
+      rewrapped: carried,
     }
   }
 
   const blocked = new Set<string>()
-  let rewrapped = 0
+  let rewrapped = carried
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
+    // Re-read the pins every pass: checkRecipient pins first-sight members
+    // mid-run, and a stale map would treat them as first-sight again after a
+    // retry and re-pin over whatever key the server serves now.
+    let pins: Map<string, PinRecord>
     let members: readonly MemberEntry[]
+    try {
+      pins = new Map((await deps.listPins()).map((p) => [p.pinnedUserId, p]))
+    } catch (err) {
+      return {
+        status: 'incomplete',
+        reason: `could not read your pins: ${describe(err)}`,
+        rewrapped,
+      }
+    }
     try {
       members = await deps.listAllMembers(groupId)
     } catch (err) {
@@ -227,7 +239,7 @@ async function runOnce(
         }
         if (code === 'rotation_not_active' && !restarted) {
           // The marker changed under us; start over from a fresh read once.
-          return runOnce(deps, groupId, true)
+          return runOnce(deps, groupId, true, rewrapped)
         }
         return { status: 'incomplete', reason: describe(err), rewrapped }
       }
