@@ -77,8 +77,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
-  // How this tab's on-load catch-up ended; null until it has. The stale-rotation
-  // banner's advice depends on it (see rotationNotice).
+  // How this tab's most recent rotation job (on-load catch-up or a removal's)
+  // ended; null until one has. The stale-rotation banner's advice depends on it
+  // (see rotationNotice).
   const [catchUpStatus, setCatchUpStatus] = useState<RotationOutcome['status'] | null>(null)
   // One rotation job at a time per group, per tab: the on-load catch-up and the
   // one a removal runs must never overlap, even across this screen unmounting
@@ -279,6 +280,11 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         return
       }
       const { removal, rotation } = result
+      // A removal can resume a stalled rotation and end differently from the
+      // on-load attempt; the banner's advice follows the latest job.
+      if (rotation !== undefined) {
+        setCatchUpStatus(rotation.status)
+      }
       const note =
         rotation === undefined
           ? null

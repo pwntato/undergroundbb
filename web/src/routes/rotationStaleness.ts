@@ -28,7 +28,7 @@ export type RotationNotice =
   | { readonly kind: 'ahead'; readonly startedBy: string; readonly ageMs: number | null }
   /** This admin's own attempt stopped; nothing resumes until the group is reopened. */
   | { readonly kind: 'stopped'; readonly startedBy: string; readonly ageMs: number | null }
-  /** This admin's attempt is paused on a pin check, which the error message explains. */
+  /** This admin's attempt is paused because a member's keys no longer match the saved copy. */
   | { readonly kind: 'blocked'; readonly startedBy: string; readonly ageMs: number | null }
 
 /**
@@ -37,7 +37,7 @@ export type RotationNotice =
  * unparseable timestamp counts as stale: a banner shown wrongly costs a
  * glance, a rotation hidden by bad data costs the removal.
  *
- * `outcome` is how this tab's on-load catch-up ended, or null while it has not
+ * `outcome` is how this tab's most recent rotation job ended, or null while it has not
  * run or finished. The advice depends on it: before it ends, and after it
  * completes, nothing is shown (the running status and the "finished" message
  * already speak), and what to tell the admin after it stops is a different
