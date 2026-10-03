@@ -106,11 +106,11 @@ func TestLeaveGroupLastAdminGets409ThenSucceedsAfterPromotion(t *testing.T) {
 	}
 
 	// Promote bob through the real endpoint, then the leave goes through.
-	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", rootRef(t, gid, owner))
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", backdatedRef(t, gid, owner))
 	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
 	}
-	leave := signedLeave(t, owner, gid, rootRef(t, gid, owner))
+	leave := signedLeave(t, owner, gid, backdatedRef(t, gid, owner))
 	if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusOK {
 		t.Fatalf("leave after promotion: %d %s", rec.Code, rec.Body.String())
 	}
@@ -120,7 +120,7 @@ func TestLeaveGroupOnlyMemberDeletesGroup(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
-	root := rootRef(t, gid, owner)
+	root := backdatedRef(t, gid, owner)
 
 	rec := doLeave(t, h, ownerCookie, gid)
 	var resp leaveGroupResponse
@@ -220,7 +220,7 @@ func TestLeaveGroupOnlyClearsTheLeaversInvitesToThatGroup(t *testing.T) {
 	addMember(t, otherGid, amb, "member")
 	ambRef := ""
 	for _, g := range []string{gid, otherGid} {
-		req := signedRoleRequest(t, owner, g, amb.userID, "ambassador", rootRef(t, g, owner))
+		req := signedRoleRequest(t, owner, g, amb.userID, "ambassador", backdatedRef(t, g, owner))
 		if rec := doChangeRole(t, h, ownerCookie, g, amb.userID, req); rec.Code != http.StatusOK {
 			t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
 		}
@@ -258,7 +258,7 @@ func setupTwoAdmins(t *testing.T) (h *Handler, gid string, owner, bob registered
 	gid = createPrivateGroup(t, h, owner, ownerCookie)
 	bob, bobCookie = loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
-	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", rootRef(t, gid, owner))
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", backdatedRef(t, gid, owner))
 	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
 	}
@@ -267,7 +267,7 @@ func setupTwoAdmins(t *testing.T) (h *Handler, gid string, owner, bob registered
 
 func TestLeaveGroupAdminAppendsSignedDemotion(t *testing.T) {
 	h, gid, owner, _, ownerCookie, _ := setupTwoAdmins(t)
-	ref := rootRef(t, gid, owner)
+	ref := backdatedRef(t, gid, owner)
 	leave := signedLeave(t, owner, gid, ref)
 	if rec := doLeaveWith(t, h, ownerCookie, gid, &leave); rec.Code != http.StatusOK {
 		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
@@ -291,7 +291,7 @@ func TestLeaveGroupAdminAppendsSignedDemotion(t *testing.T) {
 
 func TestLeaveGroupElevatedRejections(t *testing.T) {
 	h, gid, owner, bob, ownerCookie, bobCookie := setupTwoAdmins(t)
-	ref := rootRef(t, gid, owner)
+	ref := backdatedRef(t, gid, owner)
 
 	t.Run("no body", func(t *testing.T) {
 		rec := doLeave(t, h, ownerCookie, gid)

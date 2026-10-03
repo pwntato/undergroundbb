@@ -67,7 +67,8 @@
 //     honest clients near 00:00 UTC), the remover's grant, the removal and
 //     everything the remover signs later are all flagged, and with nobody left
 //     to re-grant them it is permanent. The server refuses that write
-//     (remover_granted_today) rather than store it; pinned in the tests.
+//     (remover_granted_today) rather than store it; pinned in the tests. A role
+//     change gets the same refusal (grantor_granted_today, #167).
 //   - A self-demotion is the only self-grant accepted. It takes effect the
 //     day after it is dated, so the leaver's promotion of a successor the same
 //     day still verifies.

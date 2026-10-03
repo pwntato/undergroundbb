@@ -314,7 +314,10 @@ export interface ChangeMemberRoleRequest {
  * PUT /api/groups/{id}/members/{uid}/role -- issue #37. Admin only, never
  * for oneself. 409 codes: grantor_ref_stale / grantor_changed /
  * subject_role_changed / conflict_retry mean "reload and decide again";
- * grant_key_taken means "sign again with a fresh grantSortKey".
+ * grant_key_taken means "sign again with a fresh grantSortKey";
+ * grantor_granted_today means the caller's own grant is dated the same UTC
+ * day as (or after) this one, so it could never verify: show the server's
+ * message, since reloading does not help (#167).
  */
 export async function changeMemberRole(
   groupId: string,
