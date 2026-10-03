@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,7 +192,7 @@ func TestChangeRolePromoteAndChain(t *testing.T) {
 	addMember(t, gid, bob, "member")
 
 	// creator -> alice (admin)
-	req := signedRoleRequest(t, owner, gid, alice.userID, "admin", rootRef(t, gid, owner))
+	req := signedRoleRequest(t, owner, gid, alice.userID, "admin", backdatedRef(t, gid, owner))
 	if rec := doChangeRole(t, h, ownerCookie, gid, alice.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote alice: %d %s", rec.Code, rec.Body.String())
 	}
@@ -211,8 +212,24 @@ func TestChangeRolePromoteAndChain(t *testing.T) {
 		t.Error("grant row carries CreatedAt; see issue #147")
 	}
 
-	// alice (chain: creator -> alice) -> bob (ambassador), referencing HER grant.
-	req2 := signedRoleRequest(t, alice, gid, bob.userID, "ambassador", req.GrantSortKey)
+	// alice was promoted today, so a grant she signs today could never verify
+	// (the same-day rule, #167): refused, and nothing is written.
+	tooSoon := signedRoleRequest(t, alice, gid, bob.userID, "ambassador", req.GrantSortKey)
+	rec := doChangeRole(t, h, aliceCookie, gid, bob.userID, tooSoon)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "grantor_granted_today" {
+		t.Fatalf("alice promotes bob the day she was promoted: %d %s, want 409 grantor_granted_today", rec.Code, rec.Body.String())
+	}
+	if got := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "Role"); got != "member" {
+		t.Fatalf("bob role = %q after a refused grant", got)
+	}
+	if getRow(t, "GROUP#"+gid, tooSoon.GrantSortKey) != nil {
+		t.Fatal("a refused grant was written")
+	}
+
+	// alice (chain: creator -> alice) -> bob (ambassador), referencing HER grant,
+	// which is now dated before today (as it is on any later day).
+	aliceRef := backdatedRef(t, gid, alice)
+	req2 := signedRoleRequest(t, alice, gid, bob.userID, "ambassador", aliceRef)
 	if rec := doChangeRole(t, h, aliceCookie, gid, bob.userID, req2); rec.Code != http.StatusOK {
 		t.Fatalf("alice promotes bob: %d %s", rec.Code, rec.Body.String())
 	}
@@ -222,7 +239,7 @@ func TestChangeRolePromoteAndChain(t *testing.T) {
 
 	// alice demotes the creator: allowed (append-only, alice is an admin),
 	// and the group still has an admin.
-	req3 := signedRoleRequest(t, alice, gid, owner.userID, "member", req.GrantSortKey)
+	req3 := signedRoleRequest(t, alice, gid, owner.userID, "member", aliceRef)
 	if rec := doChangeRole(t, h, aliceCookie, gid, owner.userID, req3); rec.Code != http.StatusOK {
 		t.Fatalf("demote creator: %d %s", rec.Code, rec.Body.String())
 	}
@@ -241,7 +258,20 @@ func TestChangeRoleLegacyCreatorUsesRootGrant(t *testing.T) {
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	member := registerTestUser(t, h)
 	addMember(t, gid, member, "member")
-	root := rootRef(t, gid, owner)
+	// Both the META root grant and the membership pointer are dated before
+	// today, as for a group made on an earlier day.
+	root := testGrantSortKey(t, owner.userID, time.Now().AddDate(0, 0, -3))
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+		UpdateExpression:          aws.String("SET RootGrantSortKey = :r"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: root}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
 		TableName: aws.String(testTableName()),
@@ -270,7 +300,7 @@ func TestChangeRoleRejections(t *testing.T) {
 	stranger, strangerCookie := loggedInUser(t, h)
 	addMember(t, gid, amb, "ambassador")
 	addMember(t, gid, target, "member")
-	root := rootRef(t, gid, owner)
+	root := backdatedRef(t, gid, owner)
 
 	good := func() changeRoleRequest { return signedRoleRequest(t, owner, gid, target.userID, "ambassador", root) }
 
@@ -340,5 +370,71 @@ func TestChangeRoleRequiresSession(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	if rec := doChangeRole(t, h, nil, "3f0c7a52-1111-4222-8333-444455556666", "3f0c7a52-1111-4222-8333-444455556667", changeRoleRequest{}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d", rec.Code)
+	}
+}
+
+// A grant signed on the same UTC day as the grantor's own grant is stored but
+// can never verify, and neither can anything the grantee signs afterwards, so
+// it is refused instead (#167). The creator of a group made today is the
+// simplest honest case: the root grant is dated today.
+func TestChangeRoleRefusedWhenGrantorsGrantIsDatedToday(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", rootRef(t, gid, owner))
+	rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", rec.Code, rec.Body.String())
+	}
+	if got := errCode(t, rec); got != "grantor_granted_today" {
+		t.Fatalf("code = %q, want grantor_granted_today", got)
+	}
+	if msg := errMessage(t, rec); !strings.Contains(msg, "00:00 UTC") {
+		t.Errorf("same-day refusal should say when to retry: %q", msg)
+	}
+	if got := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "Role"); got != "member" {
+		t.Errorf("bob role = %q after a refused grant", got)
+	}
+	if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
+		t.Error("an unverifiable grant was written")
+	}
+}
+
+// A grantor's grant dated AFTER the new grant means they held no grant on the
+// signing day at all. Waiting does not help a slow clock, so the advice
+// differs from the same-day case.
+func TestChangeRoleRefusedWhenGrantorsGrantIsDatedAfterTheGrant(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+
+	tomorrow := testGrantSortKey(t, owner.userID, time.Now().AddDate(0, 0, 1))
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + owner.userID},
+		},
+		UpdateExpression:          aws.String("SET GrantSortKey = :r"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: tomorrow}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", tomorrow)
+	rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "grantor_granted_today" {
+		t.Fatalf("status = %d, body: %s, want 409 grantor_granted_today", rec.Code, rec.Body.String())
+	}
+	if msg := errMessage(t, rec); !strings.Contains(msg, "clock") {
+		t.Errorf("a later-dated grantor grant needs clock advice: %q", msg)
+	}
+	if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
+		t.Error("an unverifiable grant was written")
 	}
 }

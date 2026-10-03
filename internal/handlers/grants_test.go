@@ -43,7 +43,8 @@ func TestListGrantsServesAnchorAndSignedHistory(t *testing.T) {
 	addMember(t, gid, bob, "member")
 	root := rootRef(t, gid, owner)
 
-	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", root)
+	ownerRef := backdatedRef(t, gid, owner)
+	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", ownerRef)
 	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote: %d %s", rec.Code, rec.Body.String())
 	}
@@ -68,7 +69,7 @@ func TestListGrantsServesAnchorAndSignedHistory(t *testing.T) {
 	}
 	pg, ok := bySK[req.GrantSortKey]
 	if !ok || pg.SubjectUserID != bob.userID || pg.GrantorUserID != owner.userID ||
-		pg.GrantedRole != "admin" || pg.GrantorGrantRef != root ||
+		pg.GrantedRole != "admin" || pg.GrantorGrantRef != ownerRef ||
 		pg.GrantorSigningPublicKey != enc(owner.signPub) || pg.Signature != req.Signature {
 		t.Errorf("promotion grant = %+v, want the signed request's fields", pg)
 	}
@@ -80,7 +81,7 @@ func TestListGrantsPaginates(t *testing.T) {
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
-	req := signedRoleRequest(t, owner, gid, bob.userID, "ambassador", rootRef(t, gid, owner))
+	req := signedRoleRequest(t, owner, gid, bob.userID, "ambassador", backdatedRef(t, gid, owner))
 	if rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req); rec.Code != http.StatusOK {
 		t.Fatalf("promote: %d", rec.Code)
 	}

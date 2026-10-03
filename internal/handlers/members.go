@@ -224,6 +224,18 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "grantSortKey: day is not within tolerance of the current UTC day")
 		return
 	}
+	// The verifier needs the grantor's own grant dated STRICTLY EARLIER than the
+	// grant they sign (see buildRemoveDemotion, which applies the same rule to
+	// removal): otherwise this grant and everything the grantee signs later
+	// would be stored but never verify (#167).
+	if refDay, ok := idgen.ValidGrantSortKey(currentRef, userID); ok && !day.After(refDay) {
+		if day.Before(refDay) {
+			WriteErrorWithCode(w, http.StatusConflict, "this grant is dated before your own admin grant, so it could never verify; check your device clock and retry", "grantor_granted_today")
+			return
+		}
+		WriteErrorWithCode(w, http.StatusConflict, "your own admin grant is dated the same UTC day as this grant, so it could never verify; try again after 00:00 UTC", "grantor_granted_today")
+		return
+	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "signature: "+err.Error())
