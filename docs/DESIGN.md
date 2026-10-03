@@ -1005,10 +1005,15 @@ else can resume it. Without that, a closed tab silently converts a removal into 
 
 The deadline is one hour from the marker's `startedAt`, checked by the admin's client when it loads
 the group (`web/src/routes/rotationStaleness.ts`). A rotation is a few batches of 25 re-wraps, so
-an hour is far past a healthy run and short enough that a closed tab is noticed the same day. Past
-it the admin sees a banner naming who started the rotation and how long ago. An admin who already
-holds the new key is told it resumes while the page stays open; one who does not is told to ask an
-admin who does. A marker whose timestamp cannot be parsed counts as stale.
+an hour is far past a healthy run and short enough that a closed tab is noticed the same day. The
+load-time check is a choice: a page left open while a fresh marker crosses the deadline shows
+nothing until something reloads it. Past the deadline the admin sees a banner naming who started the
+rotation and how long ago, but only once this tab's own on-load attempt to finish it has ended,
+because the advice depends on how it ended: an admin who does not hold the new key is told to ask
+one who does; an attempt that stopped is told that reopening the group tries again; one paused on a
+pin mismatch is pointed at that error. The banner never says to keep the page open, since nothing
+is running when it shows; the running status says that while a job is. A marker whose timestamp
+cannot be parsed counts as stale.
 
 A group can be converted Rotating → Open deliberately. The reverse is not offered: everyone who was
 ever a member already holds the old keys, so "upgrading" would imply a guarantee it cannot deliver.

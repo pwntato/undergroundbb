@@ -32,7 +32,7 @@ import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
 import { makePinKeys, makeRotationDeps } from './rotationDeps'
 import { catchUpRotation, removeAndRotate, rotationGuardFor } from './rotationJobs'
-import { describeRotation } from './runRotation'
+import { describeRotation, type RotationOutcome } from './runRotation'
 import { removeFailureMessage, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
@@ -77,6 +77,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
+  // How this tab's on-load catch-up ended; null until it has. The stale-rotation
+  // banner's advice depends on it (see rotationNotice).
+  const [catchUpStatus, setCatchUpStatus] = useState<RotationOutcome['status'] | null>(null)
   // One rotation job at a time per group, per tab: the on-load catch-up and the
   // one a removal runs must never overlap, even across this screen unmounting
   // and remounting while a job runs (see rotationJobs.ts). The state mirrors
@@ -112,14 +115,23 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     [groupId],
   )
 
+  // The roster plus whoever started a running rotation, who may have left
+  // since and would otherwise show as a short id in the banner.
   const usernames = useUsernames(
-    load.status === 'ready' ? load.view.members.map((m) => m.userId) : [],
+    load.status === 'ready'
+      ? [
+          ...load.view.members.map((m) => m.userId),
+          ...(load.view.rotation === undefined ? [] : [load.view.rotation.startedBy]),
+        ]
+      : [],
   )
 
   const usernamesRef = useRef(usernames)
+  const loadRef = useRef(load)
   useEffect(() => {
     usernamesRef.current = usernames
-  }, [usernames])
+    loadRef.current = load
+  }, [usernames, load])
 
   useEffect(() => {
     let cancelled = false
@@ -177,15 +189,23 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (result.busy) {
         return
       }
+      const status = result.outcome.status
+      setCatchUpStatus(status)
       const note = describeRotation(result.outcome, (id) => memberLabel(id, usernamesRef.current))
+      const current = loadRef.current
+      // The banner already says an overdue rotation needs another admin.
+      const bannerCovers =
+        status === 'cannot-resume' &&
+        current.status === 'ready' &&
+        rotationNotice(current.view, current.loadedAtMs, status) !== null
       if (note?.kind === 'error') {
         setError(note.text)
-      } else if (note !== null) {
+      } else if (note !== null && !bannerCovers) {
         setMessage(note.text)
       }
-      // A finished rotation cleared the marker; reload so a stale-rotation
-      // banner computed from the pre-run view does not outlive it.
-      if (result.outcome.status === 'completed') {
+      // A finished rotation cleared the marker; refresh the view. The banner
+      // is already suppressed for 'completed', so this is only a refresh.
+      if (status === 'completed') {
         await reload(() => false)
       }
     })()
@@ -378,7 +398,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )}
       {load.status === 'ready' && !rotationBusy && (
         <RotationBanner
-          notice={rotationNotice(load.view, load.loadedAtMs)}
+          notice={rotationNotice(load.view, load.loadedAtMs, catchUpStatus)}
           startedByLabel={memberLabel(load.view.rotation?.startedBy ?? '', usernames)}
         />
       )}

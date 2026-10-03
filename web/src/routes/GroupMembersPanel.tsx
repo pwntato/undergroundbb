@@ -289,11 +289,12 @@ export function MembersFeedback({
 }
 
 /**
- * Shown to an admin when a key rotation has outlived its deadline (see
- * rotationStaleness.ts). Until it finishes, the removed member can still read
- * every new post, so this says so plainly. `startedByLabel` names who started
- * it. Not rendered while this tab's own job is running: the running status
- * already says to keep the page open.
+ * Shown to an admin when a key rotation has outlived its deadline and this
+ * tab's attempt to finish it ended without finishing (see rotationStaleness.ts).
+ * Until it finishes, the removed member can still read every new post, so this
+ * says so plainly. `startedByLabel` names who started it. It never says "keep
+ * this page open": by the time it shows, nothing is running, and the running
+ * status already gives that advice while a job is.
  */
 export function RotationBanner({
   notice,
@@ -306,13 +307,15 @@ export function RotationBanner({
     return null
   }
   const lead = `A key rotation started ${describeAge(notice.ageMs)} ago by ${startedByLabel} has not finished. Until it does, a removed member can still read new posts.`
+  const next: Record<RotationNotice['kind'], string> = {
+    'needs-other-admin':
+      'Only an admin who already holds the new key can finish it. Ask one to open this group.',
+    stopped: 'Reopening this group tries again.',
+    blocked: 'It is paused; the message below says why.',
+  }
   return (
     <Alert variant="destructive">
-      <AlertDescription>
-        {notice.kind === 'resumable'
-          ? `${lead} You hold the new key, so it resumes while this page is open. Keep this page open until it finishes.`
-          : `${lead} Only an admin who already holds the new key can finish it. Ask one to open this group.`}
-      </AlertDescription>
+      <AlertDescription>{`${lead} ${next[notice.kind]}`}</AlertDescription>
     </Alert>
   )
 }

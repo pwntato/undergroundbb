@@ -351,15 +351,19 @@ describe('RotationBanner', () => {
     expect(html(null)).toBe('')
   })
 
-  it('tells a resuming admin to keep the page open', () => {
-    const out = html({ kind: 'resumable', startedBy: 'u1', ageMs: 2 * 3_600_000 })
+  it.each([
+    ['needs-other-admin', 'Ask one to open this group'],
+    ['stopped', 'Reopening this group tries again'],
+    ['blocked', 'the message below says why'],
+  ] as const)('a %s notice names the starter and the age, with its own next step', (kind, next) => {
+    const out = html({ kind, startedBy: 'u1', ageMs: 2 * 3_600_000 })
     expect(out).toContain('about 2 hours ago by alice')
-    expect(out).toContain('Keep this page open')
+    expect(out).toContain(next)
   })
 
-  it('tells an admin without the new key to ask another admin, with no keep-open advice', () => {
-    const out = html({ kind: 'needs-other-admin', startedBy: 'u1', ageMs: 2 * 3_600_000 })
-    expect(out).toContain('Ask one to open this group')
-    expect(out).not.toContain('Keep this page open')
+  it('never tells the admin to keep the page open, because nothing is running when it shows', () => {
+    for (const kind of ['needs-other-admin', 'stopped', 'blocked'] as const) {
+      expect(html({ kind, startedBy: 'u1', ageMs: 3_600_000 })).not.toContain('Keep this page open')
+    }
   })
 })

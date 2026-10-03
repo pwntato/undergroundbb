@@ -21,7 +21,7 @@ function view(overrides: Partial<MembersView> = {}): MembersView {
 describe('rotationNotice', () => {
   it('says nothing when no rotation is running', () => {
     const { rotation: _unused, ...noMarker } = view()
-    expect(rotationNotice(noMarker, NOW)).toBeNull()
+    expect(rotationNotice(noMarker, NOW, 'incomplete')).toBeNull()
   })
 
   it('says nothing before the deadline', () => {
@@ -32,33 +32,33 @@ describe('rotationNotice', () => {
         startedBy: 'u1',
       },
     })
-    expect(rotationNotice(v, NOW)).toBeNull()
+    expect(rotationNotice(v, NOW, 'incomplete')).toBeNull()
   })
 
-  it('warns at the deadline, to an admin who holds the new key, as resumable', () => {
-    expect(rotationNotice(view(), NOW)).toMatchObject({ kind: 'resumable', startedBy: 'u1' })
+  it('says nothing until the catch-up has ended, so it never speaks over a running job', () => {
+    expect(rotationNotice(view(), NOW, null)).toBeNull()
   })
 
-  it('tells an admin who is behind the marker that another admin must finish it', () => {
-    expect(rotationNotice(view({ myGeneration: 1 }), NOW)).toMatchObject({
-      kind: 'needs-other-admin',
-    })
+  it.each(['completed', 'caught-up', 'none'] as const)('says nothing after a %s catch-up', (s) => {
+    expect(rotationNotice(view(), NOW, s)).toBeNull()
   })
 
-  it('does not call an admin whose key is ahead of the marker resumable', () => {
-    expect(rotationNotice(view({ myGeneration: 3 }), NOW)).toMatchObject({
-      kind: 'needs-other-admin',
-    })
+  it.each([
+    ['cannot-resume', 'needs-other-admin'],
+    ['incomplete', 'stopped'],
+    ['blocked', 'blocked'],
+  ] as const)('at the deadline, a %s catch-up is a %s notice', (outcome, kind) => {
+    expect(rotationNotice(view(), NOW, outcome)).toMatchObject({ kind, startedBy: 'u1' })
   })
 
   it('tells only admins', () => {
-    expect(rotationNotice(view({ myRole: 'member' }), NOW)).toBeNull()
-    expect(rotationNotice(view({ myRole: 'ambassador' }), NOW)).toBeNull()
+    expect(rotationNotice(view({ myRole: 'member' }), NOW, 'incomplete')).toBeNull()
+    expect(rotationNotice(view({ myRole: 'ambassador' }), NOW, 'incomplete')).toBeNull()
   })
 
   it('treats an unparseable timestamp as stale rather than hiding the rotation', () => {
     const v = view({ rotation: { generation: 2, startedAt: 'garbage', startedBy: 'u1' } })
-    expect(rotationNotice(v, NOW)).toMatchObject({ kind: 'resumable', ageMs: null })
+    expect(rotationNotice(v, NOW, 'incomplete')).toMatchObject({ kind: 'stopped', ageMs: null })
   })
 })
 
