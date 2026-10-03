@@ -1011,7 +1011,8 @@ nothing until something reloads it. Past the deadline the admin sees a banner na
 rotation and how long ago, but only once this tab's own on-load attempt to finish it has ended,
 because the advice depends on how it ended: an admin who does not hold the new key is told to ask
 one who does; an attempt that stopped is told that reopening the group tries again; one paused on a
-pin mismatch is pointed at that error. The banner never says to keep the page open, since nothing
+pin mismatch is told, in the banner itself, that a member's keys no longer match the saved copy; one
+whose own key is already ahead of the marker is told to reload. The banner never says to keep the page open, since nothing
 is running when it shows; the running status says that while a job is. A marker whose timestamp
 cannot be parsed counts as stale.
 

@@ -7,7 +7,7 @@
 // where the remedy lives.
 
 import type { MembersView } from './runGroupMembers'
-import type { RotationOutcome } from './runRotation'
+import { describeRotation, type RotationOutcome } from './runRotation'
 
 /**
  * How long a rotation may run before an admin is told it has stalled. A
@@ -24,6 +24,8 @@ export type RotationNotice =
       readonly startedBy: string
       readonly ageMs: number | null
     }
+  /** This admin's key is already past the marker's generation, so the view is out of date. */
+  | { readonly kind: 'ahead'; readonly startedBy: string; readonly ageMs: number | null }
   /** This admin's own attempt stopped; nothing resumes until the group is reopened. */
   | { readonly kind: 'stopped'; readonly startedBy: string; readonly ageMs: number | null }
   /** This admin's attempt is paused on a pin check, which the error message explains. */
@@ -62,7 +64,13 @@ export function rotationNotice(
   }
   switch (outcome) {
     case 'cannot-resume':
-      return { kind: 'needs-other-admin', startedBy: marker.startedBy, ageMs }
+      // runRotation says cannot-resume for a key behind the marker AND one
+      // ahead of it; only the first needs another admin.
+      return {
+        kind: view.myGeneration > marker.generation ? 'ahead' : 'needs-other-admin',
+        startedBy: marker.startedBy,
+        ageMs,
+      }
     case 'incomplete':
       return { kind: 'stopped', startedBy: marker.startedBy, ageMs }
     case 'blocked':
@@ -88,4 +96,38 @@ export function describeAge(ageMs: number | null): string {
     return `about ${String(hours)} ${hours === 1 ? 'hour' : 'hours'}`
   }
   return `about ${String(Math.floor(hours / 24))} days`
+}
+
+/** What the screen does with a finished on-load catch-up; see catchUpResult. */
+export interface CatchUpEffects {
+  /** Recorded so the banner can pick its advice (see rotationNotice). */
+  readonly status: RotationOutcome['status']
+  readonly error: string | null
+  readonly message: string | null
+  /** A finished rotation cleared the marker, so the view needs a refresh. */
+  readonly reload: boolean
+}
+
+/**
+ * Turns a finished catch-up into the screen's state changes, kept out of the
+ * component so the rules are tested: the banner already says an overdue
+ * rotation needs another admin, so the matching info line is dropped.
+ */
+export function catchUpResult(
+  outcome: RotationOutcome,
+  view: MembersView | null,
+  loadedAtMs: number,
+  label: (userId: string) => string,
+): CatchUpEffects {
+  const note = describeRotation(outcome, label)
+  const bannerCovers =
+    outcome.status === 'cannot-resume' &&
+    view !== null &&
+    rotationNotice(view, loadedAtMs, outcome.status) !== null
+  return {
+    status: outcome.status,
+    error: note?.kind === 'error' ? note.text : null,
+    message: note !== null && note.kind !== 'error' && !bannerCovers ? note.text : null,
+    reload: outcome.status === 'completed',
+  }
 }

@@ -310,8 +310,10 @@ export function RotationBanner({
   const next: Record<RotationNotice['kind'], string> = {
     'needs-other-admin':
       'Only an admin who already holds the new key can finish it. Ask one to open this group.',
+    ahead: 'Your view is out of date. Reload the page.',
     stopped: 'Reopening this group tries again.',
-    blocked: 'It is paused; the message below says why.',
+    blocked:
+      "It is paused because a member's keys no longer match the copy you saved earlier. Check with them another way before relying on this group.",
   }
   return (
     <Alert variant="destructive">

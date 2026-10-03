@@ -25,7 +25,7 @@ import { getUser } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
-import { rotationNotice } from './rotationStaleness'
+import { catchUpResult, rotationNotice } from './rotationStaleness'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
@@ -189,23 +189,22 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (result.busy) {
         return
       }
-      const status = result.outcome.status
-      setCatchUpStatus(status)
-      const note = describeRotation(result.outcome, (id) => memberLabel(id, usernamesRef.current))
       const current = loadRef.current
-      // The banner already says an overdue rotation needs another admin.
-      const bannerCovers =
-        status === 'cannot-resume' &&
-        current.status === 'ready' &&
-        rotationNotice(current.view, current.loadedAtMs, status) !== null
-      if (note?.kind === 'error') {
-        setError(note.text)
-      } else if (note !== null && !bannerCovers) {
-        setMessage(note.text)
+      const effects = catchUpResult(
+        result.outcome,
+        current.status === 'ready' ? current.view : null,
+        current.status === 'ready' ? current.loadedAtMs : 0,
+        (id) => memberLabel(id, usernamesRef.current),
+      )
+      setCatchUpStatus(effects.status)
+      if (effects.error !== null) {
+        setError(effects.error)
+      } else if (effects.message !== null) {
+        setMessage(effects.message)
       }
-      // A finished rotation cleared the marker; refresh the view. The banner
-      // is already suppressed for 'completed', so this is only a refresh.
-      if (status === 'completed') {
+      // The banner is already suppressed once a rotation completes, so this
+      // is only a refresh of the roster.
+      if (effects.reload) {
         await reload(() => false)
       }
     })()

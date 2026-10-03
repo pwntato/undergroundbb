@@ -353,8 +353,9 @@ describe('RotationBanner', () => {
 
   it.each([
     ['needs-other-admin', 'Ask one to open this group'],
+    ['ahead', 'Reload the page'],
     ['stopped', 'Reopening this group tries again'],
-    ['blocked', 'the message below says why'],
+    ['blocked', 'keys no longer match the copy you saved'],
   ] as const)('a %s notice names the starter and the age, with its own next step', (kind, next) => {
     const out = html({ kind, startedBy: 'u1', ageMs: 2 * 3_600_000 })
     expect(out).toContain('about 2 hours ago by alice')
@@ -362,7 +363,7 @@ describe('RotationBanner', () => {
   })
 
   it('never tells the admin to keep the page open, because nothing is running when it shows', () => {
-    for (const kind of ['needs-other-admin', 'stopped', 'blocked'] as const) {
+    for (const kind of ['needs-other-admin', 'ahead', 'stopped', 'blocked'] as const) {
       expect(html({ kind, startedBy: 'u1', ageMs: 3_600_000 })).not.toContain('Keep this page open')
     }
   })

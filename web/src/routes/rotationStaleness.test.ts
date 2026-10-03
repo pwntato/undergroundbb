@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { describeAge, ROTATION_STALE_AFTER_MS, rotationNotice } from './rotationStaleness'
+import {
+  catchUpResult,
+  describeAge,
+  ROTATION_STALE_AFTER_MS,
+  rotationNotice,
+} from './rotationStaleness'
 import type { MembersView } from './runGroupMembers'
 
 const NOW = Date.parse('2026-10-03T12:00:00Z')
@@ -51,6 +56,12 @@ describe('rotationNotice', () => {
     expect(rotationNotice(view(), NOW, outcome)).toMatchObject({ kind, startedBy: 'u1' })
   })
 
+  it('does not send an admin whose key is ahead of the marker to another admin', () => {
+    expect(rotationNotice(view({ myGeneration: 3 }), NOW, 'cannot-resume')).toMatchObject({
+      kind: 'ahead',
+    })
+  })
+
   it('tells only admins', () => {
     expect(rotationNotice(view({ myRole: 'member' }), NOW, 'incomplete')).toBeNull()
     expect(rotationNotice(view({ myRole: 'ambassador' }), NOW, 'incomplete')).toBeNull()
@@ -71,5 +82,51 @@ describe('describeAge', () => {
     [59 * 60_000, '59 minutes'],
   ])('%s -> %s', (ms, text) => {
     expect(describeAge(ms)).toBe(text)
+  })
+})
+
+describe('catchUpResult', () => {
+  const label = (id: string): string => id
+  const stale = view({ myGeneration: 1 })
+
+  it('records the status and reloads only after a completed rotation', () => {
+    expect(catchUpResult({ status: 'completed', rewrapped: 2 }, view(), NOW, label)).toMatchObject({
+      status: 'completed',
+      reload: true,
+      error: null,
+    })
+    expect(
+      catchUpResult({ status: 'incomplete', reason: 'x', rewrapped: 0 }, view(), NOW, label).reload,
+    ).toBe(false)
+  })
+
+  it('routes an error outcome to error and leaves message empty', () => {
+    const fx = catchUpResult(
+      { status: 'incomplete', reason: 'offline', rewrapped: 0 },
+      view(),
+      NOW,
+      label,
+    )
+    expect(fx.error).toContain('offline')
+    expect(fx.message).toBeNull()
+  })
+
+  it('drops the cannot-resume info line when the stale banner says the same thing', () => {
+    const outcome = { status: 'cannot-resume', reason: 'r' } as const
+    expect(catchUpResult(outcome, stale, NOW, label).message).toBeNull()
+  })
+
+  it('keeps the cannot-resume info line before the deadline, when no banner will show', () => {
+    const outcome = { status: 'cannot-resume', reason: 'r' } as const
+    const fresh = view({
+      myGeneration: 1,
+      rotation: { generation: 2, startedAt: startedAgo(1000), startedBy: 'u1' },
+    })
+    expect(catchUpResult(outcome, fresh, NOW, label).message).toContain('has to be finished')
+  })
+
+  it('keeps the info line when there is no view to show a banner from', () => {
+    const outcome = { status: 'cannot-resume', reason: 'r' } as const
+    expect(catchUpResult(outcome, null, 0, label).message).not.toBeNull()
   })
 })
