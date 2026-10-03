@@ -22,7 +22,10 @@ export async function resolveUsernames(
     while (next < wanted.length) {
       const id = wanted[next++] as string
       try {
-        cache.set(id, (await fetchUser(id)).username)
+        const projection = await fetchUser(id)
+        // A deleted account is cached as '' (memberLabel shows it as deleted), not
+        // left unresolved, so its short id is not retried on every render.
+        cache.set(id, projection.deleted === true ? '' : projection.username)
       } catch {
         // Leave it unresolved; the label falls back to the short id.
       }

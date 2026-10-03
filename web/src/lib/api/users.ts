@@ -17,6 +17,8 @@ export interface UserProjection {
   readonly signingPublicKey: string
   readonly wrappingPublicKey: string
   readonly supersededSigningKeys: readonly WireSupersededKey[]
+  /** A tombstoned account (#77): `username` is empty and the keys are served only so old signatures verify. */
+  readonly deleted?: boolean
 }
 
 /** Throws ApiError(404) for an unknown user, 401 without a session. */
