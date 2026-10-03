@@ -23,6 +23,10 @@ export interface MembersView {
   readonly myGrantSortKey: string | undefined
   /** Decides whether removing a member rotates the group key. */
   readonly revocationMode: GroupDetail['revocationMode']
+  /** The caller's own key generation, compared with a running rotation's to tell who can finish it. */
+  readonly myGeneration: number
+  /** The group's in-progress key rotation, when one is running. */
+  readonly rotation?: GroupDetail['rotation']
 }
 
 export interface LoadMembersDeps {
@@ -58,6 +62,8 @@ export async function loadMembers(
         myRole: detail.role,
         myGrantSortKey: detail.myGrantSortKey,
         revocationMode: detail.revocationMode,
+        myGeneration: detail.generation,
+        ...(detail.rotation !== undefined && { rotation: detail.rotation }),
       },
     }
   } catch (err) {

@@ -17,6 +17,7 @@ import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import { memberLabel, unresolvedClass } from './memberLabel'
 import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
+import { describeAge, type RotationNotice } from './rotationStaleness'
 
 const ROLES: readonly MemberRole[] = ['admin', 'ambassador', 'member']
 
@@ -284,5 +285,39 @@ export function MembersFeedback({
         </Alert>
       )}
     </>
+  )
+}
+
+/**
+ * Shown to an admin when a key rotation has outlived its deadline and this
+ * tab's attempt to finish it ended without finishing (see rotationStaleness.ts).
+ * Until it finishes, the removed member can still read every new post, so this
+ * says so plainly. `startedByLabel` names who started it. It never says "keep
+ * this page open": by the time it shows, nothing is running, and the running
+ * status already gives that advice while a job is.
+ */
+export function RotationBanner({
+  notice,
+  startedByLabel,
+}: {
+  readonly notice: RotationNotice | null
+  readonly startedByLabel: string
+}) {
+  if (notice === null) {
+    return null
+  }
+  const lead = `A key rotation started ${describeAge(notice.ageMs)} ago by ${startedByLabel} has not finished. Until it does, a removed member can still read new posts.`
+  const next: Record<RotationNotice['kind'], string> = {
+    'needs-other-admin':
+      'Only an admin who already holds the new key can finish it. Ask one to open this group.',
+    ahead: 'Your view is out of date. Reload the page.',
+    stopped: 'Reopening this group tries again.',
+    blocked:
+      "It is paused because a member's keys no longer match the copy you saved earlier. Check with them another way before relying on this group.",
+  }
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>{`${lead} ${next[notice.kind]}`}</AlertDescription>
+    </Alert>
   )
 }

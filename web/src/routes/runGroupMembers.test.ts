@@ -44,6 +44,7 @@ function view(overrides: Partial<MembersView> = {}): MembersView {
     myRole: 'admin',
     myGrantSortKey: MY_GRANT,
     revocationMode: 'open',
+    myGeneration: 0,
     ...overrides,
   }
 }
@@ -63,8 +64,19 @@ describe('loadMembers', () => {
         myRole: 'admin',
         myGrantSortKey: MY_GRANT,
         revocationMode: 'open',
+        myGeneration: 0,
       },
     })
+  })
+
+  it("carries the caller's generation and a running rotation's marker", async () => {
+    const rotation = { generation: 3, startedAt: '2026-10-03T00:00:00Z', startedBy: 'u9' }
+    const deps: LoadMembersDeps = {
+      getGroup: vi.fn().mockResolvedValue(detail({ generation: 2, rotation })),
+      listMembers: vi.fn().mockResolvedValue({ members: [member(ME, 'admin')] }),
+    }
+    const result = await loadMembers(deps, 'g1')
+    expect(result.ok && result.view).toMatchObject({ myGeneration: 2, rotation })
   })
 
   it('follows nextCursor across pages, in order', async () => {

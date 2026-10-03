@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MemberEntry } from '@/lib/api/groups'
-import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
 import { memberLabel } from './memberLabel'
 import type { MembersView } from './runGroupMembers'
 
@@ -35,6 +35,7 @@ function render(
         myRole: 'admin',
         myGrantSortKey: 'GRANT#x',
         revocationMode: 'open',
+        myGeneration: 0,
         ...view,
       },
       userId: ME,
@@ -186,6 +187,7 @@ describe('GroupMembersPanel grant check marks', () => {
           myRole: 'admin',
           myGrantSortKey: 'GRANT#x',
           revocationMode: 'open',
+          myGeneration: 0,
         },
         userId: ME,
         busyUserId: null,
@@ -338,5 +340,31 @@ describe('MembersFeedback rotation status', () => {
   it('says nothing otherwise', () => {
     expect(render(false)).not.toContain('Keep this page open')
     expect(render()).not.toContain('Keep this page open')
+  })
+})
+
+describe('RotationBanner', () => {
+  const html = (notice: Parameters<typeof RotationBanner>[0]['notice']) =>
+    renderToStaticMarkup(createElement(RotationBanner, { notice, startedByLabel: 'alice' }))
+
+  it('renders nothing without a notice', () => {
+    expect(html(null)).toBe('')
+  })
+
+  it.each([
+    ['needs-other-admin', 'Ask one to open this group'],
+    ['ahead', 'Reload the page'],
+    ['stopped', 'Reopening this group tries again'],
+    ['blocked', 'keys no longer match the copy you saved'],
+  ] as const)('a %s notice names the starter and the age, with its own next step', (kind, next) => {
+    const out = html({ kind, startedBy: 'u1', ageMs: 2 * 3_600_000 })
+    expect(out).toContain('about 2 hours ago by alice')
+    expect(out).toContain(next)
+  })
+
+  it('never tells the admin to keep the page open, because nothing is running when it shows', () => {
+    for (const kind of ['needs-other-admin', 'ahead', 'stopped', 'blocked'] as const) {
+      expect(html({ kind, startedBy: 'u1', ageMs: 3_600_000 })).not.toContain('Keep this page open')
+    }
   })
 })

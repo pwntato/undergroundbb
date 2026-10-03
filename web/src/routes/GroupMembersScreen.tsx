@@ -24,14 +24,15 @@ import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUser } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
-import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
+import { catchUpResult, rotationNotice } from './rotationStaleness'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
 import { makePinKeys, makeRotationDeps } from './rotationDeps'
 import { catchUpRotation, removeAndRotate, rotationGuardFor } from './rotationJobs'
-import { describeRotation } from './runRotation'
+import { describeRotation, type RotationOutcome } from './runRotation'
 import { removeFailureMessage, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
@@ -44,7 +45,7 @@ import {
 
 type LoadState =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly view: MembersView }
+  | { readonly status: 'ready'; readonly view: MembersView; readonly loadedAtMs: number }
   | { readonly status: 'notFound' | 'authRequired' | 'failed' }
 
 const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], string> = {
@@ -76,6 +77,10 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
+  // How this tab's most recent rotation job (on-load catch-up or a removal's)
+  // ended; null until one has. The stale-rotation banner's advice depends on it
+  // (see rotationNotice).
+  const [catchUpStatus, setCatchUpStatus] = useState<RotationOutcome['status'] | null>(null)
   // One rotation job at a time per group, per tab: the on-load catch-up and the
   // one a removal runs must never overlap, even across this screen unmounting
   // and remounting while a job runs (see rotationJobs.ts). The state mirrors
@@ -102,19 +107,32 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (isCancelled()) {
         return
       }
-      setLoad(result.ok ? { status: 'ready', view: result.view } : { status: result.kind })
+      setLoad(
+        result.ok
+          ? { status: 'ready', view: result.view, loadedAtMs: Date.now() }
+          : { status: result.kind },
+      )
     },
     [groupId],
   )
 
+  // The roster plus whoever started a running rotation, who may have left
+  // since and would otherwise show as a short id in the banner.
   const usernames = useUsernames(
-    load.status === 'ready' ? load.view.members.map((m) => m.userId) : [],
+    load.status === 'ready'
+      ? [
+          ...load.view.members.map((m) => m.userId),
+          ...(load.view.rotation === undefined ? [] : [load.view.rotation.startedBy]),
+        ]
+      : [],
   )
 
   const usernamesRef = useRef(usernames)
+  const loadRef = useRef(load)
   useEffect(() => {
     usernamesRef.current = usernames
-  }, [usernames])
+    loadRef.current = load
+  }, [usernames, load])
 
   useEffect(() => {
     let cancelled = false
@@ -172,14 +190,26 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (result.busy) {
         return
       }
-      const note = describeRotation(result.outcome, (id) => memberLabel(id, usernamesRef.current))
-      if (note?.kind === 'error') {
-        setError(note.text)
-      } else if (note !== null) {
-        setMessage(note.text)
+      const current = loadRef.current
+      const effects = catchUpResult(
+        result.outcome,
+        current.status === 'ready' ? current.view : null,
+        current.status === 'ready' ? current.loadedAtMs : 0,
+        (id) => memberLabel(id, usernamesRef.current),
+      )
+      setCatchUpStatus(effects.status)
+      if (effects.error !== null) {
+        setError(effects.error)
+      } else if (effects.message !== null) {
+        setMessage(effects.message)
+      }
+      // The banner is already suppressed once a rotation completes, so this
+      // is only a refresh of the roster.
+      if (effects.reload) {
+        await reload(() => false)
       }
     })()
-  }, [rotationGroupId, userId, guard])
+  }, [rotationGroupId, userId, guard, reload])
 
   if (groupId === undefined) {
     return (
@@ -250,6 +280,11 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         return
       }
       const { removal, rotation } = result
+      // A removal can resume a stalled rotation and end differently from the
+      // on-load attempt; the banner's advice follows the latest job.
+      if (rotation !== undefined) {
+        setCatchUpStatus(rotation.status)
+      }
       const note =
         rotation === undefined
           ? null
@@ -364,6 +399,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             setConfirmingLeave(false)
           }}
           onConfirm={handleLeave}
+        />
+      )}
+      {load.status === 'ready' && !rotationBusy && (
+        <RotationBanner
+          notice={rotationNotice(load.view, load.loadedAtMs, catchUpStatus)}
+          startedByLabel={memberLabel(load.view.rotation?.startedBy ?? '', usernames)}
         />
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />
