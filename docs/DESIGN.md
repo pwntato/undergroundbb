@@ -923,7 +923,11 @@ ambassador** only, since removing a plain member signs nothing. Role changes get
 the day the grantor was granted, or before it, is stored but can never verify, and neither can
 anything the grantee signs later. Leaving is exempt, since a self-demotion takes effect the next day.
 The cost is a delay of up to a day on promoting, or removing, an elevated member for an admin whose
-own grant is that new, including the creator of a group made today. The verifier
+own grant is that new, including the creator of a group made today. One gap stays: the server checks only the grantor's *current* grant, while the verifier
+rejects on *any* grant the grantor holds dated the signing day, so a grantor given grant A dated today
+and then grant B dated yesterday (skewed clocks, inside the 26h tolerance) can sign a grant that the
+server stores and the verifier flags. It needs two grants to one grantor within a day, so it is left
+unless the server scans the grantor's grant rows. The verifier
 cases that make it necessary are pinned in `grant-chain.test.ts`.
 
 **The server also enforces the table above, as a first line and not a boundary.** The gates that

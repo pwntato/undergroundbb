@@ -224,16 +224,10 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "grantSortKey: day is not within tolerance of the current UTC day")
 		return
 	}
-	// The verifier needs the grantor's own grant dated STRICTLY EARLIER than the
-	// grant they sign (see buildRemoveDemotion, which applies the same rule to
-	// removal): otherwise this grant and everything the grantee signs later
-	// would be stored but never verify (#167).
-	if refDay, ok := idgen.ValidGrantSortKey(currentRef, userID); ok && !day.After(refDay) {
-		if day.Before(refDay) {
-			WriteErrorWithCode(w, http.StatusConflict, "this grant is dated before your own admin grant, so it could never verify; check your device clock and retry", "grantor_granted_today")
-			return
-		}
-		WriteErrorWithCode(w, http.StatusConflict, "your own admin grant is dated the same UTC day as this grant, so it could never verify; try again after 00:00 UTC", "grantor_granted_today")
+	// The grantor's own grant must be dated strictly earlier than this one
+	// (see grantorDatedTooLate); removal applies the same rule (#167).
+	if msg, refused := grantorDatedTooLate(day, currentRef, userID, "this grant"); refused {
+		WriteErrorWithCode(w, http.StatusConflict, msg, "grantor_granted_today")
 		return
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
@@ -794,6 +788,33 @@ type removeRejection struct {
 	code   string
 }
 
+// grantorDatedTooLate reports whether a grant dated `day`, signed by userID
+// under their current grant `currentRef`, could never verify, with the message
+// to send. The verifier needs the signer's own grant dated STRICTLY EARLIER:
+// on the same day the order is unknowable, and a later-dated grant means they
+// held no grant on the signing day at all. Either invalidates this write and
+// everything the signer signs afterwards (and the grantee's, for a role
+// change), permanently if the only admin who could re-grant them is the one
+// being removed. The later case is reachable by honest clients: the grant day
+// tolerance (now-26h .. now+2h) lets a signer granted just after 00:00 UTC
+// date for a day that is still yesterday on a slow clock. `what` names the
+// write in the message ("this grant", "this removal").
+//
+// Known gap: only the CURRENT pointer is checked, but the verifier rejects on
+// ANY grant the signer holds dated that day (see docs/DESIGN.md).
+func grantorDatedTooLate(day time.Time, currentRef, userID, what string) (msg string, refused bool) {
+	refDay, ok := idgen.ValidGrantSortKey(currentRef, userID)
+	if !ok || day.After(refDay) {
+		return "", false
+	}
+	if day.Before(refDay) {
+		// Advice differs: waiting does not help a slow clock, which would date
+		// the retry just after midnight as refDay again.
+		return what + " is dated before your own admin grant, so it could never verify; check your device clock and retry", true
+	}
+	return "your own admin grant is dated the same UTC day as " + what + ", so it could never verify; try again after 00:00 UTC", true
+}
+
 // buildRemoveDemotion validates the remover's signed demotion of the subject
 // exactly as changeMemberRole validates a grant: a well-formed sort key for
 // the SUBJECT dated near now, a well-formed signature, and a signature that
@@ -811,23 +832,12 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
 		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: day is not within tolerance of the current UTC day"
 	}
-	// The verifier needs the remover's own grant to be dated STRICTLY EARLIER
-	// than the demotion they sign: on the same day the order is unknowable, and
-	// a later-dated grant means they held no grant on the signing day at all.
-	// Either invalidates THIS demotion and everything the remover signs
-	// afterwards, permanently if the removed admin was the only one who could
-	// re-grant them. The later case is reachable by honest clients: the grant
-	// day tolerance (now-26h .. now+2h) lets a remover promoted just after
-	// 00:00 UTC sign for a day that is still yesterday on a slow clock. The
-	// remover's current grant is already in hand, so refuse here instead of
-	// storing something that can never verify (the removal-side half of #167).
-	if refDay, ok := idgen.ValidGrantSortKey(currentRef, removerID); ok && !day.After(refDay) {
-		if day.Before(refDay) {
-			// Advice differs: waiting does not help a slow clock, which would
-			// date the retry just after midnight as refDay again.
-			return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "this removal is dated before your own admin grant, so it could never verify; check your device clock and retry"
-		}
-		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, "your own admin grant is dated the same UTC day as this removal, so it could never verify; try again after 00:00 UTC"
+	// The remover's own grant must be dated strictly earlier than the demotion
+	// they sign (see grantorDatedTooLate). The remover's current grant is
+	// already in hand, so refuse here instead of storing something that can
+	// never verify (the removal-side half of #167).
+	if msg, refused := grantorDatedTooLate(day, currentRef, removerID, "this removal"); refused {
+		return nil, removeRejection{http.StatusConflict, "remover_granted_today"}, msg
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
