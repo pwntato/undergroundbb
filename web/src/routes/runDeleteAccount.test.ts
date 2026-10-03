@@ -4,10 +4,13 @@ import type { MemberEntry } from '@/lib/api/groups'
 import type { MembersView } from './runGroupMembers'
 import {
   deleteFailureMessage,
+  blockerReason,
   deletionBlockers,
   groupsThatWillBeDeleted,
   leaveOrder,
   planAccountDeletion,
+  planFingerprint,
+  runConfirmedDeletion,
   runDeleteAccount,
   type AccountPlanEntry,
   type DeleteAccountDeps,
@@ -235,5 +238,120 @@ describe('deleteFailureMessage', () => {
         label,
       ),
     ).toContain('log in again')
+  })
+})
+
+describe('runConfirmedDeletion (review of #183: the plan on screen can be stale)', () => {
+  // The user was shown g-shared under "You will leave"; Bob has left since, so
+  // leaving it now would delete the group.
+  const sharedShown = entry(view('g-shared', 'member', [m(ME, 'member'), m(BOB, 'member')]))
+  const sharedNowSolo = entry(view('g-shared', 'member', [m(ME, 'member')]))
+
+  function confirmedDeps(
+    fresh: AccountPlanEntry[],
+    over: Partial<DeleteAccountDeps> = {},
+  ): ReturnType<typeof deps> & { replan: () => Promise<never> } {
+    const d = deps(over)
+    return { ...d, replan: () => Promise.resolve({ ok: true, entries: fresh }) as never }
+  }
+
+  it('refuses, changes nothing and returns the fresh plan when a group became a group-deleting leave', async () => {
+    const d = confirmedDeps([sharedNowSolo])
+    const res = await runConfirmedDeletion(d, [sharedShown])
+    expect(res).toEqual({ ok: false, kind: 'planChanged', entries: [sharedNowSolo] })
+    expect(d.calls).toEqual([])
+  })
+
+  it('refuses when a new group appeared, a group vanished, or a role moved', async () => {
+    const extra = entry(view('g-new', 'member', [m(ME, 'member'), m(BOB, 'admin')]))
+    for (const fresh of [
+      [sharedShown, extra],
+      [],
+      [entry(view('g-shared', 'admin', [m(ME, 'admin'), m(BOB, 'admin')]))],
+    ]) {
+      const d = confirmedDeps(fresh)
+      const res = await runConfirmedDeletion(d, [sharedShown])
+      expect(res.ok === false && res.kind).toBe('planChanged')
+      expect(d.calls).toEqual([])
+    }
+  })
+
+  it('runs against the FRESH views when the plan still matches', async () => {
+    const fresh = entry(view('g-shared', 'member', [m(ME, 'member'), m(BOB, 'member')]))
+    const d = confirmedDeps([fresh])
+    const res = await runConfirmedDeletion(d, [sharedShown])
+    expect(res).toEqual({ ok: true, left: 1 })
+    expect(d.calls).toEqual(['leave:g-shared', 'delete'])
+  })
+
+  it('ignores roster churn that does not change what leaving does', () => {
+    const more = entry(view('g1', 'member', [m(ME, 'member'), m(BOB, 'admin'), m('zz', 'member')]))
+    const less = entry(view('g1', 'member', [m(ME, 'member'), m(BOB, 'admin')]))
+    expect(planFingerprint([more])).toBe(planFingerprint([less]))
+  })
+
+  it('changes nothing when the groups cannot be re-read', async () => {
+    const d = deps()
+    const failing = {
+      ...d,
+      replan: () => Promise.resolve({ ok: false as const, kind: 'failed' as const }),
+    }
+    expect(await runConfirmedDeletion(failing, [sharedShown])).toEqual({
+      ok: false,
+      kind: 'replanFailed',
+    })
+    const auth = {
+      ...d,
+      replan: () => Promise.resolve({ ok: false as const, kind: 'authRequired' as const }),
+    }
+    expect(await runConfirmedDeletion(auth, [sharedShown])).toEqual({
+      ok: false,
+      kind: 'authRequired',
+      left: 0,
+    })
+    expect(d.calls).toEqual([])
+  })
+})
+
+describe('blockerReason', () => {
+  it('tells a missing successor from a missing grant', () => {
+    expect(blockerReason(lastAdminGroup)).toBe('needsSuccessor')
+    const noGrant = entry(view('g-nogrant', 'admin', [m(ME, 'admin'), m(BOB, 'admin')], false))
+    expect(blockerReason(noGrant)).toBe('grantMissing')
+  })
+})
+
+describe('planAccountDeletion concurrency', () => {
+  it('never has more than a handful of rosters loading at once, and keeps group order', async () => {
+    let inFlight = 0
+    let peak = 0
+    const ids = Array.from({ length: 30 }, (_, i) => `g${i}`)
+    const res = await planAccountDeletion(
+      {
+        userId: ME,
+        getGroup: (async () => {
+          inFlight++
+          peak = Math.max(peak, inFlight)
+          await new Promise((r) => setTimeout(r, 2))
+          inFlight--
+          return { role: 'member', revocationMode: 'open', generation: 0 }
+        }) as never,
+        listMembers: () => Promise.resolve({ members: [m(ME, 'member'), m(BOB, 'admin')] }),
+      },
+      ids,
+    )
+    expect(peak).toBeLessThanOrEqual(4)
+    expect(res.ok && res.entries.map((e) => e.groupId)).toEqual(ids)
+  })
+})
+
+describe('deleteFailureMessage for the re-plan outcomes', () => {
+  it('asks for a fresh confirmation and says nothing was changed', () => {
+    const msg = deleteFailureMessage({ ok: false, kind: 'planChanged', entries: [] }, (id) => id)
+    expect(msg).toContain('confirm again')
+    expect(msg).toContain('Nothing was changed')
+    expect(deleteFailureMessage({ ok: false, kind: 'replanFailed' }, (id) => id)).toContain(
+      'nothing was changed',
+    )
   })
 })

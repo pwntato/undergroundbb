@@ -72,4 +72,23 @@ describe('DeleteAccountPanel', () => {
     expect(error).toContain('nothing was changed')
     expect(error).not.toContain('<button')
   })
+
+  it('says which fix applies to each blocking group', () => {
+    const html = render(
+      ready({
+        blockers: [
+          { groupId: 'g1', label: 'Last Stand', reason: 'needsSuccessor' },
+          { groupId: 'g2', label: 'No Grant', reason: 'grantMissing' },
+        ],
+      }),
+    )
+    expect(html).toContain('you are the last admin')
+    expect(html).toContain('isn&#x27;t on record')
+  })
+
+  it('does not claim nothing was changed when the re-check after a run fails', () => {
+    const after = render({ status: 'error', afterRun: true })
+    expect(after).toContain('Reload the page to see what is left')
+    expect(after).not.toContain('nothing was changed')
+  })
 })

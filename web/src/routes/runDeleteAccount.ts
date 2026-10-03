@@ -29,6 +29,29 @@ export type AccountPlanResult =
   | { readonly ok: true; readonly entries: readonly AccountPlanEntry[] }
   | { readonly ok: false; readonly kind: 'authRequired' | 'failed' }
 
+// Each group costs a group read and at least one roster page, so an account in
+// many groups would otherwise fire every request at once, and one throttled
+// request fails the whole plan.
+const PLAN_CONCURRENCY = 4
+
+/** Like Promise.all(items.map(fn)), with at most `limit` calls in flight; result order matches items. */
+async function mapWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i] as T)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 export interface PlanDeps extends LoadMembersDeps {
   readonly userId: string
 }
@@ -42,7 +65,7 @@ export async function planAccountDeletion(
   deps: PlanDeps,
   groupIds: readonly string[],
 ): Promise<AccountPlanResult> {
-  const results = await Promise.all(groupIds.map((id) => loadMembers(deps, id)))
+  const results = await mapWithLimit(groupIds, PLAN_CONCURRENCY, (id) => loadMembers(deps, id))
   const entries: AccountPlanEntry[] = []
   for (const result of results) {
     if (!result.ok) {
@@ -78,6 +101,11 @@ export function deletionBlockers(
   )
 }
 
+/** Why a group in deletionBlockers blocks, so the screen can say which fix applies. */
+export function blockerReason(entry: AccountPlanEntry): 'needsSuccessor' | 'grantMissing' {
+  return entry.plan.kind === 'needsSuccessor' ? 'needsSuccessor' : 'grantMissing'
+}
+
 /** Groups whose only member is the caller: leaving them deletes them and their content. */
 export function groupsThatWillBeDeleted(
   entries: readonly AccountPlanEntry[],
@@ -109,6 +137,16 @@ export type DeleteAccountResult =
       readonly reason: Exclude<LeaveResult, { ok: true }>['kind']
       readonly left: number
     }
+  // The groups changed between the plan the user confirmed and the one read
+  // just before leaving (someone left, a role moved, a group appeared). Nothing
+  // was changed; `entries` is the fresh plan to show for another confirmation.
+  | {
+      readonly ok: false
+      readonly kind: 'planChanged'
+      readonly entries: readonly AccountPlanEntry[]
+    }
+  // The groups could not be re-read to check the plan. Nothing was changed.
+  | { readonly ok: false; readonly kind: 'replanFailed' }
   // The groups are left but the account still belongs to one: someone's
   // invite completed in between. Run again.
   | { readonly ok: false; readonly kind: 'stillMember'; readonly left: number }
@@ -118,6 +156,50 @@ export type DeleteAccountResult =
 
 export interface DeleteAccountDeps extends LeaveDeps {
   readonly deleteAccount: () => Promise<void>
+}
+
+export interface ConfirmedDeletionDeps extends DeleteAccountDeps {
+  /** Reads and plans every group again, exactly as the first plan was made. */
+  readonly replan: () => Promise<AccountPlanResult>
+}
+
+/**
+ * What a confirmation is a confirmation OF: each group, what leaving it does,
+ * and the caller's role and grant in it. Two plans with the same fingerprint
+ * show the user the same thing.
+ */
+export function planFingerprint(entries: readonly AccountPlanEntry[]): string {
+  return entries
+    .map((e) => `${e.groupId}|${e.plan.kind}|${e.view.myRole}|${e.view.myGrantSortKey ?? ''}`)
+    .sort()
+    .join('\n')
+}
+
+/**
+ * Runs the deletion the user confirmed, but only if it is still the deletion
+ * they were shown. The server deletes a group whenever the caller is its last
+ * member, whatever the client planned, so a plan made minutes ago can turn a
+ * "you will leave" into a permanent loss (the other member left meanwhile).
+ * The groups are read again first; any difference refuses with the fresh plan
+ * and changes nothing, and a match runs on the fresh views so the demotions
+ * are signed against current grants. This narrows the window to one round of
+ * reads; closing it fully needs the leave endpoint to refuse to delete a group
+ * the client did not expect to.
+ */
+export async function runConfirmedDeletion(
+  deps: ConfirmedDeletionDeps,
+  shown: readonly AccountPlanEntry[],
+): Promise<DeleteAccountResult> {
+  const fresh = await deps.replan()
+  if (!fresh.ok) {
+    return fresh.kind === 'authRequired'
+      ? { ok: false, kind: 'authRequired', left: 0 }
+      : { ok: false, kind: 'replanFailed' }
+  }
+  if (planFingerprint(fresh.entries) !== planFingerprint(shown)) {
+    return { ok: false, kind: 'planChanged', entries: fresh.entries }
+  }
+  return runDeleteAccount(deps, fresh.entries)
 }
 
 /** Leaves every group in `entries`, then deletes the account. */
@@ -190,6 +272,10 @@ export function deleteFailureMessage(
       return `You can't delete your account yet: ${result.groupIds.map(groupLabel).join(', ')} need${result.groupIds.length === 1 ? 's' : ''} your attention first. Nothing was changed.`
     case 'leaveFailed':
       return `${groupLabel(result.groupId)} ${LEAVE_REASONS[result.reason]}. ${progress(result.left)}`
+    case 'planChanged':
+      return 'Your groups changed while this page was open. Check the list and confirm again. Nothing was changed.'
+    case 'replanFailed':
+      return "Couldn't re-check your groups before deleting, so nothing was changed. Try again."
     case 'stillMember':
       return `You still belong to a group, probably from an invite that just completed. ${progress(result.left)} Try again.`
     case 'authRequired':

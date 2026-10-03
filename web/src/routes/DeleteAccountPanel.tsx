@@ -9,11 +9,17 @@ import { Button } from '@/components/ui/button'
 export interface DeleteGroupRow {
   readonly groupId: string
   readonly label: string
+  /** Set on blockers: which fix applies to this group. */
+  readonly reason?: 'needsSuccessor' | 'grantMissing'
 }
 
 export type DeletePanelState =
   | { readonly status: 'loading' }
-  | { readonly status: 'error' }
+  | {
+      readonly status: 'error'
+      /** The groups could not be re-read after a run that may have left some. */
+      readonly afterRun?: boolean
+    }
   | {
       readonly status: 'ready'
       /** Groups the account will leave. */
@@ -46,7 +52,9 @@ export function DeleteAccountPanel({
   if (state.status === 'error') {
     return (
       <p className="text-sm text-destructive">
-        Couldn&apos;t check your groups, so nothing was changed. Try reloading the page.
+        {state.afterRun === true
+          ? "Couldn't re-check your groups. Reload the page to see what is left."
+          : "Couldn't check your groups, so nothing was changed. Try reloading the page."}
       </p>
     )
   }
@@ -72,14 +80,14 @@ export function DeleteAccountPanel({
                 <Link className="underline" to={`/groups/${encodeURIComponent(g.groupId)}/members`}>
                   {g.label}
                 </Link>
+                <span className="text-xs text-muted-foreground">
+                  {g.reason === 'grantMissing'
+                    ? ": your role here isn't on record, so it can't be left from this page"
+                    : ': you are the last admin and others remain, so make someone else an admin first'}
+                </span>
               </li>
             ))}
           </ul>
-          <p className="text-xs text-muted-foreground">
-            You are the last admin of a group that has other members, so make someone else an admin
-            there first. If your own role isn&apos;t on record for a group, it can&apos;t be left
-            from here.
-          </p>
         </div>
       )}
 

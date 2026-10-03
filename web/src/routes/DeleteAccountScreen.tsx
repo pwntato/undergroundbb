@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { deleteAccount } from '@/lib/api/auth'
+import { ApiError, deleteAccount } from '@/lib/api/auth'
 import { getKeychain, leaveGroup, listGroups, listMembers, getGroup } from '@/lib/api/groups'
 import { decryptGroupNames, signRoleGrant } from '@/lib/crypto/worker-client'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
@@ -16,10 +16,11 @@ import { DeleteAccountPanel, type DeletePanelState } from './DeleteAccountPanel'
 import { groupLabel } from './groupLabel'
 import {
   deleteFailureMessage,
+  blockerReason,
   deletionBlockers,
   groupsThatWillBeDeleted,
   planAccountDeletion,
-  runDeleteAccount,
+  runConfirmedDeletion,
   type AccountPlanEntry,
 } from './runDeleteAccount'
 import { runListGroups } from './runListGroups'
@@ -31,8 +32,43 @@ interface Loaded {
 
 type LoadState =
   | { readonly status: 'loading' }
-  | { readonly status: 'error' }
+  | { readonly status: 'error'; readonly afterRun?: boolean }
   | ({ readonly status: 'ready' } & Loaded)
+
+/** Lists the groups (with display names) and plans leaving each. Never throws. */
+async function loadPlan(
+  userId: string,
+): Promise<{ ok: true; loaded: Loaded } | { ok: false; kind: 'authRequired' | 'failed' }> {
+  try {
+    const groups = await runListGroups({
+      listGroups,
+      decryptGroupNames,
+      getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
+      getCachedGroupName,
+      setCachedGroupName,
+      userId,
+    })
+    const plan = await planAccountDeletion(
+      { getGroup, listMembers, userId },
+      groups.map((g) => g.groupId),
+    )
+    if (!plan.ok) {
+      return plan
+    }
+    return {
+      ok: true,
+      loaded: {
+        entries: plan.entries,
+        labels: new Map(groups.map((g) => [g.groupId, groupLabel(g)])),
+      },
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      kind: err instanceof ApiError && err.status === 401 ? 'authRequired' : 'failed',
+    }
+  }
+}
 
 export function DeleteAccountScreen() {
   const session = useSession()
@@ -44,37 +80,19 @@ export function DeleteAccountScreen() {
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(
-    async (isCancelled: () => boolean) => {
+    async (isCancelled: boolean | (() => boolean), afterRun = false) => {
       if (userId === null) {
         return
       }
-      let next: LoadState
-      try {
-        const groups = await runListGroups({
-          listGroups,
-          decryptGroupNames,
-          getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
-          getCachedGroupName,
-          setCachedGroupName,
-          userId,
-        })
-        const plan = await planAccountDeletion(
-          { getGroup, listMembers, userId },
-          groups.map((g) => g.groupId),
-        )
-        next = plan.ok
-          ? {
-              status: 'ready',
-              entries: plan.entries,
-              labels: new Map(groups.map((g) => [g.groupId, groupLabel(g)])),
-            }
-          : { status: 'error' }
-      } catch {
-        next = { status: 'error' }
+      const result = await loadPlan(userId)
+      if (typeof isCancelled === 'function' ? isCancelled() : isCancelled) {
+        return
       }
-      if (!isCancelled()) {
-        setLoad(next)
-      }
+      setLoad(
+        result.ok
+          ? { status: 'ready', ...result.loaded }
+          : { status: 'error', ...(afterRun && { afterRun: true }) },
+      )
     },
     [userId],
   )
@@ -104,12 +122,16 @@ export function DeleteAccountScreen() {
     const deleting = groupsThatWillBeDeleted(load.entries)
     state = {
       status: 'ready',
-      blockers: rows(blockers),
+      blockers: blockers.map((e) => ({
+        groupId: e.groupId,
+        label: labelFor(e.groupId),
+        reason: blockerReason(e),
+      })),
       deleting: rows(deleting),
       leaving: rows(load.entries.filter((e) => !blockers.includes(e) && !deleting.includes(e))),
     }
   } else {
-    state = { status: load.status }
+    state = load
   }
 
   const handleConfirm = async () => {
@@ -118,8 +140,24 @@ export function DeleteAccountScreen() {
     }
     setBusy(true)
     setError(null)
-    const result = await runDeleteAccount(
-      { leaveGroup, signRoleGrant, deleteAccount, userId },
+    // The labels of the plan the run is made against, which can differ from
+    // the ones on screen if the groups changed since this page loaded.
+    let freshLoaded: Loaded | null = null
+    const result = await runConfirmedDeletion(
+      {
+        leaveGroup,
+        signRoleGrant,
+        deleteAccount,
+        userId,
+        replan: async () => {
+          const planned = await loadPlan(userId)
+          if (planned.ok) {
+            freshLoaded = planned.loaded
+            return { ok: true, entries: planned.loaded.entries }
+          }
+          return planned
+        },
+      },
       load.entries,
     )
     if (result.ok) {
@@ -127,10 +165,17 @@ export function DeleteAccountScreen() {
       void navigate('/', { replace: true })
       return
     }
-    setError(deleteFailureMessage(result, labelFor))
     setConfirming(false)
+    if (result.kind === 'planChanged' && freshLoaded !== null) {
+      // Show what is true now and make the user confirm that instead.
+      setLoad({ status: 'ready', ...(freshLoaded as Loaded) })
+      setError(deleteFailureMessage(result, labelFor))
+      setBusy(false)
+      return
+    }
+    setError(deleteFailureMessage(result, labelFor))
     // Some groups may already be left; show what remains.
-    await reload(() => false)
+    await reload(false, true)
     setBusy(false)
   }
 
