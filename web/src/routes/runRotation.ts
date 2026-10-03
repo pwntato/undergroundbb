@@ -22,6 +22,11 @@
 //     a mismatch or an unverifiable key is skipped and reported, never wrapped
 //     to, and an unreadable pin set stops the run. (This differs from the
 //     roster's grant check, which can show a mark while "unchecked".)
+//   - The pin check covers each recipient's KEY, not WHO the recipients are:
+//     the member list is whatever the server reports. A dishonest server can
+//     keep listing a removed member or add its own account, so the rotation
+//     protects only as far as membership is reported honestly (DESIGN.md,
+//     "The recipient set is taken from the server").
 //
 // Plain function over injected deps, like runGrantCheck.ts, so it tests against
 // stubs without a worker or the network.
@@ -45,6 +50,7 @@ export interface RotationDeps {
   readonly getUser: (userId: string) => Promise<UserProjection>
   /** The caller's own current signing public key, base64. */
   readonly ownSigningKey: () => Promise<string>
+  /** Every pin the caller holds, following nextCursor. A missing pin reads as first-sight, so a partial list is unsafe. */
   readonly listPins: () => Promise<readonly PinRecord[]>
   /** Signs and stores a first-sight pin, as the roster's grant check does. */
   readonly pinKeys: (

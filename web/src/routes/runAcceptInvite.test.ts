@@ -28,7 +28,10 @@ function realInvite(opts: { expiresAt?: string; accepted?: boolean } = {}): {
 } {
   const signingKey = ed25519.signingKeyFromSeed(new Uint8Array(32).fill(2))
   const wrappingPub = new Uint8Array(32).fill(3)
-  const expiresAt = opts.expiresAt ?? '2026-10-03T00:00:00Z'
+  // Relative to now: a fixed date default is a date bomb (it expired on main).
+  const expiresAt =
+    opts.expiresAt ??
+    new Date(Date.now() + 24 * 3600 * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')
   const payload = inviteCreationPayload(INVITE_ID, GROUP_ID, signingKey.publicKey, expiresAt)
   const signature = ed25519.sign(signingKey, ed25519.SigningContext.Invite, payload)
 
