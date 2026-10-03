@@ -43,6 +43,7 @@ function view(overrides: Partial<MembersView> = {}): MembersView {
     members: [member(ME, 'admin'), member(BOB)],
     myRole: 'admin',
     myGrantSortKey: MY_GRANT,
+    revocationMode: 'open',
     ...overrides,
   }
 }
@@ -61,6 +62,7 @@ describe('loadMembers', () => {
         members: [member(ME, 'admin'), member(BOB)],
         myRole: 'admin',
         myGrantSortKey: MY_GRANT,
+        revocationMode: 'open',
       },
     })
   })

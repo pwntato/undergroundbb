@@ -6,7 +6,7 @@
 // Loading and role changes are runGroupMembers.ts's job; this component owns
 // state and effects, and GroupMembersPanel owns rendering.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -15,19 +15,23 @@ import {
   leaveGroup,
   listGrants,
   listMembers,
+  removeMember,
   type MemberRole,
 } from '@/lib/api/groups'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
-import { getOwnSigningKey, signPin, signRoleGrant } from '@/lib/crypto/worker-client'
+import { getOwnSigningKey, signRoleGrant, startGroupRotation } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUser } from '@/lib/api/users'
-import { listAllPins, putPin } from '@/lib/api/pins'
+import { listAllPins } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
+import { makePinKeys, makeRotationDeps } from './rotationDeps'
+import { describeRotation, runRotation } from './runRotation'
+import { removeFailureMessage, runRemoveMember, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
   changeRole,
@@ -64,6 +68,10 @@ export function GroupMembersScreen() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
+  const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
+  // One rotation job at a time per screen: the on-load catch-up and the one a
+  // removal starts must not both be re-wrapping.
+  const rotationRunning = useRef(false)
   // The check is stored with the exact view it ran against, so a check that
   // belongs to a previous roster or group is never shown against this one.
   const [grantCheck, setGrantCheck] = useState<ViewCheck<MembersView> | null>(null)
@@ -85,6 +93,11 @@ export function GroupMembersScreen() {
   const usernames = useUsernames(
     load.status === 'ready' ? load.view.members.map((m) => m.userId) : [],
   )
+
+  const usernamesRef = useRef(usernames)
+  useEffect(() => {
+    usernamesRef.current = usernames
+  }, [usernames])
 
   useEffect(() => {
     let cancelled = false
@@ -113,15 +126,7 @@ export function GroupMembersScreen() {
           selfUserId: userId,
           ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
           listPins: listAllPins,
-          pinKeys: async (pinnedUserId, signingPublicKeys, wrappingPublicKey) => {
-            const signed = await signPin({
-              userId,
-              pinnedUserId,
-              signingPublicKeys,
-              wrappingPublicKey,
-            })
-            await putPin(pinnedUserId, { signingPublicKeys, wrappingPublicKey, ...signed })
-          },
+          pinKeys: makePinKeys(userId),
         },
         loadedView.groupId,
         loadedView.members,
@@ -134,6 +139,32 @@ export function GroupMembersScreen() {
       cancelled = true
     }
   }, [loadedView, userId])
+
+  // An admin who loads the group finishes any rotation left running (this tab
+  // or another admin's closed mid-way) and catches up members left behind.
+  // runRotation does nothing, and says nothing, when there is nothing to do.
+  const isRotatingAdmin =
+    loadedView !== null && loadedView.myRole === 'admin' && loadedView.revocationMode === 'rotating'
+  const rotationGroupId = isRotatingAdmin ? loadedView.groupId : null
+  useEffect(() => {
+    if (rotationGroupId === null || userId === null || rotationRunning.current) {
+      return
+    }
+    rotationRunning.current = true
+    void (async () => {
+      try {
+        const outcome = await runRotation(makeRotationDeps(userId), rotationGroupId)
+        const note = describeRotation(outcome, (id) => memberLabel(id, usernamesRef.current))
+        if (note?.kind === 'error') {
+          setError(note.text)
+        } else if (note !== null) {
+          setMessage(note.text)
+        }
+      } finally {
+        rotationRunning.current = false
+      }
+    })()
+  }, [rotationGroupId, userId])
 
   if (groupId === undefined) {
     return (
@@ -166,6 +197,56 @@ export function GroupMembersScreen() {
       // Reload so the roster and the grant this view signs on are current
       // (see shouldReloadAfter for the outcomes that skip it).
       if (shouldReloadAfter(outcome)) {
+        await reload(() => false)
+      }
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleRemove = (subjectUserId: string) => {
+    if (load.status !== 'ready' || userId === null || busyUserId !== null) {
+      return
+    }
+    const { view } = load
+    const subject = view.members.find((m) => m.userId === subjectUserId)
+    if (subject === undefined) {
+      return
+    }
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const outcome = await runRemoveMember(
+        { getGroup, signRoleGrant, startGroupRotation, removeMember, userId },
+        view.groupId,
+        subjectUserId,
+        subject.role,
+      )
+      setConfirmRemoveUserId(null)
+      if (!outcome.ok) {
+        setError(removeFailureMessage(outcome))
+      } else if (!outcome.rotating) {
+        setMessage(`${label} was removed.`)
+      } else {
+        // The removal committed and started the rotation; every other
+        // member's entry point still has to be re-wrapped, from this tab.
+        setMessage(`${label} was removed. Rotating the group key; keep this page open…`)
+        rotationRunning.current = true
+        try {
+          const rotated = await runRotation(makeRotationDeps(userId), view.groupId, {
+            exclude: new Set([subjectUserId]),
+          })
+          const note = describeRotation(rotated, (id) => memberLabel(id, usernamesRef.current))
+          setMessage(`${label} was removed.${note?.kind === 'info' ? ` ${note.text}` : ''}`)
+          if (note?.kind === 'error') {
+            setError(note.text)
+          }
+        } finally {
+          rotationRunning.current = false
+        }
+      }
+      if (shouldReloadAfterRemove(outcome)) {
         await reload(() => false)
       }
       setBusyUserId(null)
@@ -244,6 +325,12 @@ export function GroupMembersScreen() {
           userId={userId}
           busyUserId={busyUserId}
           onChangeRole={handleChangeRole}
+          confirmRemoveUserId={confirmRemoveUserId}
+          onStartRemove={setConfirmRemoveUserId}
+          onCancelRemove={() => {
+            setConfirmRemoveUserId(null)
+          }}
+          onConfirmRemove={handleRemove}
           check={checkForView(grantCheck, load.view)}
         />
       )}

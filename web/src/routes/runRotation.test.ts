@@ -11,7 +11,7 @@ import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
-import { runRotation, type RotationDeps } from './runRotation'
+import { describeRotation, runRotation, type RotationDeps } from './runRotation'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const GROUP = 'g0000000-0000-4000-8000-000000000009'
@@ -430,6 +430,75 @@ describe('runRotation', () => {
       )
       expect(out.status).toBe('incomplete')
       expect(f.cryptoRecipients).toEqual([])
+    })
+  })
+
+  describe('exclude', () => {
+    it('never wraps to an excluded user the server still lists, and does not complete', async () => {
+      const f = new Fake()
+      const ok = f.add(person())
+      const removed = f.add(person()) // valid pin: only the exclude set stops this one
+      const out = await runRotation(f.deps(), GROUP, { exclude: new Set([removed.id]) })
+      expect(f.cryptoRecipients.flat()).toEqual([ok.id])
+      expect(f.gen(removed)).toBe(0)
+      expect(f.completed).toEqual([])
+      expect(out.status).toBe('incomplete') // the server insists they are behind: fails safe
+    })
+
+    it('completes normally when the server honestly no longer lists them', async () => {
+      const f = new Fake()
+      f.add(person())
+      const out = await runRotation(f.deps(), GROUP, { exclude: new Set(['gone-user']) })
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+    })
+
+    it('keeps excluding across a restart', async () => {
+      const f = new Fake()
+      const removed = f.add(person())
+      f.add(person())
+      f.onRewrap[0] = () => {
+        f.marker = { generation: 2 }
+        f.ownGeneration = 2
+        f.members.get(ME)!.generation = 2
+      }
+      await runRotation(f.deps(), GROUP, { exclude: new Set([removed.id]) })
+      expect(f.cryptoRecipients.flat()).not.toContain(removed.id)
+    })
+  })
+
+  describe('describeRotation', () => {
+    const label = (id: string) => `<${id}>`
+    it('says nothing when there was nothing to do', () => {
+      expect(describeRotation({ status: 'none' }, label)).toBeNull()
+    })
+    it('reports a finished rotation, with and without a count', () => {
+      expect(describeRotation({ status: 'completed', rewrapped: 3 }, label)).toEqual({
+        kind: 'info',
+        text: 'Key rotation finished: 3 members moved to the new group key.',
+      })
+      expect(describeRotation({ status: 'completed', rewrapped: 0 }, label)?.text).toBe(
+        'Key rotation finished.',
+      )
+    })
+    it('reports a catch-up, singular and plural', () => {
+      expect(describeRotation({ status: 'caught-up', rewrapped: 1 }, label)?.text).toMatch(
+        /^1 member who had fallen behind was moved/,
+      )
+      expect(describeRotation({ status: 'caught-up', rewrapped: 2 }, label)?.text).toMatch(
+        /^2 members who had fallen behind were moved/,
+      )
+    })
+    it('names the people a pin check blocked, as an error', () => {
+      const note = describeRotation({ status: 'blocked', blocked: ['x', 'y'], rewrapped: 1 }, label)
+      expect(note?.kind).toBe('error')
+      expect(note?.text).toContain('<x>, <y>')
+      expect(note?.text).toContain('NOT given the new group key')
+    })
+    it('reports an incomplete run as an error with its reason, and cannot-resume as info', () => {
+      const inc = describeRotation({ status: 'incomplete', reason: 'offline', rewrapped: 0 }, label)
+      expect(inc).toMatchObject({ kind: 'error' })
+      expect(inc?.text).toContain('offline')
+      expect(describeRotation({ status: 'cannot-resume', reason: 'r' }, label)?.kind).toBe('info')
     })
   })
 

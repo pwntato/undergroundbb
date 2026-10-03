@@ -7,8 +7,8 @@
 // /api/users/:id, by the screen and passed in), falling back to a shortened
 // id while it loads or if it fails, with the signed-in user marked "you".
 // Only an admin sees role controls, and never on their own row: the server refuses a self-change, which is also what
-// keeps a group from ending up with no admin. Demote/remove of an admin
-// beyond a plain role change is M6 (#55-#58).
+// keeps a group from ending up with no admin. Removing a member (#58) is a
+// two-step button (Remove, then Confirm) on the same rows.
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -31,6 +31,10 @@ export function GroupMembersPanel({
   userId,
   busyUserId,
   onChangeRole,
+  confirmRemoveUserId,
+  onStartRemove,
+  onCancelRemove,
+  onConfirmRemove,
   usernames,
   check,
 }: {
@@ -40,6 +44,11 @@ export function GroupMembersPanel({
   /** The member whose role change is in flight, if any; all controls lock while one is. */
   readonly busyUserId: string | null
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
+  /** The member whose removal is awaiting confirmation, if any. */
+  readonly confirmRemoveUserId: string | null
+  readonly onStartRemove: (subjectUserId: string) => void
+  readonly onCancelRemove: () => void
+  readonly onConfirmRemove: (subjectUserId: string) => void
   /** userId to username; anything missing renders as a short id. */
   readonly usernames?: ReadonlyMap<string, string> | undefined
   /**
@@ -102,7 +111,39 @@ export function GroupMembersPanel({
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
                 <RoleMark status={checked?.statuses.get(m.userId)} verified={isVerified(checked)} />
               </span>
-              {canChangeRoles && !isSelf && (
+              {canChangeRoles && !isSelf && confirmRemoveUserId === m.userId && (
+                <span className="flex flex-col gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Remove {memberLabel(m.userId, usernames)} from the group?{' '}
+                    {view.revocationMode === 'rotating'
+                      ? 'This also rotates the group key, so everyone else is re-wrapped to a new one. Keep this page open until it finishes.'
+                      : 'They lose access to the group going forward.'}
+                  </span>
+                  <span className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      disabled={busyUserId !== null}
+                      onClick={() => {
+                        onConfirmRemove(m.userId)
+                      }}
+                    >
+                      {busyUserId === m.userId ? 'Removing…' : 'Confirm remove'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busyUserId !== null}
+                      onClick={onCancelRemove}
+                    >
+                      Cancel
+                    </Button>
+                  </span>
+                </span>
+              )}
+              {canChangeRoles && !isSelf && confirmRemoveUserId !== m.userId && (
                 <span className="flex flex-wrap gap-2">
                   {ROLES.filter((r) => r !== m.role).map((r) => (
                     <Button
@@ -118,6 +159,17 @@ export function GroupMembersPanel({
                       {busyUserId === m.userId ? 'Saving…' : `Make ${ROLE_LABEL[r].toLowerCase()}`}
                     </Button>
                   ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busyUserId !== null}
+                    onClick={() => {
+                      onStartRemove(m.userId)
+                    }}
+                  >
+                    Remove
+                  </Button>
                 </span>
               )}
             </li>

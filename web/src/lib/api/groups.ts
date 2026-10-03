@@ -328,17 +328,66 @@ export async function leaveGroup(
 }
 
 /** Like putOrPostJSON for endpoints that answer 204; throws ApiError (with the server's `code`) otherwise. */
-async function sendNoContent(method: 'POST' | 'PUT', path: string, body: unknown): Promise<void> {
+async function sendNoContent(
+  method: 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<void> {
   const res = await fetch(path, {
     method,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
-    body: JSON.stringify(body),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   if (res.ok) {
     return
   }
   await handleJSON<never>(res)
+}
+
+/**
+ * The rotation half of a Rotating-group removal (issue #58): the new
+ * generation (exactly one past the remover's own), the chain link (old key
+ * under the new one) and the new key wrapped for the remover. The server
+ * never sees the new key unwrapped.
+ */
+export interface RemoveRotationRequest {
+  readonly generation: number
+  readonly link: WireWrappedBlob
+  readonly removerWrappedKey: WireWrappedKey
+}
+
+/**
+ * The body of DELETE /api/groups/{id}/members/{uid}: the remover's signed
+ * demotion of an admin or ambassador subject (all three fields or none), and
+ * the rotation for a Rotating group (absent for an Open one).
+ */
+export interface RemoveMemberRequest {
+  readonly grantSortKey?: string
+  readonly grantorGrantRef?: string
+  readonly signature?: string
+  readonly rotation?: RemoveRotationRequest
+}
+
+/**
+ * DELETE /api/groups/{id}/members/{uid} -- issue #58. Admin only, never
+ * oneself. 409 codes: rotation_in_progress (finish the running rotation
+ * first), rotation_stale_generation / grantor_ref_stale / grantor_changed /
+ * subject_role_changed / conflict_retry (reload and decide again),
+ * grant_key_taken (sign again with a fresh grantSortKey), grantor_grant_missing.
+ * 400 `demotion_required` / `rotation_required` / `rotation_not_applicable`
+ * mean the request did not match the subject's role or the group's mode.
+ */
+export function removeMember(
+  groupId: string,
+  userId: string,
+  req?: RemoveMemberRequest,
+): Promise<void> {
+  return sendNoContent(
+    'DELETE',
+    `/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    req,
+  )
 }
 
 /** One member's entry point wrapped for the rotation's generation. */

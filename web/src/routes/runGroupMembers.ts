@@ -21,6 +21,8 @@ export interface MembersView {
   readonly myRole: GroupDetail['role']
   /** The grant a role change must be signed on top of; absent for a non-admin. */
   readonly myGrantSortKey: string | undefined
+  /** Decides whether removing a member rotates the group key. */
+  readonly revocationMode: GroupDetail['revocationMode']
 }
 
 export interface LoadMembersDeps {
@@ -50,7 +52,13 @@ export async function loadMembers(
     // (the roster call 404s above), so reaching here means the caller is a member.
     return {
       ok: true,
-      view: { groupId, members, myRole: detail.role, myGrantSortKey: detail.myGrantSortKey },
+      view: {
+        groupId,
+        members,
+        myRole: detail.role,
+        myGrantSortKey: detail.myGrantSortKey,
+        revocationMode: detail.revocationMode,
+      },
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
@@ -63,7 +71,11 @@ export async function loadMembers(
   }
 }
 
-async function listAllMembers(deps: LoadMembersDeps, groupId: string): Promise<MemberEntry[]> {
+/** Every page of the roster. Throws on a failed page; callers decide what that means. */
+export async function listAllMembers(
+  deps: Pick<LoadMembersDeps, 'listMembers'>,
+  groupId: string,
+): Promise<MemberEntry[]> {
   const all: MemberEntry[] = []
   let cursor: string | undefined
   for (let page = 0; page < MAX_MEMBER_PAGES; page++) {

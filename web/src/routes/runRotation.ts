@@ -93,6 +93,50 @@ export type RotationOutcome =
   /** Stopped before finishing (network, churn, unreadable pins); safe to run again. */
   | { readonly status: 'incomplete'; readonly reason: string; readonly rewrapped: number }
 
+/**
+ * What to tell the admin about an outcome, or null when there is nothing to
+ * say (the common case on every admin load). `label` turns a user id into a
+ * name for the people a pin check blocked.
+ */
+export function describeRotation(
+  outcome: RotationOutcome,
+  label: (userId: string) => string,
+): { readonly kind: 'info' | 'error'; readonly text: string } | null {
+  const people = (n: number): string => `${String(n)} ${n === 1 ? 'member' : 'members'}`
+  switch (outcome.status) {
+    case 'none':
+      return null
+    case 'completed':
+      return {
+        kind: 'info',
+        text:
+          outcome.rewrapped > 0
+            ? `Key rotation finished: ${people(outcome.rewrapped)} moved to the new group key.`
+            : 'Key rotation finished.',
+      }
+    case 'caught-up':
+      return {
+        kind: 'info',
+        text: `${people(outcome.rewrapped)} who had fallen behind ${outcome.rewrapped === 1 ? 'was' : 'were'} moved to the current group key.`,
+      }
+    case 'blocked':
+      return {
+        kind: 'error',
+        text: `Key rotation is paused. The keys the server shows for ${outcome.blocked.map(label).join(', ')} don't match the copy you saved earlier, so they were NOT given the new group key. Check with them another way before relying on this group.`,
+      }
+    case 'cannot-resume':
+      return {
+        kind: 'info',
+        text: 'A key rotation is running, and it has to be finished by an admin who already holds the new key.',
+      }
+    case 'incomplete':
+      return {
+        kind: 'error',
+        text: `Key rotation stopped (${outcome.reason}). It resumes the next time an admin opens this group.`,
+      }
+  }
+}
+
 function codeOf(err: unknown): string | undefined {
   return err instanceof ApiError ? err.code : undefined
 }
@@ -114,15 +158,33 @@ function adminsFirst(members: readonly MemberEntry[]): MemberEntry[] {
  * behind when no rotation is running. Safe to call on every group load by an
  * admin: it does nothing and says 'none' when there is nothing to do.
  */
-export async function runRotation(deps: RotationDeps, groupId: string): Promise<RotationOutcome> {
-  return runOnce(deps, groupId, false, 0)
+export async function runRotation(
+  deps: RotationDeps,
+  groupId: string,
+  opts: RotationOptions = {},
+): Promise<RotationOutcome> {
+  return runOnce(deps, groupId, false, 0, opts.exclude ?? NO_USERS)
 }
+
+export interface RotationOptions {
+  /**
+   * Users the caller just removed. They are never wrapped to, even if the
+   * server still lists them (it is the server's list that cannot be trusted,
+   * issue #178). The rotation then cannot complete while the server insists
+   * they are behind, which fails safe. Covers the initiating admin only; an
+   * admin resuming later has no such record.
+   */
+  readonly exclude?: ReadonlySet<string>
+}
+
+const NO_USERS: ReadonlySet<string> = new Set()
 
 async function runOnce(
   deps: RotationDeps,
   groupId: string,
   restarted: boolean,
   carried: number,
+  exclude: ReadonlySet<string>,
 ): Promise<RotationOutcome> {
   let detail: GroupDetail
   try {
@@ -185,7 +247,10 @@ async function runOnce(
     const behind = adminsFirst(
       members.filter(
         (m) =>
-          m.userId !== deps.selfUserId && m.generation < ownGeneration && !blocked.has(m.userId),
+          m.userId !== deps.selfUserId &&
+          m.generation < ownGeneration &&
+          !blocked.has(m.userId) &&
+          !exclude.has(m.userId),
       ),
     )
 
@@ -245,7 +310,7 @@ async function runOnce(
         }
         if (code === 'rotation_not_active' && !restarted) {
           // The marker changed under us; start over from a fresh read once.
-          return runOnce(deps, groupId, true, rewrapped)
+          return runOnce(deps, groupId, true, rewrapped, exclude)
         }
         return { status: 'incomplete', reason: describe(err), rewrapped }
       }
