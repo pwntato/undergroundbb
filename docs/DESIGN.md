@@ -868,8 +868,8 @@ membership honestly. It can keep listing a removed member (their pin still match
 wrapped the new key and the rotation reports `completed`), or list an account it controls (first
 sight, pinned by trust on first use, wrapped the new key). Closing this needs verifiable
 membership: a signed removal for every subject (today only admin and ambassador subjects get a
-signed demotion) and a check of the invite-acceptance record before wrapping. Tracked in a
-separate issue; until then do not read "fails closed on pins" as defending against a server that
+signed demotion) and a check of the invite-acceptance record before wrapping. Tracked in #178;
+until then do not read "fails closed on pins" as defending against a server that
 lies about the member list.
 
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
