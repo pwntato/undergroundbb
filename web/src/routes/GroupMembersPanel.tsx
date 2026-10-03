@@ -31,6 +31,7 @@ export function GroupMembersPanel({
   userId,
   busyUserId,
   onChangeRole,
+  locked = false,
   confirmRemoveUserId,
   onStartRemove,
   onCancelRemove,
@@ -44,6 +45,8 @@ export function GroupMembersPanel({
   /** The member whose role change is in flight, if any; all controls lock while one is. */
   readonly busyUserId: string | null
   readonly onChangeRole: (subjectUserId: string, role: MemberRole) => void
+  /** True while a key-rotation job runs: every control is disabled. */
+  readonly locked?: boolean
   /** The member whose removal is awaiting confirmation, if any. */
   readonly confirmRemoveUserId: string | null
   readonly onStartRemove: (subjectUserId: string) => void
@@ -124,7 +127,7 @@ export function GroupMembersPanel({
                       type="button"
                       variant="destructive"
                       size="sm"
-                      disabled={busyUserId !== null}
+                      disabled={busyUserId !== null || locked}
                       onClick={() => {
                         onConfirmRemove(m.userId)
                       }}
@@ -135,7 +138,7 @@ export function GroupMembersPanel({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={busyUserId !== null}
+                      disabled={busyUserId !== null || locked}
                       onClick={onCancelRemove}
                     >
                       Cancel
@@ -151,7 +154,7 @@ export function GroupMembersPanel({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={busyUserId !== null}
+                      disabled={busyUserId !== null || locked}
                       onClick={() => {
                         onChangeRole(m.userId, r)
                       }}
@@ -163,7 +166,7 @@ export function GroupMembersPanel({
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={busyUserId !== null}
+                    disabled={busyUserId !== null || locked}
                     onClick={() => {
                       onStartRemove(m.userId)
                     }}

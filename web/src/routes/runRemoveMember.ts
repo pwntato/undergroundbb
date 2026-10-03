@@ -205,6 +205,36 @@ function failureOf(err: unknown): Extract<RemoveResult, { ok: false }> {
   return { ok: false, kind: 'ambiguous' }
 }
 
+export type RotationNeed =
+  { readonly run: false } | { readonly run: true; readonly exclude: ReadonlySet<string> }
+
+/**
+ * Whether a rotation job must run now, and who it must never wrap to.
+ *   - ok in a Rotating group: the removal started a rotation.
+ *   - ambiguous in a Rotating group: it may have committed and started one;
+ *     running is safe (runRotation says 'none' when there is nothing to do),
+ *     and the subject is excluded in case it did.
+ *   - rotationInProgress: a marker exists (someone else's, or ours from an
+ *     earlier ambiguous attempt); finish it, with no one to exclude.
+ * Everything else changed nothing, so there is nothing to run.
+ */
+export function rotationNeededAfter(
+  outcome: RemoveResult,
+  rotatingGroup: boolean,
+  subjectUserId: string,
+): RotationNeed {
+  if (outcome.ok) {
+    return outcome.rotating ? { run: true, exclude: new Set([subjectUserId]) } : { run: false }
+  }
+  if (outcome.kind === 'rotationInProgress') {
+    return { run: true, exclude: new Set() }
+  }
+  if (outcome.kind === 'ambiguous' && rotatingGroup) {
+    return { run: true, exclude: new Set([subjectUserId]) }
+  }
+  return { run: false }
+}
+
 /** Whether the roster should be reloaded after a removal attempt. */
 export function shouldReloadAfterRemove(outcome: RemoveResult): boolean {
   return outcome.ok || (outcome.kind !== 'coldKeys' && outcome.kind !== 'authRequired')
@@ -217,7 +247,7 @@ const FAILURE_MESSAGES: Record<
   stale:
     'The group changed while you were working, so nobody was removed. The latest roster is shown; try again.',
   rotationInProgress:
-    'A key rotation is still running. Let it finish (it resumes when this page loads) before removing another member.',
+    'A key rotation was still running, so nobody was removed. This page is finishing it; try again once it has.',
   authRequired: 'Your session has expired. Log in again and retry.',
   forbidden: 'Only a group admin can remove members.',
   notFound: 'This member or group no longer exists.',

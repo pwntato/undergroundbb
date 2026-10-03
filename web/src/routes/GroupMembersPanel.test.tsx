@@ -24,6 +24,7 @@ function render(
     busyUserId?: string | null
     usernames?: ReadonlyMap<string, string>
     confirmRemoveUserId?: string | null
+    locked?: boolean
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -39,6 +40,7 @@ function render(
       userId: ME,
       busyUserId: extra.busyUserId ?? null,
       onChangeRole: () => undefined,
+      locked: extra.locked ?? false,
       confirmRemoveUserId: extra.confirmRemoveUserId ?? null,
       onStartRemove: () => undefined,
       onCancelRemove: () => undefined,
@@ -69,6 +71,15 @@ describe('GroupMembersPanel', () => {
 
     const rotating = render({ revocationMode: 'rotating' }, { confirmRemoveUserId: BOB })
     expect(rotating).toContain('rotates the group key')
+  })
+
+  it('disables every control while a rotation job runs, even with nothing in flight', () => {
+    const idle = render({})
+    expect(idle).not.toMatch(/<button[^>]*disabled/)
+    const locked = render({}, { locked: true })
+    expect(locked.match(/<button[^>]*disabled/g)).toHaveLength(3)
+    const confirming = render({}, { locked: true, confirmRemoveUserId: BOB })
+    expect(confirming.match(/<button[^>]*disabled/g)).toHaveLength(2) // Confirm and Cancel
   })
 
   it('locks the confirmation while a removal is in flight', () => {
