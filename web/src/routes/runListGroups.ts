@@ -182,6 +182,7 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
   // decryptGroupNames response (or a cache hit) can be written back to the
   // right entry without a second pass keyed by id.
   const pendingIndexByGroupId = new Map<string, number>()
+  const chainFetches: Promise<void>[] = []
 
   for (const group of groups) {
     if (group.visibility === 'public') {
@@ -223,16 +224,26 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
 
     pendingIndexByGroupId.set(group.groupId, results.length)
     results.push({ ...group, displayName: null, displayDescription: null, nameStatus: 'coldKeys' })
-    toDecrypt.push({
-      ...(await chainFor(deps, group)),
+    const entry: (typeof toDecrypt)[number] = {
       groupId: group.groupId,
       generation: group.generation,
       nameGeneration: group.nameGeneration,
       wrappedGroupKey: group.wrappedGroupKey,
       nameCiphertext: group.nameCiphertext,
       descriptionCiphertext: group.descriptionCiphertext,
-    })
+    }
+    toDecrypt.push(entry)
+    // Fetched together after the loop rather than awaited here, so the list's
+    // latency does not grow by one round trip per rotated group.
+    chainFetches.push(
+      chainFor(deps, group).then((fetched) => {
+        if (fetched.chain !== undefined) {
+          entry.chain = fetched.chain
+        }
+      }),
+    )
   }
+  await Promise.all(chainFetches)
 
   if (toDecrypt.length === 0) {
     return sortByLabel(results)

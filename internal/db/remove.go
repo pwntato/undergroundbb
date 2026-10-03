@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -34,6 +35,20 @@ var ErrRotationStaleGeneration = errors.New("db: the remover's key generation is
 // GenKeySortKey is the GENKEY# sort key for generation n: zero-padded to six
 // digits like every numeric sort-key component (docs/DESIGN.md).
 func GenKeySortKey(n int64) string { return fmt.Sprintf("GENKEY#%06d", n) }
+
+// ParseGenKeySortKey is GenKeySortKey's inverse: the generation a GENKEY#
+// sort key names.
+func ParseGenKeySortKey(sk string) (int64, error) {
+	digits, ok := strings.CutPrefix(sk, "GENKEY#")
+	if !ok {
+		return 0, fmt.Errorf("db: %q is not a generation key sort key", sk)
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("db: malformed generation key sort key %q: %w", sk, err)
+	}
+	return n, nil
+}
 
 // RemoveMemberInput is one admin removing another member -- issue #58.
 type RemoveMemberInput struct {

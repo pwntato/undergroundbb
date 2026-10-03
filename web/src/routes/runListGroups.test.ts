@@ -512,6 +512,45 @@ describe('runListGroups', () => {
       })
     })
 
+    it("fetches every group's links concurrently, not one round trip after another", async () => {
+      const started: string[] = []
+      const release: (() => void)[] = []
+      const getNameChain = vi.fn(
+        (groupId: string) =>
+          new Promise<typeof chain>((resolve) => {
+            started.push(groupId)
+            release.push(() => {
+              resolve(chain)
+            })
+          }),
+      )
+      const decrypt = vi.fn().mockResolvedValue([])
+      const pending = runListGroups(
+        makeDeps({
+          listGroups: vi.fn().mockResolvedValue({
+            groups: [
+              privateGroup({ groupId: 'a', generation: 1, nameGeneration: 0 }),
+              privateGroup({ groupId: 'b', generation: 1, nameGeneration: 0 }),
+            ],
+          }),
+          decryptGroupNames: decrypt,
+          getNameChain,
+        }),
+      )
+      await vi.waitFor(() => {
+        // Both are in flight before either has been answered.
+        expect(started).toEqual(['a', 'b'])
+      })
+      release.forEach((r) => {
+        r()
+      })
+      await pending
+      expect(decrypt.mock.calls[0]?.[0].groups.map((g: { chain?: unknown }) => g.chain)).toEqual([
+        chain,
+        chain,
+      ])
+    })
+
     it('fetches nothing when the name is at the member generation', async () => {
       const getNameChain = vi.fn()
       const decrypt = vi

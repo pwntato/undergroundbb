@@ -278,9 +278,9 @@ func (c *Client) ListGenerationKeys(ctx context.Context, groupID string, from, t
 	}
 	next = -1
 	if len(links) > limit {
-		var n int64
-		if _, err := fmt.Sscanf(links[limit].SK, "GENKEY#%d", &n); err != nil {
-			return nil, -1, fmt.Errorf("db: malformed generation key sort key %q: %w", links[limit].SK, err)
+		n, err := ParseGenKeySortKey(links[limit].SK)
+		if err != nil {
+			return nil, -1, err
 		}
 		links = links[:limit]
 		next = n

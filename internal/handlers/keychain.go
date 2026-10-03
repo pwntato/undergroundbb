@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
 
@@ -78,7 +79,7 @@ func (h *Handler) keychain(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := keychainResponse{Links: make([]keychainLink, 0, len(links))}
 	for _, l := range links {
-		gen, err := strconv.ParseInt(l.SK[len("GENKEY#"):], 10, 64)
+		gen, err := db.ParseGenKeySortKey(l.SK)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "could not read the key chain")
 			return
