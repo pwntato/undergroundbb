@@ -327,6 +327,10 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	// nothing was ever written under (PR #142 round 2 review).
 	storedRootGrantSortKey, err := h.db.CreateGroup(r.Context(), in)
 	if err != nil {
+		if errors.Is(err, db.ErrCreatorDeleted) {
+			WriteErrorWithCode(w, http.StatusGone, "this account was deleted", "account_deleted")
+			return
+		}
 		if errors.Is(err, db.ErrGroupIDTaken) {
 			// db.CreateGroup already checked (db.isOwnGroupCreation) whether
 			// this is the caller's own earlier, successful call being

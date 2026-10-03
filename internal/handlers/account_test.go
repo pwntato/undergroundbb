@@ -92,3 +92,26 @@ func TestDeleteAccountLastAdminMustPromoteFirst(t *testing.T) {
 		t.Fatalf("last admin delete = %d %q, want 409 still_member", rec.Code, errCode(t, rec))
 	}
 }
+
+// Review of #182: a session cookie from before the deletion stays valid, and
+// used to be able to create a group with the tombstone as its admin (after
+// which a second delete returned 200 while that membership existed).
+func TestStaleCookieCannotCreateGroupAfterDeletion(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	if rec := doDeleteAccount(t, h, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req := signedCreateGroupRequest(t, user)
+	rec := doCreateGroup(t, h, cookie, req)
+	if rec.Code != http.StatusGone || errCode(t, rec) != "account_deleted" {
+		t.Fatalf("create with a stale cookie = %d %q, want 410 account_deleted (%s)", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if row := getRow(t, "GROUP#"+req.GroupID, "META"); row != nil {
+		t.Error("a group was written for a deleted account")
+	}
+	if row := getRow(t, "GROUP#"+req.GroupID, "MEMBER#"+user.userID); row != nil {
+		t.Error("a membership was written for a deleted account")
+	}
+}

@@ -839,9 +839,10 @@ cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tomb
 true` and an empty username. `CompleteInvite` refuses a deleted invitee. Two gaps, both fail safe: a
 membership completed between the membership check and the tombstone survives, visible to the group
 as a member whose profile is deleted, and an admin removes it with the ordinary removal flow; and a
-session cookie issued earlier stays valid until it expires (there is no session store), though
-nothing it can reach works on the tombstone, and a password change from it fails because `RECOVERY`
-is gone. Content other members already decrypted cannot be recalled.
+session cookie issued earlier stays valid until it expires (there is no session store). It cannot
+create a membership, because `CreateGroup` and `CompleteInvite`, the only writers of a `MEMBER#`
+row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
+anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
 
 **Inactivity is not built, and the open question is whether it should be.** An inactive admin who is
 not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no

@@ -18,6 +18,9 @@ var (
 	// leaver's demotion and enforces the last-admin rule (#66). The client
 	// leaves every group first.
 	ErrStillMember = errors.New("db: account still belongs to a group; leave every group first")
+	// ErrCreatorDeleted: CreateGroup was called for an account that has been
+	// deleted (a session cookie from before the deletion). Nothing was written.
+	ErrCreatorDeleted = errors.New("db: account was deleted")
 	// ErrAccountCleanupIncomplete accompanies a successful deletion when some
 	// of the user's own rows (pins, sent or received invites, challenge) could
 	// not all be removed. The account is already unreachable; the leftovers
@@ -45,7 +48,9 @@ var (
 // remove them with the ordinary removal flow.
 //
 // A session cookie issued before deletion stays valid until it expires (there
-// is no session store); the handler clears the caller's own cookie.
+// is no session store); the handler clears the caller's own cookie. The two
+// writers of a MEMBER# row (CreateGroup, CompleteInvite) refuse a deleted
+// account, so a stale cookie cannot give the tombstone a membership.
 func (c *Client) DeleteAccount(ctx context.Context, userID string) error {
 	user, err := c.GetUserByID(ctx, userID)
 	if err != nil {

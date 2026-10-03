@@ -209,3 +209,20 @@ func TestRewrapCredentialsCannotReviveDeletedAccount(t *testing.T) {
 		t.Error("RECOVERY was recreated")
 	}
 }
+
+func TestCreateGroupRefusesDeletedCreator(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	in := registerTestUser(t, c)
+	if err := c.DeleteAccount(ctx, in.UserID); err != nil {
+		t.Fatal(err)
+	}
+	gid := "test-group-" + randomSuffix(t)
+	_, err := c.CreateGroup(ctx, testCreateGroupInput(t, gid, in.UserID))
+	if !errors.Is(err, ErrCreatorDeleted) {
+		t.Fatalf("CreateGroup = %v, want ErrCreatorDeleted", err)
+	}
+	if itemExists(t, c, "GROUP#"+gid, "META") || itemExists(t, c, "GROUP#"+gid, "MEMBER#"+in.UserID) {
+		t.Error("rows were written for a deleted creator")
+	}
+}

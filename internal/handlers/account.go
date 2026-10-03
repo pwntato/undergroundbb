@@ -19,8 +19,10 @@ import (
 //
 // On success PROFILE is a tombstone (see db.DeleteAccount), the username is
 // free again and the response clears the caller's own session cookie. Cookies
-// issued earlier stay valid until they expire; nothing they can reach would
-// work on the tombstone.
+// issued earlier stay valid until they expire. A stale cookie cannot create a
+// membership (CreateGroup and CompleteInvite refuse a deleted account), but
+// anything else it writes, such as pins or an invite acceptance that can never
+// complete, lands on a partition nobody can sign in to.
 func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
