@@ -194,7 +194,10 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 	// groupItemIndex names the one conditional item's position, matching
 	// Register's own isConditionalCheckFailure(err, itemIndex) pattern -- see
 	// that function's doc comment for why position rather than a scan.
-	const groupItemIndex = 0
+	const (
+		groupItemIndex   = 0
+		creatorGoneIndex = 3
+	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -207,9 +210,25 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 			},
 			{Put: &types.Put{TableName: aws.String(c.table), Item: membershipItem}},
 			{Put: &types.Put{TableName: aws.String(c.table), Item: grantItem}},
+			// The creator's account must not have been deleted (#77): a
+			// session cookie issued before deletion stays valid until it
+			// expires, and without this a stale cookie would make the
+			// tombstone the admin of a new group. CompleteInvite carries the
+			// same check; these are the only two writers of a MEMBER# row.
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(c.table),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "USER#" + in.CreatorUserID},
+					"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+				},
+				ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
+			}},
 		},
 	})
 	if err != nil {
+		if isConditionalCheckFailure(err, creatorGoneIndex) {
+			return "", ErrCreatorDeleted
+		}
 		if isConditionalCheckFailure(err, groupItemIndex) {
 			// Before reporting a conflict, check whether this is the
 			// caller's own earlier, successful call being resent after a

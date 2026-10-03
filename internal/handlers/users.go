@@ -30,6 +30,9 @@ type userProjection struct {
 	SigningPublicKey      string               `json:"signingPublicKey"`
 	WrappingPublicKey     string               `json:"wrappingPublicKey"`
 	SupersededSigningKeys []supersededKeyEntry `json:"supersededSigningKeys"`
+	// Deleted marks a tombstoned account (#77): the username is empty and the
+	// keys are served only so signatures the user made still verify.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // getUser implements GET /api/users/{userId} -- issue #157. Any
@@ -68,6 +71,7 @@ func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 		SigningPublicKey:      base64.StdEncoding.EncodeToString(user.SigningPublicKey),
 		WrappingPublicKey:     base64.StdEncoding.EncodeToString(user.WrappingPublicKey),
 		SupersededSigningKeys: superseded,
+		Deleted:               user.DeletedAt != "",
 	})
 }
 
