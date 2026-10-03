@@ -611,6 +611,10 @@ var ErrAlreadyMember = errors.New("db: invitee is already a member")
 // left as they were.
 var ErrInviterNotEligible = errors.New("db: inviter is no longer an admin or ambassador")
 
+// ErrInviteeDeleted is returned by CompleteInvite when the invitee's account
+// was deleted (#77) after they accepted. Nothing was written.
+var ErrInviteeDeleted = errors.New("db: invitee account was deleted")
+
 // ErrGroupGone is returned by CompleteInvite when the group was deleted
 // (its last member left, #66) before the invite could be completed.
 var ErrGroupGone = errors.New("db: group no longer exists")
@@ -668,6 +672,7 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 		sentDeleteIndex     = 2
 		groupMetaIndex      = 3
 		inviterIndex        = 4
+		inviteeIndex        = 5
 	)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -732,9 +737,26 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 					},
 				},
 			},
+			// The invitee's account must not have been deleted (#77): account
+			// deletion refuses while any membership exists, so a membership
+			// written after the tombstone would belong to an account nobody
+			// can sign in to.
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(c.table),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: "USER#" + in.InvitedUserID},
+						"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+					},
+					ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
+				},
+			},
 		},
 	})
 	if err != nil {
+		if isConditionalCheckFailure(err, inviteeIndex) {
+			return ErrInviteeDeleted
+		}
 		if isConditionalCheckFailure(err, groupMetaIndex) {
 			return ErrGroupGone
 		}

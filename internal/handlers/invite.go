@@ -731,6 +731,17 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
 			return
 		}
+		if errors.Is(err, db.ErrInviteeDeleted) {
+			// The invitee deleted their account after accepting (#77). The
+			// invite can never complete, so clear its rows as the group-gone
+			// branch does.
+			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
+				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				return
+			}
+			WriteErrorWithCode(w, http.StatusGone, "the invited account no longer exists", "invitee_deleted")
+			return
+		}
 		if errors.Is(err, db.ErrAlreadyMember) {
 			// The membership this call would have created already exists
 			// some other way -- but the two invite rows are still there,

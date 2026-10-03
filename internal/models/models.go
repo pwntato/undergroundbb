@@ -89,6 +89,14 @@ type User struct {
 	// not locked. Set after the 5th failure within the counting window: see
 	// docs/DESIGN.md, "five-attempts-in-five-minutes."
 	LockUntil string `dynamodbav:"LockUntil,omitempty"`
+
+	// DeletedAt is an RFC 3339 timestamp, set once by account deletion (#77).
+	// A deleted account's PROFILE is a tombstone, never removed: user uuids
+	// are never reused (see docs/DESIGN.md, the AAD table), and the public
+	// keys stay so grants and signatures the user made can still be verified.
+	// Username, salt, wrapped private keys, preferences and lock state are
+	// removed; the USERNAME claim and RECOVERY item are deleted.
+	DeletedAt string `dynamodbav:"DeletedAt,omitempty"`
 }
 
 // SupersededKey is a prior Ed25519 public key and the interval it was
