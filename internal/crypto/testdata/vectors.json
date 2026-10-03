@@ -126,6 +126,8 @@
   "genkey_chain": [
     {
       "name": "gen_n_under_gen_n_plus_1",
+      "group_id": "g1",
+      "generation": 1,
       "gen_n_key_hex": "efcfde35ce7a2294113a65f29ba9b6dd1da051f935298ad85aa5811a63cc76be",
       "gen_n_plus_1_key_hex": "85536b615d5abac2fbefae5711318ebd51cfb5f93cb547445840445f92c5a0b0",
       "aad_hex": "47524f55502367313a47454e4b455923303030303031",

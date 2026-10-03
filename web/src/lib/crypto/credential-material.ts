@@ -13,6 +13,7 @@ import { base64ToBytes, bytesToBase64, bytesToBase64Url } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
   generateGrantSortKey,
+  genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
@@ -580,6 +581,118 @@ export async function completeInvite(
     },
     generation: ownGeneration,
   }
+}
+
+/** A Wrapped, base64-encoded for the wire (and for postMessage). */
+export interface WireWrapped {
+  ephemeralPub: string
+  nonce: string
+  ciphertext: string
+}
+
+function toWireWrapped(w: Wrapped): WireWrapped {
+  return {
+    ephemeralPub: bytesToBase64(w.ephemeralPub),
+    nonce: bytesToBase64(w.nonce),
+    ciphertext: bytesToBase64(w.ciphertext),
+  }
+}
+
+async function unwrapOwnGroupKey(
+  keys: LiveKeys,
+  groupId: string,
+  ownWrappedGroupKey: Wrapped,
+  ownGeneration: number,
+): Promise<Uint8Array> {
+  const groupKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    ownWrappedGroupKey,
+    memberWrapAAD(groupId, keys.userId, ownGeneration),
+  )
+  if (groupKey.length !== KEY_SIZE) {
+    throw new Error('crypto: unwrapped group key has the wrong length')
+  }
+  return groupKey
+}
+
+/**
+ * #58: mints the next generation's group key for a Rotating-group removal and
+ * returns what DELETE /api/groups/{gid}/members/{uid}'s `rotation` body
+ * carries: the new generation (ownGeneration + 1, which the server requires),
+ * the GENKEY# chain link, and the new key wrapped for the caller.
+ *
+ * The link is the OLD key encrypted under the NEW one with genKeyAAD(gid,
+ * ownGeneration), so a holder of the new key walks backward and a holder of
+ * only the old key learns nothing about the new one. The caller wraps the new
+ * key to THEMSELVES: that wrap is the only durable copy of the minted key
+ * anywhere, and every later step (re-wrapping members, resuming after a closed
+ * tab) re-derives it from the caller's own MEMBER# entry rather than keeping it
+ * in memory. The new key never leaves this module in the clear.
+ */
+export async function startGroupRotation(
+  keys: LiveKeys,
+  groupId: string,
+  ownWrappedGroupKey: Wrapped,
+  ownGeneration: number,
+): Promise<{
+  generation: number
+  link: { nonce: string; ciphertext: string }
+  removerWrappedKey: WireWrapped
+}> {
+  const oldKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
+  const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
+  const generation = ownGeneration + 1
+
+  const link = await encrypt(newKey, oldKey, genKeyAAD(groupId, ownGeneration))
+  const removerWrapped = await wrap(
+    keys.wrappingKey.publicKey,
+    newKey,
+    memberWrapAAD(groupId, keys.userId, generation),
+  )
+  return {
+    generation,
+    link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
+    removerWrappedKey: toWireWrapped(removerWrapped),
+  }
+}
+
+/**
+ * #58: re-wraps the caller's CURRENT group key (their own entry at
+ * ownGeneration, which during a rotation is the new generation) to each
+ * recipient, for PUT /api/groups/{gid}/rotation/members. The AAD names the
+ * recipient and ownGeneration, matching what that recipient's MEMBER# item
+ * will be read with.
+ *
+ * recipients' public keys arrive from the caller, which has ALREADY checked
+ * each against the caller's signed pins; this function cannot (it has no pins)
+ * and wrapping to a server-substituted key would hand the server the group key.
+ * It refuses the caller's own id (their entry is already current and the
+ * server rejects it) and a key that is not 32 bytes.
+ */
+export async function rewrapGroupKey(
+  keys: LiveKeys,
+  groupId: string,
+  ownWrappedGroupKey: Wrapped,
+  ownGeneration: number,
+  recipients: readonly { userId: string; x25519PublicKey: Uint8Array }[],
+): Promise<{ userId: string; wrappedKey: WireWrapped }[]> {
+  const groupKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
+  const out: { userId: string; wrappedKey: WireWrapped }[] = []
+  for (const r of recipients) {
+    if (r.userId === keys.userId) {
+      throw new Error('crypto: refusing to re-wrap the group key to the caller')
+    }
+    if (r.x25519PublicKey.length !== X25519_KEY_LEN) {
+      throw new Error('crypto: recipient X25519 public key must be 32 bytes')
+    }
+    const wrapped = await wrap(
+      r.x25519PublicKey,
+      groupKey,
+      memberWrapAAD(groupId, r.userId, ownGeneration),
+    )
+    out.push({ userId: r.userId, wrappedKey: toWireWrapped(wrapped) })
+  }
+  return out
 }
 
 /**

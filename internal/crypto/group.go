@@ -104,6 +104,25 @@ func MemberWrapAAD(groupID, memberUUID string, generation uint64) []byte {
 	return fmt.Appendf(nil, "GROUP#%s:MEMBER#%s:GEN#%06d", groupID, memberUUID, generation)
 }
 
+// GenKeyAAD builds the AAD for a GENKEY# chain link -- see docs/DESIGN.md's
+// AAD table, "Generation key | group id + generation number." generation is
+// the link's own index n: GENKEY#<n> holds generation n's key encrypted under
+// generation n+1's, so n is the generation of the key the link CONTAINS and is
+// the same number its sort key carries (db.GenKeySortKey).
+//
+// Unlike MemberWrapAAD there is no member in it: the link is group-wide and
+// member-independent (one per rotation, not one per member). Without the
+// binding, an attacker with write access could swap two links with both tags
+// still verifying and the chain would silently yield the wrong generation key.
+//
+// The encoding is "GROUP#<gid>:GENKEY#<nnnnnn>", generation zero-padded to six
+// digits like the sort key and every other AAD here; it is the string the
+// "genkey_chain" test vector has always pinned. This must never change once a
+// real chain link exists under it.
+func GenKeyAAD(groupID string, generation uint64) []byte {
+	return fmt.Appendf(nil, "GROUP#%s:GENKEY#%06d", groupID, generation)
+}
+
 // GroupNameAAD builds the AAD for encrypting or decrypting a private
 // group's name or description -- see docs/DESIGN.md's AAD table, "Group
 // name/description | group id + generation number." field distinguishes

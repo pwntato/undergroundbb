@@ -25,6 +25,8 @@ import {
   decryptGroupNames as decryptGroupNamesPure,
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
+  rewrapGroupKey as rewrapGroupKeyPure,
+  startGroupRotation as startGroupRotationPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
@@ -45,6 +47,8 @@ import type {
   GenerateSignupMaterialRequest,
   GetOwnSigningKeyRequest,
   RecoveryMaterial,
+  RewrapGroupKeyRequest,
+  StartGroupRotationRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
@@ -127,6 +131,12 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'completeInvite':
       await completeInvite(req)
+      return
+    case 'startGroupRotation':
+      await startGroupRotation(req)
+      return
+    case 'rewrapGroupKey':
+      await rewrapGroupKey(req)
       return
     case 'clearLiveKeys':
       clearLiveKeys(req)
@@ -341,6 +351,54 @@ async function completeInvite(req: CompleteInviteRequest): Promise<void> {
     inviteMAC,
   )
   post({ kind: 'completeInviteDone', id: req.id, result })
+}
+
+function requireLiveKeysFor(userId: string, action: string): LiveKeys {
+  if (liveKeys === null) {
+    throw new Error(
+      `worker: no live keys cached -- log in again to ${action} (this can happen after a page reload)`,
+    )
+  }
+  if (liveKeys.userId !== userId) {
+    throw new Error('worker: cached keys belong to a different account than requested')
+  }
+  return liveKeys
+}
+
+function wrappedFromWire(w: { ephemeralPub: string; nonce: string; ciphertext: string }) {
+  return {
+    ephemeralPub: base64ToBytes(w.ephemeralPub),
+    nonce: base64ToBytes(w.nonce),
+    ciphertext: base64ToBytes(w.ciphertext),
+  }
+}
+
+/** #58: mints a rotation's next key for a Rotating-group removal. Same guards as completeInvite. */
+async function startGroupRotation(req: StartGroupRotationRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 'remove a member')
+  const result = await startGroupRotationPure(
+    keys,
+    req.groupId,
+    wrappedFromWire(req.ownWrappedGroupKey),
+    req.ownGeneration,
+  )
+  post({ kind: 'startGroupRotationDone', id: req.id, result })
+}
+
+/** #58: re-wraps the caller's current group key to a batch of members. */
+async function rewrapGroupKey(req: RewrapGroupKeyRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 're-wrap members')
+  const wraps = await rewrapGroupKeyPure(
+    keys,
+    req.groupId,
+    wrappedFromWire(req.ownWrappedGroupKey),
+    req.ownGeneration,
+    req.recipients.map((r) => ({
+      userId: r.userId,
+      x25519PublicKey: base64ToBytes(r.x25519PublicKey),
+    })),
+  )
+  post({ kind: 'rewrapGroupKeyDone', id: req.id, result: { wraps } })
 }
 
 function clearLiveKeys(_req: ClearLiveKeysRequest): void {

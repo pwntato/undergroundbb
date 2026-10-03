@@ -108,6 +108,8 @@ type wrapVector struct {
 
 type genkeyChainVector struct {
 	Name            string `json:"name"`
+	GroupID         string `json:"group_id"`
+	Generation      uint64 `json:"generation"`
 	GenNKeyHex      string `json:"gen_n_key_hex"`
 	GenNPlus1KeyHex string `json:"gen_n_plus_1_key_hex"`
 	AADHex          string `json:"aad_hex"`
@@ -514,7 +516,7 @@ func main() {
 	{
 		genN := fixedSeed("genkey-n-1")[:crypto.KeySize]
 		genNPlus1 := fixedSeed("genkey-n+1-1")[:crypto.KeySize]
-		aad := []byte("GROUP#g1:GENKEY#000001")
+		aad := crypto.GenKeyAAD("g1", 1)
 		nonce := fixedSeed("genkey-link-nonce-1")[:crypto.NonceSize]
 		ciphertext, err := crypto.EncryptWithNonce(genNPlus1, nonce, genN, aad)
 		if err != nil {
@@ -522,6 +524,8 @@ func main() {
 		}
 		out.GenkeyChain = append(out.GenkeyChain, genkeyChainVector{
 			Name:            "gen_n_under_gen_n_plus_1",
+			GroupID:         "g1",
+			Generation:      1,
 			GenNKeyHex:      hex.EncodeToString(genN),
 			GenNPlus1KeyHex: hex.EncodeToString(genNPlus1),
 			AADHex:          hex.EncodeToString(aad),
