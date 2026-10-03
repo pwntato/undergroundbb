@@ -1,3 +1,6 @@
+/** What a tombstoned account is called wherever its id would otherwise be shown (#77). */
+export const DELETED_USER_LABEL = 'deleted user'
+
 /**
  * How a user is shown on the roster and invite rows: their username when the
  * users projection (GET /api/users/:id) has been read, otherwise the first
@@ -5,7 +8,13 @@
  * fails. Kept out of the panels so those files export only components.
  */
 export function memberLabel(userId: string, usernames?: ReadonlyMap<string, string>): string {
-  return usernames?.get(userId) ?? userId.split('-')[0] ?? userId
+  const username = usernames?.get(userId)
+  // An empty username is a deleted account (see resolveUsernames); a real
+  // username is never empty.
+  if (username === '') {
+    return DELETED_USER_LABEL
+  }
+  return username ?? userId.split('-')[0] ?? userId
 }
 
 /** Monospace only for the uuid-fragment fallback, so an unresolved row is visibly so. */

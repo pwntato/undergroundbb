@@ -22,6 +22,17 @@ describe('resolveUsernames', () => {
     expect(fetchUser.mock.calls.map((c) => c[0])).toEqual(['a', 'b', 'c'])
   })
 
+  it('caches a deleted account as an empty username, not as unresolved', async () => {
+    const fetchUser = vi.fn((id: string) =>
+      Promise.resolve({ ...user(id, ''), deleted: true as const }),
+    )
+    const got = await resolveUsernames(['gone'], fetchUser)
+    expect(got.has('gone')).toBe(true)
+    expect(got.get('gone')).toBe('')
+    await resolveUsernames(['gone'], fetchUser)
+    expect(fetchUser).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves a failed read out of the map without throwing, and retries it next time', async () => {
     const fetchUser = vi
       .fn<(id: string) => Promise<UserProjection>>()
