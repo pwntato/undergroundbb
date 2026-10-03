@@ -12,8 +12,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
-import { listGroups } from '@/lib/api/groups'
+import { getKeychain, listGroups } from '@/lib/api/groups'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
+import { fetchNameChain } from '@/lib/groups/nameChain'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { useSession } from '@/lib/session/useSession'
 import { GroupList, type LoadState } from './GroupList'
@@ -70,6 +71,7 @@ export function Home() {
         const groups = await runListGroups({
           listGroups,
           decryptGroupNames,
+          getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
           getCachedGroupName,
           setCachedGroupName,
           userId: session.userId as string,

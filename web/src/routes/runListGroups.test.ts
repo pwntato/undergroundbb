@@ -488,4 +488,113 @@ describe('runListGroups', () => {
       expect(results.map((g) => g.groupId)).toEqual(['cold', 'a-named', 'z-named'])
     })
   })
+
+  describe('chain walk for names sealed under an older generation', () => {
+    const chain = [{ generation: 0, wrapped: { nonce: 'bg==', ciphertext: 'Yw==' } }]
+    const listOne = (g: GroupListEntry) => vi.fn().mockResolvedValue({ groups: [g] })
+
+    it('fetches the links and hands them to the decrypt', async () => {
+      const getNameChain = vi.fn().mockResolvedValue(chain)
+      const decrypt = vi
+        .fn()
+        .mockResolvedValue([{ groupId: 'priv-1', name: 'N', description: 'D' }])
+      await runListGroups(
+        makeDeps({
+          listGroups: listOne(privateGroup({ generation: 1, nameGeneration: 0 })),
+          decryptGroupNames: decrypt,
+          getNameChain,
+        }),
+      )
+      expect(getNameChain).toHaveBeenCalledWith('priv-1', 0, 1)
+      expect(decrypt).toHaveBeenCalledWith({
+        userId: USER_ID,
+        groups: [expect.objectContaining({ chain })],
+      })
+    })
+
+    it("fetches every group's links concurrently, not one round trip after another", async () => {
+      const started: string[] = []
+      const release: (() => void)[] = []
+      const getNameChain = vi.fn(
+        (groupId: string) =>
+          new Promise<typeof chain>((resolve) => {
+            started.push(groupId)
+            release.push(() => {
+              resolve(chain)
+            })
+          }),
+      )
+      const decrypt = vi.fn().mockResolvedValue([])
+      const pending = runListGroups(
+        makeDeps({
+          listGroups: vi.fn().mockResolvedValue({
+            groups: [
+              privateGroup({ groupId: 'a', generation: 1, nameGeneration: 0 }),
+              privateGroup({ groupId: 'b', generation: 1, nameGeneration: 0 }),
+            ],
+          }),
+          decryptGroupNames: decrypt,
+          getNameChain,
+        }),
+      )
+      await vi.waitFor(() => {
+        // Both are in flight before either has been answered.
+        expect(started).toEqual(['a', 'b'])
+      })
+      release.forEach((r) => {
+        r()
+      })
+      await pending
+      expect(decrypt.mock.calls[0]?.[0].groups.map((g: { chain?: unknown }) => g.chain)).toEqual([
+        chain,
+        chain,
+      ])
+    })
+
+    it('fetches nothing when the name is at the member generation', async () => {
+      const getNameChain = vi.fn()
+      const decrypt = vi
+        .fn()
+        .mockResolvedValue([{ groupId: 'priv-1', name: 'N', description: 'D' }])
+      await runListGroups(
+        makeDeps({
+          listGroups: listOne(privateGroup({ generation: 1, nameGeneration: 1 })),
+          decryptGroupNames: decrypt,
+          getNameChain,
+        }),
+      )
+      expect(getNameChain).not.toHaveBeenCalled()
+      expect(decrypt.mock.calls[0]?.[0].groups[0]).not.toHaveProperty('chain')
+    })
+
+    it('does not fetch for a cache hit', async () => {
+      const cache = fakeCache()
+      cache.setCachedGroupName(USER_ID, 'priv-1', 0, STAMP, 'Cached', 'Desc')
+      const getNameChain = vi.fn()
+      await runListGroups(
+        makeDeps({
+          listGroups: listOne(privateGroup({ generation: 3, nameGeneration: 0 })),
+          getCachedGroupName: cache.getCachedGroupName,
+          setCachedGroupName: cache.setCachedGroupName,
+          getNameChain,
+        }),
+      )
+      expect(getNameChain).not.toHaveBeenCalled()
+    })
+
+    it('sends no chain when the fetch failed, and caches nothing from the unreadable result', async () => {
+      const decrypt = vi
+        .fn()
+        .mockResolvedValue([{ groupId: 'priv-1', name: null, description: null }])
+      const deps = makeDeps({
+        listGroups: listOne(privateGroup({ generation: 1, nameGeneration: 0 })),
+        decryptGroupNames: decrypt,
+        getNameChain: vi.fn().mockResolvedValue(undefined),
+      })
+      const result = await runListGroups(deps)
+      expect(decrypt.mock.calls[0]?.[0].groups[0]).not.toHaveProperty('chain')
+      expect(result[0]).toMatchObject({ nameStatus: 'unreadable' })
+      expect(deps.setCachedGroupName).not.toHaveBeenCalled()
+    })
+  })
 })

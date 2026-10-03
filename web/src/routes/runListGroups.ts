@@ -60,8 +60,28 @@ export interface ListGroupsDeps {
       readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
       readonly nameCiphertext: { nonce: string; ciphertext: string }
       readonly descriptionCiphertext: { nonce: string; ciphertext: string }
+      readonly chain?: readonly {
+        readonly generation: number
+        readonly wrapped: { nonce: string; ciphertext: string }
+      }[]
     }[]
   }) => Promise<readonly DecryptedGroupName[]>
+  /**
+   * Fetches the GENKEY# links a group's name needs when it was sealed under an
+   * older generation than the member's own (fetchNameChain). Optional only so a
+   * caller with no network can skip the walk; such a group reads as unreadable.
+   */
+  readonly getNameChain?: (
+    groupId: string,
+    nameGeneration: number,
+    generation: number,
+  ) => Promise<
+    | readonly {
+        readonly generation: number
+        readonly wrapped: { nonce: string; ciphertext: string }
+      }[]
+    | undefined
+  >
   /**
    * groupNameCache.ts's getCachedGroupName/setCachedGroupName, injected
    * rather than imported directly -- this codebase's test suite runs under
@@ -106,6 +126,25 @@ export function isLiveKeysError(error: unknown): boolean {
 }
 
 /**
+ * The chain links a group's name needs, as a spread-able field: nothing when
+ * the name is at the member's own generation, and also nothing when the fetch
+ * failed (the decrypt then reports the name unreadable, uncached, so a later
+ * load retries).
+ */
+async function chainFor(
+  deps: Pick<ListGroupsDeps, 'getNameChain'>,
+  group: GroupListEntry,
+): Promise<{
+  chain?: NonNullable<Awaited<ReturnType<NonNullable<ListGroupsDeps['getNameChain']>>>>
+}> {
+  if (deps.getNameChain === undefined || group.nameGeneration >= group.generation) {
+    return {}
+  }
+  const chain = await deps.getNameChain(group.groupId, group.nameGeneration, group.generation)
+  return chain === undefined ? {} : { chain }
+}
+
+/**
  * Fetches the caller's group list and resolves every group to something
  * renderable: a public group's plaintext directly, a private group's name
  * from cache when the generation matches, and everything else in one
@@ -137,11 +176,13 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
     wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
     nameCiphertext: { nonce: string; ciphertext: string }
     descriptionCiphertext: { nonce: string; ciphertext: string }
+    chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
   }[] = []
   // Index into `results` for each group still awaiting a decrypt, so the
   // decryptGroupNames response (or a cache hit) can be written back to the
   // right entry without a second pass keyed by id.
   const pendingIndexByGroupId = new Map<string, number>()
+  const chainFetches: Promise<void>[] = []
 
   for (const group of groups) {
     if (group.visibility === 'public') {
@@ -183,15 +224,26 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
 
     pendingIndexByGroupId.set(group.groupId, results.length)
     results.push({ ...group, displayName: null, displayDescription: null, nameStatus: 'coldKeys' })
-    toDecrypt.push({
+    const entry: (typeof toDecrypt)[number] = {
       groupId: group.groupId,
       generation: group.generation,
       nameGeneration: group.nameGeneration,
       wrappedGroupKey: group.wrappedGroupKey,
       nameCiphertext: group.nameCiphertext,
       descriptionCiphertext: group.descriptionCiphertext,
-    })
+    }
+    toDecrypt.push(entry)
+    // Fetched together after the loop rather than awaited here, so the list's
+    // latency does not grow by one round trip per rotated group.
+    chainFetches.push(
+      chainFor(deps, group).then((fetched) => {
+        if (fetched.chain !== undefined) {
+          entry.chain = fetched.chain
+        }
+      }),
+    )
   }
+  await Promise.all(chainFetches)
 
   if (toDecrypt.length === 0) {
     return sortByLabel(results)

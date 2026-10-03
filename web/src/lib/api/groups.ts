@@ -272,6 +272,35 @@ export async function listGrants(groupId: string, cursor?: string): Promise<List
   return handleJSON<ListGrantsResponse>(res)
 }
 
+/** One GENKEY# chain link: generation `generation`'s key, sealed under generation+1's. */
+export interface KeychainLink {
+  readonly generation: number
+  readonly wrapped: { readonly nonce: string; readonly ciphertext: string }
+}
+
+export interface KeychainResponse {
+  readonly links: readonly KeychainLink[]
+  /** The generation to pass as `from` for the next page; absent when exhausted. */
+  readonly nextFrom?: number
+}
+
+/**
+ * GET /api/groups/{id}/keychain?from=A&to=B -- the chain links for generations
+ * A..B inclusive, ascending, members only. A generation with no link is simply
+ * absent: the caller decides whether that is a gap.
+ */
+export async function getKeychain(
+  groupId: string,
+  from: number,
+  to: number,
+): Promise<KeychainResponse> {
+  const res = await fetch(
+    `/api/groups/${encodeURIComponent(groupId)}/keychain?from=${String(from)}&to=${String(to)}`,
+    { credentials: 'same-origin' },
+  )
+  return handleJSON<KeychainResponse>(res)
+}
+
 export interface ChangeMemberRoleRequest {
   readonly role: MemberRole
   /** The new grant's own address, signed as part of the payload. */

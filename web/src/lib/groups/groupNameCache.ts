@@ -3,11 +3,12 @@
 // group list's own cost accounting to hold: "Client-side caching of names
 // and unwrapped generation keys is what makes that acceptable" (the
 // acceptable cost being one GENKEY# chain walk per private group on every
-// page load, absent a cache). This cache only needs to be correct for
-// "a member's own current generation never changes," which is true for
-// every group today -- #78 (key rotation) is the only thing that can ever
-// make a generation change, and this module has no invalidation strategy
-// for that; a full one is #78's problem to build, not this issue's.
+// page load, absent a cache). Entries are keyed on the NAME's generation
+// and ciphertext stamp, not the member's own generation. Rotation (#58)
+// changes the member's generation but does not re-seal the name, so a
+// cached name stays correct across a rotation and needs no invalidation;
+// only a rename (new nonces, so a new stamp) or a truncation re-seal can
+// change what a cached entry should say, and both change the stamp.
 //
 // sessionStorage, not localStorage: scoped to one tab's lifetime, matching
 // the crypto worker's own liveKeys cache (worker.ts's own doc comment) --

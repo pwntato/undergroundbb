@@ -707,10 +707,10 @@ export async function rewrapGroupKey(
  * Two generations are involved and must not be conflated: `generation` is
  * the member's own (what their WrappedGroupKey is wrapped for, used to
  * unwrap), `nameGeneration` is the one the name/description ciphertext was
- * encrypted under (used for the AAD). They are both 0 until #78 (key
- * rotation) exists; after it they diverge, and a member who joined after a
- * rotation would additionally need a GENKEY# chain walk (not yet built) to
- * reach an older nameGeneration's key.
+ * encrypted under (used for the AAD). Rotation does not re-encrypt the name,
+ * so after one they diverge: the member's key is for the newer generation and
+ * the name needs the older one's. The caller supplies the GENKEY# links
+ * between the two (`chain`) and walkChainDown follows them back.
  *
  * One group's failure (a stale cache entry, corrupt ciphertext, a
  * generation mismatch) does not throw and does not fail the batch -- see
@@ -742,7 +742,16 @@ async function decryptOneGroupName(
       ciphertext: base64ToBytes(group.wrappedGroupKey.ciphertext),
     }
     const unwrapAAD = memberWrapAAD(group.groupId, keys.userId, group.generation)
-    const groupKey = await unwrap(keys.wrappingKey.privateKey, wrappedGroupKey, unwrapAAD)
+    const ownKey = await unwrap(keys.wrappingKey.privateKey, wrappedGroupKey, unwrapAAD)
+    // The key for the generation the name was sealed under, which is older
+    // than the member's own once the group has rotated since.
+    const groupKey = await walkChainDown(
+      ownKey,
+      group.groupId,
+      group.generation,
+      group.nameGeneration,
+      group.chain ?? [],
+    )
 
     // The name/description AAD binds nameGeneration -- the generation they
     // were encrypted under -- NOT the member's own generation used to
@@ -769,6 +778,45 @@ async function decryptOneGroupName(
     // null fields here rather than rejecting the whole batch.
     return { groupId: group.groupId, name: null, description: null }
   }
+}
+
+/**
+ * Walks the GENKEY# chain from the key at `fromGeneration` back to the key at
+ * `toGeneration`. Link n is generation n's key sealed under generation n+1's
+ * with genKeyAAD(groupId, n) (startGroupRotation writes it), so each step
+ * opens one link with the key just recovered. Throws if a link is missing or
+ * does not open, which decryptOneGroupName reports as an unreadable name; a
+ * name from a generation NEWER than the member's own is likewise unreadable,
+ * since there is no way forward along the chain.
+ */
+async function walkChainDown(
+  startKey: Uint8Array,
+  groupId: string,
+  fromGeneration: number,
+  toGeneration: number,
+  chain: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[],
+): Promise<Uint8Array> {
+  if (toGeneration > fromGeneration) {
+    throw new Error('crypto: the name is from a newer generation than the member holds')
+  }
+  const links = new Map(chain.map((l) => [l.generation, l.wrapped]))
+  let key = startKey
+  for (let generation = fromGeneration - 1; generation >= toGeneration; generation--) {
+    const link = links.get(generation)
+    if (link === undefined) {
+      throw new Error(`crypto: no chain link for generation ${String(generation)}`)
+    }
+    key = await decrypt(
+      key,
+      base64ToBytes(link.nonce),
+      base64ToBytes(link.ciphertext),
+      genKeyAAD(groupId, generation),
+    )
+    if (key.length !== KEY_SIZE) {
+      throw new Error('crypto: chain link opened to a key of the wrong length')
+    }
+  }
+  return key
 }
 
 async function decryptGroupText(
