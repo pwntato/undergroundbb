@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { catchUpRotation, createRotationGuard, removeAndRotate } from './rotationJobs'
+import {
+  catchUpRotation,
+  createRotationGuard,
+  removeAndRotate,
+  rotationGuardFor,
+} from './rotationJobs'
 import { rotationNeededAfter, runRemoveMember, type RemoveResult } from './runRemoveMember'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 import type { RemoveDeps } from './runRemoveMember'
@@ -36,17 +41,22 @@ beforeEach(() => {
 })
 
 describe('createRotationGuard', () => {
-  it('lets one holder in at a time and reports changes', () => {
-    const seen: boolean[] = []
-    const guard = createRotationGuard((h) => seen.push(h))
+  it('lets one holder in at a time and reports changes to every subscriber', () => {
+    const guard = createRotationGuard()
+    const one: boolean[] = []
+    const two: boolean[] = []
+    guard.subscribe((h) => one.push(h))
+    const off = guard.subscribe((h) => two.push(h))
     const release = guard.tryAcquire()
     expect(release).not.toBeNull()
     expect(guard.held).toBe(true)
     expect(guard.tryAcquire()).toBeNull()
+    off()
     release?.()
     expect(guard.held).toBe(false)
     expect(guard.tryAcquire()).not.toBeNull()
-    expect(seen).toEqual([true, false, true])
+    expect(one).toEqual([true, false, true])
+    expect(two).toEqual([true]) // unsubscribed before the release
   })
 
   it('ignores a repeated or stale release, which must not free a newer holder', () => {
@@ -59,6 +69,37 @@ describe('createRotationGuard', () => {
     second?.()
     second?.() // repeated
     expect(guard.held).toBe(false)
+  })
+})
+
+describe('rotationGuardFor', () => {
+  it('is one guard per group for the whole tab, and independent across groups', () => {
+    expect(rotationGuardFor('same')).toBe(rotationGuardFor('same'))
+    expect(rotationGuardFor('same')).not.toBe(rotationGuardFor('other'))
+  })
+
+  it('still holds for a screen that mounts after the job started', async () => {
+    // Remove, click Back, reopen the group: the new screen asks for the guard again.
+    const pending = deferred<RemoveResult>()
+    remove.mockReturnValue(pending.promise)
+    rotate.mockResolvedValue(DONE)
+    const removal = removeAndRotate(
+      { guard: rotationGuardFor('remount'), remove: removeDeps, rotation: rotationDeps },
+      'remount',
+      SUBJECT,
+      'member',
+      true,
+    )
+    const remounted = rotationGuardFor('remount')
+    expect(remounted.held).toBe(true)
+    expect(await catchUpRotation(remounted, rotationDeps, 'remount')).toEqual({ busy: true })
+    expect(rotate).not.toHaveBeenCalled()
+
+    pending.resolve({ ok: true, rotating: true })
+    await removal
+    expect(remounted.held).toBe(false)
+    // A different group was never affected.
+    expect(rotationGuardFor('elsewhere').held).toBe(false)
   })
 })
 

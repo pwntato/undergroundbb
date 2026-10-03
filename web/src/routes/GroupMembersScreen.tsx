@@ -6,7 +6,7 @@
 // Loading and role changes are runGroupMembers.ts's job; this component owns
 // state and effects, and GroupMembersPanel owns rendering.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -30,7 +30,7 @@ import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
 import { makePinKeys, makeRotationDeps } from './rotationDeps'
-import { catchUpRotation, createRotationGuard, removeAndRotate } from './rotationJobs'
+import { catchUpRotation, removeAndRotate, rotationGuardFor } from './rotationJobs'
 import { describeRotation } from './runRotation'
 import { removeFailureMessage, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
@@ -76,11 +76,19 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
-  // One rotation job at a time: the on-load catch-up and the one a removal
-  // runs must never overlap (see rotationJobs.ts). The state mirrors the guard
-  // so the controls lock while a job runs.
-  const [rotationBusy, setRotationBusy] = useState(false)
-  const [guard] = useState(() => createRotationGuard(setRotationBusy))
+  // One rotation job at a time per group, per tab: the on-load catch-up and the
+  // one a removal runs must never overlap, even across this screen unmounting
+  // and remounting while a job runs (see rotationJobs.ts). The state mirrors
+  // the guard so the controls lock and the status line shows.
+  const guard = rotationGuardFor(groupId ?? '')
+  const subscribeToGuard = useCallback(
+    (onChange: () => void) =>
+      guard.subscribe(() => {
+        onChange()
+      }),
+    [guard],
+  )
+  const rotationBusy = useSyncExternalStore(subscribeToGuard, () => guard.held)
   // The check is stored with the exact view it ran against, so a check that
   // belongs to a previous roster or group is never shown against this one.
   const [grantCheck, setGrantCheck] = useState<ViewCheck<MembersView> | null>(null)
@@ -358,7 +366,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           onConfirm={handleLeave}
         />
       )}
-      <MembersFeedback message={message} error={error} />
+      <MembersFeedback message={message} error={error} rotating={rotationBusy} />
       <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
         Back to your groups
       </Link>

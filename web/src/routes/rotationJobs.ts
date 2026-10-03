@@ -25,10 +25,18 @@ export interface RotationGuard {
   /** A release function if the lock was free, null if a job already holds it. */
   tryAcquire(): (() => void) | null
   readonly held: boolean
+  /** Calls `listener` with the new value whenever `held` changes; returns an unsubscribe. */
+  subscribe(listener: (held: boolean) => void): () => void
 }
 
-export function createRotationGuard(onChange?: (held: boolean) => void): RotationGuard {
+export function createRotationGuard(): RotationGuard {
   let holder: object | null = null
+  const listeners = new Set<(held: boolean) => void>()
+  const notify = (held: boolean) => {
+    for (const l of [...listeners]) {
+      l(held)
+    }
+  }
   return {
     tryAcquire() {
       if (holder !== null) {
@@ -36,19 +44,41 @@ export function createRotationGuard(onChange?: (held: boolean) => void): Rotatio
       }
       const token = {}
       holder = token
-      onChange?.(true)
+      notify(true)
       return () => {
         // A stale or repeated release must not free someone else's hold.
         if (holder === token) {
           holder = null
-          onChange?.(false)
+          notify(false)
         }
       }
     },
     get held() {
       return holder !== null
     },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
   }
+}
+
+// A job outlives the screen that started it (Back stays enabled), so the guard
+// cannot belong to the component: reopening the same group mounts a new screen
+// that must see the old job still running. One guard per group for the life of
+// the tab; they are a few bytes each, so they are never dropped.
+const guards = new Map<string, RotationGuard>()
+
+/** The tab-wide guard for groupId's rotation jobs. */
+export function rotationGuardFor(groupId: string): RotationGuard {
+  let guard = guards.get(groupId)
+  if (guard === undefined) {
+    guard = createRotationGuard()
+    guards.set(groupId, guard)
+  }
+  return guard
 }
 
 /**

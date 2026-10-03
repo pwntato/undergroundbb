@@ -320,3 +320,23 @@ describe('GroupMembersPanel grant check marks', () => {
     expect(html).not.toContain('role="alert"')
   })
 })
+
+describe('MembersFeedback rotation status', () => {
+  const render = (rotating?: boolean) =>
+    renderToStaticMarkup(
+      createElement(MembersFeedback, {
+        message: null,
+        error: null,
+        ...(rotating === undefined ? {} : { rotating }),
+      }),
+    )
+
+  it('tells the admin to keep the page open while a rotation job runs', () => {
+    expect(render(true)).toContain('Keep this page open')
+  })
+
+  it('says nothing otherwise', () => {
+    expect(render(false)).not.toContain('Keep this page open')
+    expect(render()).not.toContain('Keep this page open')
+  })
+})

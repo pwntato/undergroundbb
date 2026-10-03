@@ -257,12 +257,22 @@ function RoleMark({
 export function MembersFeedback({
   message,
   error,
+  rotating = false,
 }: {
   readonly message: string | null
   readonly error: string | null
+  /** A key-rotation job is running: say so, because leaving stalls it. */
+  readonly rotating?: boolean
 }) {
   return (
     <>
+      {rotating && (
+        <Alert>
+          <AlertDescription>
+            Working on the group&apos;s key rotation. Keep this page open until it finishes.
+          </AlertDescription>
+        </Alert>
+      )}
       {message !== null && (
         <Alert>
           <AlertDescription>{message}</AlertDescription>
