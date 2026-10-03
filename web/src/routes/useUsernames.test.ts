@@ -23,8 +23,10 @@ describe('resolveUsernames', () => {
   })
 
   it('caches a deleted account as an empty username, not as unresolved', async () => {
+    // The server sends an empty username for a tombstone; the flag is what
+    // decides, so a stray non-empty one must not be shown as a person.
     const fetchUser = vi.fn((id: string) =>
-      Promise.resolve({ ...user(id, ''), deleted: true as const }),
+      Promise.resolve({ ...user(id, 'stale-name'), deleted: true as const }),
     )
     const got = await resolveUsernames(['gone'], fetchUser)
     expect(got.has('gone')).toBe(true)
