@@ -181,10 +181,11 @@ export function planFingerprint(entries: readonly AccountPlanEntry[]): string {
  * member, whatever the client planned, so a plan made minutes ago can turn a
  * "you will leave" into a permanent loss (the other member left meanwhile).
  * The groups are read again first; any difference refuses with the fresh plan
- * and changes nothing, and a match runs on the fresh views so the demotions
- * are signed against current grants. This narrows the window to one round of
- * reads; closing it fully needs the leave endpoint to refuse to delete a group
- * the client did not expect to.
+ * and changes nothing. A match runs on the fresh entries, which carry the same
+ * role and grant the fingerprint compared, so which set is used makes no
+ * difference to what is sent. This narrows the window to one round of reads;
+ * closing it fully needs the leave endpoint to refuse to delete a group the
+ * client did not expect to.
  */
 export async function runConfirmedDeletion(
   deps: ConfirmedDeletionDeps,
