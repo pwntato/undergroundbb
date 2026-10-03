@@ -45,6 +45,12 @@ describe('rotationNotice', () => {
     })
   })
 
+  it('does not call an admin whose key is ahead of the marker resumable', () => {
+    expect(rotationNotice(view({ myGeneration: 3 }), NOW)).toMatchObject({
+      kind: 'needs-other-admin',
+    })
+  })
+
   it('tells only admins', () => {
     expect(rotationNotice(view({ myRole: 'member' }), NOW)).toBeNull()
     expect(rotationNotice(view({ myRole: 'ambassador' }), NOW)).toBeNull()
