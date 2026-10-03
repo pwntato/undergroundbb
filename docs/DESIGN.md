@@ -918,9 +918,12 @@ now-26h to now+2h). When the removed admin was the creator, nobody is left who c
 remover, so the chain under them stays unverified permanently. The server already holds the
 remover's current grant, so it answers 409 `remover_granted_today` ("try again after 00:00 UTC")
 instead of storing a write that can never verify. This applies to removing an **admin or
-ambassador** only, since removing a plain member signs nothing. It is the removal-side half of
-#167, which asks for the same refusal on role changes and is not built yet. The cost is a delay of
-up to a day on removing an elevated member for an admin whose own grant is that new. The verifier
+ambassador** only, since removing a plain member signs nothing. Role changes get the same refusal
+(`PUT /api/groups/{gid}/members/{uid}/role`, 409 `grantor_granted_today`, #167): a grant signed on
+the day the grantor was granted, or before it, is stored but can never verify, and neither can
+anything the grantee signs later. Leaving is exempt, since a self-demotion takes effect the next day.
+The cost is a delay of up to a day on promoting, or removing, an elevated member for an admin whose
+own grant is that new, including the creator of a group made today. The verifier
 cases that make it necessary are pinned in `grant-chain.test.ts`.
 
 **The server also enforces the table above, as a first line and not a boundary.** The gates that

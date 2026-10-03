@@ -210,6 +210,20 @@ describe('changeRole', () => {
     })
   })
 
+  it('does not call grantor_granted_today stale: reloading cannot fix it, so the server text is shown', async () => {
+    const message =
+      'your own admin grant is dated the same UTC day as this grant, so it could never verify; try again after 00:00 UTC'
+    const changeMemberRole = vi
+      .fn()
+      .mockRejectedValue(new ApiError(409, message, 'grantor_granted_today'))
+    expect(await changeRole(changeDeps({ changeMemberRole }), view(), BOB, 'admin')).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message,
+    })
+    expect(changeMemberRole).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['grantor_ref_stale', 'grantor_changed', 'subject_role_changed', 'conflict_retry'])(
     'maps 409 %s to stale without resending',
     async (code) => {
