@@ -836,7 +836,8 @@ signatures the user made still verify), deletes the `USERNAME#` claim (the name 
 deletes `RECOVERY`. Pins, the login challenge, invites they sent and invites addressed to them are
 swept afterwards, and a repeated call finishes any leftovers. `PROFILE` is never deleted, so the uuid
 cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tombstone with `deleted:
-true` and an empty username. `CompleteInvite` refuses a deleted invitee. Two gaps, both fail safe: a
+true` and an empty username, which the web client shows as "deleted user" (id in the tooltip) in
+rosters, invites and the leave panel. `CompleteInvite` refuses a deleted invitee. Two gaps, both fail safe: a
 membership completed between the membership check and the tombstone survives, visible to the group
 as a member whose profile is deleted, and an admin removes it with the ordinary removal flow; and a
 session cookie issued earlier stays valid until it expires (there is no session store). It cannot
