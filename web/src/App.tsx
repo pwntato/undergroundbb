@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
 import { AcceptInviteScreen } from '@/routes/AcceptInviteScreen'
 import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
+import { DeleteAccountScreen } from '@/routes/DeleteAccountScreen'
 import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
 import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
 import { GroupMembersScreen } from '@/routes/GroupMembersScreen'
@@ -83,6 +84,14 @@ function App() {
               element={
                 <RequireAuth>
                   <ChangePasswordScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/account/delete"
+              element={
+                <RequireAuth>
+                  <DeleteAccountScreen />
                 </RequireAuth>
               }
             />
