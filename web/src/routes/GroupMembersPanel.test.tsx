@@ -75,17 +75,17 @@ describe('GroupMembersPanel', () => {
 
   it('disables every control while a rotation job runs, even with nothing in flight', () => {
     const idle = render({})
-    expect(idle).not.toMatch(/<button[^>]*disabled/)
+    expect(idle).not.toMatch(/<button[^>]*\sdisabled=""/)
     const locked = render({}, { locked: true })
-    expect(locked.match(/<button[^>]*disabled/g)).toHaveLength(3)
+    expect(locked.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(3)
     const confirming = render({}, { locked: true, confirmRemoveUserId: BOB })
-    expect(confirming.match(/<button[^>]*disabled/g)).toHaveLength(2) // Confirm and Cancel
+    expect(confirming.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(2) // Confirm and Cancel
   })
 
   it('locks the confirmation while a removal is in flight', () => {
     const html = render({}, { confirmRemoveUserId: BOB, busyUserId: BOB })
     expect(html).toContain('Removing…')
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Removing…/)
+    expect(html).toMatch(/<button[^>]*\sdisabled=""[^>]*>Removing…/)
   })
 
   it('labels members by the first block of their id and marks the caller', () => {
@@ -131,7 +131,7 @@ describe('GroupMembersPanel', () => {
   it('disables every control while a change is in flight and marks the row', () => {
     const html = render({}, { busyUserId: BOB })
     expect(html).toContain('Saving…')
-    expect(html.match(/<button[^>]*disabled/g)).toHaveLength(3) // two roles and Remove
+    expect(html.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(3) // two roles and Remove
   })
 
   it('offers no buttons to an admin whose own grant is missing, and says why', () => {
