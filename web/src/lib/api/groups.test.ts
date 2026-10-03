@@ -8,7 +8,8 @@
 // call in this file uses.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { listGroups } from './groups'
+import { ApiError } from './auth'
+import { listGroups, removeMember } from './groups'
 
 function stubFetch(status: number, body: unknown) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -69,5 +70,47 @@ describe('listGroups', () => {
     const result = await listGroups()
 
     expect(result.groups).toEqual([])
+  })
+})
+
+describe('removeMember', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('DELETEs the member path with no body when there is nothing to attach', async () => {
+    const fetchMock = stubFetch(204, null)
+    await removeMember('g 1', 'u/2')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/groups/g%201/members/u%2F2')
+    expect(init.method).toBe('DELETE')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('sends the demotion and rotation as the JSON body', async () => {
+    const fetchMock = stubFetch(204, null)
+    const req = {
+      grantSortKey: 'GRANT#k',
+      grantorGrantRef: 'GRANT#r',
+      signature: 's',
+      rotation: {
+        generation: 2,
+        link: { nonce: 'n', ciphertext: 'c' },
+        removerWrappedKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' },
+      },
+    }
+    await removeMember('g1', 'u2', req)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual(req)
+  })
+
+  it('rejects with the server code on a 409', async () => {
+    stubFetch(409, { error: 'busy', code: 'rotation_in_progress' })
+    await expect(removeMember('g1', 'u2')).rejects.toMatchObject({
+      status: 409,
+      code: 'rotation_in_progress',
+    })
+    stubFetch(409, { error: 'busy', code: 'rotation_in_progress' })
+    await expect(removeMember('g1', 'u2')).rejects.toBeInstanceOf(ApiError)
   })
 })

@@ -20,7 +20,12 @@ const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
 
 function render(
   view: Partial<MembersView>,
-  extra: { busyUserId?: string | null; usernames?: ReadonlyMap<string, string> } = {},
+  extra: {
+    busyUserId?: string | null
+    usernames?: ReadonlyMap<string, string>
+    confirmRemoveUserId?: string | null
+    locked?: boolean
+  } = {},
 ): string {
   return renderToStaticMarkup(
     createElement(GroupMembersPanel, {
@@ -29,17 +34,60 @@ function render(
         members: [member(ME, 'admin'), member(BOB, 'member')],
         myRole: 'admin',
         myGrantSortKey: 'GRANT#x',
+        revocationMode: 'open',
         ...view,
       },
       userId: ME,
       busyUserId: extra.busyUserId ?? null,
       onChangeRole: () => undefined,
+      locked: extra.locked ?? false,
+      confirmRemoveUserId: extra.confirmRemoveUserId ?? null,
+      onStartRemove: () => undefined,
+      onCancelRemove: () => undefined,
+      onConfirmRemove: () => undefined,
       ...(extra.usernames !== undefined && { usernames: extra.usernames }),
     }),
   )
 }
 
 describe('GroupMembersPanel', () => {
+  it('offers Remove to an admin on other members only, never on their own row', () => {
+    const html = render({})
+    expect(html.match(/>Remove</g)).toHaveLength(1)
+  })
+
+  it('offers no Remove to a non-admin or to an admin without a grant on record', () => {
+    expect(render({ myRole: 'member' })).not.toContain('>Remove<')
+    expect(render({ myGrantSortKey: undefined })).not.toContain('>Remove<')
+  })
+
+  it('asks for confirmation, and says a Rotating group also rotates the key', () => {
+    const open = render({}, { confirmRemoveUserId: BOB })
+    expect(open).toContain('Confirm remove')
+    expect(open).toContain('Cancel')
+    expect(open).not.toContain('rotates the group key')
+    // Role buttons give way to the confirmation on that row.
+    expect(open).not.toContain('>Remove<')
+
+    const rotating = render({ revocationMode: 'rotating' }, { confirmRemoveUserId: BOB })
+    expect(rotating).toContain('rotates the group key')
+  })
+
+  it('disables every control while a rotation job runs, even with nothing in flight', () => {
+    const idle = render({})
+    expect(idle).not.toMatch(/<button[^>]*\sdisabled=""/)
+    const locked = render({}, { locked: true })
+    expect(locked.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(3)
+    const confirming = render({}, { locked: true, confirmRemoveUserId: BOB })
+    expect(confirming.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(2) // Confirm and Cancel
+  })
+
+  it('locks the confirmation while a removal is in flight', () => {
+    const html = render({}, { confirmRemoveUserId: BOB, busyUserId: BOB })
+    expect(html).toContain('Removing…')
+    expect(html).toMatch(/<button[^>]*\sdisabled=""[^>]*>Removing…/)
+  })
+
   it('labels members by the first block of their id and marks the caller', () => {
     const html = render({})
     expect(html).toContain('aaaaaaaa')
@@ -67,9 +115,9 @@ describe('GroupMembersPanel', () => {
     expect(html).toContain('Make admin')
     expect(html).toContain('Make ambassador')
     // Bob is a member, so "Make member" is not offered for him; the admin's
-    // own row has no controls at all.
+    // own row has no controls at all. The third button is Remove.
     expect(html).not.toContain('Make member')
-    expect(html.match(/<button/g)).toHaveLength(2)
+    expect(html.match(/<button/g)).toHaveLength(3)
   })
 
   it('offers no controls to an ambassador or a member', () => {
@@ -83,7 +131,7 @@ describe('GroupMembersPanel', () => {
   it('disables every control while a change is in flight and marks the row', () => {
     const html = render({}, { busyUserId: BOB })
     expect(html).toContain('Saving…')
-    expect(html.match(/<button[^>]*disabled/g)).toHaveLength(2)
+    expect(html.match(/<button[^>]*\sdisabled=""/g)).toHaveLength(3) // two roles and Remove
   })
 
   it('offers no buttons to an admin whose own grant is missing, and says why', () => {
@@ -137,10 +185,15 @@ describe('GroupMembersPanel grant check marks', () => {
           members: [member(ME, 'admin'), member(BOB, 'member')],
           myRole: 'admin',
           myGrantSortKey: 'GRANT#x',
+          revocationMode: 'open',
         },
         userId: ME,
         busyUserId: null,
         onChangeRole: () => undefined,
+        confirmRemoveUserId: null,
+        onStartRemove: () => undefined,
+        onCancelRemove: () => undefined,
+        onConfirmRemove: () => undefined,
         check,
       }),
     )
@@ -265,5 +318,25 @@ describe('GroupMembersPanel grant check marks', () => {
     expect(html).not.toContain('remember')
     expect(html).not.toContain('trust anchor is different')
     expect(html).not.toContain('role="alert"')
+  })
+})
+
+describe('MembersFeedback rotation status', () => {
+  const render = (rotating?: boolean) =>
+    renderToStaticMarkup(
+      createElement(MembersFeedback, {
+        message: null,
+        error: null,
+        ...(rotating === undefined ? {} : { rotating }),
+      }),
+    )
+
+  it('tells the admin to keep the page open while a rotation job runs', () => {
+    expect(render(true)).toContain('Keep this page open')
+  })
+
+  it('says nothing otherwise', () => {
+    expect(render(false)).not.toContain('Keep this page open')
+    expect(render()).not.toContain('Keep this page open')
   })
 })
