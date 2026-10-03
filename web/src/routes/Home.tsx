@@ -146,6 +146,9 @@ export function Home() {
         <Button asChild variant="outline">
           <Link to="/account/password">Change password</Link>
         </Button>
+        <Button asChild variant="outline">
+          <Link to="/account/delete">Delete account</Link>
+        </Button>
       </div>
     </div>
   )

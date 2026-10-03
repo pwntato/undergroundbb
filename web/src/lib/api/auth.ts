@@ -287,3 +287,14 @@ export interface ChangePasswordResponse {
 export async function changePassword(req: ChangePasswordRequest): Promise<ChangePasswordResponse> {
   return sendJSON<ChangePasswordResponse>('PUT', '/api/account/password', req)
 }
+
+/**
+ * DELETE /api/account -- issue #77. Throws ApiError(409, code
+ * 'still_member') while the account belongs to any group: the caller leaves
+ * every group first (each leave signs its own demotion). On success the
+ * server has tombstoned the account and cleared the session cookie.
+ */
+export async function deleteAccount(): Promise<void> {
+  const res = await fetch('/api/account', { method: 'DELETE', credentials: 'same-origin' })
+  await handleJSON<unknown>(res)
+}
