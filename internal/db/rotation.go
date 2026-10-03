@@ -252,3 +252,38 @@ func (c *Client) CompleteRotation(ctx context.Context, groupID, callerUserID str
 	}
 	return nil
 }
+
+// ListGenerationKeys returns the group's GENKEY# chain links for generations
+// from..to inclusive, in ascending order, at most limit of them. When the
+// range holds more, next is the generation to resume from (the first one not
+// returned); otherwise next is -1. A generation with no link is simply absent:
+// the caller decides whether that is the floor of a truncated chain or a gap.
+func (c *Client) ListGenerationKeys(ctx context.Context, groupID string, from, to int64, limit int) (links []models.GenerationKey, next int64, err error) {
+	out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.table),
+		KeyConditionExpression: aws.String("PK = :pk AND SK BETWEEN :from AND :to"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":   &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			":from": &types.AttributeValueMemberS{Value: GenKeySortKey(from)},
+			":to":   &types.AttributeValueMemberS{Value: GenKeySortKey(to)},
+		},
+		ConsistentRead: aws.Bool(true),
+		Limit:          aws.Int32(int32(limit + 1)),
+	})
+	if err != nil {
+		return nil, -1, fmt.Errorf("db: list generation keys: %w", err)
+	}
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &links); err != nil {
+		return nil, -1, fmt.Errorf("db: unmarshal generation keys: %w", err)
+	}
+	next = -1
+	if len(links) > limit {
+		var n int64
+		if _, err := fmt.Sscanf(links[limit].SK, "GENKEY#%d", &n); err != nil {
+			return nil, -1, fmt.Errorf("db: malformed generation key sort key %q: %w", links[limit].SK, err)
+		}
+		links = links[:limit]
+		next = n
+	}
+	return links, next, nil
+}
