@@ -1138,6 +1138,20 @@ caching of unwrapped generation keys is what keeps that tolerable in practice; i
 being tolerable, the fix is re-wrapping a member's entry point deeper into the chain, not dropping
 links out of the middle.
 
+**Reading the chain.** `GET /api/groups/{gid}/keychain?from=A&to=B` returns the `GENKEY#` links for
+generations A through B inclusive, ascending, to members only (anyone else gets the roster's 404),
+at most 200 per page with `nextFrom` when more remain. It returns links and nothing else: the server
+cannot open them, and an absent generation is not an error, because the floor of a truncated chain
+looks the same as a gap. The client decides which it is. The one reader today is the group name: a
+member whose own generation is *g* and whose group's name was sealed at generation *n* < *g* fetches
+links *n* through *g*-1 and walks back, opening link *k* with the key it just recovered and
+`genKeyAAD(gid, k)` to get generation *k*'s key, so the remover's own name no longer reads blank
+after a removal. The crypto worker does no network I/O, so the caller fetches the links
+(`web/src/lib/groups/nameChain.ts`) and passes them in. A missing or unopenable link, or a name
+newer than the member's own generation, makes that one name unreadable and is never cached, so the
+next load retries. The oldest-surviving-generation floor on `META` is not served yet, because
+truncation is not built.
+
 Because TTL deletion is eventual (typically within 48 hours), clients also filter expired items on
 read rather than trusting deletion to have occurred. That filter is a **display convenience, not the
 deletion mechanism** — it hides items that are still in the table, so it will happily mask ciphertext

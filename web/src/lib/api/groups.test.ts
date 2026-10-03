@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './auth'
-import { listGroups, removeMember } from './groups'
+import { getKeychain, listGroups, removeMember } from './groups'
 
 function stubFetch(status: number, body: unknown) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -112,5 +112,25 @@ describe('removeMember', () => {
     })
     stubFetch(409, { error: 'busy', code: 'rotation_in_progress' })
     await expect(removeMember('g1', 'u2')).rejects.toBeInstanceOf(ApiError)
+  })
+})
+
+describe('getKeychain', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('GETs the range with from and to in the query and returns the body', async () => {
+    const body = { links: [{ generation: 1, wrapped: { nonce: 'bg==', ciphertext: 'Yw==' } }] }
+    const fetchMock = stubFetch(200, body)
+    expect(await getKeychain('g/1', 1, 3)).toEqual(body)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/groups/g%2F1/keychain?from=1&to=3')
+    expect(init.credentials).toBe('same-origin')
+  })
+
+  it('rejects with ApiError on a non-2xx response', async () => {
+    stubFetch(404, { error: 'group not found' })
+    await expect(getKeychain('g1', 0, 0)).rejects.toMatchObject({ status: 404 })
   })
 })

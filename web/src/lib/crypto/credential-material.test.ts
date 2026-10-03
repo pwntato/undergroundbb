@@ -443,37 +443,100 @@ describe('decryptGroupNames', () => {
     ])
   })
 
-  it('binds the name AAD to nameGeneration, not the member generation', async () => {
-    // Once rotation exists a member's generation (what their wrap is for)
-    // and the name's generation (what its AAD binds) differ. The wrap here
-    // is at generation 0; the name is sealed at generation 3.
-    const groupId = 'group-uuid-test-namegen'
-    const groupKey = new Uint8Array(32).fill(8)
-    const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
-    const enc = async (field: 'NAME' | 'DESC', text: string) => {
+  // The chain tests mint real links with startGroupRotation (the code that
+  // writes them in production), so a walk that disagrees with the writer on the
+  // key, the AAD or the direction fails here rather than against a fixture.
+  async function rotatedGroup(rotations: number) {
+    const groupId = 'group-uuid-test-chain'
+    const keyAtGeneration0 = new Uint8Array(32).fill(8)
+    const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, keyAtGeneration0)
+    const fromWire = (w: { ephemeralPub: string; nonce: string; ciphertext: string }) => ({
+      ephemeralPub: base64ToBytes(w.ephemeralPub),
+      nonce: base64ToBytes(w.nonce),
+      ciphertext: base64ToBytes(w.ciphertext),
+    })
+    let own = wrappedGroupKey
+    const chain: { generation: number; wrapped: { nonce: string; ciphertext: string } }[] = []
+    for (let generation = 0; generation < rotations; generation++) {
+      const step = await startGroupRotation(keys, groupId, fromWire(own), generation)
+      chain.push({ generation, wrapped: step.link })
+      own = step.removerWrappedKey
+    }
+    const enc = async (field: 'NAME' | 'DESC', text: string, generation: number) => {
       const sealed = await encrypt(
-        groupKey,
+        keyAtGeneration0,
         new TextEncoder().encode(text),
-        groupNameAAD(groupId, field, 3),
+        groupNameAAD(groupId, field, generation),
       )
       return { nonce: bytesToBase64(sealed.nonce), ciphertext: bytesToBase64(sealed.ciphertext) }
     }
     const entry = {
       groupId,
-      generation: 0,
-      wrappedGroupKey,
-      nameCiphertext: await enc('NAME', 'Renamed'),
-      descriptionCiphertext: await enc('DESC', 'Described'),
+      generation: rotations,
+      nameGeneration: 0,
+      wrappedGroupKey: own,
+      nameCiphertext: await enc('NAME', 'Renamed', 0),
+      descriptionCiphertext: await enc('DESC', 'Described', 0),
     }
+    return { keys, entry, chain }
+  }
 
-    expect(await decryptGroupNames(keys, [{ ...entry, nameGeneration: 3 }])).toEqual([
-      { groupId, name: 'Renamed', description: 'Described' },
+  it('walks the chain back to the generation the name was sealed under', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    expect(await decryptGroupNames(keys, [{ ...entry, chain }])).toEqual([
+      { groupId: entry.groupId, name: 'Renamed', description: 'Described' },
     ])
-    // Using the member generation as the AAD generation (the old behavior)
-    // must fail this entry, not silently succeed.
-    expect(await decryptGroupNames(keys, [{ ...entry, nameGeneration: 0 }])).toEqual([
-      { groupId, name: null, description: null },
+  })
+
+  it('accepts the links in any order', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    expect(await decryptGroupNames(keys, [{ ...entry, chain: [...chain].reverse() }])).toEqual([
+      { groupId: entry.groupId, name: 'Renamed', description: 'Described' },
     ])
+  })
+
+  it('reports the name unreadable when a link is missing', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    const gap = chain.filter((l) => l.generation !== 0)
+    expect(await decryptGroupNames(keys, [{ ...entry, chain: gap }])).toEqual([
+      { groupId: entry.groupId, name: null, description: null },
+    ])
+    expect(await decryptGroupNames(keys, [entry])).toEqual([
+      { groupId: entry.groupId, name: null, description: null },
+    ])
+  })
+
+  it('reports the name unreadable when a link was tampered with or relabeled', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    const flipped = chain.map((l) =>
+      l.generation === 1
+        ? { ...l, wrapped: { ...l.wrapped, ciphertext: bytesToBase64(new Uint8Array(48)) } }
+        : l,
+    )
+    expect(await decryptGroupNames(keys, [{ ...entry, chain: flipped }])).toEqual([
+      { groupId: entry.groupId, name: null, description: null },
+    ])
+    // Swapping the two links' generations breaks their AAD binding.
+    const relabeled = chain.map((l) => ({ ...l, generation: 1 - l.generation }))
+    expect(await decryptGroupNames(keys, [{ ...entry, chain: relabeled }])).toEqual([
+      { groupId: entry.groupId, name: null, description: null },
+    ])
+  })
+
+  it('does not use the member generation as the name generation', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    // Claiming the name is at the member's own generation skips the walk and
+    // must fail, not succeed with the wrong key.
+    expect(await decryptGroupNames(keys, [{ ...entry, nameGeneration: 2, chain }])).toEqual([
+      { groupId: entry.groupId, name: null, description: null },
+    ])
+  })
+
+  it('reports a name from a newer generation than the member holds as unreadable', async () => {
+    const { keys, entry, chain } = await rotatedGroup(2)
+    expect(
+      await decryptGroupNames(keys, [{ ...entry, generation: 0, nameGeneration: 2, chain }]),
+    ).toEqual([{ groupId: entry.groupId, name: null, description: null }])
   })
 
   it('encryptGroupText output round-trips through decryptGroupNames', async () => {

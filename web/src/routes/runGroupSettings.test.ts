@@ -77,6 +77,25 @@ describe('loadGroupSettings', () => {
     expect(deps.decryptGroupNames).not.toHaveBeenCalled()
   })
 
+  it('fetches the chain links for a name from an older generation and passes them on', async () => {
+    const chain = [{ generation: 0, wrapped: { nonce: 'bg==', ciphertext: 'Yw==' } }]
+    const getNameChain = vi.fn().mockResolvedValue(chain)
+    const deps = loadDeps(privateDetail({ generation: 1, nameGeneration: 0 }), { getNameChain })
+    await loadGroupSettings(deps, 'priv-1')
+    expect(getNameChain).toHaveBeenCalledWith('priv-1', 0, 1)
+    expect(deps.decryptGroupNames).toHaveBeenCalledWith({
+      userId: 'user-1',
+      groups: [expect.objectContaining({ chain })],
+    })
+  })
+
+  it('fetches no chain when the name is at the caller generation', async () => {
+    const getNameChain = vi.fn()
+    const deps = loadDeps(privateDetail({ generation: 1, nameGeneration: 1 }), { getNameChain })
+    await loadGroupSettings(deps, 'priv-1')
+    expect(getNameChain).not.toHaveBeenCalled()
+  })
+
   it('decrypts a private group under nameGeneration and caches the result', async () => {
     const deps = loadDeps(privateDetail({ generation: 2, nameGeneration: 1 }))
     const result = await loadGroupSettings(deps, 'priv-1')

@@ -9,9 +9,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { getGroup, updateGroup } from '@/lib/api/groups'
+import { getGroup, getKeychain, updateGroup } from '@/lib/api/groups'
 import { decryptGroupNames, encryptGroupText } from '@/lib/crypto/worker-client'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
+import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
 import {
@@ -54,7 +55,14 @@ export function GroupSettingsScreen() {
         return
       }
       const result = await loadGroupSettings(
-        { getGroup, decryptGroupNames, getCachedGroupName, setCachedGroupName, userId },
+        {
+          getGroup,
+          decryptGroupNames,
+          getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
+          getCachedGroupName,
+          setCachedGroupName,
+          userId,
+        },
         groupId,
       )
       if (isCancelled()) {

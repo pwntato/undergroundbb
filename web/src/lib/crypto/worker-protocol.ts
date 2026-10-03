@@ -483,6 +483,16 @@ export interface DecryptGroupNamesRequest {
     readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
     readonly nameCiphertext: { nonce: string; ciphertext: string }
     readonly descriptionCiphertext: { nonce: string; ciphertext: string }
+    /**
+     * The GENKEY# links for generations nameGeneration..generation-1, in any
+     * order, when nameGeneration is older than the member's own generation
+     * (see fetchNameChain). Without them a name from an older generation
+     * cannot be read and the group reads as unreadable.
+     */
+    readonly chain?: readonly {
+      readonly generation: number
+      readonly wrapped: { nonce: string; ciphertext: string }
+    }[]
   }[]
 }
 

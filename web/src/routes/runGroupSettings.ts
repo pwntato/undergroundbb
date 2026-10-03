@@ -36,8 +36,28 @@ export interface LoadSettingsDeps {
       readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
       readonly nameCiphertext: Blob
       readonly descriptionCiphertext: Blob
+      readonly chain?: readonly {
+        readonly generation: number
+        readonly wrapped: { nonce: string; ciphertext: string }
+      }[]
     }[]
   }) => Promise<readonly { name: string | null; description: string | null }[]>
+  /**
+   * The GENKEY# links the name needs when it was sealed under an older
+   * generation than the caller's own (fetchNameChain). Optional only so a
+   * caller with no network can skip the walk; the name then reads as unreadable.
+   */
+  readonly getNameChain?: (
+    groupId: string,
+    nameGeneration: number,
+    generation: number,
+  ) => Promise<
+    | readonly {
+        readonly generation: number
+        readonly wrapped: { nonce: string; ciphertext: string }
+      }[]
+    | undefined
+  >
   readonly getCachedGroupName: (
     userId: string,
     groupId: string,
@@ -124,10 +144,15 @@ export async function loadGroupSettings(
   }
 
   try {
+    const chain =
+      deps.getNameChain === undefined || detail.nameGeneration >= detail.generation
+        ? undefined
+        : await deps.getNameChain(groupId, detail.nameGeneration, detail.generation)
     const [result] = await deps.decryptGroupNames({
       userId: deps.userId,
       groups: [
         {
+          ...(chain !== undefined && { chain }),
           groupId,
           generation: detail.generation,
           nameGeneration: detail.nameGeneration,
