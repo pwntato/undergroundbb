@@ -17,6 +17,7 @@ import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import { memberLabel, unresolvedClass } from './memberLabel'
 import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
+import { describeAge, type RotationNotice } from './rotationStaleness'
 
 const ROLES: readonly MemberRole[] = ['admin', 'ambassador', 'member']
 
@@ -284,5 +285,34 @@ export function MembersFeedback({
         </Alert>
       )}
     </>
+  )
+}
+
+/**
+ * Shown to an admin when a key rotation has outlived its deadline (see
+ * rotationStaleness.ts). Until it finishes, the removed member can still read
+ * every new post, so this says so plainly. `startedByLabel` names who started
+ * it. Not rendered while this tab's own job is running: the running status
+ * already says to keep the page open.
+ */
+export function RotationBanner({
+  notice,
+  startedByLabel,
+}: {
+  readonly notice: RotationNotice | null
+  readonly startedByLabel: string
+}) {
+  if (notice === null) {
+    return null
+  }
+  const lead = `A key rotation started ${describeAge(notice.ageMs)} ago by ${startedByLabel} has not finished. Until it does, a removed member can still read new posts.`
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        {notice.kind === 'resumable'
+          ? `${lead} You hold the new key, so it resumes while this page is open. Keep this page open until it finishes.`
+          : `${lead} Only an admin who already holds the new key can finish it. Ask one to open this group.`}
+      </AlertDescription>
+    </Alert>
   )
 }

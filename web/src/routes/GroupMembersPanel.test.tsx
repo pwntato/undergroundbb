@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MemberEntry } from '@/lib/api/groups'
-import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
 import { memberLabel } from './memberLabel'
 import type { MembersView } from './runGroupMembers'
 
@@ -35,6 +35,7 @@ function render(
         myRole: 'admin',
         myGrantSortKey: 'GRANT#x',
         revocationMode: 'open',
+        myGeneration: 0,
         ...view,
       },
       userId: ME,
@@ -186,6 +187,7 @@ describe('GroupMembersPanel grant check marks', () => {
           myRole: 'admin',
           myGrantSortKey: 'GRANT#x',
           revocationMode: 'open',
+          myGeneration: 0,
         },
         userId: ME,
         busyUserId: null,
@@ -338,5 +340,26 @@ describe('MembersFeedback rotation status', () => {
   it('says nothing otherwise', () => {
     expect(render(false)).not.toContain('Keep this page open')
     expect(render()).not.toContain('Keep this page open')
+  })
+})
+
+describe('RotationBanner', () => {
+  const html = (notice: Parameters<typeof RotationBanner>[0]['notice']) =>
+    renderToStaticMarkup(createElement(RotationBanner, { notice, startedByLabel: 'alice' }))
+
+  it('renders nothing without a notice', () => {
+    expect(html(null)).toBe('')
+  })
+
+  it('tells a resuming admin to keep the page open', () => {
+    const out = html({ kind: 'resumable', startedBy: 'u1', ageMs: 2 * 3_600_000 })
+    expect(out).toContain('about 2 hours ago by alice')
+    expect(out).toContain('Keep this page open')
+  })
+
+  it('tells an admin without the new key to ask another admin, with no keep-open advice', () => {
+    const out = html({ kind: 'needs-other-admin', startedBy: 'u1', ageMs: 2 * 3_600_000 })
+    expect(out).toContain('Ask one to open this group')
+    expect(out).not.toContain('Keep this page open')
   })
 })

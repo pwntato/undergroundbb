@@ -24,7 +24,8 @@ import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUser } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
-import { GroupMembersPanel, MembersFeedback } from './GroupMembersPanel'
+import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
+import { rotationNotice } from './rotationStaleness'
 import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
@@ -44,7 +45,7 @@ import {
 
 type LoadState =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly view: MembersView }
+  | { readonly status: 'ready'; readonly view: MembersView; readonly loadedAtMs: number }
   | { readonly status: 'notFound' | 'authRequired' | 'failed' }
 
 const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], string> = {
@@ -102,7 +103,11 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (isCancelled()) {
         return
       }
-      setLoad(result.ok ? { status: 'ready', view: result.view } : { status: result.kind })
+      setLoad(
+        result.ok
+          ? { status: 'ready', view: result.view, loadedAtMs: Date.now() }
+          : { status: result.kind },
+      )
     },
     [groupId],
   )
@@ -178,8 +183,13 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       } else if (note !== null) {
         setMessage(note.text)
       }
+      // A finished rotation cleared the marker; reload so a stale-rotation
+      // banner computed from the pre-run view does not outlive it.
+      if (result.outcome.status === 'completed') {
+        await reload(() => false)
+      }
     })()
-  }, [rotationGroupId, userId, guard])
+  }, [rotationGroupId, userId, guard, reload])
 
   if (groupId === undefined) {
     return (
@@ -364,6 +374,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             setConfirmingLeave(false)
           }}
           onConfirm={handleLeave}
+        />
+      )}
+      {load.status === 'ready' && !rotationBusy && (
+        <RotationBanner
+          notice={rotationNotice(load.view, load.loadedAtMs)}
+          startedByLabel={memberLabel(load.view.rotation?.startedBy ?? '', usernames)}
         />
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />

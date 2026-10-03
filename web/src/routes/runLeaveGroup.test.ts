@@ -19,6 +19,7 @@ const view = (myRole: MembersView['myRole'], members: MemberEntry[]): MembersVie
   myRole,
   myGrantSortKey: 'GRANT#x',
   revocationMode: 'open',
+  myGeneration: 0,
 })
 
 describe('leavePlan', () => {
