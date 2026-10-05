@@ -438,3 +438,66 @@ func TestChangeRoleRefusedWhenGrantorsGrantIsDatedAfterTheGrant(t *testing.T) {
 		t.Error("an unverifiable grant was written")
 	}
 }
+
+// tombstoneProfile marks the account deleted while leaving its membership in
+// place: the state account deletion's documented race leaves behind (#77).
+func tombstoneProfile(t *testing.T, userID string) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression:          aws.String("SET DeletedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":now": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A member whose account was deleted can never sign in to act as the admin or
+// ambassador they would be made, so a sole admin could otherwise promote the
+// tombstone and leave a group with no live admin. Demotion stays allowed so the
+// group can tidy up.
+func TestChangeRoleRefusesToElevateADeletedMember(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	carol := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	addMember(t, gid, carol, "member")
+	ref := backdatedRef(t, gid, owner)
+
+	// Carol is made admin while her account is live, then deleted.
+	live := signedRoleRequest(t, owner, gid, carol.userID, "admin", ref)
+	if rec := doChangeRole(t, h, ownerCookie, gid, carol.userID, live); rec.Code != http.StatusOK {
+		t.Fatalf("promote a live member: %d %s", rec.Code, rec.Body.String())
+	}
+	tombstoneProfile(t, bob.userID)
+	tombstoneProfile(t, carol.userID)
+
+	for _, role := range []string{"admin", "ambassador"} {
+		req := signedRoleRequest(t, owner, gid, bob.userID, role, ref)
+		rec := doChangeRole(t, h, ownerCookie, gid, bob.userID, req)
+		if rec.Code != http.StatusGone || errCode(t, rec) != "subject_deleted" {
+			t.Fatalf("elevate a deleted member to %s: %d %s, want 410 subject_deleted", role, rec.Code, rec.Body.String())
+		}
+		if got := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "Role"); got != "member" {
+			t.Fatalf("deleted member's role = %q after a refused %s grant", got, role)
+		}
+		if getRow(t, "GROUP#"+gid, req.GrantSortKey) != nil {
+			t.Fatalf("a refused %s grant was written", role)
+		}
+	}
+
+	// Demoting a deleted admin is how the group removes them from governance.
+	down := signedRoleRequest(t, owner, gid, carol.userID, "member", ref)
+	if rec := doChangeRole(t, h, ownerCookie, gid, carol.userID, down); rec.Code != http.StatusOK {
+		t.Fatalf("demote a deleted admin: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID), "Role"); got != "member" {
+		t.Errorf("deleted admin's role = %q after demotion", got)
+	}
+}
