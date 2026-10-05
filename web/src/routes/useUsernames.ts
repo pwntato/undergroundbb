@@ -1,7 +1,9 @@
 // Resolves user ids to usernames through GET /api/users/:id, for the roster
 // and invite rows. Best effort: a failed read leaves that id out of the map
 // and memberLabel falls back to the short id. Results are cached for the page
-// lifetime; a username never changes, so nothing here expires.
+// lifetime; a username never changes, so nothing here expires. The one thing
+// that does change is deletion: an id resolved earlier keeps its name until a
+// reload, so do not rely on this cache to notice that an account was deleted.
 
 import { useEffect, useState } from 'react'
 import { getUser } from '@/lib/api/users'
@@ -22,7 +24,10 @@ export async function resolveUsernames(
     while (next < wanted.length) {
       const id = wanted[next++] as string
       try {
-        cache.set(id, (await fetchUser(id)).username)
+        const projection = await fetchUser(id)
+        // A deleted account is cached as '' (memberLabel shows it as deleted), not
+        // left unresolved, so its short id is not retried on every render.
+        cache.set(id, projection.deleted === true ? '' : projection.username)
       } catch {
         // Leave it unresolved; the label falls back to the short id.
       }
