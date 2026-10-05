@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -77,18 +78,35 @@ func (c *Client) memberRoles(ctx context.Context, groupID string) (map[string]st
 	}
 }
 
-// otherAdmin returns some admin other than userID, or "" if there is none.
-func otherAdmin(roles map[string]string, userID string) string {
+// liveOtherAdmin returns an admin other than userID whose account is not
+// deleted, or "" if there is none (#77). A deleted account's membership can
+// outlive the tombstone for a moment, and nobody can sign in as it, so it
+// cannot take over a group: counting it would let the last live admin leave
+// with a group nobody can govern.
+func (c *Client) liveOtherAdmin(ctx context.Context, roles map[string]string, userID string) (string, error) {
+	var admins []string
 	for id, r := range roles {
 		if id != userID && r == models.RoleAdmin {
-			return id
+			admins = append(admins, id)
 		}
 	}
-	return ""
-}
-
-func otherAdminExists(roles map[string]string, userID string) bool {
-	return otherAdmin(roles, userID) != ""
+	sort.Strings(admins)
+	for _, id := range admins {
+		user, err := c.GetUserByID(ctx, id)
+		// Only a tombstone is dead. PROFILE is never deleted, so a missing row
+		// does not happen outside synthetic fixtures; treating it as live
+		// matches the transaction's attribute_not_exists(DeletedAt) check.
+		if errors.Is(err, ErrUserNotFound) {
+			return id, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if user.DeletedAt == "" {
+			return id, nil
+		}
+	}
+	return "", nil
 }
 
 func memberKey(groupID, userID string) map[string]types.AttributeValue {
@@ -145,8 +163,13 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 		return c.deleteGroup(ctx, groupID, userID)
 	}
 
+	successor := ""
 	if role == models.RoleAdmin {
-		if !otherAdminExists(roles, userID) {
+		successor, err = c.liveOtherAdmin(ctx, roles, userID)
+		if err != nil {
+			return false, err
+		}
+		if successor == "" {
 			return false, ErrLastAdmin
 		}
 	}
@@ -209,16 +232,28 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 			ConditionExpression: aws.String("attribute_not_exists(PK)"),
 		}})
 	}
+	profileCheckIndex := -1
 	if role == models.RoleAdmin {
 		adminCheckIndex = len(items)
 		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 			TableName:                aws.String(c.table),
-			Key:                      memberKey(groupID, otherAdmin(roles, userID)),
+			Key:                      memberKey(groupID, successor),
 			ConditionExpression:      aws.String("#role = :admin"),
 			ExpressionAttributeNames: map[string]string{"#role": "Role"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
 			},
+		}})
+		// ...and that admin's account must still be live when this commits, so
+		// a deletion between the read above and here cannot strand the group.
+		profileCheckIndex = len(items)
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "USER#" + successor},
+				"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+			},
+			ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
 		}})
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
@@ -227,6 +262,7 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 			return false, ErrLeaveGrantKeyTaken
 		case isConditionalCheckFailure(err, deleteIndex),
 			adminCheckIndex >= 0 && isConditionalCheckFailure(err, adminCheckIndex),
+			profileCheckIndex >= 0 && isConditionalCheckFailure(err, profileCheckIndex),
 			isTransactionConflict(err):
 			return false, ErrLeaveConflict
 		}

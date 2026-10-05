@@ -39,6 +39,17 @@ describe('leavePlan', () => {
     })
   })
 
+  it('does not count a deleted admin as another admin', () => {
+    const v = view('admin', [m(ME, 'admin'), m(BOB, 'admin'), m(CAT, 'member')])
+    expect(leavePlan(v, ME, new Map([[BOB, '']]))).toEqual({
+      kind: 'needsSuccessor',
+      candidates: [BOB, CAT],
+    })
+    // Unresolved or live names leave the optimistic plan, which the server re-checks.
+    expect(leavePlan(v, ME, new Map())).toEqual({ kind: 'plain' })
+    expect(leavePlan(v, ME, new Map([[BOB, 'bob']]))).toEqual({ kind: 'plain' })
+  })
+
   it('lets a non-admin leave plainly', () => {
     for (const role of ['member', 'ambassador'] as const) {
       expect(leavePlan(view(role, [m(BOB, 'admin'), m(ME, role)]), ME)).toEqual({ kind: 'plain' })

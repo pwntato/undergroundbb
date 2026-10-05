@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/pwntato/undergroundbb/internal/models"
 )
@@ -321,5 +322,112 @@ func TestLeaveGroupSoleAdminNeedsNoDemotion(t *testing.T) {
 	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil)
 	if err != nil || !deleted {
 		t.Fatalf("deleted=%v err=%v", deleted, err)
+	}
+}
+
+// putTombstone writes a deleted account's PROFILE, leaving any membership in
+// place: the state account deletion's documented race leaves behind (#77).
+func putTombstone(t *testing.T, c *Client, userID string) {
+	t.Helper()
+	_, err := c.ddb.PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(c.table),
+		Item: map[string]types.AttributeValue{
+			"PK": s("USER#" + userID), "SK": s("PROFILE"), "DeletedAt": s("2026-10-05T00:00:00Z"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Test ids are short and shared across tests and runs ("admin2"), and a
+	// tombstone left behind would make every later test see that user as deleted.
+	t.Cleanup(func() {
+		_, _ = c.ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+			TableName: aws.String(c.table),
+			Key:       map[string]types.AttributeValue{"PK": s("USER#" + userID), "SK": s("PROFILE")},
+		})
+	})
+}
+
+// A deleted admin is not another admin: nobody can sign in as them, so if the
+// leaver is the only live admin the group would be left with no one to govern.
+func TestLeaveGroupDeletedCoAdminDoesNotCountAsAnotherAdmin(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	ghost := "ghost-" + randomSuffix(t)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, ghost, "admin")
+	putTestMember(t, c, g, "bob", "member")
+	putTombstone(t, c, ghost)
+
+	_, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	if !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("err = %v, want ErrLastAdmin", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Error("the leaver was removed although no live admin remained")
+	}
+}
+
+// With a live co-admin alongside the deleted one, leaving is fine, and the
+// transaction's admin check must be against the live one.
+func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	// Sorts before the live one, so a check that just took the first admin
+	// would pick the tombstone.
+	ghost := "aaa-ghost-" + randomSuffix(t)
+	putTestMember(t, c, g, ghost, "admin")
+	putTestMember(t, c, g, "zed", "admin")
+	putTombstone(t, c, ghost)
+
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Error("admin1 did not leave")
+	}
+}
+
+// The successor's account can be deleted between the roster read and the
+// transaction. The transaction's own PROFILE check is what then refuses the
+// leave, so the group is not stranded; a retry sees the tombstone and answers
+// last_admin. The tombstone is written from inside the client, right before
+// the TransactWriteItems call goes out.
+func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	successor := "successor-" + randomSuffix(t)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, successor, "admin")
+
+	racing := *c
+	fired := false
+	racing.ddb = dynamodb.New(c.ddb.Options(), func(o *dynamodb.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("tombstone-before-txn",
+				func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+					if middleware.GetOperationName(ctx) == "TransactWriteItems" && !fired {
+						fired = true
+						putTombstone(t, c, successor)
+					}
+					return next.HandleInitialize(ctx, in)
+				}), middleware.Before)
+		})
+	})
+
+	_, err := racing.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	if !fired {
+		t.Fatal("the tombstone was never written, so this tested nothing")
+	}
+	if !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("err = %v, want ErrLeaveConflict", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Fatal("admin1 left although the only other admin was deleted")
+	}
+	// The retry now sees the tombstone up front.
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("retry err = %v, want ErrLastAdmin", err)
 	}
 }
