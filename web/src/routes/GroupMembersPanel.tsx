@@ -14,7 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
 import type { RoleStatus } from '@/lib/crypto/grant-chain'
-import { memberLabel, unresolvedClass } from './memberLabel'
+import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
 import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
@@ -149,7 +149,11 @@ export function GroupMembersPanel({
               )}
               {canChangeRoles && !isSelf && confirmRemoveUserId !== m.userId && (
                 <span className="flex flex-wrap gap-2">
-                  {ROLES.filter((r) => r !== m.role).map((r) => (
+                  {ROLES.filter(
+                    // A deleted account can only be demoted: nobody can sign in as them to act as an
+                    // admin or ambassador, and the server refuses (#77).
+                    (r) => r !== m.role && (r === 'member' || !isDeletedUser(m.userId, usernames)),
+                  ).map((r) => (
                     <Button
                       key={r}
                       type="button"

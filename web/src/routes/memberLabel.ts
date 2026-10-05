@@ -21,3 +21,8 @@ export function memberLabel(userId: string, usernames?: ReadonlyMap<string, stri
 export function unresolvedClass(userId: string, usernames?: ReadonlyMap<string, string>): string {
   return usernames?.has(userId) === true ? '' : 'font-mono'
 }
+
+/** Whether the user's account was deleted (#77); false while their name is unresolved. */
+export function isDeletedUser(userId: string, usernames?: ReadonlyMap<string, string>): boolean {
+  return usernames?.get(userId) === ''
+}

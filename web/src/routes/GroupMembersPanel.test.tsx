@@ -57,6 +57,19 @@ describe('GroupMembersPanel', () => {
     expect(html.match(/>Remove</g)).toHaveLength(1)
   })
 
+  it('lets a deleted member be demoted or removed but never made admin or ambassador', () => {
+    const alive = render({ members: [member(ME, 'admin'), member(BOB, 'ambassador')] })
+    expect(alive).toContain('Make admin')
+    const gone = render(
+      { members: [member(ME, 'admin'), member(BOB, 'ambassador')] },
+      { usernames: new Map([[BOB, '']]) },
+    )
+    expect(gone).toContain('Make member')
+    expect(gone).toContain('>Remove<')
+    expect(gone).not.toContain('Make admin')
+    expect(gone).not.toContain('Make ambassador')
+  })
+
   it('offers no Remove to a non-admin or to an admin without a grant on record', () => {
     expect(render({ myRole: 'member' })).not.toContain('>Remove<')
     expect(render({ myGrantSortKey: undefined })).not.toContain('>Remove<')
