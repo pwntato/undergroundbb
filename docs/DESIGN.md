@@ -839,7 +839,10 @@ cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tomb
 true` and an empty username, which the web client shows as "deleted user" (id in the tooltip) in
 rosters, invites and the leave panel. `CompleteInvite` refuses a deleted invitee. Two gaps, both fail safe: a
 membership completed between the membership check and the tombstone survives, visible to the group
-as a member whose profile is deleted, and an admin removes it with the ordinary removal flow; and a
+as a member whose profile is deleted, and an admin removes it with the ordinary removal flow (a role
+change that would *elevate* such a member is refused, 410 `subject_deleted`, so a sole admin cannot
+hand the group to a tombstone; demoting one is allowed, and the web client offers a deleted member
+only Make member and Remove, and never as a successor); and a
 session cookie issued earlier stays valid until it expires (there is no session store). It cannot
 create a membership, because `CreateGroup` and `CompleteInvite`, the only writers of a `MEMBER#`
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
