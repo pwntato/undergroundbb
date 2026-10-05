@@ -34,6 +34,7 @@ function render(
   view: { sent?: SentInvite[]; received?: ReceivedInvite[] },
   busyInviteId: string | null = null,
   now: number = NOW,
+  usernames?: ReadonlyMap<string, string>,
 ): string {
   return renderToStaticMarkup(
     createElement(InvitesPanel, {
@@ -42,6 +43,7 @@ function render(
       busyInviteId,
       onRevoke: () => undefined,
       now,
+      usernames,
     }),
   )
 }
@@ -108,6 +110,21 @@ describe('InvitesPanel', () => {
     expect(recvHtml).toContain('have not completed it')
     expect(recvHtml).not.toContain('disappears')
   })
+
+  it.each([false, true])(
+    'names a deleted inviter "deleted user" and keeps the id in the tooltip (overdue: %s)',
+    (overdue) => {
+      const html = render(
+        { received: [{ ...received, overdue }] },
+        null,
+        NOW,
+        new Map([[received.inviterUserId, '']]),
+      )
+      expect(html).toContain('>deleted user<')
+      expect(html).toContain(`title="${received.inviterUserId}"`)
+      expect(html).not.toContain('abcd1234<')
+    },
+  )
 
   it('locks every revoke button while one is in flight and labels the busy one', () => {
     const other = { ...pending, inviteId: 'i-other' }

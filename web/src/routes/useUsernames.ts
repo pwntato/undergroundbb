@@ -1,7 +1,9 @@
 // Resolves user ids to usernames through GET /api/users/:id, for the roster
 // and invite rows. Best effort: a failed read leaves that id out of the map
 // and memberLabel falls back to the short id. Results are cached for the page
-// lifetime; a username never changes, so nothing here expires.
+// lifetime; a username never changes, so nothing here expires. The one thing
+// that does change is deletion: an id resolved earlier keeps its name until a
+// reload, so do not rely on this cache to notice that an account was deleted.
 
 import { useEffect, useState } from 'react'
 import { getUser } from '@/lib/api/users'

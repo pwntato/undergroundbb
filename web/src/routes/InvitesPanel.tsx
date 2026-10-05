@@ -177,7 +177,10 @@ function ReceivedRow({
       {invite.overdue === true ? (
         <span className="text-xs text-destructive">
           You accepted an invite from{' '}
-          <span className={unresolvedClass(invite.inviterUserId, usernames)}>
+          <span
+            className={unresolvedClass(invite.inviterUserId, usernames)}
+            title={invite.inviterUserId}
+          >
             {memberLabel(invite.inviterUserId, usernames)}
           </span>
           , but they have not completed it, and it was due {formatDate(invite.completionDeadline)}.
@@ -187,7 +190,10 @@ function ReceivedRow({
       ) : (
         <span className="text-xs text-muted-foreground">
           You accepted an invite from{' '}
-          <span className={unresolvedClass(invite.inviterUserId, usernames)}>
+          <span
+            className={unresolvedClass(invite.inviterUserId, usernames)}
+            title={invite.inviterUserId}
+          >
             {memberLabel(invite.inviterUserId, usernames)}
           </span>
           . You join once they next log in, by {formatDate(invite.completionDeadline)}.
