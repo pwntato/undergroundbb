@@ -6,7 +6,7 @@
 // departing admin knows who should take over better than any heuristic.
 
 import { Button } from '@/components/ui/button'
-import { memberLabel, unresolvedClass } from './memberLabel'
+import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
 import type { LeavePlan } from './runLeaveGroup'
 
 export function LeaveGroupPanel({
@@ -29,6 +29,11 @@ export function LeaveGroupPanel({
   /** successorUserId is set only for a 'needsSuccessor' plan. */
   readonly onConfirm: (successorUserId?: string) => void
 }) {
+  // A deleted account cannot sign in to be the admin it would be made (#77).
+  const successors =
+    plan.kind === 'needsSuccessor'
+      ? plan.candidates.filter((id) => !isDeletedUser(id, usernames))
+      : []
   if (!confirming) {
     return (
       <div className="flex w-full max-w-md flex-col gap-2">
@@ -50,14 +55,20 @@ export function LeaveGroupPanel({
           Leave this group? You will lose access to it, and will need a new invite to come back.
         </p>
       )}
-      {plan.kind === 'needsSuccessor' && (
+      {plan.kind === 'needsSuccessor' && successors.length === 0 && (
+        <p className="text-sm">
+          You are the only admin, and every other member&apos;s account was deleted, so no one can
+          take over. Remove them from the members list first; then leaving deletes the group.
+        </p>
+      )}
+      {plan.kind === 'needsSuccessor' && successors.length > 0 && (
         <>
           <p className="text-sm">
             You are the only admin. Choose who takes over before you go; they are made an admin and
             you then leave.
           </p>
           <ul className="flex flex-col gap-2">
-            {plan.candidates.map((id) => (
+            {successors.map((id) => (
               <li key={id} className="flex items-center justify-between gap-2">
                 <span className={`${unresolvedClass(id, usernames)} text-sm`} title={id}>
                   {memberLabel(id, usernames)}

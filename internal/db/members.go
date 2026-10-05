@@ -60,8 +60,8 @@ func (c *Client) listMembers(ctx context.Context, groupID, afterUserID string, l
 	return members, next, nil
 }
 
-// Errors returned by ChangeMemberRole. Each maps to a distinct, retryable
-// 409 -- the caller reloads and re-signs.
+// Errors returned by ChangeMemberRole. Each maps to a distinct 409 -- the
+// caller reloads and re-signs -- except ErrSubjectDeleted, which is a 410.
 var (
 	// ErrGrantorChanged: the grantor's own role or current grant is no
 	// longer what the signed grantorGrantRef assumed.
@@ -69,6 +69,11 @@ var (
 	// ErrSubjectRoleChanged: the subject's role is no longer the one the
 	// caller saw (another admin changed it first), or they left.
 	ErrSubjectRoleChanged = errors.New("db: subject's role changed")
+	// ErrSubjectDeleted: ChangeMemberRole would elevate a member whose account
+	// was deleted (#77). Their membership can outlive the tombstone for a
+	// moment, and a deleted account can never sign in to act as the admin it
+	// was made. Demoting such a member is still allowed. Not retryable.
+	ErrSubjectDeleted = errors.New("db: subject's account was deleted")
 	// ErrGrantKeyTaken: a GRANT# row already exists at the chosen sort key.
 	ErrGrantKeyTaken = errors.New("db: grant sort key taken")
 	// ErrRoleChangeConflict: a concurrent transaction touched one of the
@@ -138,41 +143,54 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 		grantorIndex = 0
 		subjectIndex = 1
 		grantIndex   = 2
+		profileIndex = 3
 	)
-	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{ConditionCheck: &types.ConditionCheck{
-				TableName: aws.String(c.table),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
-					"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.GrantorUserID},
-				},
-				ConditionExpression:       aws.String(grantorCond),
-				ExpressionAttributeNames:  grantorNames,
-				ExpressionAttributeValues: grantorValues,
-			}},
-			{Update: &types.Update{
-				TableName: aws.String(c.table),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
-					"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.SubjectUserID},
-				},
-				UpdateExpression:         aws.String("SET #role = :new, #gsk = :gsk"),
-				ConditionExpression:      aws.String("#role = :old"),
-				ExpressionAttributeNames: map[string]string{"#role": "Role", "#gsk": "GrantSortKey"},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":new": &types.AttributeValueMemberS{Value: in.NewRole},
-					":old": &types.AttributeValueMemberS{Value: in.OldRole},
-					":gsk": &types.AttributeValueMemberS{Value: in.GrantSortKey},
-				},
-			}},
-			{Put: &types.Put{
-				TableName:           aws.String(c.table),
-				Item:                grantItem,
-				ConditionExpression: aws.String("attribute_not_exists(PK)"),
-			}},
-		},
-	})
+	items := []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+				"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.GrantorUserID},
+			},
+			ConditionExpression:       aws.String(grantorCond),
+			ExpressionAttributeNames:  grantorNames,
+			ExpressionAttributeValues: grantorValues,
+		}},
+		{Update: &types.Update{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
+				"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + in.SubjectUserID},
+			},
+			UpdateExpression:         aws.String("SET #role = :new, #gsk = :gsk"),
+			ConditionExpression:      aws.String("#role = :old"),
+			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gsk": "GrantSortKey"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":new": &types.AttributeValueMemberS{Value: in.NewRole},
+				":old": &types.AttributeValueMemberS{Value: in.OldRole},
+				":gsk": &types.AttributeValueMemberS{Value: in.GrantSortKey},
+			},
+		}},
+		{Put: &types.Put{
+			TableName:           aws.String(c.table),
+			Item:                grantItem,
+			ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		}},
+	}
+	// Elevating a member whose account was deleted (#77) is refused: their
+	// membership can survive the tombstone, and nobody can sign in as them to
+	// act on the role. Demoting one stays allowed so the group can tidy up.
+	if in.NewRole != models.RoleMember {
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "USER#" + in.SubjectUserID},
+				"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+			},
+			ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
+		}})
+	}
+	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		switch {
 		case isConditionalCheckFailure(err, grantorIndex):
@@ -181,6 +199,8 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 			return ErrSubjectRoleChanged
 		case isConditionalCheckFailure(err, grantIndex):
 			return ErrGrantKeyTaken
+		case isConditionalCheckFailure(err, profileIndex):
+			return ErrSubjectDeleted
 		case isTransactionConflict(err):
 			return ErrRoleChangeConflict
 		}
