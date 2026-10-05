@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/pwntato/undergroundbb/internal/models"
 )
@@ -375,5 +376,47 @@ func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
 	}
 	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
 		t.Error("admin1 did not leave")
+	}
+}
+
+// The successor's account can be deleted between the roster read and the
+// transaction. The transaction's own PROFILE check is what then refuses the
+// leave, so the group is not stranded; a retry sees the tombstone and answers
+// last_admin. The tombstone is written from inside the client, right before
+// the TransactWriteItems call goes out.
+func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "admin2", "admin")
+
+	racing := *c
+	fired := false
+	racing.ddb = dynamodb.New(c.ddb.Options(), func(o *dynamodb.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("tombstone-before-txn",
+				func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+					if middleware.GetOperationName(ctx) == "TransactWriteItems" && !fired {
+						fired = true
+						putTombstone(t, c, "admin2")
+					}
+					return next.HandleInitialize(ctx, in)
+				}), middleware.Before)
+		})
+	})
+
+	_, err := racing.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	if !fired {
+		t.Fatal("the tombstone was never written, so this tested nothing")
+	}
+	if !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("err = %v, want ErrLeaveConflict", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Fatal("admin1 left although the only other admin was deleted")
+	}
+	// The retry now sees the tombstone up front.
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("retry err = %v, want ErrLastAdmin", err)
 	}
 }
