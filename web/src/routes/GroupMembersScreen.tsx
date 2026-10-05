@@ -333,7 +333,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       const outcome = await runLeave(
         { leaveGroup, signRoleGrant, userId },
         view,
-        leavePlan(view, userId).kind,
+        leavePlan(view, userId, usernames).kind,
       )
       if (outcome.ok || outcome.kind === 'notFound') {
         // Gone from this group either way; nothing left to show here.
@@ -388,7 +388,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )}
       {load.status === 'ready' && userId !== null && (
         <LeaveGroupPanel
-          plan={leavePlan(load.view, userId)}
+          plan={leavePlan(load.view, userId, usernames)}
           confirming={confirmingLeave}
           busy={busyUserId !== null || rotationBusy}
           usernames={usernames}

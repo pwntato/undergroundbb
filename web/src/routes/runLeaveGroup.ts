@@ -5,6 +5,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type { LeaveGroupRequest } from '@/lib/api/groups'
 import type { MembersView } from './runGroupMembers'
+import { isDeletedUser } from './memberLabel'
 import { isLiveKeysError } from './runListGroups'
 
 /** What leaving means for this caller, from the roster they are looking at. */
@@ -19,12 +20,22 @@ export type LeavePlan =
  * Computed from the loaded roster, so it can be stale; the server re-checks
  * and answers 409 last_admin if this plan was optimistic.
  */
-export function leavePlan(view: MembersView, userId: string): LeavePlan {
+export function leavePlan(
+  view: MembersView,
+  userId: string,
+  usernames?: ReadonlyMap<string, string>,
+): LeavePlan {
   const others = view.members.filter((m) => m.userId !== userId)
   if (others.length === 0) {
     return { kind: 'deletesGroup' }
   }
-  if (view.myRole === 'admin' && !others.some((m) => m.role === 'admin')) {
+  // A deleted admin is not another admin (#77): nobody can sign in as them, so
+  // leaving would strand the group. `usernames` says which are deleted; while
+  // they are unresolved the plan is optimistic and the server (last_admin) decides.
+  if (
+    view.myRole === 'admin' &&
+    !others.some((m) => m.role === 'admin' && !isDeletedUser(m.userId, usernames))
+  ) {
     return { kind: 'needsSuccessor', candidates: others.map((m) => m.userId) }
   }
   return { kind: 'plain' }
