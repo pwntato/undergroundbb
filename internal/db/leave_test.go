@@ -338,6 +338,14 @@ func putTombstone(t *testing.T, c *Client, userID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Test ids are short and shared across tests and runs ("admin2"), and a
+	// tombstone left behind would make every later test see that user as deleted.
+	t.Cleanup(func() {
+		_, _ = c.ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+			TableName: aws.String(c.table),
+			Key:       map[string]types.AttributeValue{"PK": s("USER#" + userID), "SK": s("PROFILE")},
+		})
+	})
 }
 
 // A deleted admin is not another admin: nobody can sign in as them, so if the
@@ -345,10 +353,11 @@ func putTombstone(t *testing.T, c *Client, userID string) {
 func TestLeaveGroupDeletedCoAdminDoesNotCountAsAnotherAdmin(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
+	ghost := "ghost-" + randomSuffix(t)
 	putTestMember(t, c, g, "admin1", "admin")
-	putTestMember(t, c, g, "ghost", "admin")
+	putTestMember(t, c, g, ghost, "admin")
 	putTestMember(t, c, g, "bob", "member")
-	putTombstone(t, c, "ghost")
+	putTombstone(t, c, ghost)
 
 	_, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
 	if !errors.Is(err, ErrLastAdmin) {
@@ -367,9 +376,10 @@ func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	// Sorts before the live one, so a check that just took the first admin
 	// would pick the tombstone.
-	putTestMember(t, c, g, "aaa-ghost", "admin")
+	ghost := "aaa-ghost-" + randomSuffix(t)
+	putTestMember(t, c, g, ghost, "admin")
 	putTestMember(t, c, g, "zed", "admin")
-	putTombstone(t, c, "aaa-ghost")
+	putTombstone(t, c, ghost)
 
 	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
 		t.Fatalf("err = %v", err)
@@ -387,8 +397,9 @@ func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
 func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
+	successor := "successor-" + randomSuffix(t)
 	putTestMember(t, c, g, "admin1", "admin")
-	putTestMember(t, c, g, "admin2", "admin")
+	putTestMember(t, c, g, successor, "admin")
 
 	racing := *c
 	fired := false
@@ -398,7 +409,7 @@ func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing
 				func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
 					if middleware.GetOperationName(ctx) == "TransactWriteItems" && !fired {
 						fired = true
-						putTombstone(t, c, "admin2")
+						putTombstone(t, c, successor)
 					}
 					return next.HandleInitialize(ctx, in)
 				}), middleware.Before)
