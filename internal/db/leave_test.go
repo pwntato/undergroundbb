@@ -323,3 +323,57 @@ func TestLeaveGroupSoleAdminNeedsNoDemotion(t *testing.T) {
 		t.Fatalf("deleted=%v err=%v", deleted, err)
 	}
 }
+
+// putTombstone writes a deleted account's PROFILE, leaving any membership in
+// place: the state account deletion's documented race leaves behind (#77).
+func putTombstone(t *testing.T, c *Client, userID string) {
+	t.Helper()
+	_, err := c.ddb.PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(c.table),
+		Item: map[string]types.AttributeValue{
+			"PK": s("USER#" + userID), "SK": s("PROFILE"), "DeletedAt": s("2026-10-05T00:00:00Z"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A deleted admin is not another admin: nobody can sign in as them, so if the
+// leaver is the only live admin the group would be left with no one to govern.
+func TestLeaveGroupDeletedCoAdminDoesNotCountAsAnotherAdmin(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "ghost", "admin")
+	putTestMember(t, c, g, "bob", "member")
+	putTombstone(t, c, "ghost")
+
+	_, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	if !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("err = %v, want ErrLastAdmin", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Error("the leaver was removed although no live admin remained")
+	}
+}
+
+// With a live co-admin alongside the deleted one, leaving is fine, and the
+// transaction's admin check must be against the live one.
+func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	// Sorts before the live one, so a check that just took the first admin
+	// would pick the tombstone.
+	putTestMember(t, c, g, "aaa-ghost", "admin")
+	putTestMember(t, c, g, "zed", "admin")
+	putTombstone(t, c, "aaa-ghost")
+
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
+		t.Error("admin1 did not leave")
+	}
+}
