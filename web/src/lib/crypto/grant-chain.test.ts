@@ -1373,20 +1373,59 @@ describe('verifyGrantChain: successor claims', () => {
       ).toBe(true)
     })
 
-    it.each([29, 366, 90.5, Number.NaN])('rejects a period of %s', (period) => {
+    it.each([29, 366])('rejects a period of %s, signed correctly', (period) => {
       const w = claimWorld()
-      const sortKey = dk(CREATOR, '2026-04-01')
+      const d = designation(w.creatorKey, CREATOR, BOB, period, '2026-04-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2028-01-01')
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
+      const v = verdictOf(input, c)
+      expect(v.valid).toBe(false)
+      expect(v.reason).toMatch(/out of range/)
+    })
+
+    it.each([
+      [30, '2026-05-01', true],
+      [365, '2027-04-01', true],
+      [365, '2027-03-31', false],
+    ])('a period of %s claimed on %s verifies: %s', (period, day, ok) => {
+      const w = claimWorld()
+      const d = designation(w.creatorKey, CREATOR, BOB, period, '2026-04-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, day)
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
+      expect(verdictOf(input, c).valid).toBe(ok)
+    })
+
+    it.each([90.5, Number.NaN])('rejects a non-integer period of %s without throwing', (period) => {
+      const w = claimWorld()
       const d: DesignationRecord = {
-        sortKey,
+        sortKey: dk(CREATOR, '2026-04-01'),
         adminUserId: CREATOR,
         successorUserId: BOB,
         periodDays: period,
         adminGrantRef: w.root.sortKey,
-        signature: w.desig.signature, // content is irrelevant: the range check comes first
+        signature: w.desig.signature,
       }
       const c = claim(w.bobKey, BOB, { ...d, periodDays: 30 }, '2026-12-31')
       const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
       expect(verdictOf(input, c).valid).toBe(false)
+    })
+
+    it('rejects a designation by an admin who had been demoted to ambassador', () => {
+      const w = claimWorld()
+      const demoted = grant(
+        w.creatorKey,
+        ALICE,
+        'ambassador',
+        CREATOR,
+        '2026-03-10',
+        w.root.sortKey,
+      )
+      const d = designation(w.aliceKey, ALICE, BOB, 30, '2026-04-01', demoted.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, demoted, c] })
+      const v = verdictOf(input, c)
+      expect(v.valid).toBe(false)
+      expect(v.reason).toMatch(/not admin/)
     })
 
     it('poisons a designation served twice', () => {

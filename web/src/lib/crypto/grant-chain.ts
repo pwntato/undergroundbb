@@ -516,7 +516,6 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
    */
   function verifyClaim(g: GrantRecord, parsed: ParsedKey, sig: Uint8Array): GrantVerdict {
     const designationKey = g.viaDesignation!
-    if (g.sortKey === anchor.rootGrantSortKey) return reject('the root grant cannot be a claim')
     // The claim payload does not sign a role, and a designation can only confer admin.
     if (g.grantedRole !== 'admin') return reject('a successor claim can only confer admin')
     if ((citing.get(designationKey) ?? 0) > 1) {
