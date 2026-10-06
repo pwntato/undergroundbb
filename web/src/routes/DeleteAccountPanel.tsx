@@ -10,7 +10,7 @@ export interface DeleteGroupRow {
   readonly groupId: string
   readonly label: string
   /** Set on blockers: which fix applies to this group. */
-  readonly reason?: 'needsSuccessor' | 'grantMissing'
+  readonly reason?: 'needsSuccessor' | 'noSuccessor' | 'grantMissing'
 }
 
 export type DeletePanelState =
@@ -83,7 +83,9 @@ export function DeleteAccountPanel({
                 <span className="text-xs text-muted-foreground">
                   {g.reason === 'grantMissing'
                     ? ": your role here isn't on record, so it can't be left from this page"
-                    : ': you are the last admin and others remain, so make someone else an admin first'}
+                    : g.reason === 'noSuccessor'
+                      ? ": you are the last admin and every other member's account was deleted, so no one can take over. Remove them from the members list first"
+                      : ': you are the last admin and others remain, so make someone else an admin first'}
                 </span>
               </li>
             ))}

@@ -10,6 +10,7 @@
 // a signature run before the ones that cannot be undone.
 
 import { ApiError } from '@/lib/api/auth'
+import { isDeletedUser } from './memberLabel'
 import { loadMembers, type LoadMembersDeps, type MembersView } from './runGroupMembers'
 import {
   leavePlan,
@@ -23,6 +24,13 @@ export interface AccountPlanEntry {
   readonly groupId: string
   readonly view: MembersView
   readonly plan: LeavePlan
+  /**
+   * Set on a needsSuccessor group where every other member's account was
+   * deleted, so nobody can be promoted (#193): the fix is to remove them, not
+   * to pick a successor. Absent means "not known to be", so an unresolved name
+   * keeps the optimistic wording.
+   */
+  readonly noLiveSuccessor?: boolean
 }
 
 export type AccountPlanResult =
@@ -95,11 +103,24 @@ export async function planAccountDeletion(
       : [],
   )
   const usernames = otherAdmins.length === 0 ? undefined : await deps.resolveUsernames(otherAdmins)
-  const entries = views.map((view) => ({
+  const planned = views.map((view) => ({
     groupId: view.groupId,
     view,
     plan: leavePlan(view, deps.userId, usernames),
   }))
+  // Only a group that already blocks needs to know whether anyone in it can be
+  // promoted, so only its members are resolved (the other admins are cached).
+  const candidates = planned.flatMap((e) =>
+    e.plan.kind === 'needsSuccessor' ? e.plan.candidates : [],
+  )
+  const candidateNames =
+    candidates.length === 0 ? undefined : await deps.resolveUsernames(candidates)
+  const entries: AccountPlanEntry[] = planned.map((e) =>
+    e.plan.kind === 'needsSuccessor' &&
+    e.plan.candidates.every((id) => isDeletedUser(id, candidateNames))
+      ? { ...e, noLiveSuccessor: true }
+      : e,
+  )
   return { ok: true, entries }
 }
 
@@ -120,8 +141,13 @@ export function deletionBlockers(
 }
 
 /** Why a group in deletionBlockers blocks, so the screen can say which fix applies. */
-export function blockerReason(entry: AccountPlanEntry): 'needsSuccessor' | 'grantMissing' {
-  return entry.plan.kind === 'needsSuccessor' ? 'needsSuccessor' : 'grantMissing'
+export function blockerReason(
+  entry: AccountPlanEntry,
+): 'needsSuccessor' | 'noSuccessor' | 'grantMissing' {
+  if (entry.plan.kind !== 'needsSuccessor') {
+    return 'grantMissing'
+  }
+  return entry.noLiveSuccessor === true ? 'noSuccessor' : 'needsSuccessor'
 }
 
 /** Groups whose only member is the caller: leaving them deletes them and their content. */

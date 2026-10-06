@@ -79,11 +79,15 @@ describe('DeleteAccountPanel', () => {
         blockers: [
           { groupId: 'g1', label: 'Last Stand', reason: 'needsSuccessor' },
           { groupId: 'g2', label: 'No Grant', reason: 'grantMissing' },
+          { groupId: 'g3', label: 'Ghost Town', reason: 'noSuccessor' },
         ],
       }),
     )
-    expect(html).toContain('you are the last admin')
+    expect(html).toContain('make someone else an admin first')
     expect(html).toContain('isn&#x27;t on record')
+    // Nobody can be promoted here, so promoting is not the advice.
+    expect(html).toContain('Remove them from the members list first')
+    expect(html.match(/make someone else an admin first/g)).toHaveLength(1)
   })
 
   it('does not claim nothing was changed when the re-check after a run fails', () => {
