@@ -1,6 +1,9 @@
 package crypto
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // TrustAnchorPayload builds the canonical byte string a group's trust-anchor
 // signature covers -- see docs/DESIGN.md, "Roles and the chain of trust":
@@ -68,6 +71,56 @@ func RoleGrantPayload(groupID, subjectUUID, role, grantSortKey, grantorGrantRef 
 		[]byte(role),
 		[]byte(grantSortKey),
 		[]byte(grantorGrantRef),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
+// SuccessorDesignationPayload builds the bytes an admin signs (under
+// ContextSuccessorDesignation) to name the member who takes over if they go
+// inactive -- docs/DESIGN.md, "Inactivity: the admin pre-signs a successor".
+// An empty successorUUID is the revocation form: it names nobody, and the
+// newest designation by day wins.
+//
+// designationSortKey is the row's own address, DESIGNATION#<admin
+// uuid>#<YYYY-MM-DD>#<rand>, signed for the same reason RoleGrantPayload
+// signs grantSortKey: the day in the address is what a verifier uses to pick
+// the admin's signing key and to order designations, so a copied signature
+// must only verify at the address it was signed for. adminGrantRef is the
+// sort key of the admin's own current grant, so the designation is bound to
+// the admin standing it was made under; the claim check requires that grant
+// to still be current. periodDays is the decimal inactivity period, signed
+// so the server cannot shorten it.
+//
+// Same length-prefixed encoding as RoleGrantPayload, and the same warning:
+// this must never change once a real designation has been signed under it.
+func SuccessorDesignationPayload(groupID, adminUUID, successorUUID string, periodDays int, designationSortKey, adminGrantRef string) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(adminUUID),
+		[]byte(successorUUID),
+		[]byte(strconv.Itoa(periodDays)),
+		[]byte(designationSortKey),
+		[]byte(adminGrantRef),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
+// SuccessorClaimPayload builds the bytes a designated successor signs (under
+// ContextSuccessorClaim) to claim the admin role -- docs/DESIGN.md,
+// "Inactivity: the admin pre-signs a successor". claimSortKey is the new
+// GRANT# row's own address, so the claim day is signed by the claimant, not
+// chosen by the server, and a signature copied to another row or day does
+// not verify. designationSortKey names the designation relied on. The role
+// is deliberately not in the payload: a designation can only confer admin,
+// and the verifier requires that of any row that cites one.
+//
+// This must never change once a real claim has been signed under it.
+func SuccessorClaimPayload(groupID, successorUUID, designationSortKey, claimSortKey string) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(successorUUID),
+		[]byte(designationSortKey),
+		[]byte(claimSortKey),
 	}
 	return lengthPrefixedConcat(fields)
 }

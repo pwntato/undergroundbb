@@ -182,6 +182,36 @@ type roleGrantVector struct {
 	SignatureHex    string `json:"signature_hex"`
 }
 
+// successorDesignationVector proves SuccessorDesignationPayload's exact
+// encoding (#161), for a named successor and for the revocation form (empty
+// successor uuid).
+type successorDesignationVector struct {
+	Name               string `json:"name"`
+	PrivateHex         string `json:"private_key_hex"`
+	PublicHex          string `json:"public_key_hex"`
+	GroupID            string `json:"group_id"`
+	AdminUUID          string `json:"admin_uuid"`
+	SuccessorUUID      string `json:"successor_uuid"`
+	PeriodDays         int    `json:"period_days"`
+	DesignationSortKey string `json:"designation_sort_key"`
+	AdminGrantRef      string `json:"admin_grant_ref"`
+	PayloadHex         string `json:"payload_hex"`
+	SignatureHex       string `json:"signature_hex"`
+}
+
+// successorClaimVector proves SuccessorClaimPayload's exact encoding (#161).
+type successorClaimVector struct {
+	Name               string `json:"name"`
+	PrivateHex         string `json:"private_key_hex"`
+	PublicHex          string `json:"public_key_hex"`
+	GroupID            string `json:"group_id"`
+	SuccessorUUID      string `json:"successor_uuid"`
+	DesignationSortKey string `json:"designation_sort_key"`
+	ClaimSortKey       string `json:"claim_sort_key"`
+	PayloadHex         string `json:"payload_hex"`
+	SignatureHex       string `json:"signature_hex"`
+}
+
 // pinVector proves PinPayload's exact encoding, including that the signing
 // key set is order-independent: two cases list the same keys in different
 // orders and must produce the same payload.
@@ -275,25 +305,27 @@ type inviteMACVector struct {
 }
 
 type vectorFile struct {
-	Version          int                      `json:"version"`
-	KDF              []kdfVector              `json:"kdf"`
-	AEAD             []aeadVector             `json:"aead"`
-	AEADNegative     []aeadNegativeVector     `json:"aead_negative"`
-	Signing          []signingVector          `json:"signing"`
-	SignedPayload    []signedPayloadVector    `json:"signed_payload"`
-	Wrapping         []wrapVector             `json:"wrapping"`
-	GenkeyChain      []genkeyChainVector      `json:"genkey_chain"`
-	Fingerprint      []fingerprintVector      `json:"fingerprint"`
-	CredentialWrap   []credentialWrapVector   `json:"credential_wrap"`
-	KeyBundle        []keyBundleVector        `json:"key_bundle"`
-	TrustAnchor      []trustAnchorVector      `json:"trust_anchor"`
-	RoleGrant        []roleGrantVector        `json:"role_grant"`
-	Pin              []pinVector              `json:"pin"`
-	MemberWrap       []memberWrapVector       `json:"member_wrap_aad"`
-	GroupName        []groupNameVector        `json:"group_name_aad"`
-	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
-	InviteAcceptance []inviteAcceptanceVector `json:"invite_acceptance"`
-	InviteMAC        []inviteMACVector        `json:"invite_mac"`
+	Version              int                          `json:"version"`
+	KDF                  []kdfVector                  `json:"kdf"`
+	AEAD                 []aeadVector                 `json:"aead"`
+	AEADNegative         []aeadNegativeVector         `json:"aead_negative"`
+	Signing              []signingVector              `json:"signing"`
+	SignedPayload        []signedPayloadVector        `json:"signed_payload"`
+	Wrapping             []wrapVector                 `json:"wrapping"`
+	GenkeyChain          []genkeyChainVector          `json:"genkey_chain"`
+	Fingerprint          []fingerprintVector          `json:"fingerprint"`
+	CredentialWrap       []credentialWrapVector       `json:"credential_wrap"`
+	KeyBundle            []keyBundleVector            `json:"key_bundle"`
+	TrustAnchor          []trustAnchorVector          `json:"trust_anchor"`
+	RoleGrant            []roleGrantVector            `json:"role_grant"`
+	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
+	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
+	Pin                  []pinVector                  `json:"pin"`
+	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
+	GroupName            []groupNameVector            `json:"group_name_aad"`
+	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
+	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
+	InviteMAC            []inviteMACVector            `json:"invite_mac"`
 }
 
 func main() {
@@ -657,6 +689,74 @@ func main() {
 			GrantorGrantRef: grantRef,
 			PayloadHex:      hex.EncodeToString(nonRootPayload),
 			SignatureHex:    hex.EncodeToString(nonRootSig),
+		})
+	}
+
+	// --- Successor designation and claim (#161) ---
+	{
+		adminPub, adminPriv := fixedEd25519Key("successor-designation-admin-1")
+		groupID := "group-uuid-2"
+		adminUUID := "admin-uuid-1"
+		successorUUID := "successor-uuid-1"
+		adminGrantRef := "GRANT#" + adminUUID + "#2026-09-06#a1b2c3d4e5f6a1b2"
+
+		designationSortKey := "DESIGNATION#" + adminUUID + "#2026-09-10#0a1b2c3d4e5f6071"
+		payload := crypto.SuccessorDesignationPayload(groupID, adminUUID, successorUUID, 90, designationSortKey, adminGrantRef)
+		sig, err := crypto.Sign(adminPriv, crypto.ContextSuccessorDesignation, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.SuccessorDesignation = append(out.SuccessorDesignation, successorDesignationVector{
+			Name:               "named",
+			PrivateHex:         hex.EncodeToString(adminPriv),
+			PublicHex:          hex.EncodeToString(adminPub),
+			GroupID:            groupID,
+			AdminUUID:          adminUUID,
+			SuccessorUUID:      successorUUID,
+			PeriodDays:         90,
+			DesignationSortKey: designationSortKey,
+			AdminGrantRef:      adminGrantRef,
+			PayloadHex:         hex.EncodeToString(payload),
+			SignatureHex:       hex.EncodeToString(sig),
+		})
+
+		revokeSortKey := "DESIGNATION#" + adminUUID + "#2026-09-12#7f6e5d4c3b2a1908"
+		revokePayload := crypto.SuccessorDesignationPayload(groupID, adminUUID, "", 30, revokeSortKey, adminGrantRef)
+		revokeSig, err := crypto.Sign(adminPriv, crypto.ContextSuccessorDesignation, revokePayload)
+		if err != nil {
+			panic(err)
+		}
+		out.SuccessorDesignation = append(out.SuccessorDesignation, successorDesignationVector{
+			Name:               "revocation",
+			PrivateHex:         hex.EncodeToString(adminPriv),
+			PublicHex:          hex.EncodeToString(adminPub),
+			GroupID:            groupID,
+			AdminUUID:          adminUUID,
+			SuccessorUUID:      "",
+			PeriodDays:         30,
+			DesignationSortKey: revokeSortKey,
+			AdminGrantRef:      adminGrantRef,
+			PayloadHex:         hex.EncodeToString(revokePayload),
+			SignatureHex:       hex.EncodeToString(revokeSig),
+		})
+
+		succPub, succPriv := fixedEd25519Key("successor-claim-1")
+		claimSortKey := "GRANT#" + successorUUID + "#2026-12-09#1122334455667788"
+		claimPayload := crypto.SuccessorClaimPayload(groupID, successorUUID, designationSortKey, claimSortKey)
+		claimSig, err := crypto.Sign(succPriv, crypto.ContextSuccessorClaim, claimPayload)
+		if err != nil {
+			panic(err)
+		}
+		out.SuccessorClaim = append(out.SuccessorClaim, successorClaimVector{
+			Name:               "claim",
+			PrivateHex:         hex.EncodeToString(succPriv),
+			PublicHex:          hex.EncodeToString(succPub),
+			GroupID:            groupID,
+			SuccessorUUID:      successorUUID,
+			DesignationSortKey: designationSortKey,
+			ClaimSortKey:       claimSortKey,
+			PayloadHex:         hex.EncodeToString(claimPayload),
+			SignatureHex:       hex.EncodeToString(claimSig),
 		})
 	}
 

@@ -103,6 +103,57 @@ export function roleGrantPayload(
 }
 
 /**
+ * Builds the bytes an admin signs (under ed25519.SigningContext.SuccessorDesignation)
+ * to name the member who takes over if they go inactive (#161). An empty
+ * successorUUID is the revocation form. designationSortKey is the row's own
+ * address (DESIGNATION#<admin uuid>#<YYYY-MM-DD>#<rand>), adminGrantRef the
+ * sort key of the admin's own current grant, periodDays the decimal
+ * inactivity period. Must match internal/crypto/group.go's
+ * SuccessorDesignationPayload byte for byte, and never change once a real
+ * designation has been signed under it.
+ */
+export function successorDesignationPayload(
+  groupId: string,
+  adminUUID: string,
+  successorUUID: string,
+  periodDays: number,
+  designationSortKey: string,
+  adminGrantRef: string,
+): Uint8Array {
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(adminUUID),
+    encoder.encode(successorUUID),
+    encoder.encode(String(periodDays)),
+    encoder.encode(designationSortKey),
+    encoder.encode(adminGrantRef),
+  ])
+}
+
+/**
+ * Builds the bytes a designated successor signs (under
+ * ed25519.SigningContext.SuccessorClaim) to claim the admin role (#161). The
+ * role is not in the payload: a designation can only confer admin, and the
+ * verifier requires that of any row that cites one. Must match
+ * internal/crypto/group.go's SuccessorClaimPayload byte for byte.
+ */
+export function successorClaimPayload(
+  groupId: string,
+  successorUUID: string,
+  designationSortKey: string,
+  claimSortKey: string,
+): Uint8Array {
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(successorUUID),
+    encoder.encode(designationSortKey),
+    encoder.encode(claimSortKey),
+  ])
+}
+
+/**
  * Builds the AAD for wrapping or unwrapping a single member's copy of a
  * group's generation key -- see docs/DESIGN.md's AAD table, "Member's
  * wrapped group key | group id + member uuid + generation number." Unlike a

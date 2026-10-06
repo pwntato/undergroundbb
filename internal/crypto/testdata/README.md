@@ -56,6 +56,13 @@ why.
   (#34). Two cases: a root grant (empty grantor grant ref, no predecessor to
   reference) and a non-root grant referencing a real one, proving the two
   shapes produce genuinely different payloads.
+- `successor_designation`: `(group id, admin uuid, successor uuid, period
+  days, designation sort key, admin grant ref) -> payload`, plus the Ed25519
+  signature over it — pinning `SuccessorDesignationPayload` (#161). Two
+  cases: a named successor and the revocation form (empty successor uuid).
+- `successor_claim`: `(group id, successor uuid, designation sort key, claim
+  sort key) -> payload`, plus the Ed25519 signature over it — pinning
+  `SuccessorClaimPayload` (#161). The role is deliberately not signed.
 - `member_wrap_aad`: `(group id, member uuid, generation) -> AAD`, plus the
   AES-256-GCM ciphertext that AAD produces under a fixed key/nonce/plaintext
   — pinning `MemberWrapAAD` (#34), the AAD for a single member's own wrapped
