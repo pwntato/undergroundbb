@@ -892,15 +892,17 @@ replace an admin who is only away.
   designation day is on or after their `MEMBER#` `CreatedAt` (so a removed successor who rejoins by
   invite does not inherit it); no earlier activation row cites this designation (each designation
   fires at most once, so an admin who returns and demotes the successor is not re-promoted by it);
-  the admin has been inactive for `periodDays`, measured from the later of their `LastLoginDay` and
-  the designation's day, to the claim's signed day (not the server's own today: the server accepts a
-  client-dated claim up to `grantDaySkewTolerance` behind its clock, as for every client-dated
-  grant, so a slow clock or a request that crosses midnight can sign yesterday, and a gate measured
-  to the server's today would pass what the verifier's floor rejects, for good) (a session lasts 24
-  hours, so the last login can fall the day before the designation; measuring from the later day
-  makes this gate imply the verifier's floor, so an honest claim is never rejected and, because it
-  fires at most once, never stuck); and no other admin has logged in within that period, measured
-  the same way, so it fires for an abandoned group, not because one of two admins is away.
+  the admin has been inactive for `periodDays`, and no other admin has logged in within that period.
+  The second condition makes it fire for an abandoned group, not because one of two admins is away.
+  Inactivity is measured from the later of the admin's `LastLoginDay` and the designation's day, to
+  the claim's signed day, for both conditions.
+  - *Why from the later day.* A session lasts 24 hours, so the last login can fall the day before the
+    designation. Measuring from the later day makes this gate imply the verifier's floor, so an
+    honest claim is never rejected and, because it fires at most once, never stuck.
+  - *Why to the signed day, not the server's today.* The server accepts a client-dated claim up to
+    `grantDaySkewTolerance` behind its clock, as for every client-dated grant, so a slow clock or a
+    request that crosses midnight can sign yesterday. A gate measured to the server's today would
+    pass a claim the verifier's floor rejects, for good.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
   day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
@@ -925,12 +927,14 @@ replace an admin who is only away.
   designation the admin revoked, replaced or lost admin under before the claim day. A successor who
   cooperates with the server can postdate the claim, because the verifier has no clock and checks
   the signed day; the admin undoes that by revoking or re-designating before that day, since the
-  lapse window runs up to it, and a viewer's grant check, which does have a clock, flags a claim row
-  dated after the viewer's today. What is left is omission: a server that hides a revocation row
-  from everyone can still serve a stale designation, which the existing grant history is equally
-  exposed to. The login clock is the server's, but only the honest-path check uses it, so a lying
-  clock alone can withhold a legitimate claim, not forge one. The claim screen should re-check
-  eligibility against the day it is about to sign.
+  lapse window runs up to it, and a viewer's grant check, which does have a clock, should flag a
+  claim row dated more than `grantDaySkewTolerance` ahead of the viewer's now (the same slack the
+  server allows a fast clock, so an honest claim is not false-flagged; the check does not exist
+  yet). What is left is omission: a server that hides a revocation row from everyone can still serve
+  a stale designation, which the existing grant history is equally exposed to. The login clock is
+  the server's, but only the honest-path check uses it, so a lying clock alone can withhold a
+  legitimate claim, not forge one. The claim screen should re-check eligibility against the day it
+  is about to sign.
 - **Lapses.** The designation stops applying without notice to the successor when any claim check
   above fails. Nothing re-nominates for the admin, so they have to maintain it; the group screen
   should say when an admin has none and when theirs has lapsed.
