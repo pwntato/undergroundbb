@@ -562,3 +562,15 @@ func TestClaimDesignationForACreatorWithoutAStoredGrantPointer(t *testing.T) {
 		w.assertRefused(t, w.claim(t), http.StatusConflict, "admin_changed")
 	})
 }
+
+// Only the window from the designation's day through the claim's signed day
+// counts: rows dated after the claim day cannot have preceded it.
+func TestClaimDesignationIgnoresRowsDatedAfterTheClaimDay(t *testing.T) {
+	w := newClaimWorld(t)
+	seedDesignation(t, w.h, w.gid, w.owner, "", 90, time.Now().AddDate(0, 0, 5), w.ref)
+	putRaw(t, w.gid, testGrantSortKey(t, w.owner.userID, time.Now().AddDate(0, 0, 5)), map[string]types.AttributeValue{
+		"SubjectUserID": s(w.owner.userID), "GrantedRole": s("member"), "GrantorUserID": s(w.owner.userID)})
+	if rec := w.claim(t); rec.Code != http.StatusOK {
+		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
+	}
+}

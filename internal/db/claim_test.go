@@ -74,6 +74,16 @@ func TestClaimDesignationConditions(t *testing.T) {
 		}
 		assertNothingClaimed(t, c, gid, member, claim)
 	})
+	t.Run("admin gained a stored grant pointer after the handler read the root fallback", func(t *testing.T) {
+		gid, admin, member, ref := designationFixture(t, c)
+		claim := "GRANT#" + member + "#2026-06-01#8899aabbccddeeff"
+		in := claimInput(gid, admin, member, ref, desigOf(admin), claim)
+		in.AdminHasStoredGrant = false // the fixture's admin does have one
+		if err := c.ClaimDesignation(ctx, in); !errors.Is(err, ErrClaimAdminChanged) {
+			t.Fatalf("%v, want ErrClaimAdminChanged", err)
+		}
+		assertNothingClaimed(t, c, gid, member, claim)
+	})
 	t.Run("successor's role changed", func(t *testing.T) {
 		gid, admin, member, ref := designationFixture(t, c)
 		claim := "GRANT#" + member + "#2026-06-01#8899aabbccddeeff"
