@@ -87,6 +87,8 @@ describe('DeleteAccountPanel', () => {
     expect(html).toContain('isn&#x27;t on record')
     // Nobody can be promoted here, so promoting is not the advice.
     expect(html).toContain('Remove them from the members list first')
+    // Removing them leaves a solo group, which the deletion then takes with it.
+    expect(html).toContain('the group is then deleted with your account')
     expect(html.match(/make someone else an admin first/g)).toHaveLength(1)
   })
 

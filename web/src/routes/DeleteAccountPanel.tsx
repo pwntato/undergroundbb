@@ -84,7 +84,7 @@ export function DeleteAccountPanel({
                   {g.reason === 'grantMissing'
                     ? ": your role here isn't on record, so it can't be left from this page"
                     : g.reason === 'noSuccessor'
-                      ? ": you are the last admin and every other member's account was deleted, so no one can take over. Remove them from the members list first"
+                      ? ": you are the last admin and every other member's account was deleted, so no one can take over. Remove them from the members list first; the group is then deleted with your account"
                       : ': you are the last admin and others remain, so make someone else an admin first'}
                 </span>
               </li>
