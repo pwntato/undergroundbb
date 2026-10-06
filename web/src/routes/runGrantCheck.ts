@@ -21,7 +21,7 @@
 // and must sign intervals then. `match` is not proof of freshness either
 // (docs/DESIGN.md, "A superseded pin can be replayed"): also #62's problem.
 
-import type { ListGrantsResponse } from '@/lib/api/groups'
+import type { ListDesignationsResponse, ListGrantsResponse } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import type { PinRecord } from '@/lib/crypto/pin'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
@@ -29,6 +29,7 @@ import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import {
   checkMemberRole,
   verifyGrantChain,
+  type DesignationRecord,
   type GrantRecord,
   type RoleStatus,
   type UserKeyHistory,
@@ -90,6 +91,10 @@ export function checkForView<V>(stored: ViewCheck<V> | null, current: V): GrantC
 
 export interface GrantCheckDeps {
   readonly listGrants: (groupId: string, cursor?: string) => Promise<ListGrantsResponse>
+  /** The signed successor designations a claim row relies on (#161). */
+  readonly listDesignations: (groupId: string, cursor?: string) => Promise<ListDesignationsResponse>
+  /** The viewer's clock in ms, for flagging a postdated claim. Defaults to Date.now. */
+  readonly now?: () => number
   readonly getUser: (userId: string) => Promise<UserProjection>
   readonly readPin: (groupId: string) => StoredAnchorPin | null
   readonly writePin: (groupId: string, pin: StoredAnchorPin) => boolean
@@ -119,9 +124,14 @@ export async function checkGrants(
 ): Promise<GrantCheck> {
   try {
     const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
+    const designations = await readAllDesignations(deps, groupId)
     const { served, unreadable } = await readServedKeys(deps, [
       anchor.creatorUserId,
       ...grants.map((g) => g.grantorUserId),
+      // A claim is signed by its SUBJECT, and rests on a designation signed by
+      // the admin, so both keys are needed to check one.
+      ...grants.filter((g) => g.viaDesignation).map((g) => g.subjectUserId),
+      ...designations.map((d) => d.adminUserId),
     ])
     const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served, unreadable)
 
@@ -132,6 +142,8 @@ export async function checkGrants(
       ...(stored !== null && { pinnedAnchor: stored }),
       grants,
       keyHistories,
+      designations,
+      now: (deps.now ?? Date.now)(),
     })
 
     const rootVerdict = result.verdicts.get(anchor.rootGrantSortKey)
@@ -202,6 +214,21 @@ async function readAllGrants(
     cursor = res.nextCursor
   }
   throw new Error('grant pagination did not terminate')
+}
+
+async function readAllDesignations(
+  deps: GrantCheckDeps,
+  groupId: string,
+): Promise<DesignationRecord[]> {
+  const out: DesignationRecord[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < MAX_GRANT_PAGES; page++) {
+    const res = await deps.listDesignations(groupId, cursor)
+    out.push(...res.designations)
+    if (!res.nextCursor) return out
+    cursor = res.nextCursor
+  }
+  throw new Error('designation pagination did not terminate')
 }
 
 /**
