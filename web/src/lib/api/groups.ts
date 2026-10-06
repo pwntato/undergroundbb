@@ -336,8 +336,10 @@ export interface ClaimDesignationRequest {
  * claims the admin role. 409 codes: not_inactive (the admin or another admin
  * was active within the period; the server's message says when to try again),
  * designation_superseded / designation_lapsed / admin_changed / already_claimed
- * / designation_not_yours / designation_before_join / already_admin /
- * subject_role_changed / conflict_retry mean the situation changed (reload);
+ * / designation_not_yours / already_admin / subject_role_changed /
+ * conflict_retry mean the situation changed (reload); designation_before_join
+ * (you joined after it was signed) is like not_inactive: reloading cannot
+ * help, show the server's message;
  * grant_key_taken means "sign again with a fresh claim sort key".
  */
 export async function claimDesignation(

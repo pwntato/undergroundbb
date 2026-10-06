@@ -64,7 +64,7 @@ export function SuccessorPanel({
   if (view.myRole === 'admin') {
     const status = adminSuccessorStatus(userId, view.designations, view.grants, view.members, nowMs)
     const candidates = view.members.filter(
-      (m) => m.userId !== userId && !isDeletedUser(m.userId, usernames),
+      (m) => m.userId !== userId && m.role !== 'admin' && !isDeletedUser(m.userId, usernames),
     )
     return (
       <div className="flex w-full max-w-md flex-col gap-4">

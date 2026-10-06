@@ -126,6 +126,7 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
     doing: 'designate' | 'claim',
     action: () => Promise<SuccessorActionResult>,
     success: string,
+    onSuccess?: () => void,
   ) => {
     if (busy) return
     setBusy(true)
@@ -136,6 +137,7 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
       setConfirmingClaim(null)
       if (outcome.ok) {
         setMessage(success)
+        onSuccess?.()
       } else {
         setError(failureText(outcome, doing))
       }
@@ -154,8 +156,11 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
       'designate',
       () => designate(designateDeps(userId), view, successor, Number(choice.periodDays)),
       `${memberLabel(successor, usernames)} is now your designated successor.`,
+      // Kept on a refusal, so a same-day refusal does not lose the pick.
+      () => {
+        setChoice((c) => ({ ...c, successorUserId: '' }))
+      },
     )
-    setChoice((c) => ({ ...c, successorUserId: '' }))
   }
 
   const handleRevoke = () => {

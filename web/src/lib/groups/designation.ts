@@ -8,6 +8,12 @@
 // input the server alone has: the admins' last-login days. The server's claim
 // check and every viewer's grant check are what decide; this just keeps an
 // honest user from signing something they can already tell will be refused.
+//
+// Two things only the server can see, so a designation can look active here and
+// still be refused: the admins' last-login days (`not_inactive`), and when the
+// successor joined (`designation_before_join`: a member who left and was
+// re-invited after being designated shows as an active successor, because the
+// roster serves no join day).
 
 import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
 
@@ -57,6 +63,7 @@ interface MemberLike {
  *  - lapsed: the admin received a grant dated on or after the designation's
  *    day (a demotion, removal or re-promotion), which voids it
  *  - successorGone: the named successor is no longer a member
+ *  - successorAdmin: the named successor is an admin now, so they cannot claim
  *  - active: it stands; claimableFrom is the first day the period has elapsed
  */
 export type AdminSuccessorStatus =
@@ -66,6 +73,7 @@ export type AdminSuccessorStatus =
   | { readonly kind: 'used'; readonly designation: DesignationRecord; readonly claimedBy: string }
   | { readonly kind: 'lapsed'; readonly designation: DesignationRecord; readonly since: number }
   | { readonly kind: 'successorGone'; readonly designation: DesignationRecord }
+  | { readonly kind: 'successorAdmin'; readonly designation: DesignationRecord }
   | {
       readonly kind: 'active'
       readonly designation: DesignationRecord
@@ -145,6 +153,9 @@ export function adminSuccessorStatus(
   if (since !== null) return { kind: 'lapsed', designation: d, since }
   if (!members.some((m) => m.userId === d.successorUserId)) {
     return { kind: 'successorGone', designation: d }
+  }
+  if (members.some((m) => m.userId === d.successorUserId && m.role === 'admin')) {
+    return { kind: 'successorAdmin', designation: d }
   }
   return {
     kind: 'active',

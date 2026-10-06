@@ -128,7 +128,6 @@ const DESIGNATE_STALE_CODES = new Set(['grantor_ref_stale', 'grantor_changed', '
 const CLAIM_STALE_CODES = new Set([
   'designation_superseded',
   'designation_lapsed',
-  'designation_not_found',
   'designation_not_yours',
   'admin_changed',
   'already_claimed',

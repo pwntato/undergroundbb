@@ -112,6 +112,12 @@ describe('adminSuccessorStatus', () => {
     expect(status([d], [grant(CAT, '2026-07-10')]).kind).toBe('active')
   })
 
+  it('notices a successor who is an admin already, who cannot claim', () => {
+    const d = designation('2026-06-01', BOB)
+    const ms = [MEMBERS[0] as (typeof MEMBERS)[number], { userId: BOB, role: 'admin' }]
+    expect(status([d], [], ms).kind).toBe('successorAdmin')
+  })
+
   it('is used once a grant cites it, and says who claimed', () => {
     const d = designation('2026-06-01', BOB)
     const claim = grant(BOB, '2026-08-31', { grantedRole: 'admin', viaDesignation: d.sortKey })

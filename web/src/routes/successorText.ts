@@ -23,6 +23,8 @@ export function adminStatusText(
       return `Your designation of ${name(status.designation.successorUserId ?? '')} lapsed: your own role changed on ${formatDay(status.since)}. You have no successor now.`
     case 'successorGone':
       return `${name(status.designation.successorUserId ?? '')} is no longer a member, so your designation cannot be used. You have no successor now.`
+    case 'successorAdmin':
+      return `${name(status.designation.successorUserId ?? '')} is an admin now, so they cannot take over. You have no effective successor; name a member who is not an admin.`
     case 'active':
       return `${name(status.successorUserId)} is your successor. They can take over from ${formatDay(status.claimableFrom)} (${String(status.periodDays)} days after you named them), if neither you nor any other admin has logged in since then.`
   }

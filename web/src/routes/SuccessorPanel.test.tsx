@@ -89,6 +89,18 @@ describe('SuccessorPanel, admin', () => {
     expect(html).not.toContain('deleted user')
   })
 
+  it('does not offer a fellow admin as a candidate, and says so if one is already named', () => {
+    const v = view('admin', [designation(BOB)])
+    const withAdminBob: SuccessorView = {
+      ...v,
+      members: v.members.map((m) => (m.userId === BOB ? { ...m, role: 'admin' as const } : m)),
+    }
+    const html = render(withAdminBob, ADMIN, '2026-09-01')
+    expect(html).not.toContain('<option value="' + BOB)
+    expect(html).toContain('bob_member is an admin now')
+    expect(html).not.toContain('is your successor')
+  })
+
   it('shows the standing designation with the day it can fire, and offers replace and revoke', () => {
     const html = render(view('admin', [designation(BOB)]), ADMIN, '2026-09-01')
     expect(html).toContain('bob_member is your successor')
