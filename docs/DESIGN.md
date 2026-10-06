@@ -906,8 +906,8 @@ replace an admin who is only away.
   no other `GRANT#` row cites the same `viaDesignation` (if more than one does, all of them are
   rejected, the way `compute()` poisons a duplicate sort key, so a returning admin's demotion cannot
   be undone by a second claim from a cooperating server and successor); the floor
-  `claimDay - designationDay >= periodDays` (signing the designation shows the admin was active on that day, so an honest claim never trips
-  it, and a server cannot fire early); and the lapse check: reject if the admin has any *other*
+  `claimDay - designationDay >= periodDays` (signing the designation shows the admin was active on
+  that day, so an honest claim never trips it, and a server cannot fire early); and the lapse check: reject if the admin has any *other*
   designation, or any grant *to them* (a role change of theirs, not one they signed), dated **on or
   after** the designation's day and on or before the claim day. "On or after" is deliberate: a
   same-day revocation or self-demotion cannot be ordered against the designation, so it must cancel
