@@ -266,7 +266,8 @@ describe('planAccountDeletion with a deleted co-admin', () => {
 
   it('resolves only the other admins of groups the caller admins', async () => {
     const { resolve } = await run(new Map())
-    expect(resolve).toHaveBeenCalledTimes(1)
+    // The first read; a second one, for the blocking group's members, is pinned
+    // in the #193 tests below.
     expect([...(resolve.mock.calls[0] as unknown as [string[]])[0]].sort()).toEqual(
       [BOB, CAROL].sort(),
     )
@@ -292,6 +293,63 @@ describe('planAccountDeletion with a deleted co-admin', () => {
       ['g-member'],
     )
     expect(resolve).not.toHaveBeenCalled()
+  })
+})
+
+describe('planAccountDeletion when no member can be promoted (#193)', () => {
+  const DAVE = 'dddddddd-4444-4444-8444-444444444444'
+  const CAROL = 'cccccccc-3333-4333-8333-333333333333'
+  const rosters: Record<string, MemberEntry[]> = {
+    // Everyone else is deleted: there is no one to make an admin.
+    'g-all-dead': [m(ME, 'admin'), m(BOB, 'admin'), m(DAVE, 'member')],
+    // One live member remains, so picking a successor still works.
+    'g-one-live': [m(ME, 'admin'), m(BOB, 'admin'), m(CAROL, 'member')],
+  }
+  const run = (names: Map<string, string>) => {
+    const resolve = vi.fn(() => Promise.resolve(names))
+    return planAccountDeletion(
+      {
+        userId: ME,
+        getGroup: (() =>
+          Promise.resolve({ role: 'admin', revocationMode: 'open', generation: 0 })) as never,
+        listMembers: ((id: string) => Promise.resolve({ members: rosters[id] })) as never,
+        resolveUsernames: resolve,
+      },
+      Object.keys(rosters),
+    ).then((res) => ({ res, resolve }))
+  }
+  const reasons = (res: Awaited<ReturnType<typeof run>>['res']) =>
+    res.ok
+      ? Object.fromEntries(deletionBlockers(res.entries).map((e) => [e.groupId, blockerReason(e)]))
+      : {}
+
+  it('says noSuccessor only where every other member is deleted', async () => {
+    const { res } = await run(
+      new Map([
+        [BOB, ''],
+        [DAVE, ''],
+        [CAROL, 'carol'],
+      ]),
+    )
+    expect(reasons(res)).toEqual({ 'g-all-dead': 'noSuccessor', 'g-one-live': 'needsSuccessor' })
+  })
+
+  it('keeps the optimistic wording while a member name is unresolved', async () => {
+    const { res } = await run(
+      new Map([
+        [BOB, ''],
+        // DAVE did not resolve: he may be live, so a successor may exist.
+      ]),
+    )
+    expect(reasons(res)['g-all-dead']).toBe('needsSuccessor')
+  })
+
+  it('resolves the members of a blocking group in a second read, and nothing more', async () => {
+    // Bob is deleted, so both groups block and their members are read.
+    const { resolve } = await run(new Map([[BOB, '']]))
+    expect(resolve).toHaveBeenCalledTimes(2)
+    const second = [...(resolve.mock.calls[1] as unknown as [string[]])[0]].sort()
+    expect(second).toEqual([BOB, CAROL, DAVE].sort())
   })
 })
 
