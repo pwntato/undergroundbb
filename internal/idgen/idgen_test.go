@@ -167,3 +167,34 @@ func TestValidGrantSortKeyRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestValidDesignationSortKey(t *testing.T) {
+	const adminUUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	const otherUUID = "a1a1a1a1-58cc-4372-a567-0e02b2c3d479"
+	good := "DESIGNATION#" + adminUUID + "#2026-09-25#a1b2c3d4e5f6a1b2"
+
+	day, ok := ValidDesignationSortKey(good, adminUUID)
+	if !ok || !day.Equal(time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("ValidDesignationSortKey(%q) = %v, %v", good, day, ok)
+	}
+
+	cases := map[string]string{
+		"wrong admin uuid":    "DESIGNATION#" + otherUUID + "#2026-09-25#a1b2c3d4e5f6a1b2",
+		"a grant sort key":    "GRANT#" + adminUUID + "#2026-09-25#a1b2c3d4e5f6a1b2",
+		"bad day shape":       "DESIGNATION#" + adminUUID + "#2026-9-25#a1b2c3d4e5f6a1b2",
+		"impossible day":      "DESIGNATION#" + adminUUID + "#2026-13-45#a1b2c3d4e5f6a1b2",
+		"short random suffix": "DESIGNATION#" + adminUUID + "#2026-09-25#a1b2",
+		"uppercase hex":       "DESIGNATION#" + adminUUID + "#2026-09-25#A1B2C3D4E5F6A1B2",
+		"trailing junk":       good + "x",
+		"empty string":        "",
+	}
+	for name, key := range cases {
+		if _, ok := ValidDesignationSortKey(key, adminUUID); ok {
+			t.Errorf("%s: ValidDesignationSortKey(%q) = true, want false", name, key)
+		}
+	}
+	// And a designation key is not accepted where a grant key is expected.
+	if _, ok := ValidGrantSortKey(good, adminUUID); ok {
+		t.Error("a DESIGNATION# key passed ValidGrantSortKey")
+	}
+}

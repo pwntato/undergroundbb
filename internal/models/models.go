@@ -97,6 +97,11 @@ type User struct {
 	// Username, salt, wrapped private keys, preferences and lock state are
 	// removed; the USERNAME claim and RECOVERY item are deleted.
 	DeletedAt string `dynamodbav:"DeletedAt,omitempty"`
+	// LastLoginDay is the UTC day ("2006-01-02") of the last successful login
+	// (#161). Day resolution on purpose, and written at most once a day, so
+	// login is the only place that touches it. Empty on a row from before it
+	// existed. It is a server attestation: only the server's claim check reads it.
+	LastLoginDay string `dynamodbav:"LastLoginDay,omitempty"`
 }
 
 // SupersededKey is a prior Ed25519 public key and the interval it was
@@ -696,4 +701,29 @@ type Rotation struct {
 	StartedAt string `dynamodbav:"StartedAt"`
 	// StartedBy is the admin whose browser minted the new key and holds it.
 	StartedBy string `dynamodbav:"StartedBy"`
+}
+
+// SuccessorDesignation is the GROUP#<gid> / DESIGNATION#<admin uuid>#<day>#<rand>
+// item (#161, docs/DESIGN.md, "Inactivity: the admin pre-signs a successor").
+// Append-only, like GRANT#: the newest by day wins, and one with an empty
+// SuccessorUserID revokes. No TTL, for the same reason GRANT# has none.
+//
+// No signing key is stored: nothing in the signed payload binds one, so a
+// verifier resolves the admin's key for the row's day from their key history,
+// as it does for a grant. AdminUserID is duplicated off the sort key so a
+// listing can read it directly.
+type SuccessorDesignation struct {
+	Record
+
+	AdminUserID string `dynamodbav:"AdminUserID"`
+	// SuccessorUserID is empty for a revocation.
+	SuccessorUserID string `dynamodbav:"SuccessorUserID,omitempty"`
+	// PeriodDays is the signed inactivity period, 30 to 365.
+	PeriodDays int `dynamodbav:"PeriodDays"`
+	// AdminGrantRef is the sort key of the admin's own current grant when this
+	// was signed -- an input to crypto.SuccessorDesignationPayload.
+	AdminGrantRef string `dynamodbav:"AdminGrantRef"`
+	// Signature is the admin's Ed25519 signature under
+	// crypto.ContextSuccessorDesignation.
+	Signature []byte `dynamodbav:"Signature"`
 }
