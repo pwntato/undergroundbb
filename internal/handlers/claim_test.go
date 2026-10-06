@@ -520,3 +520,45 @@ func TestClaimDesignationRefusesADeletedSuccessor(t *testing.T) {
 	}
 	w.assertRefused(t, rec, http.StatusGone, "subject_deleted")
 }
+
+func removeMemberGrantPointer(t *testing.T, gid, userID string) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:        aws.String(testTableName()),
+		Key:              map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("MEMBER#" + userID)},
+		UpdateExpression: aws.String("REMOVE GrantSortKey"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A creator on a group made before MEMBER# recorded GrantSortKey has no stored
+// pointer; their current grant is the group's root grant. The transaction can
+// only require the attribute to be absent there, so the handler's own compare
+// against the designation's ref is what refuses a designation citing anything else.
+func TestClaimDesignationForACreatorWithoutAStoredGrantPointer(t *testing.T) {
+	t.Run("designation cites the root grant", func(t *testing.T) {
+		w := newClaimWorld(t)
+		removeMemberGrantPointer(t, w.gid, w.owner.userID)
+		if rec := w.claim(t); rec.Code != http.StatusOK {
+			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
+		}
+		if memberRole(t, w.gid, w.bob.userID) != "admin" {
+			t.Error("bob is not admin")
+		}
+	})
+	t.Run("designation cites some other grant", func(t *testing.T) {
+		w := newClaimWorld(t)
+		removeMemberGrantPointer(t, w.gid, w.owner.userID)
+		deleteRaw(t, w.gid, w.designation)
+		// Written raw: PutDesignation would itself refuse a ref that is not the admin's.
+		w.designation = testDesignationSortKey(t, w.owner.userID, daysAgo(100))
+		putRaw(t, w.gid, w.designation, map[string]types.AttributeValue{
+			"Type": s("SuccessorDesignation"), "AdminUserID": s(w.owner.userID), "SuccessorUserID": s(w.bob.userID),
+			"PeriodDays":    &types.AttributeValueMemberN{Value: "90"},
+			"AdminGrantRef": s(testGrantSortKey(t, w.owner.userID, daysAgo(150))),
+			"Signature":     &types.AttributeValueMemberB{Value: make([]byte, 64)},
+		})
+		w.assertRefused(t, w.claim(t), http.StatusConflict, "admin_changed")
+	})
+}
