@@ -465,6 +465,15 @@ type RoleGrant struct {
 	// bytes. Empty for the root grant.
 	GrantorGrantRef string `dynamodbav:"GrantorGrantRef,omitempty"`
 
+	// ViaDesignation is set only on the row a designated successor's claim
+	// writes (#161, docs/DESIGN.md, "Inactivity"): the sort key of the
+	// DESIGNATION# row it relies on. It tells a verifier to use the
+	// successor-claim rule instead of the ordinary grant rule: Signature is
+	// then the SUCCESSOR's (under crypto.ContextSuccessorClaim), GrantorUserID
+	// the designating admin, and GrantorGrantRef the grant that admin signed
+	// the designation against. Empty on every other grant.
+	ViaDesignation string `dynamodbav:"ViaDesignation,omitempty"`
+
 	// Signature is the grantor's Ed25519 signature (under
 	// crypto.ContextRoleGrant) over the grant's content -- group id, subject
 	// uuid, granted role, and (for a non-root grant) a pointer to the

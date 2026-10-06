@@ -82,6 +82,15 @@ const (
 // requires.
 const DefaultSessionTTL = 24 * time.Hour
 
+// MaxSessionTTL caps SESSION_TTL_HOURS at 7 days. The inactivity rule for a
+// pre-signed successor (#161, docs/DESIGN.md, "Inactivity") measures an
+// admin's activity by the day of their last LOGIN, and its shortest period is
+// 30 days. A session as long as that period would let an admin who uses the
+// board every day log in once a month and look inactive, so a successor could
+// claim the group out from under them. A week leaves a wide margin below 30
+// days while still being a "long session" for anyone who wants one.
+const MaxSessionTTL = 7 * 24 * time.Hour
+
 // FromEnv builds a Config from environment variables, falling back to
 // defaults -- except SESSION_SECRET, which has no safe default and is
 // required. A compiled-in or auto-generated fallback would either let
@@ -107,7 +116,7 @@ func FromEnv() Config {
 		AllowGroupExpirationOff: BoolEnvOrDefault("ALLOW_GROUP_EXPIRATION_OFF", DefaultAllowGroupExpirationOff),
 		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
 		SessionSecret:           sessionSecretBytes,
-		SessionTTL:              durationEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
+		SessionTTL:              sessionTTLEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
 	}
 }
 
@@ -164,6 +173,19 @@ func durationEnvOrDefault(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(hours) * time.Hour
+}
+
+// sessionTTLEnvOrDefault is durationEnvOrDefault with MaxSessionTTL applied. A
+// value above the cap is clamped to it, not rejected: the operator asked for
+// a longer session, the safe reading is the longest one allowed, and refusing
+// to start would take the whole deployment down over a tuning knob.
+func sessionTTLEnvOrDefault(key string, def time.Duration) time.Duration {
+	ttl := durationEnvOrDefault(key, def)
+	if ttl > MaxSessionTTL {
+		log.Printf("warning: %s=%d exceeds the maximum of %d hours, using the maximum", key, int64(ttl/time.Hour), int64(MaxSessionTTL/time.Hour))
+		return MaxSessionTTL
+	}
+	return ttl
 }
 
 // registrationPolicyEnvOrDefault reads REGISTRATION_POLICY. An unset variable

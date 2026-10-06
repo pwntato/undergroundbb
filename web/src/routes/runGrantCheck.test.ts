@@ -8,8 +8,13 @@ import type { ListGrantsResponse } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from '@/lib/crypto/ed25519'
-import type { GrantRecord } from '@/lib/crypto/grant-chain'
-import { roleGrantPayload, trustAnchorPayload } from '@/lib/crypto/group'
+import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
+import {
+  roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
+  trustAnchorPayload,
+} from '@/lib/crypto/group'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { checkForView, checkGrants, type GrantCheck, type GrantCheckDeps } from './runGrantCheck'
@@ -97,9 +102,13 @@ const MEMBERS = [
 
 function deps(
   w: ReturnType<typeof world>,
-  over: Partial<GrantCheckDeps> & { pages?: GrantRecord[][] } = {},
+  over: Partial<GrantCheckDeps> & {
+    pages?: GrantRecord[][]
+    designations?: DesignationRecord[][]
+  } = {},
 ): GrantCheckDeps & { pins: Map<string, StoredAnchorPin>; keyPins: Map<string, PinRecord> } {
   const pages = over.pages ?? [[w.root, w.alice, w.bob]]
+  const designationPages = over.designations ?? [[]]
   const pins = new Map<string, StoredAnchorPin>()
   // The fake server side of PIN#: pinKeys signs with the caller's real key
   // exactly as the worker would, and listPins returns what was stored, so a
@@ -135,6 +144,13 @@ function deps(
         ...(i + 1 < pages.length && { nextCursor: String(i + 1) }),
       }
       return res
+    },
+    listDesignations: async (_g, cursor) => {
+      const i = cursor === undefined ? 0 : Number(cursor)
+      return {
+        designations: designationPages[i]!,
+        ...(i + 1 < designationPages.length && { nextCursor: String(i + 1) }),
+      }
     },
     getUser: async (id) => {
       const u = w.users.get(id)
@@ -521,5 +537,135 @@ describe('checkForView', () => {
 
   it('shows nothing before any check has run', () => {
     expect(checkForView(null, viewA)).toBeNull()
+  })
+})
+
+describe('checkGrants: successor claims (#161)', () => {
+  // The creator designates EVE on 04-01 for 30 days; EVE claims on 05-01.
+  function claimed() {
+    const w = world()
+    const eveKey = generateSigningKey()
+    w.users.set(EVE, user(EVE, eveKey))
+    const dsk = `DESIGNATION#${CREATOR}#2026-04-01#00000000000000aa`
+    const desig: DesignationRecord = {
+      sortKey: dsk,
+      adminUserId: CREATOR,
+      successorUserId: EVE,
+      periodDays: 30,
+      adminGrantRef: w.root.sortKey,
+      signature: b64(
+        sign(
+          w.creatorKey,
+          SigningContext.SuccessorDesignation,
+          successorDesignationPayload(GROUP, CREATOR, EVE, 30, dsk, w.root.sortKey),
+        ),
+      ),
+    }
+    const csk = sk(EVE, '2026-05-01')
+    const claim: GrantRecord = {
+      sortKey: csk,
+      subjectUserId: EVE,
+      grantedRole: 'admin',
+      grantorUserId: CREATOR,
+      grantorGrantRef: w.root.sortKey,
+      viaDesignation: dsk,
+      signature: b64(
+        sign(eveKey, SigningContext.SuccessorClaim, successorClaimPayload(GROUP, EVE, dsk, csk)),
+      ),
+    }
+    return { w, desig, claim }
+  }
+  const members = [
+    { userId: CREATOR, role: 'admin' },
+    { userId: EVE, role: 'admin' },
+  ]
+  const afterClaim = () => Date.parse('2026-05-02T00:00:00Z')
+
+  it('confirms a claimed admin, fetching the successor and the designations', async () => {
+    const { w, desig, claim } = claimed()
+    const getUser = vi.fn(deps(w).getUser)
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[desig]],
+      getUser,
+      now: afterClaim,
+    })
+    const r = await checkGrants(d, GROUP, members)
+    expect(r.state === 'checked' && r.statuses.get(EVE)).toEqual({ status: 'verified' })
+    expect(getUser).toHaveBeenCalledWith(EVE)
+  })
+
+  it('reads every page of designations', async () => {
+    const { w, desig, claim } = claimed()
+    const other = { ...desig, sortKey: `DESIGNATION#${CREATOR}#2026-01-01#00000000000000bb` }
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[other], [desig]],
+      now: afterClaim,
+    })
+    const r = await checkGrants(d, GROUP, members)
+    // `other` is dated before the designation, so it does not lapse it, and it is read.
+    expect(r.state === 'checked' && r.statuses.get(EVE)).toEqual({ status: 'verified' })
+  })
+
+  it('marks the claimed admin unverified when the server withholds the designation', async () => {
+    const { w, claim } = claimed()
+    const d = deps(w, { pages: [[w.root, claim]], designations: [[]], now: afterClaim })
+    const r = await checkGrants(d, GROUP, members)
+    expect(r.state === 'checked' && r.statuses.get(EVE)?.status).toBe('unverified')
+  })
+
+  it("flags a claim dated ahead of the viewer's clock", async () => {
+    const { w, desig, claim } = claimed()
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[desig]],
+      now: () => Date.parse('2026-04-20T00:00:00Z'),
+    })
+    const r = await checkGrants(d, GROUP, members)
+    expect(r.state === 'checked' && r.statuses.get(EVE)?.status).toBe('unverified')
+  })
+
+  it('is unavailable, not silently empty, when the designations cannot be read', async () => {
+    const { w, desig, claim } = claimed()
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[desig]],
+      listDesignations: async () => {
+        throw new Error('500')
+      },
+    })
+    expect(await checkGrants(d, GROUP, members)).toEqual({ state: 'unavailable' })
+  })
+
+  it("does not read designations, or their admins' keys, when no grant cites one", async () => {
+    const { w, desig } = claimed()
+    const listDesignations = vi.fn(async () => {
+      throw new Error('500')
+    })
+    const getUser = vi.fn(deps(w).getUser)
+    const d = deps(w, { designations: [[desig]], listDesignations, getUser })
+    const r = await checkGrants(d, GROUP, MEMBERS)
+    expect(r.state).toBe('checked')
+    expect(listDesignations).not.toHaveBeenCalled()
+  })
+
+  it('does not read the key of an admin whose designation nobody cites', async () => {
+    const { w, desig, claim } = claimed()
+    // ALICE has an unclaimed designation; her key is not needed for any claim.
+    const unclaimed: DesignationRecord = {
+      ...desig,
+      sortKey: `DESIGNATION#${ALICE}#2026-04-01#00000000000000cc`,
+      adminUserId: ALICE,
+    }
+    const getUser = vi.fn(deps(w).getUser)
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[desig, unclaimed]],
+      getUser,
+      now: afterClaim,
+    })
+    await checkGrants(d, GROUP, members)
+    expect(getUser.mock.calls.map(([id]) => id).sort()).toEqual([CREATOR, EVE].sort())
   })
 })

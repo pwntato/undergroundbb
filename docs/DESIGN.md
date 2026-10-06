@@ -850,7 +850,7 @@ create a membership, because `CreateGroup` and `CompleteInvite`, the only writer
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
 
-**Inactivity: the admin pre-signs a successor (#161, storage built, claim not yet).** An inactive admin who is
+**Inactivity: the admin pre-signs a successor (#161, claim built, UI not yet).** An inactive admin who is
 not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no
 remaining admin is acting, so the signature has to exist before the admin goes quiet. Co-signing by
 the highest remaining role was rejected: it makes a non-admin signature create an admin, a second
@@ -869,12 +869,12 @@ replace an admin who is only away.
 - **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
   conditional write per day at login, so nothing on the request hot path). Sessions last 24 hours by
   default, so an active admin logs in at least daily and this tracks real use. The gate assumes
-  sessions much shorter than the smallest period (30 days): `SESSION_TTL_HOURS` has no upper bound
-  today, and at a month an admin using the board daily could stamp once a month, so the claim PR
-  (step 2) must cap it in config well below 30 days. It is a server
-  attestation, used only by the server's own claim check below; a client never verifies it. A
-  `PROFILE` with no `LastLoginDay` (every row from before this ships) simply loses to the
-  designation's day in the rule below.
+  sessions much shorter than the smallest period (30 days), so `SESSION_TTL_HOURS` is capped at 168
+  hours (7 days, `config.MaxSessionTTL`): a larger value is lowered to the cap with a warning, and
+  Terraform refuses one. Without a cap, an admin using the board daily on a month-long session would
+  stamp only once a month and look inactive. It is a server attestation, used only by the server's
+  own claim check below; a client never verifies it. A `PROFILE` with no `LastLoginDay` (every row
+  from before this ships) simply loses to the designation's day in the rule below.
 - **The successor signs the claim.** The successor's browser calls `POST
   /api/groups/{gid}/designation/claim`, signing a new `SuccessorClaim` payload (own signing context,
   length-prefixed, in the pattern of `RoleGrantPayload`): group id, successor uuid, the designation's
@@ -930,14 +930,14 @@ replace an admin who is only away.
   designation the admin revoked, replaced or lost admin under before the claim day. A successor who
   cooperates with the server can postdate the claim, because the verifier has no clock and checks
   the signed day; the admin undoes that by revoking or re-designating before that day, since the
-  lapse window runs up to it, and a viewer's grant check, which does have a clock, should flag a
-  claim row dated more than `grantDaySkewTolerance` ahead of the viewer's now (the same slack the
-  server allows a fast clock, so an honest claim is not false-flagged; the check does not exist
-  yet). What is left is omission: a server that hides a revocation row from everyone can still serve
-  a stale designation, which the existing grant history is equally exposed to. The login clock is
-  the server's, but only the honest-path check uses it, so a lying clock alone can withhold a
-  legitimate claim, not forge one. The claim screen should re-check eligibility against the day it
-  is about to sign.
+  lapse window runs up to it, and a viewer's grant check, which does have a clock, rejects a claim
+  row dated more than two hours ahead of the viewer's now (`CLAIM_DAY_SKEW_TOLERANCE_MS`, the same
+  slack the server allows a fast clock, so an honest claim is not false-flagged; `checkGrants`
+  passes `Date.now()`, and the verifier does nothing when given no clock). What is left is omission:
+  a server that hides a revocation row from everyone can still serve a stale designation, which the
+  existing grant history is equally exposed to. The login clock is the server's, but only the
+  honest-path check uses it, so a lying clock alone can withhold a legitimate claim, not forge one.
+  The claim screen should re-check eligibility against the day it is about to sign.
 - **Lapses.** The designation stops applying without notice to the successor when any claim check
   above fails. Nothing re-nominates for the admin, so they have to maintain it; the group screen
   should say when an admin has none and when theirs has lapsed.
@@ -956,14 +956,35 @@ replace an admin who is only away.
   revocation still carries a `periodDays` in range, which is signed and stored but ignored. A
   successful login stamps `PROFILE.LastLoginDay` (one conditional write per day; a login fails if
   the stamp fails, because a missed stamp would make an active admin look inactive). Account
-  deletion removes `LastLoginDay` with the rest of what a tombstone does not need. Nothing reads
-  `LastLoginDay` or activates a designation yet.
+  deletion removes `LastLoginDay` with the rest of what a tombstone does not need.
+- **What exists** (step 2): `POST /api/groups/{gid}/designation/claim`, called by the successor with
+  `{designationSortKey, claimSortKey, signature}`. The caller must be a member and not already an
+  admin (`already_admin`); the claim sort key must be a well-formed `GRANT#` key for the caller
+  dated within the usual client-day tolerance, and the signature must verify under the caller's
+  current key and `successor-claim:v1`. It then refuses, each with its own code: no such designation
+  (404 `designation_not_found`); one that does not name the caller, which includes a revocation
+  (`designation_not_yours`); another designation by the admin dated from this one's day through the
+  claim day (`designation_superseded`); any grant to the admin in that window
+  (`designation_lapsed`); an earlier row citing it (`already_claimed`); the admin no longer an admin
+  or no longer on the grant it was signed against (`admin_changed`); a designation dated before the
+  caller's `MEMBER#` `CreatedAt` (`designation_before_join`); and an admin, the designating one or
+  any other, not inactive for `periodDays` (`not_inactive`). Inactivity is `claimDay -
+  max(LastLoginDay, designationDay) >= periodDays`, with the claim day being the one in the signed
+  sort key. One transaction then appends the `GRANT#` row (`ViaDesignation`, the successor's
+  signature, `GrantorUserID` the admin) and sets the successor's `MEMBER#` role and `GrantSortKey`;
+  it checks the admin is still an admin on the signed grant, the successor still holds the role the
+  claim was checked against (which is what makes two concurrent claims safe: the second finds the
+  role changed), and the successor's account is not deleted. The designation rows themselves are
+  read before the transaction, so a revocation written in between does not stop the claim; the
+  verifier's lapse rule is what still voids it. `GET /grants` serves `viaDesignation`. The web grant
+  check fetches every designation page and the successor's key, and `verifyGrantChain` takes
+  `designations` and `now`; a claim row whose designation is not served is unverified.
 - **Build order**: (1a) both payloads and contexts in Go and TS with vectors (pure builders, so
   shipping them early is harmless: nothing emits a claim row yet); (1b) `DESIGNATION#` rows, PUT/GET
   and `LastLoginDay`; (2) the claim endpoint and the verifier rule in `grant-chain.ts` together, in
   one PR, because a claim row reaching a client without the rule shows as unverified and so does
-  every grant the successor signs after it; (3) the admin UI to designate, revoke and see status,
-  and the successor claim.
+  every grant the successor signs after it (built, with the `SESSION_TTL_HOURS` cap); (3) the admin
+  UI to designate, revoke and see status, and the successor claim screen (not built).
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry

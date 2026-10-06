@@ -198,3 +198,24 @@ func TestValidDesignationSortKey(t *testing.T) {
 		t.Error("a DESIGNATION# key passed ValidGrantSortKey")
 	}
 }
+
+func TestDesignationAdmin(t *testing.T) {
+	const admin = "0a1b2c3d-0000-4000-8000-000000000001"
+	good := "DESIGNATION#" + admin + "#2026-03-04#0011223344556677"
+	got, day, ok := DesignationAdmin(good)
+	if !ok || got != admin || day.Format("2006-01-02") != "2026-03-04" {
+		t.Fatalf("DesignationAdmin(%q) = %q, %v, %v", good, got, day, ok)
+	}
+	for _, bad := range []string{
+		"",
+		"GRANT#" + admin + "#2026-03-04#0011223344556677",
+		"DESIGNATION#" + admin + "#2026-13-04#0011223344556677",
+		"DESIGNATION#" + admin + "#2026-03-04#001122334455667",
+		"DESIGNATION#" + admin + "#2026-03-04#0011223344556677x",
+		"DESIGNATION#nope#2026-03-04#0011223344556677",
+	} {
+		if _, _, ok := DesignationAdmin(bad); ok {
+			t.Errorf("DesignationAdmin accepted %q", bad)
+		}
+	}
+}

@@ -32,6 +32,19 @@
 //     walking the history covers #56 with no separate row.
 //   - A member with no GRANT# row (added by invite) is baseline `member`.
 //
+//   - A row with `viaDesignation` is a designated successor's claim of the
+//     admin role (#161, docs/DESIGN.md, "Inactivity"), not an ordinary grant,
+//     and is judged by verifyClaim below instead: the designation must verify
+//     like any admin-signed row, name this subject, and be cited by no other
+//     row; the SUCCESSOR's claim signature must verify under a key they held on
+//     the claim day; the role must be admin; the claim must fall at least
+//     periodDays after the designation; and the designating admin must have
+//     no other designation and no grant TO them dated on or after the
+//     designation's day up to the claim day. The server cannot choose the
+//     successor or claim early; a successor who colludes with it can postdate
+//     the claim, which the admin undoes by revoking first, and which a caller
+//     passing `now` flags when the claim is dated beyond the skew tolerance.
+//
 // Caller obligations. "verified" here means "consistent with the anchor and
 // key histories supplied", and is proof against the server only if BOTH held:
 //   1. pinnedAnchor was supplied and matched (result.anchorPinned), and
@@ -78,7 +91,12 @@
 
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
-import { roleGrantPayload, trustAnchorPayload } from './group.js'
+import {
+  roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
+  trustAnchorPayload,
+} from './group.js'
 
 export type GrantRole = 'admin' | 'ambassador' | 'member'
 
@@ -91,8 +109,32 @@ export interface GrantRecord {
   /** Server-written hint; never used for verification. */
   readonly grantorSigningPublicKey?: string
   readonly grantorGrantRef?: string
+  /**
+   * Set only on a designated successor's claim (#161): the DESIGNATION# sort
+   * key it relies on. A row that has it is judged by the claim rule, never as
+   * an ordinary grant.
+   */
+  readonly viaDesignation?: string
   readonly signature: string
 }
+
+/** A successor designation as served by GET /api/groups/{id}/designations. */
+export interface DesignationRecord {
+  readonly sortKey: string
+  readonly adminUserId: string
+  /** Absent on a revocation. */
+  readonly successorUserId?: string
+  readonly periodDays: number
+  readonly adminGrantRef: string
+  readonly signature: string
+}
+
+/**
+ * How far past `now` a claim's signed day may be before it is flagged. The
+ * server accepts a client-dated grant up to two hours ahead of its own clock
+ * (grantDaySkewTolerance), so an honest claim from a fast clock is not flagged.
+ */
+export const CLAIM_DAY_SKEW_TOLERANCE_MS = 2 * 60 * 60 * 1000
 
 /** The anchor as served on every page of the grants response. */
 export interface GrantAnchor {
@@ -137,6 +179,19 @@ export interface GrantChainInput {
    * history from a real one.
    */
   readonly keyHistories: ReadonlyMap<string, UserKeyHistory>
+  /**
+   * Every designation the server serves (all pages). A claim row whose
+   * designation is not here is rejected, so a caller that cannot fetch them
+   * must not pass an empty list as if it had.
+   */
+  readonly designations?: readonly DesignationRecord[]
+  /**
+   * The viewer's clock, ms since the epoch. When set, a claim row dated more
+   * than CLAIM_DAY_SKEW_TOLERANCE_MS ahead of it is rejected: the verifier has
+   * no clock of its own, so this is the only check that catches a postdated
+   * claim (docs/DESIGN.md, "Inactivity").
+   */
+  readonly now?: number
 }
 
 export interface GrantChainResult {
@@ -159,6 +214,9 @@ export type RoleStatus =
   { readonly status: 'verified' } | { readonly status: 'unverified'; readonly reason: string }
 
 const SORT_KEY = /^GRANT#([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$/
+const DESIGNATION_KEY = /^DESIGNATION#([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$/
+const MIN_PERIOD_DAYS = 30
+const MAX_PERIOD_DAYS = 365
 const DAY_MS = 24 * 60 * 60 * 1000
 const ROLES: readonly string[] = ['admin', 'ambassador', 'member']
 
@@ -169,6 +227,14 @@ interface ParsedKey {
 
 function parseSortKey(sortKey: string): ParsedKey | null {
   const m = SORT_KEY.exec(sortKey)
+  if (!m) return null
+  const day = Date.parse(`${m[2]}T00:00:00.000Z`)
+  if (Number.isNaN(day)) return null
+  return { subject: m[1]!, day }
+}
+
+function parseDesignationKey(sortKey: string): ParsedKey | null {
+  const m = DESIGNATION_KEY.exec(sortKey)
   if (!m) return null
   const day = Date.parse(`${m[2]}T00:00:00.000Z`)
   if (Number.isNaN(day)) return null
@@ -257,7 +323,24 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
     grantsBySubject.set(g.subjectUserId, list)
   }
 
+  // Designations by sort key (a duplicate poisons it), and which grants rely on each.
+  const designationByKey = new Map<string, DesignationRecord>()
+  const duplicatedDesignations = new Set<string>()
+  const designationsByAdmin = new Map<string, DesignationRecord[]>()
+  for (const d of input.designations ?? []) {
+    if (designationByKey.has(d.sortKey)) duplicatedDesignations.add(d.sortKey)
+    designationByKey.set(d.sortKey, d)
+    const list = designationsByAdmin.get(d.adminUserId) ?? []
+    list.push(d)
+    designationsByAdmin.set(d.adminUserId, list)
+  }
+  const citing = new Map<string, number>()
+  for (const g of input.grants) {
+    if (g.viaDesignation) citing.set(g.viaDesignation, (citing.get(g.viaDesignation) ?? 0) + 1)
+  }
+
   const verdicts = new Map<string, GrantVerdict>()
+  const designationVerdicts = new Map<string, GrantVerdict>()
 
   const reject = (reason: string): GrantVerdict => ({ valid: false, reason })
 
@@ -282,6 +365,7 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
     if (!ROLES.includes(g.grantedRole)) return reject('unknown role')
     const sig = decode(g.signature)
     if (!sig) return reject('malformed signature')
+    if (g.viaDesignation) return verifyClaim(g, parsed, sig)
     const ref = g.grantorGrantRef ?? ''
     const payload = roleGrantPayload(groupId, g.subjectUserId, g.grantedRole, g.sortKey, ref)
 
@@ -354,6 +438,133 @@ export function verifyGrantChain(input: GrantChainInput): GrantChainResult {
       if (verify(key, SigningContext.RoleGrant, payload, sig)) return { valid: true }
     }
     return reject('signature does not verify under any key the grantor held on that day')
+  }
+
+  function verifyDesignation(d: DesignationRecord): GrantVerdict {
+    const cached = designationVerdicts.get(d.sortKey)
+    if (cached) return cached
+    const verdict = computeDesignation(d)
+    designationVerdicts.set(d.sortKey, verdict)
+    return verdict
+  }
+
+  /**
+   * A designation verifies like a grant the admin signed: under a key they
+   * held on its day, while holding admin that day by a verifying grant that
+   * is strictly earlier, with no other grant to them on the day itself (order
+   * within a day is unknowable, so a same-day change fails safe).
+   */
+  function computeDesignation(d: DesignationRecord): GrantVerdict {
+    if (duplicatedDesignations.has(d.sortKey)) return reject('duplicate designation sort key')
+    const parsed = parseDesignationKey(d.sortKey)
+    if (!parsed) return reject('malformed designation sort key')
+    if (parsed.subject !== d.adminUserId) return reject('designation sort key does not match admin')
+    if (
+      !Number.isSafeInteger(d.periodDays) ||
+      d.periodDays < MIN_PERIOD_DAYS ||
+      d.periodDays > MAX_PERIOD_DAYS
+    ) {
+      return reject('designation period is out of range')
+    }
+    const sig = decode(d.signature)
+    if (!sig) return reject('malformed designation signature')
+    if (d.adminGrantRef === '') return reject('designation has no admin grant reference')
+
+    let latestDay = -Infinity
+    let latest: GrantRecord[] = []
+    for (const other of grantsBySubject.get(d.adminUserId) ?? []) {
+      const p = parseSortKey(other.sortKey)
+      if (!p) continue
+      if (p.day === parsed.day) return reject("admin's role changed on the designation's day")
+      if (p.day > parsed.day) continue
+      if (p.day > latestDay) {
+        latestDay = p.day
+        latest = [other]
+      } else if (p.day === latestDay) {
+        latest.push(other)
+      }
+    }
+    if (latest.length === 0) return reject('admin held no grant on the designation day')
+    if (latest.length > 1) return reject("admin's current grant is ambiguous (same-day tie)")
+    const current = latest[0]!
+    if (d.adminGrantRef !== current.sortKey) {
+      return reject("adminGrantRef is not the admin's current grant")
+    }
+    if (current.grantedRole !== 'admin') return reject('designating admin was not admin that day')
+    if (!verifyOne(current).valid) return reject("admin's own grant does not verify")
+
+    const history = keyHistories.get(d.adminUserId)
+    if (!history) return reject('no key history for the designating admin')
+    const payload = successorDesignationPayload(
+      groupId,
+      d.adminUserId,
+      d.successorUserId ?? '',
+      d.periodDays,
+      d.sortKey,
+      d.adminGrantRef,
+    )
+    for (const key of keysOnDay(history, parsed.day)) {
+      if (verify(key, SigningContext.SuccessorDesignation, payload, sig)) return { valid: true }
+    }
+    return reject('designation signature does not verify under any key the admin held that day')
+  }
+
+  /**
+   * The successor-claim rule (docs/DESIGN.md, "Inactivity: the admin pre-signs
+   * a successor"). Every check here is made from signed rows; none relies on
+   * the server's login record or clock.
+   */
+  function verifyClaim(g: GrantRecord, parsed: ParsedKey, sig: Uint8Array): GrantVerdict {
+    const designationKey = g.viaDesignation!
+    // The claim payload does not sign a role, and a designation can only confer admin.
+    if (g.grantedRole !== 'admin') return reject('a successor claim can only confer admin')
+    if ((citing.get(designationKey) ?? 0) > 1) {
+      return reject('more than one grant relies on this designation')
+    }
+    const d = designationByKey.get(designationKey)
+    if (!d) return reject('the designation this claim relies on was not served')
+    const designation = verifyDesignation(d)
+    if (!designation.valid) return reject(`designation does not verify (${designation.reason})`)
+    if (d.successorUserId !== g.subjectUserId) return reject('the designation names someone else')
+    if (g.grantorUserId !== d.adminUserId) return reject('claim names a different admin')
+    if ((g.grantorGrantRef ?? '') !== d.adminGrantRef) {
+      return reject('claim does not cite the grant the designation was signed against')
+    }
+    const dParsed = parseDesignationKey(d.sortKey)!
+
+    // The floor: signing the designation shows the admin was active that day,
+    // so periodDays must have passed before anyone may claim.
+    if (parsed.day - dParsed.day < d.periodDays * DAY_MS) {
+      return reject('the claim is dated before the designation period elapsed')
+    }
+    if (input.now !== undefined && parsed.day - input.now > CLAIM_DAY_SKEW_TOLERANCE_MS) {
+      return reject('the claim is dated in the future')
+    }
+
+    // The lapse: anything of the admin's own from the designation's day up to
+    // the claim's. "On or after" is deliberate: a same-day revocation or
+    // self-demotion cannot be ordered against the designation, so it cancels it.
+    for (const other of designationsByAdmin.get(d.adminUserId) ?? []) {
+      if (other.sortKey === d.sortKey) continue
+      const p = parseDesignationKey(other.sortKey)
+      if (p && p.day >= dParsed.day && p.day <= parsed.day) {
+        return reject('the admin signed another designation since, which cancels this one')
+      }
+    }
+    for (const other of grantsBySubject.get(d.adminUserId) ?? []) {
+      const p = parseSortKey(other.sortKey)
+      if (p && p.day >= dParsed.day && p.day <= parsed.day) {
+        return reject("the admin's own role changed since the designation")
+      }
+    }
+
+    const history = keyHistories.get(g.subjectUserId)
+    if (!history) return reject('no key history for the successor')
+    const payload = successorClaimPayload(groupId, g.subjectUserId, designationKey, g.sortKey)
+    for (const key of keysOnDay(history, parsed.day)) {
+      if (verify(key, SigningContext.SuccessorClaim, payload, sig)) return { valid: true }
+    }
+    return reject('claim signature does not verify under any key the successor held that day')
   }
 
   function isSelfDemotion(g: GrantRecord): boolean {

@@ -139,3 +139,19 @@ func ValidDesignationSortKey(s, adminUUID string) (time.Time, bool) {
 	}
 	return day, true
 }
+
+// DesignationAdmin returns the admin uuid in a well-formed DESIGNATION# sort
+// key and the day it is dated, for a caller that was handed the key and has
+// to find out whose it is (the claim endpoint). ok is false for any other shape.
+func DesignationAdmin(s string) (adminUUID string, day time.Time, ok bool) {
+	m := designationSortKeyPattern.FindStringSubmatch(s)
+	if m == nil {
+		return "", time.Time{}, false
+	}
+	adminUUID = s[len("DESIGNATION#") : len("DESIGNATION#")+36]
+	day, err := time.Parse("2006-01-02", m[1])
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return adminUUID, day, true
+}

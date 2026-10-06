@@ -7,14 +7,21 @@ import { describe, expect, it } from 'vitest'
 import { bytesToBase64 } from './base64.js'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from './ed25519.js'
 import {
+  CLAIM_DAY_SKEW_TOLERANCE_MS,
   checkMemberRole,
   verifyGrantChain,
+  type DesignationRecord,
   type GrantAnchor,
   type GrantChainInput,
   type GrantRecord,
   type UserKeyHistory,
 } from './grant-chain.js'
-import { roleGrantPayload, trustAnchorPayload } from './group.js'
+import {
+  roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
+  trustAnchorPayload,
+} from './group.js'
 
 const GROUP = '11111111-1111-4111-8111-111111111111'
 const CREATOR = 'c0000000-0000-4000-8000-000000000001'
@@ -1101,5 +1108,462 @@ describe('verifyGrantChain: removal of an admin (#58)', () => {
     const viaSelf = grant(w.aliceKey, ALICE, 'member', ALICE, '2026-03-06', w.aliceAdmin.sortKey)
     expect(verdictOf(withBob(w, bob, viaSelf), bob).valid).toBe(true)
     expect(verdictOf(withBob(w, bob, remove(w, '2026-03-06')), bob).valid).toBe(false)
+  })
+})
+
+// ---- Successor claims (#161) -------------------------------------------------
+
+let desigCounter = 0
+function dk(admin: string, day: string): string {
+  desigCounter++
+  return `DESIGNATION#${admin}#${day}#${desigCounter.toString(16).padStart(16, '0')}`
+}
+
+function designation(
+  key: SigningKey,
+  admin: string,
+  successor: string,
+  periodDays: number,
+  day: string,
+  ref: string,
+  sortKey: string = dk(admin, day),
+): DesignationRecord {
+  const sig = sign(
+    key,
+    SigningContext.SuccessorDesignation,
+    successorDesignationPayload(GROUP, admin, successor, periodDays, sortKey, ref),
+  )
+  return {
+    sortKey,
+    adminUserId: admin,
+    ...(successor ? { successorUserId: successor } : {}),
+    periodDays,
+    adminGrantRef: ref,
+    signature: b64(sig),
+  }
+}
+
+function claim(
+  key: SigningKey,
+  subject: string,
+  d: DesignationRecord,
+  day: string,
+  sortKey: string = sk(subject, day),
+): GrantRecord {
+  const sig = sign(
+    key,
+    SigningContext.SuccessorClaim,
+    successorClaimPayload(GROUP, subject, d.sortKey, sortKey),
+  )
+  return {
+    sortKey,
+    subjectUserId: subject,
+    grantedRole: 'admin',
+    grantorUserId: d.adminUserId,
+    ...(d.adminGrantRef ? { grantorGrantRef: d.adminGrantRef } : {}),
+    viaDesignation: d.sortKey,
+    signature: b64(sig),
+  }
+}
+
+interface ClaimWorld extends World {
+  bobKey: SigningKey
+  /** creator designates Bob on 2026-04-01 for 30 days. */
+  desig: DesignationRecord
+  /** Bob's claim on 2026-05-01, exactly 30 days later. */
+  bobClaim: GrantRecord
+  input: GrantChainInput
+}
+
+function claimWorld(): ClaimWorld {
+  const w = world()
+  const bobKey = generateSigningKey()
+  const desig = designation(w.creatorKey, CREATOR, BOB, 30, '2026-04-01', w.root.sortKey)
+  const bobClaim = claim(bobKey, BOB, desig, '2026-05-01')
+  const input: GrantChainInput = {
+    ...w.input,
+    grants: [...w.input.grants, bobClaim],
+    designations: [desig],
+    keyHistories: new Map([...w.input.keyHistories, [BOB, history(bobKey)]]),
+  }
+  return { ...w, bobKey, desig, bobClaim, input }
+}
+
+function cw(w: ClaimWorld, over: Partial<GrantChainInput>): GrantChainInput {
+  return { ...w.input, ...over }
+}
+
+describe('verifyGrantChain: successor claims', () => {
+  it('verifies a claim and reports the successor as a verified admin', () => {
+    const w = claimWorld()
+    const r = verifyGrantChain(w.input)
+    expect(r.verdicts.get(w.bobClaim.sortKey)).toEqual({ valid: true })
+    expect(checkMemberRole(r, BOB, 'admin')).toEqual({ status: 'verified' })
+    // The designating admin is untouched.
+    expect(checkMemberRole(r, CREATOR, 'admin')).toEqual({ status: 'verified' })
+  })
+
+  it('lets the new admin grant from the day after the claim, not on it', () => {
+    const w = claimWorld()
+    const next = grant(w.bobKey, EVE, 'member', BOB, '2026-05-02', w.bobClaim.sortKey)
+    const same = grant(w.bobKey, EVE, 'ambassador', BOB, '2026-05-01', w.bobClaim.sortKey)
+    expect(verdictOf(cw(w, { grants: [...w.input.grants, next] }), next).valid).toBe(true)
+    const v = verdictOf(cw(w, { grants: [...w.input.grants, same] }), same)
+    expect(v.valid).toBe(false)
+  })
+
+  it('rejects a claim whose designation was not served', () => {
+    const w = claimWorld()
+    expect(verdictOf(cw(w, { designations: [] }), w.bobClaim).valid).toBe(false)
+    const { designations: _omit, ...rest } = w.input
+    expect(verdictOf(rest, w.bobClaim).valid).toBe(false)
+  })
+
+  it('rejects a role other than admin: the claim does not sign the role', () => {
+    const w = claimWorld()
+    const forged = { ...w.bobClaim, grantedRole: 'ambassador' }
+    const input = cw(w, { grants: [w.root, w.aliceAdmin, forged] })
+    const v = verdictOf(input, forged)
+    expect(v.valid).toBe(false)
+    expect(v.reason).toMatch(/only confer admin/)
+  })
+
+  it('enforces the floor: periodDays must have passed, and exactly periodDays is enough', () => {
+    const w = claimWorld()
+    const early = claim(w.bobKey, BOB, w.desig, '2026-04-30')
+    const on = claim(w.bobKey, BOB, w.desig, '2026-05-01')
+    expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, early] }), early).valid).toBe(false)
+    expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, on] }), on).valid).toBe(true)
+  })
+
+  it('rejects a claim dated before the designation', () => {
+    const w = claimWorld()
+    const before = claim(w.bobKey, BOB, w.desig, '2026-03-20')
+    expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, before] }), before).valid).toBe(false)
+  })
+
+  it('rejects a claim signed for a different row or day (the claim sort key is signed)', () => {
+    const w = claimWorld()
+    const moved = { ...w.bobClaim, sortKey: sk(BOB, '2026-06-01') }
+    expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, moved] }), moved).valid).toBe(false)
+  })
+
+  it('rejects a claim signed by anyone but the successor', () => {
+    const w = claimWorld()
+    const byAdmin = claim(w.creatorKey, BOB, w.desig, '2026-05-01')
+    const byEve = claim(generateSigningKey(), BOB, w.desig, '2026-05-01')
+    for (const bad of [byAdmin, byEve]) {
+      expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, bad] }), bad).valid).toBe(false)
+    }
+  })
+
+  it('rejects a claim signed under the role-grant context', () => {
+    const w = claimWorld()
+    const sortKey = sk(BOB, '2026-05-01')
+    const wrong: GrantRecord = {
+      ...w.bobClaim,
+      sortKey,
+      signature: b64(
+        sign(
+          w.bobKey,
+          SigningContext.RoleGrant,
+          successorClaimPayload(GROUP, BOB, w.desig.sortKey, sortKey),
+        ),
+      ),
+    }
+    expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, wrong] }), wrong).valid).toBe(false)
+  })
+
+  it('accepts a claim signed with a superseded key the successor held that day', () => {
+    const w = claimWorld()
+    const newKey = generateSigningKey()
+    const histories = new Map(w.input.keyHistories)
+    histories.set(BOB, {
+      signingPublicKey: b64(newKey.publicKey),
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.bobKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2026-05-10T00:00:00Z',
+        },
+      ],
+    })
+    expect(verdictOf(cw(w, { keyHistories: histories }), w.bobClaim).valid).toBe(true)
+    // ...but not a key Bob only got afterwards.
+    const late = claim(newKey, BOB, w.desig, '2026-05-01')
+    expect(
+      verdictOf(cw(w, { keyHistories: histories, grants: [w.root, w.aliceAdmin, late] }), late)
+        .valid,
+    ).toBe(false)
+  })
+
+  it('rejects a designation naming someone else, or a revocation', () => {
+    const w = claimWorld()
+    const forEve = designation(w.creatorKey, CREATOR, EVE, 30, '2026-04-01', w.root.sortKey)
+    const revoked = designation(w.creatorKey, CREATOR, '', 30, '2026-04-01', w.root.sortKey)
+    for (const d of [forEve, revoked]) {
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      expect(
+        verdictOf(cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] }), c).valid,
+      ).toBe(false)
+    }
+  })
+
+  it('rejects a claim that names a different admin or grant than the designation', () => {
+    const w = claimWorld()
+    const otherAdmin = { ...w.bobClaim, grantorUserId: ALICE }
+    const otherRef = { ...w.bobClaim, grantorGrantRef: w.aliceAdmin.sortKey }
+    for (const bad of [otherAdmin, otherRef]) {
+      expect(verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, bad] }), bad).valid).toBe(false)
+    }
+  })
+
+  describe('the designation itself must verify', () => {
+    it('rejects one signed by the wrong key', () => {
+      const w = claimWorld()
+      const d = designation(generateSigningKey(), CREATOR, BOB, 30, '2026-04-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      expect(
+        verdictOf(cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] }), c).valid,
+      ).toBe(false)
+    })
+
+    it('rejects one whose admin was not an admin that day', () => {
+      const w = claimWorld()
+      // Bob has no grant at all as of 04-01 apart from nothing; Eve was never admin.
+      const eveKey = generateSigningKey()
+      const d = designation(eveKey, EVE, BOB, 30, '2026-04-01', w.root.sortKey)
+      const c = { ...claim(w.bobKey, BOB, d, '2026-05-01') }
+      const input = cw(w, {
+        designations: [d],
+        grants: [w.root, w.aliceAdmin, c],
+        keyHistories: new Map([...w.input.keyHistories, [EVE, history(eveKey)]]),
+      })
+      expect(verdictOf(input, c).valid).toBe(false)
+    })
+
+    it('rejects one citing a stale admin grant', () => {
+      const w = claimWorld()
+      const d = designation(w.aliceKey, ALICE, BOB, 30, '2026-04-01', w.root.sortKey) // Alice's ref is the creator's root
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      expect(
+        verdictOf(cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] }), c).valid,
+      ).toBe(false)
+    })
+
+    it("rejects one dated the same day as the admin's own grant", () => {
+      const w = claimWorld()
+      const d = designation(w.creatorKey, CREATOR, BOB, 30, '2026-03-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2026-04-01')
+      expect(
+        verdictOf(cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] }), c).valid,
+      ).toBe(false)
+    })
+
+    it('rejects a designation by an admin whose own grant does not verify', () => {
+      const w = claimWorld()
+      const d = designation(w.aliceKey, ALICE, BOB, 30, '2026-04-01', w.aliceAdmin.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      const broken = { ...w.aliceAdmin, signature: b64(new Uint8Array(64)) }
+      const input = cw(w, { designations: [d], grants: [w.root, broken, c] })
+      expect(verdictOf(input, c).valid).toBe(false)
+      // And with Alice's grant intact it does verify, so it was her grant that failed it.
+      expect(
+        verdictOf(cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] }), c).valid,
+      ).toBe(true)
+    })
+
+    it.each([29, 366])('rejects a period of %s, signed correctly', (period) => {
+      const w = claimWorld()
+      const d = designation(w.creatorKey, CREATOR, BOB, period, '2026-04-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2028-01-01')
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
+      const v = verdictOf(input, c)
+      expect(v.valid).toBe(false)
+      expect(v.reason).toMatch(/out of range/)
+    })
+
+    it.each([
+      [30, '2026-05-01', true],
+      [365, '2027-04-01', true],
+      [365, '2027-03-31', false],
+    ])('a period of %s claimed on %s verifies: %s', (period, day, ok) => {
+      const w = claimWorld()
+      const d = designation(w.creatorKey, CREATOR, BOB, period, '2026-04-01', w.root.sortKey)
+      const c = claim(w.bobKey, BOB, d, day)
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
+      expect(verdictOf(input, c).valid).toBe(ok)
+    })
+
+    it.each([90.5, Number.NaN])('rejects a non-integer period of %s without throwing', (period) => {
+      const w = claimWorld()
+      const d: DesignationRecord = {
+        sortKey: dk(CREATOR, '2026-04-01'),
+        adminUserId: CREATOR,
+        successorUserId: BOB,
+        periodDays: period,
+        adminGrantRef: w.root.sortKey,
+        signature: w.desig.signature,
+      }
+      const c = claim(w.bobKey, BOB, { ...d, periodDays: 30 }, '2026-12-31')
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, c] })
+      expect(verdictOf(input, c).valid).toBe(false)
+    })
+
+    it('rejects a designation by an admin who had been demoted to ambassador', () => {
+      const w = claimWorld()
+      const demoted = grant(
+        w.creatorKey,
+        ALICE,
+        'ambassador',
+        CREATOR,
+        '2026-03-10',
+        w.root.sortKey,
+      )
+      const d = designation(w.aliceKey, ALICE, BOB, 30, '2026-04-01', demoted.sortKey)
+      const c = claim(w.bobKey, BOB, d, '2026-05-01')
+      const input = cw(w, { designations: [d], grants: [w.root, w.aliceAdmin, demoted, c] })
+      const v = verdictOf(input, c)
+      expect(v.valid).toBe(false)
+      expect(v.reason).toMatch(/not admin/)
+    })
+
+    it('poisons a designation served twice', () => {
+      const w = claimWorld()
+      expect(verdictOf(cw(w, { designations: [w.desig, w.desig] }), w.bobClaim).valid).toBe(false)
+    })
+  })
+
+  describe('the lapse rule', () => {
+    it('is cancelled by another designation by the admin from the same day through the claim day', () => {
+      const w = claimWorld()
+      for (const day of ['2026-04-01', '2026-04-15', '2026-05-01']) {
+        const other = designation(w.creatorKey, CREATOR, EVE, 30, day, w.root.sortKey)
+        expect(verdictOf(cw(w, { designations: [w.desig, other] }), w.bobClaim).valid).toBe(false)
+      }
+    })
+
+    it('is not cancelled by designations before it or after the claim day', () => {
+      const w = claimWorld()
+      const before = designation(w.creatorKey, CREATOR, EVE, 30, '2026-03-31', w.root.sortKey)
+      const after = designation(w.creatorKey, CREATOR, EVE, 30, '2026-05-02', w.root.sortKey)
+      expect(verdictOf(cw(w, { designations: [w.desig, before, after] }), w.bobClaim).valid).toBe(
+        true,
+      )
+    })
+
+    it('is cancelled by a revocation the admin signed in the window', () => {
+      const w = claimWorld()
+      const revoke = designation(w.creatorKey, CREATOR, '', 30, '2026-04-20', w.root.sortKey)
+      expect(verdictOf(cw(w, { designations: [w.desig, revoke] }), w.bobClaim).valid).toBe(false)
+    })
+
+    it('is cancelled by any grant TO the admin dated from the designation day through the claim day', () => {
+      const w = claimWorld()
+      for (const day of ['2026-04-01', '2026-04-10', '2026-05-01']) {
+        // A self-demotion, or a re-promotion by someone else: either way a grant to the admin.
+        const demote = grant(w.creatorKey, CREATOR, 'member', CREATOR, day, w.root.sortKey)
+        expect(verdictOf(cw(w, { grants: [...w.input.grants, demote] }), w.bobClaim).valid).toBe(
+          false,
+        )
+        const byAlice = grant(w.aliceKey, CREATOR, 'member', ALICE, day, w.aliceAdmin.sortKey)
+        expect(verdictOf(cw(w, { grants: [...w.input.grants, byAlice] }), w.bobClaim).valid).toBe(
+          false,
+        )
+      }
+    })
+
+    it('is not cancelled by grants to the admin outside the window, or by grants the admin signed', () => {
+      // The root grant (03-01) is already a grant to the admin dated before the window.
+      const w = claimWorld()
+      const after = grant(w.aliceKey, CREATOR, 'admin', ALICE, '2026-05-02', w.aliceAdmin.sortKey)
+      const signedByAdmin = grant(
+        w.creatorKey,
+        EVE,
+        'member',
+        CREATOR,
+        '2026-04-10',
+        w.root.sortKey,
+      )
+      expect(
+        verdictOf(cw(w, { grants: [...w.input.grants, after, signedByAdmin] }), w.bobClaim).valid,
+      ).toBe(true)
+    })
+  })
+
+  describe('fires at most once', () => {
+    it('rejects every row that cites the same designation', () => {
+      const w = claimWorld()
+      const second = claim(w.bobKey, BOB, w.desig, '2026-05-03')
+      const input = cw(w, { grants: [...w.input.grants, second] })
+      expect(verdictOf(input, w.bobClaim).valid).toBe(false)
+      expect(verdictOf(input, second).valid).toBe(false)
+    })
+
+    it('rejects a second claim by someone else on the same designation', () => {
+      const w = claimWorld()
+      const eveKey = generateSigningKey()
+      const evil = claim(eveKey, EVE, w.desig, '2026-05-01')
+      const input = cw(w, {
+        grants: [...w.input.grants, evil],
+        keyHistories: new Map([...w.input.keyHistories, [EVE, history(eveKey)]]),
+      })
+      expect(verdictOf(input, w.bobClaim).valid).toBe(false)
+      expect(verdictOf(input, evil).valid).toBe(false)
+    })
+  })
+
+  describe('a row cannot pass as a different kind', () => {
+    it('does not accept a claim with viaDesignation stripped as an ordinary grant', () => {
+      const w = claimWorld()
+      const { viaDesignation: _drop, ...stripped } = w.bobClaim
+      const v = verdictOf(cw(w, { grants: [w.root, w.aliceAdmin, stripped] }), stripped)
+      expect(v.valid).toBe(false)
+    })
+
+    it('does not accept an ordinary grant with a viaDesignation added', () => {
+      const w = claimWorld()
+      const added = { ...w.aliceAdmin, viaDesignation: w.desig.sortKey }
+      expect(verdictOf(cw(w, { grants: [w.root, added, w.bobClaim] }), added).valid).toBe(false)
+    })
+
+    it('never treats the root grant as a claim', () => {
+      const w = claimWorld()
+      const rooted = { ...w.root, viaDesignation: w.desig.sortKey }
+      expect(verdictOf(cw(w, { grants: [rooted, w.aliceAdmin, w.bobClaim] }), rooted).valid).toBe(
+        false,
+      )
+    })
+  })
+
+  describe('the viewer-side check for a postdated claim', () => {
+    const at = (s: string) => Date.parse(s)
+
+    it('flags a claim dated more than the skew tolerance ahead of the viewer', () => {
+      const w = claimWorld()
+      const v = verdictOf(cw(w, { now: at('2026-04-29T00:00:00Z') }), w.bobClaim)
+      expect(v.valid).toBe(false)
+      expect(v.reason).toMatch(/future/)
+    })
+
+    it('accepts a claim dated up to the tolerance ahead (a fast clock)', () => {
+      const w = claimWorld()
+      const edge = at('2026-05-01T00:00:00Z') - CLAIM_DAY_SKEW_TOLERANCE_MS
+      expect(verdictOf(cw(w, { now: edge }), w.bobClaim).valid).toBe(true)
+      expect(verdictOf(cw(w, { now: edge - 1 }), w.bobClaim).valid).toBe(false)
+    })
+
+    it('does nothing without a clock, and never flags a past claim', () => {
+      const w = claimWorld()
+      expect(verdictOf(w.input, w.bobClaim).valid).toBe(true)
+      expect(verdictOf(cw(w, { now: at('2027-01-01T00:00:00Z') }), w.bobClaim).valid).toBe(true)
+    })
+
+    it('makes grants the postdated admin signed unverified too', () => {
+      const w = claimWorld()
+      const next = grant(w.bobKey, EVE, 'member', BOB, '2026-05-02', w.bobClaim.sortKey)
+      const input = cw(w, { grants: [...w.input.grants, next], now: at('2026-04-29T00:00:00Z') })
+      expect(verdictOf(input, next).valid).toBe(false)
+    })
   })
 })

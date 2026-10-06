@@ -239,3 +239,31 @@ func TestInt64EnvOrDefault(t *testing.T) {
 		t.Errorf("unparseable = %d, want fallback 42", got)
 	}
 }
+
+// TestSessionTTLIsCapped pins the upper bound the successor-designation rule
+// relies on (#161): a session must stay far shorter than the 30-day minimum
+// inactivity period, so a long TTL is clamped rather than honoured.
+func TestSessionTTLIsCapped(t *testing.T) {
+	cases := []struct {
+		env  string
+		want time.Duration
+	}{
+		{"168", MaxSessionTTL},
+		{"169", MaxSessionTTL},
+		{"720", MaxSessionTTL},
+		{"100000", MaxSessionTTL},
+		{"167", 167 * time.Hour},
+	}
+	for _, c := range cases {
+		t.Run(c.env, func(t *testing.T) {
+			t.Setenv("SESSION_SECRET", testSessionSecret)
+			t.Setenv("SESSION_TTL_HOURS", c.env)
+			if got := FromEnv().SessionTTL; got != c.want {
+				t.Errorf("SessionTTL for %s hours = %s, want %s", c.env, got, c.want)
+			}
+		})
+	}
+	if MaxSessionTTL >= 30*24*time.Hour/2 {
+		t.Errorf("MaxSessionTTL = %s is not well below the 30-day minimum inactivity period", MaxSessionTTL)
+	}
+}

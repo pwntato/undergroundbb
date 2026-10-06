@@ -13,6 +13,7 @@ import {
   changeMemberRole,
   getGroup,
   leaveGroup,
+  listDesignations,
   listGrants,
   listMembers,
   removeMember,
@@ -155,6 +156,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       const result = await checkGrants(
         {
           listGrants,
+          listDesignations,
           getUser,
           readPin: (g) => readAnchorPin(userId, g),
           writePin: (g, pin) => writeAnchorPin(userId, g, pin),

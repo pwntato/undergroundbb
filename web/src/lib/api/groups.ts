@@ -3,7 +3,7 @@
 // wire as standard-padded base64, matching decodeBase64Field's own
 // expectation, the same convention auth.ts's endpoints already use.
 
-import type { GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
+import type { DesignationRecord, GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import { ApiError } from './auth.js'
 
 export interface WireArgon2Params {
@@ -270,6 +270,28 @@ export async function listGrants(groupId: string, cursor?: string): Promise<List
     credentials: 'same-origin',
   })
   return handleJSON<ListGrantsResponse>(res)
+}
+
+/**
+ * GET /api/groups/{id}/designations: the signed successor designations (#161),
+ * served the way grants are and verified by nothing server-side. Pass them to
+ * lib/crypto/grant-chain so a successor's claim row can be checked.
+ */
+export interface ListDesignationsResponse {
+  readonly designations: readonly DesignationRecord[]
+  /** Empty on the last page; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+export async function listDesignations(
+  groupId: string,
+  cursor?: string,
+): Promise<ListDesignationsResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/designations${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ListDesignationsResponse>(res)
 }
 
 /** One GENKEY# chain link: generation `generation`'s key, sealed under generation+1's. */
