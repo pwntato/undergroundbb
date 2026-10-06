@@ -410,6 +410,14 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         />
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />
+      {load.status === 'ready' && (
+        <Link
+          to={`/groups/${encodeURIComponent(load.view.groupId)}/successor`}
+          className="text-sm text-primary underline-offset-4 hover:underline"
+        >
+          Successor for an inactive admin
+        </Link>
+      )}
       <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
         Back to your groups
       </Link>

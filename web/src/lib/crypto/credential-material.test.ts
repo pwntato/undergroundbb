@@ -27,6 +27,8 @@ import {
   signInviteCreation,
   signPin,
   signRoleGrant,
+  signSuccessorClaim,
+  signSuccessorDesignation,
   startGroupRotation,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -35,6 +37,8 @@ import {
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
   trustAnchorPayload,
 } from './group.js'
 import {
@@ -1180,5 +1184,107 @@ describe('group key rotation (#58)', () => {
         { userId: CAROL_ID, x25519PublicKey: carol.wrappingKey.publicKey },
       ]),
     ).rejects.toThrow()
+  })
+})
+
+describe('signSuccessorDesignation and signSuccessorClaim', () => {
+  const GROUP_ID = '44444444-4444-4444-8444-444444444444'
+  const SUCCESSOR_ID = '55555555-5555-4555-8555-555555555555'
+  const ADMIN_REF = 'GRANT#11111111-1111-4111-8111-111111111111#2026-09-01#aaaaaaaaaaaaaaaa'
+
+  async function keysFor() {
+    const signup = await generateSignupMaterial(USER_ID, 'successor-password', () => {})
+    const { keys } = await completeLogin({
+      password: 'successor-password',
+      salt: signup.salt,
+      argon2Params: signup.argon2Params,
+      wrappedPrivateKeys: signup.wrappedPrivateKeys,
+      userId: USER_ID,
+      nonce: Buffer.from([6, 6, 6, 6]).toString('base64'),
+    })
+    return keys
+  }
+
+  it('signs a designation that binds each field, under the designation context only', async () => {
+    const keys = await keysFor()
+    const { designationSortKey, signature } = signSuccessorDesignation(
+      keys,
+      GROUP_ID,
+      SUCCESSOR_ID,
+      90,
+      ADMIN_REF,
+    )
+    expect(designationSortKey.startsWith(`DESIGNATION#${USER_ID}#`)).toBe(true)
+    const verifies = (
+      ctx: (typeof ed25519.SigningContext)[keyof typeof ed25519.SigningContext],
+      successor: string,
+      period: number,
+      ref: string,
+      sortKey: string,
+    ) =>
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ctx,
+        successorDesignationPayload(GROUP_ID, USER_ID, successor, period, sortKey, ref),
+        base64ToBytes(signature),
+      )
+    const D = ed25519.SigningContext.SuccessorDesignation
+    expect(verifies(D, SUCCESSOR_ID, 90, ADMIN_REF, designationSortKey)).toBe(true)
+    expect(verifies(D, '', 90, ADMIN_REF, designationSortKey)).toBe(false)
+    expect(verifies(D, SUCCESSOR_ID, 91, ADMIN_REF, designationSortKey)).toBe(false)
+    expect(verifies(D, SUCCESSOR_ID, 90, 'GRANT#other', designationSortKey)).toBe(false)
+    expect(verifies(D, SUCCESSOR_ID, 90, ADMIN_REF, `${designationSortKey}x`)).toBe(false)
+    expect(
+      verifies(ed25519.SigningContext.RoleGrant, SUCCESSOR_ID, 90, ADMIN_REF, designationSortKey),
+    ).toBe(false)
+  })
+
+  it('signs the revocation form with an empty successor', async () => {
+    const keys = await keysFor()
+    const { designationSortKey, signature } = signSuccessorDesignation(
+      keys,
+      GROUP_ID,
+      '',
+      90,
+      ADMIN_REF,
+    )
+    expect(
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ed25519.SigningContext.SuccessorDesignation,
+        successorDesignationPayload(GROUP_ID, USER_ID, '', 90, designationSortKey, ADMIN_REF),
+        base64ToBytes(signature),
+      ),
+    ).toBe(true)
+  })
+
+  it('refuses a non-integer period rather than signing it', async () => {
+    const keys = await keysFor()
+    expect(() => signSuccessorDesignation(keys, GROUP_ID, SUCCESSOR_ID, 90.5, ADMIN_REF)).toThrow(
+      /integer/,
+    )
+  })
+
+  it('signs a claim that binds the designation and its own address, under the claim context only', async () => {
+    const keys = await keysFor()
+    const DESIGNATION = `DESIGNATION#${SUCCESSOR_ID}#2026-06-01#bbbbbbbbbbbbbbbb`
+    const { claimSortKey, signature } = signSuccessorClaim(keys, GROUP_ID, DESIGNATION)
+    expect(claimSortKey.startsWith(`GRANT#${USER_ID}#`)).toBe(true)
+    const verifies = (
+      ctx: (typeof ed25519.SigningContext)[keyof typeof ed25519.SigningContext],
+      designation: string,
+      sortKey: string,
+    ) =>
+      ed25519.verify(
+        keys.signingKey.publicKey,
+        ctx,
+        successorClaimPayload(GROUP_ID, USER_ID, designation, sortKey),
+        base64ToBytes(signature),
+      )
+    const C = ed25519.SigningContext.SuccessorClaim
+    expect(verifies(C, DESIGNATION, claimSortKey)).toBe(true)
+    expect(verifies(C, `${DESIGNATION}x`, claimSortKey)).toBe(false)
+    expect(verifies(C, DESIGNATION, `${claimSortKey}x`)).toBe(false)
+    expect(verifies(ed25519.SigningContext.RoleGrant, DESIGNATION, claimSortKey)).toBe(false)
   })
 })

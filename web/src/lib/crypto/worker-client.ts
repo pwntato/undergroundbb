@@ -46,6 +46,12 @@ import type {
   SignRoleGrantRequest,
   SignRoleGrantResponse,
   SignRoleGrantResult,
+  SignSuccessorClaimRequest,
+  SignSuccessorClaimResponse,
+  SignSuccessorClaimResult,
+  SignSuccessorDesignationRequest,
+  SignSuccessorDesignationResponse,
+  SignSuccessorDesignationResult,
   SignInviteAcceptanceRequest,
   SignInviteAcceptanceResponse,
   SignInviteAcceptanceResult,
@@ -355,6 +361,68 @@ export function signRoleGrant(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signRoleGrant`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Signs a successor designation (or, with an empty successorUserId, a revocation) -- #161. */
+export function signSuccessorDesignation(
+  req: Omit<SignSuccessorDesignationRequest, 'kind' | 'id'>,
+): Promise<SignSuccessorDesignationResult> {
+  const id = nextRequestID()
+  const fullReq: SignSuccessorDesignationRequest = { kind: 'signSuccessorDesignation', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signSuccessorDesignationDone') {
+        resolve((msg as SignSuccessorDesignationResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signSuccessorDesignation`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Signs the claim of a designated successor -- #161. */
+export function signSuccessorClaim(
+  req: Omit<SignSuccessorClaimRequest, 'kind' | 'id'>,
+): Promise<SignSuccessorClaimResult> {
+  const id = nextRequestID()
+  const fullReq: SignSuccessorClaimRequest = { kind: 'signSuccessorClaim', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signSuccessorClaimDone') {
+        resolve((msg as SignSuccessorClaimResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signSuccessorClaim`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

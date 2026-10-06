@@ -32,6 +32,8 @@ import {
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
   signRoleGrant as signRoleGrantPure,
+  signSuccessorClaim as signSuccessorClaimPure,
+  signSuccessorDesignation as signSuccessorDesignationPure,
   type LiveKeys,
 } from './credential-material.js'
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
@@ -54,6 +56,8 @@ import type {
   SignInviteCreationRequest,
   SignPinRequest,
   SignRoleGrantRequest,
+  SignSuccessorClaimRequest,
+  SignSuccessorDesignationRequest,
   SignupMaterial,
   WorkerRequest,
   WorkerResponse,
@@ -110,6 +114,12 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signRoleGrant':
       signRoleGrant(req)
+      return
+    case 'signSuccessorDesignation':
+      signSuccessorDesignation(req)
+      return
+    case 'signSuccessorClaim':
+      signSuccessorClaim(req)
       return
     case 'signPin':
       signPin(req)
@@ -247,6 +257,26 @@ function signRoleGrant(req: SignRoleGrantRequest): void {
     req.grantorGrantRef,
   )
   post({ kind: 'signRoleGrantDone', id: req.id, result })
+}
+
+/** Signs a successor designation -- #161. */
+function signSuccessorDesignation(req: SignSuccessorDesignationRequest): void {
+  const keys = requireLiveKeys(req.userId, 'designate a successor')
+  const result = signSuccessorDesignationPure(
+    keys,
+    req.groupId,
+    req.successorUserId,
+    req.periodDays,
+    req.adminGrantRef,
+  )
+  post({ kind: 'signSuccessorDesignationDone', id: req.id, result })
+}
+
+/** Signs a successor's claim -- #161. */
+function signSuccessorClaim(req: SignSuccessorClaimRequest): void {
+  const keys = requireLiveKeys(req.userId, 'claim the admin role')
+  const result = signSuccessorClaimPure(keys, req.groupId, req.designationSortKey)
+  post({ kind: 'signSuccessorClaimDone', id: req.id, result })
 }
 
 /** Signs a pin -- issue #63. Same liveKeys-unset/wrong-account guards as signRoleGrant. */

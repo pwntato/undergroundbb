@@ -35,6 +35,20 @@ export function generateGrantSortKey(subjectUUID: string, now: Date = new Date()
 }
 
 /**
+ * Generates the "DESIGNATION#<admin uuid>#<YYYY-MM-DD, UTC>#<rand>" sort key a
+ * successor designation will be written under (#161), the client-side
+ * counterpart of internal/idgen's DesignationSortKey shape. Like a grant's, it
+ * is signed as part of the payload, so the client chooses it before the
+ * server sees anything. Same UTC-day rule and random width as
+ * generateGrantSortKey.
+ */
+export function generateDesignationSortKey(adminUUID: string, now: Date = new Date()): string {
+  const day = now.toISOString().slice(0, 10)
+  const rand = bytesToHex(crypto.getRandomValues(new Uint8Array(RAND_SUFFIX_BYTES)))
+  return `DESIGNATION#${adminUUID}#${day}#${rand}`
+}
+
+/**
  * Builds the canonical byte string a group's trust-anchor signature covers
  * -- see docs/DESIGN.md, "Roles and the chain of trust": "The anchor is
  * signed by the creator at group creation" over the creator's uuid, their
