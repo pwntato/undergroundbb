@@ -36,6 +36,13 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 		t.Fatalf("PutChallenge: %v", err)
 	}
 
+	if err := c.RecordLogin(ctx, uid, "2026-10-05"); err != nil {
+		t.Fatalf("RecordLogin: %v", err)
+	}
+	if before, err := c.GetUserByID(ctx, uid); err != nil || before.LastLoginDay != "2026-10-05" {
+		t.Fatalf("setup: LastLoginDay = %q, %v", before.LastLoginDay, err)
+	}
+
 	if err := c.DeleteAccount(ctx, uid); err != nil {
 		t.Fatalf("DeleteAccount: %v", err)
 	}
@@ -43,6 +50,9 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	user, err := c.GetUserByID(ctx, uid)
 	if err != nil {
 		t.Fatalf("PROFILE must survive as a tombstone: %v", err)
+	}
+	if user.LastLoginDay != "" {
+		t.Errorf("LastLoginDay = %q on a tombstone, want removed", user.LastLoginDay)
 	}
 	if user.DeletedAt == "" {
 		t.Error("DeletedAt not set")

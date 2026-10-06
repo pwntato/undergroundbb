@@ -275,6 +275,14 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The day of the last login is what the successor-claim check measures
+	// inactivity from (#161). It fails the login rather than being skipped: a
+	// missed stamp would make an active admin look inactive.
+	if err := h.db.RecordLogin(r.Context(), userID, time.Now().UTC().Format("2006-01-02")); err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not process verification")
+		return
+	}
+
 	token := h.sessions.Issue(userID, h.cfg.SessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,

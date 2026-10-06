@@ -114,3 +114,28 @@ func ValidGrantSortKey(s, subjectUUID string) (time.Time, bool) {
 	}
 	return day, true
 }
+
+// designationSortKeyPattern matches a DESIGNATION# item's sort key,
+// "DESIGNATION#<admin uuid>#<YYYY-MM-DD>#<rand>" -- the same shape as
+// GRANT# (see grantSortKeyPattern), addressed by the designating admin.
+var designationSortKeyPattern = regexp.MustCompile(`^DESIGNATION#[0-9a-f-]{36}#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$`)
+
+// ValidDesignationSortKey reports whether s is a well-formed
+// "DESIGNATION#<adminUUID>#<YYYY-MM-DD>#<rand>" sort key for the given admin,
+// and if so returns the day, parsed as a UTC date at midnight. Client-chosen
+// and signed (crypto.SuccessorDesignationPayload), so the server validates
+// the shape the way it does for a grant's.
+func ValidDesignationSortKey(s, adminUUID string) (time.Time, bool) {
+	m := designationSortKeyPattern.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, false
+	}
+	if s[len("DESIGNATION#"):len("DESIGNATION#")+36] != adminUUID {
+		return time.Time{}, false
+	}
+	day, err := time.Parse("2006-01-02", m[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return day, true
+}
