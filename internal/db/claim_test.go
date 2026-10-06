@@ -169,7 +169,16 @@ func assertNothingClaimed(t *testing.T, c *Client, gid, member, claimKey string)
 	if to, _ := c.ListGrantsTo(context.Background(), gid, member); len(to) != 0 {
 		t.Fatalf("a refused claim wrote a row: %+v", to)
 	}
-	_ = claimKey
+	out, err := c.ddb.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(c.table), ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: claimKey},
+		},
+	})
+	if err != nil || out.Item != nil {
+		t.Fatalf("a refused claim wrote the claim row: %v, %v", out.Item, err)
+	}
 }
 
 func TestListAdminDesignationsAndAdminMembers(t *testing.T) {

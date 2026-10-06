@@ -272,7 +272,8 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 // successor signed, and not to the server's today, keeps this gate from
 // passing a claim the verifier's floor would reject (docs/DESIGN.md,
 // "Inactivity"). The later start keeps it from rejecting an honest one: a
-// session lasts a day, so a login can fall the day before the designation.
+// session can outlast the day of its login (up to config.MaxSessionTTL), so
+// the admin's last login can fall days before the designation they signed.
 func inactiveFor(claimDay, designationDay time.Time, lastLoginDay string, period time.Duration) bool {
 	base := designationDay
 	if d, err := time.Parse(dayLayout, lastLoginDay); err == nil && d.After(base) {

@@ -124,14 +124,20 @@ export async function checkGrants(
 ): Promise<GrantCheck> {
   try {
     const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
-    const designations = await readAllDesignations(deps, groupId)
+    // The verifier only looks at designations through a claim row, so a group
+    // with none neither reads them nor lets them affect the check: an unread or
+    // unclaimed designation must not turn the whole members screen unavailable.
+    const claims = grants.filter((g) => g.viaDesignation)
+    const designations = claims.length > 0 ? await readAllDesignations(deps, groupId) : []
+    const cited = new Set(claims.map((g) => g.viaDesignation))
     const { served, unreadable } = await readServedKeys(deps, [
       anchor.creatorUserId,
       ...grants.map((g) => g.grantorUserId),
       // A claim is signed by its SUBJECT, and rests on a designation signed by
-      // the admin, so both keys are needed to check one.
-      ...grants.filter((g) => g.viaDesignation).map((g) => g.subjectUserId),
-      ...designations.map((d) => d.adminUserId),
+      // the admin, so both keys are needed to check one. Only cited
+      // designations count: an admin who merely has one is not read.
+      ...claims.map((g) => g.subjectUserId),
+      ...designations.filter((d) => cited.has(d.sortKey)).map((d) => d.adminUserId),
     ])
     const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served, unreadable)
 

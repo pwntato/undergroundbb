@@ -637,4 +637,35 @@ describe('checkGrants: successor claims (#161)', () => {
     })
     expect(await checkGrants(d, GROUP, members)).toEqual({ state: 'unavailable' })
   })
+
+  it("does not read designations, or their admins' keys, when no grant cites one", async () => {
+    const { w, desig } = claimed()
+    const listDesignations = vi.fn(async () => {
+      throw new Error('500')
+    })
+    const getUser = vi.fn(deps(w).getUser)
+    const d = deps(w, { designations: [[desig]], listDesignations, getUser })
+    const r = await checkGrants(d, GROUP, MEMBERS)
+    expect(r.state).toBe('checked')
+    expect(listDesignations).not.toHaveBeenCalled()
+  })
+
+  it('does not read the key of an admin whose designation nobody cites', async () => {
+    const { w, desig, claim } = claimed()
+    // ALICE has an unclaimed designation; her key is not needed for any claim.
+    const unclaimed: DesignationRecord = {
+      ...desig,
+      sortKey: `DESIGNATION#${ALICE}#2026-04-01#00000000000000cc`,
+      adminUserId: ALICE,
+    }
+    const getUser = vi.fn(deps(w).getUser)
+    const d = deps(w, {
+      pages: [[w.root, claim]],
+      designations: [[desig, unclaimed]],
+      getUser,
+      now: afterClaim,
+    })
+    await checkGrants(d, GROUP, members)
+    expect(getUser.mock.calls.map(([id]) => id).sort()).toEqual([CREATOR, EVE].sort())
+  })
 })
