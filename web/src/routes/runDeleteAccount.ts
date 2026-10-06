@@ -110,9 +110,9 @@ export async function planAccountDeletion(
   }))
   // Only a group that already blocks needs to know whether anyone in it can be
   // promoted, so only its members are resolved (the other admins are cached).
-  const candidates = planned.flatMap((e) =>
-    e.plan.kind === 'needsSuccessor' ? e.plan.candidates : [],
-  )
+  const candidates = [
+    ...new Set(planned.flatMap((e) => (e.plan.kind === 'needsSuccessor' ? e.plan.candidates : []))),
+  ]
   const candidateNames =
     candidates.length === 0 ? undefined : await deps.resolveUsernames(candidates)
   const entries: AccountPlanEntry[] = planned.map((e) =>
