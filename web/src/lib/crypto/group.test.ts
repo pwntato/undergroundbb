@@ -4,7 +4,7 @@
 // idgen.DaySuffix (Go), so it gets its own focused unit tests instead.
 
 import { describe, expect, it } from 'vitest'
-import { generateGrantSortKey } from './group.js'
+import { generateGrantSortKey, successorDesignationPayload } from './group.js'
 
 const SUBJECT_UUID = 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
 
@@ -33,5 +33,21 @@ describe('generateGrantSortKey', () => {
       expect(seen.has(key)).toBe(false)
       seen.add(key)
     }
+  })
+})
+
+describe('successorDesignationPayload', () => {
+  const sign = (days: number) =>
+    successorDesignationPayload('g', 'a', 's', days, 'DESIGNATION#a#2026-09-10#aaaa', 'GRANT#a#d#c')
+
+  it('refuses a period Go could not encode', () => {
+    for (const bad of [90.5, 1e21, NaN, Infinity, -Infinity]) {
+      expect(() => sign(bad)).toThrow('periodDays must be an integer')
+    }
+  })
+
+  it('encodes -0 and a plain integer the way Go does', () => {
+    expect(sign(-0)).toEqual(sign(0))
+    expect(() => sign(90)).not.toThrow()
   })
 })

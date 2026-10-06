@@ -227,3 +227,41 @@ func TestGenKeyAADZeroPadsGeneration(t *testing.T) {
 		t.Errorf("GenKeyAAD(...,8) = %q, want %q", got, want)
 	}
 }
+
+func TestSuccessorDesignationPayloadDistinguishesEveryField(t *testing.T) {
+	const dk, ref = "DESIGNATION#admin-1#2026-09-10#aaaa", "GRANT#admin-1#2026-09-06#cccc"
+	base := SuccessorDesignationPayload("group-1", "admin-1", "succ-1", 90, dk, ref)
+	cases := map[string][]byte{
+		"groupID":            SuccessorDesignationPayload("group-2", "admin-1", "succ-1", 90, dk, ref),
+		"adminUUID":          SuccessorDesignationPayload("group-1", "admin-2", "succ-1", 90, dk, ref),
+		"successorUUID":      SuccessorDesignationPayload("group-1", "admin-1", "succ-2", 90, dk, ref),
+		"revocation":         SuccessorDesignationPayload("group-1", "admin-1", "", 90, dk, ref),
+		"periodDays":         SuccessorDesignationPayload("group-1", "admin-1", "succ-1", 91, dk, ref),
+		"designationSortKey": SuccessorDesignationPayload("group-1", "admin-1", "succ-1", 90, "DESIGNATION#admin-1#2026-09-10#bbbb", ref),
+		"adminGrantRef":      SuccessorDesignationPayload("group-1", "admin-1", "succ-1", 90, dk, "GRANT#admin-1#2026-09-06#dddd"),
+	}
+	for name, other := range cases {
+		if bytes.Equal(base, other) {
+			t.Errorf("changing %s did not change the payload", name)
+		}
+	}
+	if !bytes.Equal(base, SuccessorDesignationPayload("group-1", "admin-1", "succ-1", 90, dk, ref)) {
+		t.Fatal("SuccessorDesignationPayload is not deterministic")
+	}
+}
+
+func TestSuccessorClaimPayloadDistinguishesEveryField(t *testing.T) {
+	const dk, ck = "DESIGNATION#admin-1#2026-09-10#aaaa", "GRANT#succ-1#2026-12-09#bbbb"
+	base := SuccessorClaimPayload("group-1", "succ-1", dk, ck)
+	cases := map[string][]byte{
+		"groupID":            SuccessorClaimPayload("group-2", "succ-1", dk, ck),
+		"successorUUID":      SuccessorClaimPayload("group-1", "succ-2", dk, ck),
+		"designationSortKey": SuccessorClaimPayload("group-1", "succ-1", "DESIGNATION#admin-1#2026-09-10#cccc", ck),
+		"claimSortKey":       SuccessorClaimPayload("group-1", "succ-1", dk, "GRANT#succ-1#2026-12-09#dddd"),
+	}
+	for name, other := range cases {
+		if bytes.Equal(base, other) {
+			t.Errorf("changing %s did not change the payload", name)
+		}
+	}
+}

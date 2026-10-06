@@ -940,11 +940,12 @@ replace an admin who is only away.
   should say when an admin has none and when theirs has lapsed.
 - **After activation** the original admin is still an admin if they return; nothing is revoked.
   Ordinary role changes and removal govern from there.
-- **Build order**: (1) the designation payload and context in Go and TS with a vectors entry,
-  `DESIGNATION#` rows, PUT/GET, `LastLoginDay`; (2) the claim endpoint, the `SuccessorClaim` payload
-  and the verifier rule in `grant-chain.ts` together, in one PR, because a claim row reaching a
-  client without the rule shows as unverified and so does every grant the successor signs after it;
-  (3) the admin UI to designate, revoke and see status, and the successor claim.
+- **Build order**: (1a) both payloads and contexts in Go and TS with vectors (pure builders, so
+  shipping them early is harmless: nothing emits a claim row yet); (1b) `DESIGNATION#` rows, PUT/GET
+  and `LastLoginDay`; (2) the claim endpoint and the verifier rule in `grant-chain.ts` together, in
+  one PR, because a claim row reaching a client without the rule shows as unverified and so does
+  every grant the successor signs after it; (3) the admin UI to designate, revoke and see status,
+  and the successor claim.
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry

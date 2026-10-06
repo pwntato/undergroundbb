@@ -27,6 +27,12 @@ const (
 	ContextTrustAnchor SigningContext = "underground-bb:trust-anchor:v1"
 	// ContextPin signs a user's pin of another user's key set.
 	ContextPin SigningContext = "underground-bb:pin:v1"
+	// ContextSuccessorDesignation signs an admin's designation of the member
+	// who takes over if they go inactive (#161).
+	ContextSuccessorDesignation SigningContext = "underground-bb:successor-designation:v1"
+	// ContextSuccessorClaim signs a designated successor's claim of the
+	// admin role under such a designation (#161).
+	ContextSuccessorClaim SigningContext = "underground-bb:successor-claim:v1"
 )
 
 // GenerateSigningKey generates a new Ed25519 keypair.

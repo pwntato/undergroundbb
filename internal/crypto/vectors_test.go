@@ -16,25 +16,27 @@ import (
 // here must match internal/crypto/testdata/gen/main.go's output types
 // exactly, since both are the same JSON schema — see testdata/README.md.
 type vectorFile struct {
-	Version          int                      `json:"version"`
-	KDF              []kdfVector              `json:"kdf"`
-	AEAD             []aeadVector             `json:"aead"`
-	AEADNegative     []aeadNegativeVector     `json:"aead_negative"`
-	Signing          []signingVector          `json:"signing"`
-	SignedPayload    []signedPayloadVector    `json:"signed_payload"`
-	Wrapping         []wrapVector             `json:"wrapping"`
-	GenkeyChain      []genkeyChainVector      `json:"genkey_chain"`
-	Fingerprint      []fingerprintVector      `json:"fingerprint"`
-	CredentialWrap   []credentialWrapVector   `json:"credential_wrap"`
-	KeyBundle        []keyBundleVector        `json:"key_bundle"`
-	TrustAnchor      []trustAnchorVector      `json:"trust_anchor"`
-	RoleGrant        []roleGrantVector        `json:"role_grant"`
-	Pin              []pinVector              `json:"pin"`
-	MemberWrap       []memberWrapVector       `json:"member_wrap_aad"`
-	GroupName        []groupNameVector        `json:"group_name_aad"`
-	InviteCreation   []inviteCreationVector   `json:"invite_creation"`
-	InviteAcceptance []inviteAcceptanceVector `json:"invite_acceptance"`
-	InviteMAC        []inviteMACVector        `json:"invite_mac"`
+	Version              int                          `json:"version"`
+	KDF                  []kdfVector                  `json:"kdf"`
+	AEAD                 []aeadVector                 `json:"aead"`
+	AEADNegative         []aeadNegativeVector         `json:"aead_negative"`
+	Signing              []signingVector              `json:"signing"`
+	SignedPayload        []signedPayloadVector        `json:"signed_payload"`
+	Wrapping             []wrapVector                 `json:"wrapping"`
+	GenkeyChain          []genkeyChainVector          `json:"genkey_chain"`
+	Fingerprint          []fingerprintVector          `json:"fingerprint"`
+	CredentialWrap       []credentialWrapVector       `json:"credential_wrap"`
+	KeyBundle            []keyBundleVector            `json:"key_bundle"`
+	TrustAnchor          []trustAnchorVector          `json:"trust_anchor"`
+	RoleGrant            []roleGrantVector            `json:"role_grant"`
+	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
+	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
+	Pin                  []pinVector                  `json:"pin"`
+	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
+	GroupName            []groupNameVector            `json:"group_name_aad"`
+	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
+	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
+	InviteMAC            []inviteMACVector            `json:"invite_mac"`
 }
 
 type kdfVector struct {
@@ -158,6 +160,32 @@ type roleGrantVector struct {
 	GrantorGrantRef string `json:"grantor_grant_ref"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
+}
+
+type successorDesignationVector struct {
+	Name               string `json:"name"`
+	PrivateHex         string `json:"private_key_hex"`
+	PublicHex          string `json:"public_key_hex"`
+	GroupID            string `json:"group_id"`
+	AdminUUID          string `json:"admin_uuid"`
+	SuccessorUUID      string `json:"successor_uuid"`
+	PeriodDays         int    `json:"period_days"`
+	DesignationSortKey string `json:"designation_sort_key"`
+	AdminGrantRef      string `json:"admin_grant_ref"`
+	PayloadHex         string `json:"payload_hex"`
+	SignatureHex       string `json:"signature_hex"`
+}
+
+type successorClaimVector struct {
+	Name               string `json:"name"`
+	PrivateHex         string `json:"private_key_hex"`
+	PublicHex          string `json:"public_key_hex"`
+	GroupID            string `json:"group_id"`
+	SuccessorUUID      string `json:"successor_uuid"`
+	DesignationSortKey string `json:"designation_sort_key"`
+	ClaimSortKey       string `json:"claim_sort_key"`
+	PayloadHex         string `json:"payload_hex"`
+	SignatureHex       string `json:"signature_hex"`
 }
 
 type pinVector struct {
@@ -636,6 +664,76 @@ func TestVectorRoleGrant(t *testing.T) {
 			}
 			if !Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
 				t.Fatal("Verify rejected the vector's own signature over RoleGrantPayload")
+			}
+		})
+	}
+}
+
+// TestVectorSuccessorDesignation pins SuccessorDesignationPayload's exact
+// encoding for a named successor and for the revocation form (empty successor).
+func TestVectorSuccessorDesignation(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.SuccessorDesignation) < 2 {
+		t.Fatalf("expected at least 2 successor_designation vectors (named, revocation), got %d", len(v.SuccessorDesignation))
+	}
+	for _, tc := range v.SuccessorDesignation {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := SuccessorDesignationPayload(tc.GroupID, tc.AdminUUID, tc.SuccessorUUID, tc.PeriodDays, tc.DesignationSortKey, tc.AdminGrantRef)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("SuccessorDesignationPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextSuccessorDesignation, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextSuccessorDesignation, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			// A designation must not verify as a claim or a role grant.
+			if Verify(pub, ContextSuccessorClaim, wantPayload, wantSig) || Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
+				t.Fatal("designation signature verified under another context")
+			}
+		})
+	}
+}
+
+// TestVectorSuccessorClaim pins SuccessorClaimPayload's exact encoding.
+func TestVectorSuccessorClaim(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.SuccessorClaim) < 1 {
+		t.Fatal("expected at least 1 successor_claim vector")
+	}
+	for _, tc := range v.SuccessorClaim {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := SuccessorClaimPayload(tc.GroupID, tc.SuccessorUUID, tc.DesignationSortKey, tc.ClaimSortKey)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("SuccessorClaimPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextSuccessorClaim, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextSuccessorClaim, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			if Verify(pub, ContextSuccessorDesignation, wantPayload, wantSig) || Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
+				t.Fatal("claim signature verified under another context")
 			}
 		})
 	}

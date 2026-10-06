@@ -21,6 +21,8 @@ import {
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
   trustAnchorPayload,
   type GroupTextField,
 } from './group.js'
@@ -151,6 +153,30 @@ interface VectorFile {
     role: string
     grant_sort_key: string
     grantor_grant_ref: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  successor_designation: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    admin_uuid: string
+    successor_uuid: string
+    period_days: number
+    designation_sort_key: string
+    admin_grant_ref: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  successor_claim: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    successor_uuid: string
+    designation_sort_key: string
+    claim_sort_key: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -473,6 +499,51 @@ describe('role grant vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RoleGrant, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins successorDesignationPayload's exact encoding (#161), for a named
+// successor and for the revocation form (empty successor).
+describe('successor designation vectors', () => {
+  for (const tc of vectors.successor_designation) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = successorDesignationPayload(
+        tc.group_id,
+        tc.admin_uuid,
+        tc.successor_uuid,
+        tc.period_days,
+        tc.designation_sort_key,
+        tc.admin_grant_ref,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.SuccessorDesignation, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins successorClaimPayload's exact encoding (#161).
+describe('successor claim vectors', () => {
+  for (const tc of vectors.successor_claim) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = successorClaimPayload(
+        tc.group_id,
+        tc.successor_uuid,
+        tc.designation_sort_key,
+        tc.claim_sort_key,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.SuccessorClaim, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }
