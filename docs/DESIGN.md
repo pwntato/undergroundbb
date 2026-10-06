@@ -865,34 +865,59 @@ replace an admin who is only away.
   signed under a key the admin held that day and needs the admin to hold admin that day, checked
   exactly as a grant is.
 - **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
-  conditional write per day at login, so nothing on the request hot path). A session that never
-  logs in again counts as inactive. This is a server attestation: the client cannot verify it.
-- **Activation is not a signature.** The successor's browser calls `POST
-  /api/groups/{gid}/designation/claim`. The server appends an admin grant row for them, marked as
-  coming from the designation, only if all of these hold: the designation is the admin's newest and
-  not a revocation; the admin still holds admin; the successor is a live (non-deleted) member; the
-  admin's `LastLoginDay` is at least `periodDays` ago; and no other admin has logged in within that
-  period (so it fires for an abandoned group, not because one of two admins is away). The row
-  records the designation it relies on, the activation day and the admin's `LastLoginDay`.
+  conditional write per day at login, so nothing on the request hot path). Sessions last 24 hours by
+  default, so an active admin logs in at least daily and this tracks real use. It is a server
+  attestation, used only by the server's own claim check below; a client never verifies it. A
+  `PROFILE` with no `LastLoginDay` (every row from before this ships) counts as last active on the
+  designation's day, because the admin signed it that day.
+- **The successor signs the claim.** The successor's browser calls `POST
+  /api/groups/{gid}/designation/claim`, signing a new `SuccessorClaim` payload (own signing context,
+  length-prefixed, in the pattern of `RoleGrantPayload`): group id, successor uuid, the designation's
+  sort key, and the claim row's own sort key `GRANT#<successor>#<YYYY-MM-DD>#<rand>`. The claim day
+  is therefore signed by the honest party, not picked by the server, and a signature copied to another
+  row or day does not verify.
+- **The row.** The server appends an ordinary `GRANT#` row for the successor: role `admin`;
+  `grantorUserId` the designating admin; `grantorGrantRef` the admin's grant ref as signed in the
+  designation; `viaDesignation` the designation's sort key (the field that tells a verifier to use
+  this section's rule instead of the ordinary grant rule); `signature` the successor's claim
+  signature. Clients that do not know `viaDesignation` must not treat the row as an ordinary grant,
+  so the claim endpoint ships with the verifier rule, never before it.
+- **Server claim checks** (the server's own honest-path gate; the verifier does not rely on them
+  except where stated below). All must hold: the designation is the admin's newest and not a
+  revocation; the admin's *current* grant is exactly the ref the designation signed (one check that
+  covers the admin leaving, being removed or demoted, and being re-promoted later: a re-promotion
+  is a new grant, so the old designation does not return); the successor is a live member and the
+  designation day is on or after their `MEMBER#` `CreatedAt` (so a removed successor who rejoins by
+  invite does not inherit it); no earlier activation row cites this designation (each designation
+  fires at most once, so an admin who returns and demotes the successor is not re-promoted by it);
+  the admin's `LastLoginDay` is at least `periodDays` ago; and no other admin has logged in within
+  that period, so it fires for an abandoned group, not because one of two admins is away.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
-  same chain walk as any grant; that it is the newest designation before the activation day and
-  names this subject; and `activationDay - lastLoginDay >= periodDays` as arithmetic on the recorded
-  values. Like every grant, it takes effect the day *after* its date, so the successor's own grants
-  are not caught by the strict same-day rule.
-- **What this trusts the server for, and what it does not.** The inactivity clock is the server's. A
-  malicious or compromised server can therefore promote the successor early. It cannot choose the
-  successor: only a person the admin signed for, and only within `periodDays` bounds the admin set,
-  and the admin can revoke any time they are active. That is the property Option A was picked for,
-  and it is weaker than a signed heartbeat, which was rejected as too heavy.
-- **Lapses.** The designation stops applying, silently, when the admin leaves, is removed or demoted
-  (their role is no longer admin), when the successor leaves, is removed or is deleted, or when a
-  newer designation exists. Nothing re-nominates for them, so the admin has to maintain it; the
-  group screen should say when an admin has none and when theirs has lapsed.
+  same chain walk as any grant; the successor's claim signature under a key they held on the claim
+  day; that the designation names this subject; the floor `claimDay - designationDay >= periodDays`
+  (signing the designation shows the admin was active on that day, so an honest claim never trips
+  it, and a server cannot fire early); and the lapse check: reject if the admin has any designation
+  or grant dated after the designation's day and on or before the claim day. That makes revocation,
+  demotion, removal and replacement bind the server too, not only the honest path.
+- **Same-day behavior.** A grant takes effect the day after it is dated, so the successor can grant
+  roles from the day after the claim; the server refuses earlier attempts (`grantor_granted_today`),
+  as for any new admin, and the claim screen should say so.
+- **What this trusts the server for, and what it does not.** It cannot choose the successor, cannot
+  claim before `periodDays` have passed since the designation, and cannot use a designation the admin
+  revoked, replaced or lost admin under before the claim day. What is left is omission: a server that
+  hides a revocation row from everyone can still serve a stale designation, which the existing grant
+  history is equally exposed to. The login clock is the server's, but only the honest-path check uses
+  it, so a lying clock can withhold a legitimate claim, not forge one.
+- **Lapses.** The designation stops applying without notice to the successor when any claim check
+  above fails. Nothing re-nominates for the admin, so they have to maintain it; the group screen
+  should say when an admin has none and when theirs has lapsed.
 - **After activation** the original admin is still an admin if they return; nothing is revoked.
   Ordinary role changes and removal govern from there.
-- **Build order**: (1) crypto payload and context in Go and TS with a vectors entry, `DESIGNATION#`
-  rows, PUT/GET, `LastLoginDay`; (2) the claim endpoint; (3) the verifier rule in `grant-chain.ts`;
-  (4) the admin UI to designate, revoke and see status, and the successor claim.
+- **Build order**: (1) the designation payload and context in Go and TS with a vectors entry,
+  `DESIGNATION#` rows, PUT/GET, `LastLoginDay`; (2) the claim endpoint, the `SuccessorClaim` payload
+  and the verifier rule in `grant-chain.ts` together, in one PR, because a claim row reaching a
+  client without the rule shows as unverified and so does every grant the successor signs after it;
+  (3) the admin UI to designate, revoke and see status, and the successor claim.
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
