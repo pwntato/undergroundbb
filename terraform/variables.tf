@@ -81,7 +81,7 @@ variable "session_ttl_hours" {
   description = "How long an issued login session cookie remains valid, in hours. See internal/config.DefaultSessionTTL and internal/session's package doc -- docs/DESIGN.md pins no duration, only \"short-lived,\" so this is deployment policy with a documented default."
 
   validation {
-    condition     = var.session_ttl_hours > 0 && floor(var.session_ttl_hours) == var.session_ttl_hours
-    error_message = "session_ttl_hours must be a positive whole number of hours."
+    condition     = var.session_ttl_hours > 0 && var.session_ttl_hours <= 168 && floor(var.session_ttl_hours) == var.session_ttl_hours
+    error_message = "session_ttl_hours must be a positive whole number of hours, at most 168 (7 days): the inactivity rule for a pre-signed successor measures activity by login day (docs/DESIGN.md, \"Inactivity\"), so sessions must stay far shorter than its 30-day minimum period (internal/config.MaxSessionTTL)."
   }
 }

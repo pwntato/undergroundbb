@@ -89,7 +89,7 @@ unauthenticated, from `GET /api/config` — the SPA fetches it on boot.
 | `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
 | `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
 | `SESSION_SECRET` | *(required, no default)* | Hex-encoded HMAC key for login session cookies — see [`internal/session`](internal/session). There is no safe default; the process refuses to start without it. Generate one with `openssl rand -hex 32`. |
-| `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number. |
+| `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number, at most `168` (7 days): a longer value is lowered to 168 with a warning, because the inactivity rule for a pre-signed successor measures activity by login day ([`docs/DESIGN.md`](docs/DESIGN.md), "Inactivity"). |
 
 Setup instructions will land with the first deployable release. All nine are wired into the Lambda's
 Terraform config (`terraform/lambda.tf`) — `SITE_NAME`, `REGISTRATION_POLICY`,

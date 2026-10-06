@@ -482,7 +482,11 @@ type grantEntry struct {
 	GrantorUserID           string `json:"grantorUserId"`
 	GrantorSigningPublicKey string `json:"grantorSigningPublicKey"`
 	GrantorGrantRef         string `json:"grantorGrantRef,omitempty"`
-	Signature               string `json:"signature"`
+	// ViaDesignation is set only on a successor's claim row (#161): the
+	// DESIGNATION# sort key it relies on. A client that does not know the
+	// field must not treat the row as an ordinary grant.
+	ViaDesignation string `json:"viaDesignation,omitempty"`
+	Signature      string `json:"signature"`
 }
 
 // listGrantsResponse is the wire shape of GET /api/groups/{id}/grants. The
@@ -568,6 +572,7 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 			GrantorUserID:           g.GrantorUserID,
 			GrantorSigningPublicKey: enc(g.GrantorSigningPublicKey),
 			GrantorGrantRef:         g.GrantorGrantRef,
+			ViaDesignation:          g.ViaDesignation,
 			Signature:               enc(g.Signature),
 		})
 	}
