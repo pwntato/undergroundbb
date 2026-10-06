@@ -188,6 +188,7 @@ describe('planAccountDeletion', () => {
     userId: ME,
     getGroup: getGroup as never,
     listMembers: () => Promise.resolve({ members: [m(ME, 'member'), m(BOB, 'admin')] }),
+    resolveUsernames: () => Promise.resolve(new Map<string, string>()),
   })
   const detail = { role: 'member', revocationMode: 'open', generation: 0 }
 
@@ -213,6 +214,84 @@ describe('planAccountDeletion', () => {
       ['g1'],
     )
     expect(broken).toEqual({ ok: false, kind: 'failed' })
+  })
+})
+
+describe('planAccountDeletion with a deleted co-admin', () => {
+  const CAROL = 'cccccccc-3333-4333-8333-333333333333'
+  const rosters: Record<string, MemberEntry[]> = {
+    // Bob is the only other admin and is deleted: leaving would strand the group.
+    'g-dead-co-admin': [m(ME, 'admin'), m(BOB, 'admin'), m(CAROL, 'member')],
+    'g-live-co-admin': [m(ME, 'admin'), m(CAROL, 'admin')],
+    'g-member': [m(ME, 'member'), m(BOB, 'admin')],
+  }
+  const roles: Record<string, string> = {
+    'g-dead-co-admin': 'admin',
+    'g-live-co-admin': 'admin',
+    'g-member': 'member',
+  }
+  const run = (names: Map<string, string>, resolve = vi.fn(() => Promise.resolve(names))) =>
+    planAccountDeletion(
+      {
+        userId: ME,
+        getGroup: ((id: string) =>
+          Promise.resolve({ role: roles[id], revocationMode: 'open', generation: 0 })) as never,
+        listMembers: ((id: string) => Promise.resolve({ members: rosters[id] })) as never,
+        resolveUsernames: resolve,
+      },
+      Object.keys(rosters),
+    ).then((res) => ({ res, resolve }))
+
+  it('plans a group whose only co-admin is deleted as needsSuccessor, so it blocks up front', async () => {
+    const { res } = await run(
+      new Map([
+        [BOB, ''],
+        [CAROL, 'carol'],
+      ]),
+    )
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const kinds = Object.fromEntries(res.entries.map((e) => [e.groupId, e.plan.kind]))
+    expect(kinds).toEqual({
+      'g-dead-co-admin': 'needsSuccessor',
+      'g-live-co-admin': 'plain',
+      'g-member': 'plain',
+    })
+    // (g-live-co-admin also blocks here, as grantMissing: this fixture has no grant on record.)
+    const blocked = deletionBlockers(res.entries).filter(
+      (e) => blockerReason(e) === 'needsSuccessor',
+    )
+    expect(blocked.map((e) => e.groupId)).toEqual(['g-dead-co-admin'])
+  })
+
+  it('resolves only the other admins of groups the caller admins', async () => {
+    const { resolve } = await run(new Map())
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect([...(resolve.mock.calls[0] as unknown as [string[]])[0]].sort()).toEqual(
+      [BOB, CAROL].sort(),
+    )
+  })
+
+  it('stays optimistic for an admin whose name did not resolve', async () => {
+    const { res } = await run(new Map())
+    expect(res.ok && res.entries.find((e) => e.groupId === 'g-dead-co-admin')?.plan.kind).toBe(
+      'plain',
+    )
+  })
+
+  it('does not call the resolver when the caller admins nothing with other admins', async () => {
+    const resolve = vi.fn(() => Promise.resolve(new Map<string, string>()))
+    await planAccountDeletion(
+      {
+        userId: ME,
+        getGroup: (() =>
+          Promise.resolve({ role: 'member', revocationMode: 'open', generation: 0 })) as never,
+        listMembers: (() => Promise.resolve({ members: rosters['g-member'] })) as never,
+        resolveUsernames: resolve,
+      },
+      ['g-member'],
+    )
+    expect(resolve).not.toHaveBeenCalled()
   })
 })
 
@@ -337,6 +416,7 @@ describe('planAccountDeletion concurrency', () => {
           return { role: 'member', revocationMode: 'open', generation: 0 }
         }) as never,
         listMembers: () => Promise.resolve({ members: [m(ME, 'member'), m(BOB, 'admin')] }),
+        resolveUsernames: () => Promise.resolve(new Map<string, string>()),
       },
       ids,
     )

@@ -54,6 +54,8 @@ async function mapWithLimit<T, R>(
 
 export interface PlanDeps extends LoadMembersDeps {
   readonly userId: string
+  /** Best effort and never throws (see resolveUsernames); an id it leaves out is treated as live. */
+  readonly resolveUsernames: (ids: readonly string[]) => Promise<ReadonlyMap<string, string>>
 }
 
 /**
@@ -66,7 +68,7 @@ export async function planAccountDeletion(
   groupIds: readonly string[],
 ): Promise<AccountPlanResult> {
   const results = await mapWithLimit(groupIds, PLAN_CONCURRENCY, (id) => loadMembers(deps, id))
-  const entries: AccountPlanEntry[] = []
+  const views: MembersView[] = []
   for (const result of results) {
     if (!result.ok) {
       // A group that has vanished since the list loaded is not a failure to
@@ -76,12 +78,23 @@ export async function planAccountDeletion(
       }
       return { ok: false, kind: result.kind === 'authRequired' ? 'authRequired' : 'failed' }
     }
-    entries.push({
-      groupId: result.view.groupId,
-      view: result.view,
-      plan: leavePlan(result.view, deps.userId),
-    })
+    views.push(result.view)
   }
+  // A group whose only other admins were deleted is a blocker (#77), but only
+  // leavePlan can say so, and only once it knows which admins are deleted. So
+  // resolve the other admins, and only those, in the groups the caller admins:
+  // a roster-wide read would cost a request per member for nothing.
+  const otherAdmins = views.flatMap((v) =>
+    v.myRole === 'admin'
+      ? v.members.filter((x) => x.role === 'admin' && x.userId !== deps.userId).map((x) => x.userId)
+      : [],
+  )
+  const usernames = otherAdmins.length === 0 ? undefined : await deps.resolveUsernames(otherAdmins)
+  const entries = views.map((view) => ({
+    groupId: view.groupId,
+    view,
+    plan: leavePlan(view, deps.userId, usernames),
+  }))
   return { ok: true, entries }
 }
 

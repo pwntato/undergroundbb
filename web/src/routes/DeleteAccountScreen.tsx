@@ -24,6 +24,7 @@ import {
   type AccountPlanEntry,
 } from './runDeleteAccount'
 import { runListGroups } from './runListGroups'
+import { resolveUsernames } from './useUsernames'
 
 interface Loaded {
   readonly entries: readonly AccountPlanEntry[]
@@ -49,7 +50,7 @@ async function loadPlan(
       userId,
     })
     const plan = await planAccountDeletion(
-      { getGroup, listMembers, userId },
+      { getGroup, listMembers, userId, resolveUsernames },
       groups.map((g) => g.groupId),
     )
     if (!plan.ok) {
