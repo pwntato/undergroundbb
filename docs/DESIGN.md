@@ -897,7 +897,7 @@ replace an admin who is only away.
   day; that the designation names this subject; the floor `claimDay - designationDay >= periodDays`
   (signing the designation shows the admin was active on that day, so an honest claim never trips
   it, and a server cannot fire early); and the lapse check: reject if the admin has any designation
-  or grant dated after the designation's day and on or before the claim day. That makes revocation,
+  or grant *to them* (a role change of theirs, not one they signed) dated after the designation's day and on or before the claim day. That makes revocation,
   demotion, removal and replacement bind the server too, not only the honest path.
 - **Same-day behavior.** A grant takes effect the day after it is dated, so the successor can grant
   roles from the day after the claim; the server refuses earlier attempts (`grantor_granted_today`),
