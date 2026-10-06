@@ -120,6 +120,11 @@ export function successorDesignationPayload(
   designationSortKey: string,
   adminGrantRef: string,
 ): Uint8Array {
+  // Go's strconv.Itoa can only produce an integer; String() would sign "90.5", "1e+21" or "NaN".
+  // The 30 to 365 range belongs with the PUT and the verifier, not here.
+  if (!Number.isSafeInteger(periodDays)) {
+    throw new Error('periodDays must be an integer')
+  }
   const encoder = new TextEncoder()
   return lengthPrefixedConcat([
     encoder.encode(groupId),
