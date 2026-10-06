@@ -863,15 +863,15 @@ replace an admin who is only away.
   ref. It is appended, never overwritten; the newest by day wins, and one naming no successor (empty
   uuid) revokes. Order within a day is unknowable, so two designations by one admin on one day cancel
   each other (the admin designates again the next day), and the server refuses a second designation
-  from one admin on the same day, as it does `grantor_granted_today`. `periodDays` is the admin's choice within 30 to 365, and the UI suggests 90. It is
-  signed under a key the admin held that day and needs the admin to hold admin that day, checked
-  exactly as a grant is.
+  from one admin on the same day, as it does `grantor_granted_today`. `periodDays` is the admin's
+  choice within 30 to 365, and the UI suggests 90. It is signed under a key the admin held that day
+  and needs the admin to hold admin that day, checked exactly as a grant is.
 - **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
   conditional write per day at login, so nothing on the request hot path). Sessions last 24 hours by
   default, so an active admin logs in at least daily and this tracks real use. It is a server
   attestation, used only by the server's own claim check below; a client never verifies it. A
-  `PROFILE` with no `LastLoginDay` (every row from before this ships) counts as last active on the
-  designation's day, because the admin signed it that day.
+  `PROFILE` with no `LastLoginDay` (every row from before this ships) simply loses to the
+  designation's day in the rule below.
 - **The successor signs the claim.** The successor's browser calls `POST
   /api/groups/{gid}/designation/claim`, signing a new `SuccessorClaim` payload (own signing context,
   length-prefixed, in the pattern of `RoleGrantPayload`): group id, successor uuid, the designation's
@@ -892,8 +892,12 @@ replace an admin who is only away.
   designation day is on or after their `MEMBER#` `CreatedAt` (so a removed successor who rejoins by
   invite does not inherit it); no earlier activation row cites this designation (each designation
   fires at most once, so an admin who returns and demotes the successor is not re-promoted by it);
-  the admin's `LastLoginDay` is at least `periodDays` ago; and no other admin has logged in within
-  that period, so it fires for an abandoned group, not because one of two admins is away.
+  the admin has been inactive for `periodDays`, measured from the later of their `LastLoginDay` and
+  the designation's day (a session lasts 24 hours, so the last login can fall the day before the
+  designation; measuring from the later day makes this gate imply the verifier's floor, so an honest
+  claim is never rejected and, because it fires at most once, never stuck); and no other admin has
+  logged in within that period, measured the same way, so it fires for an abandoned group, not
+  because one of two admins is away.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
   day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
@@ -901,8 +905,8 @@ replace an admin who is only away.
   and `checkMemberRole` must not believe any other); that the designation names this subject; that
   no other `GRANT#` row cites the same `viaDesignation` (if more than one does, all of them are
   rejected, the way `compute()` poisons a duplicate sort key, so a returning admin's demotion cannot
-  be undone by a second claim from a cooperating server and successor); the floor `claimDay - designationDay >= periodDays`
-  (signing the designation shows the admin was active on that day, so an honest claim never trips
+  be undone by a second claim from a cooperating server and successor); the floor
+  `claimDay - designationDay >= periodDays` (signing the designation shows the admin was active on that day, so an honest claim never trips
   it, and a server cannot fire early); and the lapse check: reject if the admin has any *other*
   designation, or any grant *to them* (a role change of theirs, not one they signed), dated **on or
   after** the designation's day and on or before the claim day. "On or after" is deliberate: a
