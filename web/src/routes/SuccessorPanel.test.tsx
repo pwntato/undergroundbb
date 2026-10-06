@@ -109,6 +109,9 @@ describe('SuccessorPanel, admin', () => {
     expect(html).toContain('lapsed')
     expect(html).toContain('2026-07-10')
     expect(html).toContain('You have no successor now')
+    // Nothing standing to revoke.
+    expect(html).not.toContain('Revoke')
+    expect(html).toContain('Designate successor')
   })
 
   it('says after a revocation that there is no successor', () => {
@@ -118,6 +121,7 @@ describe('SuccessorPanel, admin', () => {
       '2026-09-01',
     )
     expect(html).toContain('You revoked your successor')
+    expect(html).not.toContain('Revoke')
   })
 
   it('disables Designate until someone is chosen, and every control while busy', () => {
