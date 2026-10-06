@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 	"time"
 
@@ -381,5 +385,52 @@ func TestLoginRecordsLastLoginDay(t *testing.T) {
 	}
 	if getRow(t, "USER#00000000-0000-4000-8000-000000000000", "PROFILE") != nil {
 		t.Error("RecordLogin created a PROFILE row")
+	}
+}
+
+// A login whose LastLoginDay stamp fails must fail, with no session: a missed
+// stamp would make an active admin look inactive to the claim check. The write
+// is failed by a proxy in front of DynamoDB Local, because db.Client exposes no
+// way to reach its SDK client.
+func TestLoginFailsWhenTheLastLoginStampFails(t *testing.T) {
+	good := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, good)
+
+	target, err := url.Parse(testEndpoint(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	injected := 0
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if r.Header.Get("X-Amz-Target") == "DynamoDB_20120810.UpdateItem" && bytes.Contains(body, []byte("LastLoginDay")) {
+			injected++
+			w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+			w.WriteHeader(http.StatusBadRequest) // not retried by the SDK
+			_, _ = w.Write([]byte(`{"__type":"com.amazon.coral.validate#ValidationException","message":"injected"}`))
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	defer front.Close()
+	c, err := db.New(context.Background(), testTableName(), front.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := completeLogin(t, New(config.FromEnv(), c), user)
+	if injected == 0 {
+		t.Fatal("the stamp write was never attempted, so this tested nothing")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("login = %d, want 500: %s", rec.Code, rec.Body.String())
+	}
+	if sessionCookieFrom(rec) != nil {
+		t.Fatal("a session was issued although the stamp failed")
+	}
+	if got := strAttr(getRow(t, "USER#"+user.userID, "PROFILE"), "LastLoginDay"); got != "" {
+		t.Errorf("LastLoginDay = %q after a failed stamp", got)
 	}
 }

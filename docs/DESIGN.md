@@ -850,7 +850,7 @@ create a membership, because `CreateGroup` and `CompleteInvite`, the only writer
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
 
-**Inactivity: the admin pre-signs a successor (#161, designed, not built).** An inactive admin who is
+**Inactivity: the admin pre-signs a successor (#161, storage built, claim not yet).** An inactive admin who is
 not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no
 remaining admin is acting, so the signature has to exist before the admin goes quiet. Co-signing by
 the highest remaining role was rejected: it makes a non-admin signature create an admin, a second
@@ -868,7 +868,10 @@ replace an admin who is only away.
   and needs the admin to hold admin that day, checked exactly as a grant is.
 - **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
   conditional write per day at login, so nothing on the request hot path). Sessions last 24 hours by
-  default, so an active admin logs in at least daily and this tracks real use. It is a server
+  default, so an active admin logs in at least daily and this tracks real use. The gate assumes
+  sessions much shorter than the smallest period (30 days): `SESSION_TTL_HOURS` has no upper bound
+  today, and at a month an admin using the board daily could stamp once a month, so the claim PR
+  (step 2) must cap it in config well below 30 days. It is a server
   attestation, used only by the server's own claim check below; a client never verifies it. A
   `PROFILE` with no `LastLoginDay` (every row from before this ships) simply loses to the
   designation's day in the rule below.
@@ -944,14 +947,16 @@ replace an admin who is only away.
   `DESIGNATION#` row, or a revocation when `successorUserId` is empty; `GET
   /api/groups/{gid}/designations` (members only, paged like grants) serves the rows and verifies
   nothing. The PUT refuses: a period outside 30 to 365; yourself, a non-member, or a deleted account
-  as successor; a stale `adminGrantRef` (`grantor_ref_stale`); an admin grant dated the same day
-  or later (`grantor_granted_today`, the verifier's strict rule); a second designation by the same
+  as successor; a stale `adminGrantRef` (`grantor_ref_stale`); an admin grant dated the same day or
+  later (`grantor_granted_today`, the verifier's strict rule); a second designation by the same
   admin the same day (`designation_today`, a read before the write, so two concurrent requests can
   both pass, which is harmless because the verifier cancels a same-day pair); a sort key not within
   the usual client-day tolerance; and a signature that does not verify under the admin's current key
   and `successor-designation:v1`. The row stores no signing key, since nothing signed binds one. A
-  successful login stamps `PROFILE.LastLoginDay` (one conditional write per day; a login fails if the
-  stamp fails, because a missed stamp would make an active admin look inactive). Nothing reads
+  revocation still carries a `periodDays` in range, which is signed and stored but ignored. A
+  successful login stamps `PROFILE.LastLoginDay` (one conditional write per day; a login fails if
+  the stamp fails, because a missed stamp would make an active admin look inactive). Account
+  deletion removes `LastLoginDay` with the rest of what a tombstone does not need. Nothing reads
   `LastLoginDay` or activates a designation yet.
 - **Build order**: (1a) both payloads and contexts in Go and TS with vectors (pure builders, so
   shipping them early is harmless: nothing emits a claim row yet); (1b) `DESIGNATION#` rows, PUT/GET

@@ -94,13 +94,14 @@ type User struct {
 	// A deleted account's PROFILE is a tombstone, never removed: user uuids
 	// are never reused (see docs/DESIGN.md, the AAD table), and the public
 	// keys stay so grants and signatures the user made can still be verified.
-	// Username, salt, wrapped private keys, preferences and lock state are
-	// removed; the USERNAME claim and RECOVERY item are deleted.
+	// Username, salt, wrapped private keys, preferences, lock state and
+	// LastLoginDay are removed; the USERNAME claim and RECOVERY item are deleted.
 	DeletedAt string `dynamodbav:"DeletedAt,omitempty"`
 	// LastLoginDay is the UTC day ("2006-01-02") of the last successful login
 	// (#161). Day resolution on purpose, and written at most once a day, so
 	// login is the only place that touches it. Empty on a row from before it
 	// existed. It is a server attestation: only the server's claim check reads it.
+	// Account deletion removes it with the rest of what a tombstone does not need.
 	LastLoginDay string `dynamodbav:"LastLoginDay,omitempty"`
 }
 

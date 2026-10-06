@@ -147,6 +147,13 @@ visible on group `META` items in the same dump. It does not name the group, and 
 most groups keep the 30-day default it distinguishes very little. It is a real edge, though, and it
 is the one disclosure in this section that comes from expiry rather than from a key.
 
+**`LastLoginDay` is a third place a day hides, and it is per user rather than per item.** `PROFILE`
+carries the UTC day of the user's last successful login (#161), kept so the successor-claim check can
+tell an abandoned group from an away admin. It is day resolution, the latest value only, and it is
+written for every user, including one who never posts or joins anything, so a dump shows when a lurker
+was last around. That was judged acceptable at day resolution and is needed for the claim; account
+deletion removes it.
+
 What day-level timing still gives an observer is real: activity on a given date, per user, per
 group, and a rough correlation of who was active on the same days, plus thread sequence where
 comments are involved. What it withholds is the fine-grained analysis that a millisecond timeline
