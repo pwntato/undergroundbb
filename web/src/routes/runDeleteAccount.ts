@@ -54,7 +54,12 @@ async function mapWithLimit<T, R>(
 
 export interface PlanDeps extends LoadMembersDeps {
   readonly userId: string
-  /** Best effort and never throws (see resolveUsernames); an id it leaves out is treated as live. */
+  /**
+   * Best effort and never throws (see resolveUsernames); an id it leaves out is
+   * treated as live. The page-lifetime cache means a name cached before the
+   * account was deleted is also treated as live, so this narrows the mid-run
+   * last_admin failure rather than guaranteeing it cannot happen.
+   */
   readonly resolveUsernames: (ids: readonly string[]) => Promise<ReadonlyMap<string, string>>
 }
 
