@@ -861,7 +861,9 @@ replace an admin who is only away.
   length-prefixed like `RoleGrantPayload`): group id, admin uuid, successor uuid, `periodDays`, the
   row's own sort key `DESIGNATION#<admin uuid>#<YYYY-MM-DD>#<rand>`, and the admin's current grant
   ref. It is appended, never overwritten; the newest by day wins, and one naming no successor (empty
-  uuid) revokes. `periodDays` is the admin's choice within 30 to 365, and the UI suggests 90. It is
+  uuid) revokes. Order within a day is unknowable, so two designations by one admin on one day cancel
+  each other (the admin designates again the next day), and the server refuses a second designation
+  from one admin on the same day, as it does `grantor_granted_today`. `periodDays` is the admin's choice within 30 to 365, and the UI suggests 90. It is
   signed under a key the admin held that day and needs the admin to hold admin that day, checked
   exactly as a grant is.
 - **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
@@ -894,11 +896,19 @@ replace an admin who is only away.
   that period, so it fires for an abandoned group, not because one of two admins is away.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
-  day; that the designation names this subject; the floor `claimDay - designationDay >= periodDays`
+  day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
+  only confer admin, so the verifier requires `grantedRole === 'admin'` on a `viaDesignation` row
+  and `checkMemberRole` must not believe any other); that the designation names this subject; that
+  no other `GRANT#` row cites the same `viaDesignation` (if more than one does, all of them are
+  rejected, the way `compute()` poisons a duplicate sort key, so a returning admin's demotion cannot
+  be undone by a second claim from a cooperating server and successor); the floor `claimDay - designationDay >= periodDays`
   (signing the designation shows the admin was active on that day, so an honest claim never trips
-  it, and a server cannot fire early); and the lapse check: reject if the admin has any designation
-  or grant *to them* (a role change of theirs, not one they signed) dated after the designation's day and on or before the claim day. That makes revocation,
-  demotion, removal and replacement bind the server too, not only the honest path.
+  it, and a server cannot fire early); and the lapse check: reject if the admin has any *other*
+  designation, or any grant *to them* (a role change of theirs, not one they signed), dated **on or
+  after** the designation's day and on or before the claim day. "On or after" is deliberate: a
+  same-day revocation or self-demotion cannot be ordered against the designation, so it must cancel
+  it rather than be skipped. That makes revocation, demotion, removal and replacement bind the
+  server too, not only the honest path. The server's claim check uses the same rule.
 - **Same-day behavior.** A grant takes effect the day after it is dated, so the successor can grant
   roles from the day after the claim; the server refuses earlier attempts (`grantor_granted_today`),
   as for any new admin, and the claim screen should say so.
