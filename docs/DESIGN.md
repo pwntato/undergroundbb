@@ -850,12 +850,49 @@ create a membership, because `CreateGroup` and `CompleteInvite`, the only writer
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
 
-**Inactivity is not built, and the open question is whether it should be.** An inactive admin who is
+**Inactivity: the admin pre-signs a successor (#161, designed, not built).** An inactive admin who is
 not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no
-remaining admin is acting, so any automatic promotion needs a signature the group does not have.
-Candidates: the admin pre-signs a successor designation that clients accept only after a stated
-inactivity period, or the highest remaining role co-signs. Both need a verifier rule beyond the
-same-day grant rules above, so this is left to #161.
+remaining admin is acting, so the signature has to exist before the admin goes quiet. Co-signing by
+the highest remaining role was rejected: it makes a non-admin signature create an admin, a second
+root of authority beside the creator-rooted chain, and in a small group a quorum of one or two can
+replace an admin who is only away.
+
+- **The designation.** While active, an admin signs `SuccessorDesignation` (new signing context,
+  length-prefixed like `RoleGrantPayload`): group id, admin uuid, successor uuid, `periodDays`, the
+  row's own sort key `DESIGNATION#<admin uuid>#<YYYY-MM-DD>#<rand>`, and the admin's current grant
+  ref. It is appended, never overwritten; the newest by day wins, and one naming no successor (empty
+  uuid) revokes. `periodDays` is the admin's choice within 30 to 365, and the UI suggests 90. It is
+  signed under a key the admin held that day and needs the admin to hold admin that day, checked
+  exactly as a grant is.
+- **Activity** means the last successful login, kept as `PROFILE.LastLoginDay` (day resolution, one
+  conditional write per day at login, so nothing on the request hot path). A session that never
+  logs in again counts as inactive. This is a server attestation: the client cannot verify it.
+- **Activation is not a signature.** The successor's browser calls `POST
+  /api/groups/{gid}/designation/claim`. The server appends an admin grant row for them, marked as
+  coming from the designation, only if all of these hold: the designation is the admin's newest and
+  not a revocation; the admin still holds admin; the successor is a live (non-deleted) member; the
+  admin's `LastLoginDay` is at least `periodDays` ago; and no other admin has logged in within that
+  period (so it fires for an abandoned group, not because one of two admins is away). The row
+  records the designation it relies on, the activation day and the admin's `LastLoginDay`.
+- **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
+  same chain walk as any grant; that it is the newest designation before the activation day and
+  names this subject; and `activationDay - lastLoginDay >= periodDays` as arithmetic on the recorded
+  values. Like every grant, it takes effect the day *after* its date, so the successor's own grants
+  are not caught by the strict same-day rule.
+- **What this trusts the server for, and what it does not.** The inactivity clock is the server's. A
+  malicious or compromised server can therefore promote the successor early. It cannot choose the
+  successor: only a person the admin signed for, and only within `periodDays` bounds the admin set,
+  and the admin can revoke any time they are active. That is the property Option A was picked for,
+  and it is weaker than a signed heartbeat, which was rejected as too heavy.
+- **Lapses.** The designation stops applying, silently, when the admin leaves, is removed or demoted
+  (their role is no longer admin), when the successor leaves, is removed or is deleted, or when a
+  newer designation exists. Nothing re-nominates for them, so the admin has to maintain it; the
+  group screen should say when an admin has none and when theirs has lapsed.
+- **After activation** the original admin is still an admin if they return; nothing is revoked.
+  Ordinary role changes and removal govern from there.
+- **Build order**: (1) crypto payload and context in Go and TS with a vectors entry, `DESIGNATION#`
+  rows, PUT/GET, `LastLoginDay`; (2) the claim endpoint; (3) the verifier rule in `grant-chain.ts`;
+  (4) the admin UI to designate, revoke and see status, and the successor claim.
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
