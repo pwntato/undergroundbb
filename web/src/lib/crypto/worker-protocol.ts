@@ -240,6 +240,56 @@ export interface SignRoleGrantResponse {
 }
 
 /**
+ * Signs a successor designation (#161) with the worker's own liveKeys. An empty
+ * successorUserId revokes. adminGrantRef is the caller's OWN current grant; the
+ * worker generates the designation's sort key and returns it with the signature.
+ */
+export interface SignSuccessorDesignationRequest {
+  readonly kind: 'signSuccessorDesignation'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly successorUserId: string
+  readonly periodDays: number
+  readonly adminGrantRef: string
+}
+
+export interface SignSuccessorDesignationResult {
+  readonly designationSortKey: string
+  readonly signature: string
+}
+
+export interface SignSuccessorDesignationResponse {
+  readonly kind: 'signSuccessorDesignationDone'
+  readonly id: string
+  readonly result: SignSuccessorDesignationResult
+}
+
+/**
+ * Signs the claim of a designated successor (#161) with the worker's own
+ * liveKeys. The worker generates the claim row's sort key (dated today UTC,
+ * which is the claim day) and returns it with the signature.
+ */
+export interface SignSuccessorClaimRequest {
+  readonly kind: 'signSuccessorClaim'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly designationSortKey: string
+}
+
+export interface SignSuccessorClaimResult {
+  readonly claimSortKey: string
+  readonly signature: string
+}
+
+export interface SignSuccessorClaimResponse {
+  readonly kind: 'signSuccessorClaimDone'
+  readonly id: string
+  readonly result: SignSuccessorClaimResult
+}
+
+/**
  * Signs a pin of another user's key set (issue #63) with the worker's own
  * liveKeys. Key fields are base64. The signing key set is a set; the worker
  * does not care about its order.
@@ -584,6 +634,8 @@ export type WorkerRequest =
   | CompleteChangePasswordRequest
   | SignGroupCreationRequest
   | SignRoleGrantRequest
+  | SignSuccessorDesignationRequest
+  | SignSuccessorClaimRequest
   | SignPinRequest
   | GetOwnSigningKeyRequest
   | DecryptGroupNamesRequest
@@ -603,6 +655,8 @@ export type WorkerResponse =
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
   | SignRoleGrantResponse
+  | SignSuccessorDesignationResponse
+  | SignSuccessorClaimResponse
   | SignPinResponse
   | GetOwnSigningKeyResponse
   | DecryptGroupNamesResponse

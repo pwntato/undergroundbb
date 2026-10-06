@@ -850,7 +850,7 @@ create a membership, because `CreateGroup` and `CompleteInvite`, the only writer
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
 
-**Inactivity: the admin pre-signs a successor (#161, claim built, UI not yet).** An inactive admin who is
+**Inactivity: the admin pre-signs a successor (#161, UI built).** An inactive admin who is
 not the last admin needs nothing. An inactive *last* admin leaves a group nobody can govern, and no
 remaining admin is acting, so the signature has to exist before the admin goes quiet. Co-signing by
 the highest remaining role was rejected: it makes a non-admin signature create an admin, a second
@@ -979,12 +979,30 @@ replace an admin who is only away.
   verifier's lapse rule is what still voids it. `GET /grants` serves `viaDesignation`. The web grant
   check fetches every designation page and the successor's key, and `verifyGrantChain` takes
   `designations` and `now`; a claim row whose designation is not served is unverified.
+- **What exists** (step 3): the screen at `/groups/:groupId/successor`, linked from the members
+  screen, which every member can open. An admin sees their standing designation or why they have
+  none (never designated; revoked; two on one day cancelled; claimed already; the successor is no
+  longer a member; lapsed because a grant to them is dated on or after the designation's day) and
+  can designate a member (not themselves or a deleted account) with a period defaulting to 90
+  inside 30 to 365, replace, or revoke; each signs `SuccessorDesignation` in the worker against
+  the admin's own current grant and calls `PUT /designation`, re-signing once on
+  `designation_key_taken`. A member a designation names sees when the period elapses and, from
+  then, a two-step Claim: it reloads the group, checks eligibility against today's UTC day, signs
+  `SuccessorClaim` in the worker, checks again against the day in the signed claim key (the worker
+  dates it from its own clock, which may have crossed midnight), and only then calls `POST
+  /designation/claim`. The confirm step says they can grant roles from the day after the claim
+  (the server refuses earlier, `grantor_granted_today`). The client rules
+  (`lib/groups/designation.ts`) mirror the verifier's: newest designation of the admin, no second
+  one on its day, no grant to the admin from its day through the claim day, not already cited, the
+  admin still an admin, `claimDay - designationDay >= periodDays`. They are advisory: they cannot
+  see last-login days, so the server's `not_inactive` is shown as its own message, and nothing
+  here verifies a signature.
 - **Build order**: (1a) both payloads and contexts in Go and TS with vectors (pure builders, so
   shipping them early is harmless: nothing emits a claim row yet); (1b) `DESIGNATION#` rows, PUT/GET
   and `LastLoginDay`; (2) the claim endpoint and the verifier rule in `grant-chain.ts` together, in
   one PR, because a claim row reaching a client without the rule shows as unverified and so does
   every grant the successor signs after it (built, with the `SESSION_TTL_HOURS` cap); (3) the admin
-  UI to designate, revoke and see status, and the successor claim screen (not built).
+  UI to designate, revoke and see status, and the successor claim screen (built).
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
 `startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry

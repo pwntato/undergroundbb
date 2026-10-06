@@ -294,6 +294,61 @@ export async function listDesignations(
   return handleJSON<ListDesignationsResponse>(res)
 }
 
+export interface PutDesignationRequest {
+  /** The row's own address, signed as part of the payload. */
+  readonly designationSortKey: string
+  /** Empty revokes the standing designation. */
+  readonly successorUserId: string
+  /** 30 to 365; signed, and stored but ignored on a revocation. */
+  readonly periodDays: number
+  /** The caller's own current grant (GroupDetail.myGrantSortKey). */
+  readonly adminGrantRef: string
+  readonly signature: string
+}
+
+/**
+ * PUT /api/groups/{id}/designation -- #161. Admin only: appends a signed
+ * successor designation, or a revocation when successorUserId is empty.
+ * 409 codes: grantor_ref_stale / grantor_changed / conflict_retry mean
+ * "reload and decide again"; designation_key_taken means "sign again with a
+ * fresh sort key"; grantor_granted_today (the admin's own grant is dated today)
+ * and designation_today (already designated today) mean "try tomorrow": show
+ * the server's message, reloading does not help. 410 subject_deleted: that
+ * account was deleted.
+ */
+export async function putDesignation(
+  groupId: string,
+  req: PutDesignationRequest,
+): Promise<{ sortKey: string }> {
+  return putOrPostJSON('PUT', `/api/groups/${encodeURIComponent(groupId)}/designation`, req)
+}
+
+export interface ClaimDesignationRequest {
+  /** The DESIGNATION# row being claimed. */
+  readonly designationSortKey: string
+  /** The claim row's own address (a GRANT# key for the caller), whose day is the claim day. */
+  readonly claimSortKey: string
+  readonly signature: string
+}
+
+/**
+ * POST /api/groups/{id}/designation/claim -- #161. The designated successor
+ * claims the admin role. 409 codes: not_inactive (the admin or another admin
+ * was active within the period; the server's message says when to try again),
+ * designation_superseded / designation_lapsed / admin_changed / already_claimed
+ * / designation_not_yours / already_admin / subject_role_changed /
+ * conflict_retry mean the situation changed (reload); designation_before_join
+ * (you joined after it was signed) is like not_inactive: reloading cannot
+ * help, show the server's message;
+ * grant_key_taken means "sign again with a fresh claim sort key".
+ */
+export async function claimDesignation(
+  groupId: string,
+  req: ClaimDesignationRequest,
+): Promise<{ role: MemberRole; grantSortKey: string }> {
+  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/designation/claim`, req)
+}
+
 /** One GENKEY# chain link: generation `generation`'s key, sealed under generation+1's. */
 export interface KeychainLink {
   readonly generation: number

@@ -4,7 +4,11 @@
 // idgen.DaySuffix (Go), so it gets its own focused unit tests instead.
 
 import { describe, expect, it } from 'vitest'
-import { generateGrantSortKey, successorDesignationPayload } from './group.js'
+import {
+  generateDesignationSortKey,
+  generateGrantSortKey,
+  successorDesignationPayload,
+} from './group.js'
 
 const SUBJECT_UUID = 'f47ac10b-58cc-4372-a567-0e02b2c3d479'
 
@@ -33,6 +37,21 @@ describe('generateGrantSortKey', () => {
       expect(seen.has(key)).toBe(false)
       seen.add(key)
     }
+  })
+})
+
+describe('generateDesignationSortKey', () => {
+  it('produces the DESIGNATION#<uuid>#<YYYY-MM-DD>#<16 hex chars> shape, dated in UTC', () => {
+    const key = generateDesignationSortKey(SUBJECT_UUID, new Date('2026-09-26T04:30:00.000Z'))
+    expect(key).toMatch(/^DESIGNATION#[0-9a-f-]{36}#\d{4}-\d{2}-\d{2}#[0-9a-f]{16}$/)
+    expect(key.startsWith(`DESIGNATION#${SUBJECT_UUID}#2026-09-26#`)).toBe(true)
+  })
+
+  it('generates a fresh random suffix on every call', () => {
+    const now = new Date('2026-09-25T12:00:00.000Z')
+    const seen = new Set<string>()
+    for (let i = 0; i < 200; i++) seen.add(generateDesignationSortKey(SUBJECT_UUID, now))
+    expect(seen.size).toBe(200)
   })
 })
 

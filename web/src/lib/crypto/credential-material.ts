@@ -12,11 +12,14 @@ import { DEFAULT_PARAMS, deriveKey } from './argon2.js'
 import { base64ToBytes, bytesToBase64, bytesToBase64Url } from './base64.js'
 import { credentialWrapAAD } from './credential.js'
 import {
+  generateDesignationSortKey,
   generateGrantSortKey,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
+  successorClaimPayload,
+  successorDesignationPayload,
   trustAnchorPayload,
 } from './group.js'
 import { fingerprint } from './fingerprint.js'
@@ -372,6 +375,56 @@ export function signRoleGrant(
   const payload = roleGrantPayload(groupId, subjectUserId, role, grantSortKey, grantorGrantRef)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.RoleGrant, payload)
   return { grantSortKey, signature: bytesToBase64(signature) }
+}
+
+/**
+ * #161: signs a successor designation -- the admin's own Ed25519 signature over
+ * successorDesignationPayload under SigningContext.SuccessorDesignation. An
+ * empty successorUserId is the revocation form. adminGrantRef is the admin's
+ * own CURRENT grant (GroupDetail.myGrantSortKey). The row's sort key is
+ * generated here, because the payload signs it; a retry after a
+ * 'designation_key_taken' conflict must call this again for a fresh one.
+ */
+export function signSuccessorDesignation(
+  keys: LiveKeys,
+  groupId: string,
+  successorUserId: string,
+  periodDays: number,
+  adminGrantRef: string,
+): { designationSortKey: string; signature: string } {
+  const designationSortKey = generateDesignationSortKey(keys.userId)
+  const payload = successorDesignationPayload(
+    groupId,
+    keys.userId,
+    successorUserId,
+    periodDays,
+    designationSortKey,
+    adminGrantRef,
+  )
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.SuccessorDesignation,
+    payload,
+  )
+  return { designationSortKey, signature: bytesToBase64(signature) }
+}
+
+/**
+ * #161: signs a designated successor's claim -- the successor's own signature
+ * over successorClaimPayload under SigningContext.SuccessorClaim. The claim
+ * row's sort key (a GRANT# key for the successor, dated today UTC) is
+ * generated here because the payload signs it, which is also what fixes the
+ * claim day; the caller re-checks eligibility against that day before sending.
+ */
+export function signSuccessorClaim(
+  keys: LiveKeys,
+  groupId: string,
+  designationSortKey: string,
+): { claimSortKey: string; signature: string } {
+  const claimSortKey = generateGrantSortKey(keys.userId)
+  const payload = successorClaimPayload(groupId, keys.userId, designationSortKey, claimSortKey)
+  const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.SuccessorClaim, payload)
+  return { claimSortKey, signature: bytesToBase64(signature) }
 }
 
 /**

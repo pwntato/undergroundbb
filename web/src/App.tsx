@@ -5,6 +5,7 @@ import { DeleteAccountScreen } from '@/routes/DeleteAccountScreen'
 import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
 import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
 import { GroupMembersScreen } from '@/routes/GroupMembersScreen'
+import { SuccessorScreen } from '@/routes/SuccessorScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { InvitesScreen } from '@/routes/InvitesScreen'
@@ -124,6 +125,14 @@ function App() {
               element={
                 <RequireAuth>
                   <GroupMembersScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/:groupId/successor"
+              element={
+                <RequireAuth>
+                  <SuccessorScreen />
                 </RequireAuth>
               }
             />
