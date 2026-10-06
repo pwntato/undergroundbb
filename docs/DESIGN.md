@@ -905,14 +905,15 @@ replace an admin who is only away.
   and `checkMemberRole` must not believe any other); that the designation names this subject; that
   no other `GRANT#` row cites the same `viaDesignation` (if more than one does, all of them are
   rejected, the way `compute()` poisons a duplicate sort key, so a returning admin's demotion cannot
-  be undone by a second claim from a cooperating server and successor); the floor
-  `claimDay - designationDay >= periodDays` (signing the designation shows the admin was active on
-  that day, so an honest claim never trips it, and a server cannot fire early); and the lapse
-  check: reject if the admin has any *other* designation, or any grant *to them* (a role change of
-  theirs, not one they signed), dated **on or after** the designation's day and on or before the claim day. "On or after" is deliberate: a
-  same-day revocation or self-demotion cannot be ordered against the designation, so it must cancel
-  it rather than be skipped. That makes revocation, demotion, removal and replacement bind the
-  server too, not only the honest path. The server's claim check uses the same rule.
+  be undone by a second claim from a cooperating server and successor); the floor `claimDay -
+  designationDay >= periodDays` (signing the designation shows the admin was active on that day, so
+  an honest claim never trips it, and a server cannot fire early); and the lapse check: reject if
+  the admin has any *other* designation, or any grant *to them* (a role change of theirs, not one
+  they signed), dated **on or after** the designation's day and on or before the claim day. "On or
+  after" is deliberate: a same-day revocation or self-demotion cannot be ordered against the
+  designation, so it must cancel it rather than be skipped. That makes revocation, demotion, removal
+  and replacement bind the server too, not only the honest path. The server's claim check uses the
+  same rule.
 - **Same-day behavior.** A grant takes effect the day after it is dated, so the successor can grant
   roles from the day after the claim; the server refuses earlier attempts (`grantor_granted_today`),
   as for any new admin, and the claim screen should say so.
