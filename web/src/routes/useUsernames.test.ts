@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MAX_CONCURRENT_READS, clearUsernameCache, resolveUsernames } from './useUsernames'
+import { clearUsernameCache, resolveUsernames } from './useUsernames'
 import type { UserProjection } from '@/lib/api/users'
 
 const user = (userId: string, username: string): UserProjection => ({
@@ -10,53 +10,67 @@ const user = (userId: string, username: string): UserProjection => ({
   supersededSigningKeys: [],
 })
 
+/** A getUsers stand-in that knows every id except those in `unknown`. */
+const fetchUsers = (unknown: readonly string[] = []) =>
+  vi.fn((ids: readonly string[]) =>
+    Promise.resolve(
+      new Map(ids.filter((id) => !unknown.includes(id)).map((id) => [id, user(id, `name-${id}`)])),
+    ),
+  )
+
 describe('resolveUsernames', () => {
   beforeEach(clearUsernameCache)
 
-  it('reads each distinct id once and caches across calls', async () => {
-    const fetchUser = vi.fn((id: string) => Promise.resolve(user(id, `name-${id}`)))
-    const first = await resolveUsernames(['a', 'b', 'a'], fetchUser)
+  it('asks for the distinct unknown ids in one call and caches across calls', async () => {
+    const fetch = fetchUsers()
+    const first = await resolveUsernames(['a', 'b', 'a'], fetch)
     expect(first.get('a')).toBe('name-a')
     expect(first.get('b')).toBe('name-b')
-    await resolveUsernames(['a', 'b', 'c'], fetchUser)
-    expect(fetchUser.mock.calls.map((c) => c[0])).toEqual(['a', 'b', 'c'])
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch.mock.calls[0]?.[0]).toEqual(['a', 'b'])
+    await resolveUsernames(['a', 'b', 'c'], fetch)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch.mock.calls[1]?.[0]).toEqual(['c'])
+  })
+
+  it('makes no call when everything is cached', async () => {
+    const fetch = fetchUsers()
+    await resolveUsernames(['a'], fetch)
+    await resolveUsernames(['a'], fetch)
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it('caches a deleted account as an empty username, not as unresolved', async () => {
     // The server sends an empty username for a tombstone; the flag is what
     // decides, so a stray non-empty one must not be shown as a person.
-    const fetchUser = vi.fn((id: string) =>
-      Promise.resolve({ ...user(id, 'stale-name'), deleted: true as const }),
+    const fetch = vi.fn((ids: readonly string[]) =>
+      Promise.resolve(
+        new Map(ids.map((id) => [id, { ...user(id, 'stale-name'), deleted: true as const }])),
+      ),
     )
-    const got = await resolveUsernames(['gone'], fetchUser)
+    const got = await resolveUsernames(['gone'], fetch)
     expect(got.has('gone')).toBe(true)
     expect(got.get('gone')).toBe('')
-    await resolveUsernames(['gone'], fetchUser)
-    expect(fetchUser).toHaveBeenCalledTimes(1)
+    await resolveUsernames(['gone'], fetch)
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves a failed read out of the map without throwing, and retries it next time', async () => {
-    const fetchUser = vi
-      .fn<(id: string) => Promise<UserProjection>>()
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce(user('a', 'alice'))
-    expect((await resolveUsernames(['a'], fetchUser)).has('a')).toBe(false)
-    expect((await resolveUsernames(['a'], fetchUser)).get('a')).toBe('alice')
+  it('leaves an id the server did not return out of the map, and retries it next time', async () => {
+    const fetch = vi
+      .fn<(ids: readonly string[]) => Promise<ReadonlyMap<string, UserProjection>>>()
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValueOnce(new Map([['a', user('a', 'alice')]]))
+    expect((await resolveUsernames(['a'], fetch)).has('a')).toBe(false)
+    expect((await resolveUsernames(['a'], fetch)).get('a')).toBe('alice')
   })
 
-  it('never has more than the cap in flight and still resolves everything', async () => {
-    let inFlight = 0
-    let peak = 0
-    const fetchUser = async (id: string) => {
-      inFlight++
-      peak = Math.max(peak, inFlight)
-      await new Promise((r) => setTimeout(r, 1))
-      inFlight--
-      return user(id, `n-${id}`)
-    }
-    const ids = Array.from({ length: 50 }, (_, i) => `id${i}`)
-    const got = await resolveUsernames(ids, fetchUser)
-    expect(got.size).toBe(50)
-    expect(peak).toBe(MAX_CONCURRENT_READS)
+  it('resolves the ones it got and leaves the rest when only some come back', async () => {
+    const got = await resolveUsernames(['a', 'x', 'b'], fetchUsers(['x']))
+    expect([...got.keys()].sort()).toEqual(['a', 'b'])
+  })
+
+  it('does not throw if the batch call itself rejects', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error('boom'))
+    expect((await resolveUsernames(['a'], fetch)).size).toBe(0)
   })
 })

@@ -5,7 +5,7 @@
 
 import { listAllPins, putPin } from '@/lib/api/pins'
 import { completeRotation, getGroup, listMembers, rewrapMembers } from '@/lib/api/groups'
-import { getUser } from '@/lib/api/users'
+import { getUsers } from '@/lib/api/users'
 import { getOwnSigningKey, rewrapGroupKey, signPin } from '@/lib/crypto/worker-client'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
@@ -24,7 +24,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
     selfUserId: userId,
     getGroup,
     listAllMembers: (groupId) => listAllMembers({ listMembers }, groupId),
-    getUser,
+    getUsers,
     ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
     listPins: listAllPins,
     pinKeys: makePinKeys(userId),

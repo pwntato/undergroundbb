@@ -22,7 +22,7 @@ import {
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { getOwnSigningKey, signRoleGrant, startGroupRotation } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
-import { getUser } from '@/lib/api/users'
+import { getUsers } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
@@ -157,7 +157,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         {
           listGrants,
           listDesignations,
-          getUser,
+          getUsers,
           readPin: (g) => readAnchorPin(userId, g),
           writePin: (g, pin) => writeAnchorPin(userId, g, pin),
           selfUserId: userId,

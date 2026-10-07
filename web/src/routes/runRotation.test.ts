@@ -70,6 +70,7 @@ class Fake {
   listPinsError: Error | undefined
 
   // call logs
+  userReads: string[][] = []
   rewrapBatches: { generation: number; users: string[] }[] = []
   completed: number[] = []
   pinned: string[] = []
@@ -128,10 +129,14 @@ class Fake {
           role: r.role,
           generation: r.generation,
         })),
-      getUser: async (id) => {
-        const r = this.members.get(id)
-        if (!r) throw new ApiError(404, 'no such user')
-        return served(r.person)
+      getUsers: async (ids) => {
+        this.userReads.push([...ids])
+        return new Map(
+          ids.flatMap((id) => {
+            const r = this.members.get(id)
+            return r ? [[id, served(r.person)] as const] : []
+          }),
+        )
       },
       ownSigningKey: async () => b64(me.publicKey),
       listPins: async () => {
@@ -422,14 +427,24 @@ describe('runRotation', () => {
       const out = await runRotation(
         {
           ...deps,
-          getUser: async () => {
-            throw new Error('offline')
-          },
+          getUsers: async () => new Map(), // nothing readable
         },
         GROUP,
       )
       expect(out.status).toBe('incomplete')
       expect(f.cryptoRecipients).toEqual([])
+    })
+  })
+
+  describe('key reads', () => {
+    it('reads each batch of recipients in one call, not one per member', async () => {
+      const f = new Fake()
+      const people = Array.from({ length: 30 }, () => f.add(person()))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('completed')
+      // 30 behind members at 25 per rewrap batch: two key reads, not thirty.
+      expect(f.userReads.map((ids) => ids.length)).toEqual([25, 5])
+      expect(new Set(f.userReads.flat())).toEqual(new Set(people.map((p) => p.id)))
     })
   })
 

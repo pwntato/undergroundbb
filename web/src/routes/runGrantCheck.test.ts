@@ -152,11 +152,8 @@ function deps(
         ...(i + 1 < designationPages.length && { nextCursor: String(i + 1) }),
       }
     },
-    getUser: async (id) => {
-      const u = w.users.get(id)
-      if (!u) throw new Error('404')
-      return u
-    },
+    getUsers: async (ids) =>
+      new Map(ids.flatMap((id) => (w.users.has(id) ? [[id, w.users.get(id)!] as const] : []))),
     readPin: (g) => pins.get(g) ?? null,
     writePin: (g, p) => {
       pins.set(g, p)
@@ -176,12 +173,13 @@ describe('checkGrants', () => {
 
   it('reads every page of the history and the key history of each distinct signer once', async () => {
     const w = world()
-    const getUser = vi.fn(deps(w).getUser)
-    const d = deps(w, { pages: [[w.root], [w.alice], [w.bob]], getUser })
+    const getUsers = vi.fn(deps(w).getUsers)
+    const d = deps(w, { pages: [[w.root], [w.alice], [w.bob]], getUsers })
     const r = await checkGrants(d, GROUP, MEMBERS)
     expect(r.state === 'checked' && r.statuses.get(BOB)).toEqual({ status: 'verified' })
-    // Creator (root + alice grants) and Alice (bob's grant): two lookups.
-    expect(getUser).toHaveBeenCalledTimes(2)
+    // Creator (root + alice grants) and Alice (bob's grant): both in one batch call.
+    expect(getUsers).toHaveBeenCalledTimes(1)
+    expect([...(getUsers.mock.calls[0]?.[0] ?? [])].sort()).toEqual([ALICE, CREATOR].sort())
   })
 
   it('flags a role the roster shows that no signed grant backs', async () => {
@@ -460,9 +458,10 @@ describe('checkGrants key pinning (#63)', () => {
     expect(checked(await checkGrants(d, GROUP, MEMBERS)).keys).toBe('pinned')
     const flaky = {
       ...d,
-      getUser: async (id: string) => {
-        if (id === ALICE) throw new Error('503')
-        return d.getUser(id)
+      getUsers: async (ids: readonly string[]) => {
+        const got = new Map(await d.getUsers(ids))
+        got.delete(ALICE) // as if the server did not return her
+        return got
       },
     }
     const r = checked(await checkGrants(flaky, GROUP, MEMBERS))
@@ -583,16 +582,16 @@ describe('checkGrants: successor claims (#161)', () => {
 
   it('confirms a claimed admin, fetching the successor and the designations', async () => {
     const { w, desig, claim } = claimed()
-    const getUser = vi.fn(deps(w).getUser)
+    const getUsers = vi.fn(deps(w).getUsers)
     const d = deps(w, {
       pages: [[w.root, claim]],
       designations: [[desig]],
-      getUser,
+      getUsers,
       now: afterClaim,
     })
     const r = await checkGrants(d, GROUP, members)
     expect(r.state === 'checked' && r.statuses.get(EVE)).toEqual({ status: 'verified' })
-    expect(getUser).toHaveBeenCalledWith(EVE)
+    expect(getUsers.mock.calls.flatMap(([ids]) => [...ids])).toContain(EVE)
   })
 
   it('reads every page of designations', async () => {
@@ -643,8 +642,8 @@ describe('checkGrants: successor claims (#161)', () => {
     const listDesignations = vi.fn(async () => {
       throw new Error('500')
     })
-    const getUser = vi.fn(deps(w).getUser)
-    const d = deps(w, { designations: [[desig]], listDesignations, getUser })
+    const getUsers = vi.fn(deps(w).getUsers)
+    const d = deps(w, { designations: [[desig]], listDesignations, getUsers })
     const r = await checkGrants(d, GROUP, MEMBERS)
     expect(r.state).toBe('checked')
     expect(listDesignations).not.toHaveBeenCalled()
@@ -658,14 +657,14 @@ describe('checkGrants: successor claims (#161)', () => {
       sortKey: `DESIGNATION#${ALICE}#2026-04-01#00000000000000cc`,
       adminUserId: ALICE,
     }
-    const getUser = vi.fn(deps(w).getUser)
+    const getUsers = vi.fn(deps(w).getUsers)
     const d = deps(w, {
       pages: [[w.root, claim]],
       designations: [[desig, unclaimed]],
-      getUser,
+      getUsers,
       now: afterClaim,
     })
     await checkGrants(d, GROUP, members)
-    expect(getUser.mock.calls.map(([id]) => id).sort()).toEqual([CREATOR, EVE].sort())
+    expect(getUsers.mock.calls.flatMap(([ids]) => [...ids]).sort()).toEqual([CREATOR, EVE].sort())
   })
 })
