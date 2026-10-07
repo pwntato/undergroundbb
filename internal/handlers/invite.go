@@ -245,12 +245,13 @@ type getInviteResponse struct {
 	Accepted bool `json:"accepted"`
 }
 
-// getInvite implements GET /api/invites/{id} -- issue #39. Does not itself
-// check ExpiresAt -- see acceptInvite's own doc comment for why this read
-// does not enforce the security-relevant expiry check itself (an
-// unauthenticated GET has no side effect to protect); the invitee's client
-// should still surface an obviously-expired ExpiresAt as a display
-// convenience, but the read-time check that matters is on the accept path.
+// getInvite implements GET /api/invites/{id} -- issue #39. An invite nobody
+// has accepted is refused with 410 once its signed ExpiresAt has passed, as
+// acceptInvite does (#158): TTL deletion is eventual, so without this a dead
+// link would keep serving its group id and inviter keys until the sweep. The
+// accept path still re-checks, since that is the check with a side effect to
+// protect. An ACCEPTED invite stays readable after ExpiresAt, so an invitee
+// reopening their link sees "already accepted" rather than "expired".
 func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 	inviteID := r.PathValue("id")
 	if !idgen.ValidUUID(inviteID) {
@@ -266,6 +267,17 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 	if invite == nil {
 		WriteError(w, http.StatusNotFound, "invite not found or expired")
 		return
+	}
+	if invite.InvitedUserID == "" {
+		expiresAt, err := time.Parse(time.RFC3339, invite.ExpiresAt)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "could not fetch invite")
+			return
+		}
+		if time.Now().After(expiresAt) {
+			WriteError(w, http.StatusGone, "invite has expired")
+			return
+		}
 	}
 
 	// See getInviteResponse's own doc comment for why this second read
