@@ -22,6 +22,7 @@ import { signSuccessorClaim, signSuccessorDesignation } from '@/lib/crypto/worke
 import { SUGGESTED_PERIOD_DAYS } from '@/lib/groups/designation'
 import { useSession } from '@/lib/session/useSession'
 import { memberLabel } from './memberLabel'
+import { SuccessorMessages } from './SuccessorMessages'
 import { SuccessorPanel, type DesignationChoice } from './SuccessorPanel'
 import {
   claim,
@@ -188,7 +189,7 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
   }
 
   return (
-    <>
+    <div className="relative flex w-full max-w-md flex-col items-center gap-4">
       {load.status === 'loading' && <p className="text-sm text-muted-foreground">Loading…</p>}
       {load.status === 'notFound' && (
         <p className="text-sm text-muted-foreground">
@@ -222,22 +223,13 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
           onConfirmClaim={handleClaim}
         />
       )}
-      {message !== null && (
-        <Alert>
-          <AlertDescription>{message}</AlertDescription>
-        </Alert>
-      )}
-      {error !== null && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
       <Link
         to={`/groups/${encodeURIComponent(groupId)}/members`}
         className="text-sm text-primary underline-offset-4 hover:underline"
       >
         Back to members
       </Link>
-    </>
+      <SuccessorMessages message={message} error={error} />
+    </div>
   )
 }

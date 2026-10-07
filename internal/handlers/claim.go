@@ -212,6 +212,10 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, fail)
 		return
 	}
+	// Every admin is checked, not just the first that fails: the retry date is
+	// the latest day any of them becomes inactive, so it does not depend on
+	// the order the admins are listed in.
+	var retryFrom time.Time
 	for _, a := range admins {
 		aid := a.SK[len("MEMBER#"):]
 		lastLogin := ""
@@ -225,13 +229,17 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 			lastLogin = profile.LastLoginDay
 		}
 		if !inactiveFor(claimDay, designationDay, lastLogin, period) {
-			msg := "the admin has been active within the last " + strconv.Itoa(designation.PeriodDays) + " days"
-			if aid != adminID {
-				msg = "another admin has been active within the last " + strconv.Itoa(designation.PeriodDays) + " days"
+			if from := inactiveFrom(designationDay, lastLogin, period); from.After(retryFrom) {
+				retryFrom = from
 			}
-			WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
-			return
 		}
+	}
+	if !retryFrom.IsZero() {
+		msg := "an admin has been active within the last " + strconv.Itoa(designation.PeriodDays) +
+			" days; you can try again from " + retryFrom.Format(dayLayout) +
+			" (UTC) if no admin logs in before then"
+		WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
+		return
 	}
 
 	err = h.db.ClaimDesignation(r.Context(), db.ClaimDesignationInput{
@@ -275,9 +283,15 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 // session can outlast the day of its login (up to config.MaxSessionTTL), so
 // the admin's last login can fall days before the designation they signed.
 func inactiveFor(claimDay, designationDay time.Time, lastLoginDay string, period time.Duration) bool {
+	return !claimDay.Before(inactiveFrom(designationDay, lastLoginDay, period))
+}
+
+// inactiveFrom is the first day inactiveFor accepts for an admin, assuming
+// they do not log in again before then.
+func inactiveFrom(designationDay time.Time, lastLoginDay string, period time.Duration) time.Time {
 	base := designationDay
 	if d, err := time.Parse(dayLayout, lastLoginDay); err == nil && d.After(base) {
 		base = d
 	}
-	return claimDay.Sub(base) >= period
+	return base.Add(period)
 }
