@@ -1059,6 +1059,14 @@ and loses nothing by omitting a member it should have named: the worst it can ma
 refuse to finish. A rotation still cannot complete while the server insists the excluded member is
 behind, which fails safe.
 
+**Deploy note.** There is no client path to adopt or clear a marker that lacks the record, and no
+abort endpoint: while a marker exists, removals and group edits are refused and new posts stay on the
+old generation. Before deploying a build that requires the record, confirm no `ROTATION` item exists
+in the table (`Scan` with `begins_with(SK, "ROTATION")`), or finish those rotations first with the old
+client. A browser still on the old bundle sends a Rotating-group removal without `startSignature` and
+gets 400 `bad_signature`; reloading fixes it. If a legacy marker is ever stranded, the remedy is
+operator-side, because the remover cannot re-sign after the fact.
+
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
 started a rotation (an Open group has none), and nothing binds the set of signed records, the same
 gap the grant history and pins already accept. (2) **Listing an account it made up.** A fabricated

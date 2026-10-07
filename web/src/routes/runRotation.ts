@@ -393,6 +393,10 @@ async function verifyRotationStart(
 
   let keys: Uint8Array[] | null
   if (marker.startedBy === deps.selfUserId) {
+    // #62: only the CURRENT key. Once signing keys can rotate, a starter who
+    // rotated mid-rotation signed under a superseded key, and as the only
+    // admin at this generation nobody could resume; take the served set (as the
+    // other branch does) before that ships.
     keys = [own]
   } else {
     const failure: { err?: unknown } = {}

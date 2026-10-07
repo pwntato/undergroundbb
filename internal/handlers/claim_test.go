@@ -497,7 +497,13 @@ func TestClaimDesignationBadInput(t *testing.T) {
 		}, 400, ""},
 		{"malformed signature", func(r *claimDesignationRequest) { r.Signature = "!!" }, 400, ""},
 		{"signed for a different designation", func(r *claimDesignationRequest) {
+			// Differ from the real key whatever its random last character is:
+			// a fixed "0" equals it one time in sixteen and the claim then
+			// verifies and succeeds.
 			other := w.designation[:len(w.designation)-1] + "0"
+			if other == w.designation {
+				other = w.designation[:len(w.designation)-1] + "1"
+			}
 			sig, _ := crypto.Sign(w.bob.signPriv, crypto.ContextSuccessorClaim,
 				crypto.SuccessorClaimPayload(w.gid, w.bob.userID, other, r.ClaimSortKey))
 			r.Signature = base64.StdEncoding.EncodeToString(sig)
