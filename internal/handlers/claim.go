@@ -212,6 +212,10 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, fail)
 		return
 	}
+	// Every admin is checked, not just the first that fails: the retry date is
+	// the latest day any of them becomes inactive, so it does not depend on
+	// the order the admins are listed in.
+	var retryFrom time.Time
 	for _, a := range admins {
 		aid := a.SK[len("MEMBER#"):]
 		lastLogin := ""
@@ -225,16 +229,17 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 			lastLogin = profile.LastLoginDay
 		}
 		if !inactiveFor(claimDay, designationDay, lastLogin, period) {
-			who := "the admin"
-			if aid != adminID {
-				who = "another admin"
+			if from := inactiveFrom(designationDay, lastLogin, period); from.After(retryFrom) {
+				retryFrom = from
 			}
-			msg := who + " has been active within the last " + strconv.Itoa(designation.PeriodDays) +
-				" days; you can try again from " + inactiveFrom(designationDay, lastLogin, period).Format(dayLayout) +
-				" (UTC) if they do not log in before then"
-			WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
-			return
 		}
+	}
+	if !retryFrom.IsZero() {
+		msg := "an admin has been active within the last " + strconv.Itoa(designation.PeriodDays) +
+			" days; you can try again from " + retryFrom.Format(dayLayout) +
+			" (UTC) if none of them logs in before then"
+		WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
+		return
 	}
 
 	err = h.db.ClaimDesignation(r.Context(), db.ClaimDesignationInput{

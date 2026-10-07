@@ -154,6 +154,15 @@ written for every user, including one who never posts or joins anything, so a du
 was last around. That was judged acceptable at day resolution and is needed for the claim; account
 deletion removes it.
 
+The `not_inactive` refusal also names the day to retry (#197), which is the latest, over every admin,
+of the later of their last login and the designation's day, plus the period. When an admin's login is
+the later of the two, that date minus the period is their `LastLoginDay`. So a designated successor
+(a member the designating admin chose) learns the day-resolution last login of the latest-active admin
+in the group, including an admin who never chose them, and can re-request daily to watch it move. It
+is the same day-resolution value a dump shows, limited to the one admin whose activity is blocking the
+claim, and only to someone who may claim once it passes. It was accepted so a refused successor knows
+when to come back; if that is too much, the message can go back to naming only the period.
+
 What day-level timing still gives an observer is real: activity on a given date, per user, per
 group, and a rough correlation of who was active on the same days, plus thread sequence where
 comments are involved. What it withholds is the fine-grained analysis that a millisecond timeline

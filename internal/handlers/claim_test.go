@@ -314,25 +314,39 @@ func TestClaimDesignationRefusals(t *testing.T) {
 	}
 }
 
-// not_inactive says when to try again: the later of the last login and the
-// designation's day, plus the period (here the login, 30 days ago, plus 90).
+// not_inactive says when to try again: the latest day any admin becomes
+// inactive, each being the later of their last login and the designation's
+// day, plus the period. The designating admin and a second admin each get the
+// later login in turn, so the order the admins are listed in (random user ids)
+// cannot hide a wrong date.
 func TestClaimDesignationNotInactiveNamesRetryDay(t *testing.T) {
-	for _, other := range []bool{false, true} {
-		w := newClaimWorld(t)
-		login := daysAgo(30)
-		if other {
-			carol := registerTestUser(t, w.h)
-			addMember(t, w.gid, carol, "admin")
-			setLastLogin(t, carol.userID, login)
-		} else {
-			setLastLogin(t, w.owner.userID, login)
-		}
-		rec := w.claim(t)
-		w.assertRefused(t, rec, http.StatusConflict, "not_inactive")
-		want := "you can try again from " + login.AddDate(0, 0, 90).Format(dayLayout) + " (UTC)"
-		if !strings.Contains(rec.Body.String(), want) {
-			t.Errorf("other=%v: body %s lacks %q", other, rec.Body.String(), want)
-		}
+	cases := []struct {
+		name                string
+		ownerAgo, secondAgo int
+		fromAgo             int // the later login decides the date
+	}{
+		{"only the designating admin is active", 30, 0, 30},
+		{"the designating admin logged in last", 10, 30, 10},
+		{"the other admin logged in last", 30, 10, 10},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for range 6 { // fresh random ids each time, so both list orders occur
+				w := newClaimWorld(t)
+				setLastLogin(t, w.owner.userID, daysAgo(c.ownerAgo))
+				if c.secondAgo != 0 {
+					carol := registerTestUser(t, w.h)
+					addMember(t, w.gid, carol, "admin")
+					setLastLogin(t, carol.userID, daysAgo(c.secondAgo))
+				}
+				rec := w.claim(t)
+				w.assertRefused(t, rec, http.StatusConflict, "not_inactive")
+				want := "you can try again from " + daysAgo(c.fromAgo).AddDate(0, 0, 90).Format(dayLayout) + " (UTC)"
+				if !strings.Contains(rec.Body.String(), want) {
+					t.Fatalf("body %s lacks %q", rec.Body.String(), want)
+				}
+			}
+		})
 	}
 }
 
