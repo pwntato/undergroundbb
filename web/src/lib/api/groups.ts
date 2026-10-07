@@ -505,7 +505,12 @@ export interface RewrapEntry {
   readonly wrappedKey: WireWrappedKey
 }
 
-/** The most members PUT /rotation/members takes at once (db.MaxRewrapBatch). */
+/**
+ * The most members PUT /rotation/members takes at once (db.MaxRewrapBatch).
+ * runRotation reads each batch's keys with one getUsers call and attributes a
+ * failure to the whole batch, which is exact only while this stays at or below
+ * USER_BATCH_SIZE (api/users.ts).
+ */
 export const MAX_REWRAP_BATCH = 25
 
 /**
