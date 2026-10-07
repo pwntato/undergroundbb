@@ -10,5 +10,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Several suites do real Argon2id work (credential-material, signup,
+    // recovery, change-password), about 1.5s locally; a shared CI runner has
+    // taken over 5s, the default, and failed an unrelated run (#163).
+    testTimeout: 30_000,
   },
 })
