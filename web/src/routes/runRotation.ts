@@ -24,9 +24,13 @@
 //     roster's grant check, which can show a mark while "unchecked".)
 //   - The pin check covers each recipient's KEY, not WHO the recipients are:
 //     the member list is whatever the server reports. A dishonest server can
-//     keep listing a removed member or add its own account, so the rotation
-//     protects only as far as membership is reported honestly (DESIGN.md,
-//     "The recipient set is taken from the server").
+//     add its own account, or keep listing a removed member. For the removed
+//     member, the rotation marker carries a signature by the admin who started
+//     it naming whom they removed, and a resuming admin excludes that member
+//     whatever the list says (#178); a marker with no verifiable signature
+//     stops the run. What stays open is the server hiding the marker itself,
+//     and listing an account it made up (DESIGN.md, "The recipient set is
+//     taken from the server").
 //
 // Plain function over injected deps, like runGrantCheck.ts, so it tests against
 // stubs without a worker or the network.
@@ -36,6 +40,8 @@ import type { GroupDetail, MemberEntry, RewrapEntry } from '@/lib/api/groups'
 import { MAX_REWRAP_BATCH } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
+import { SigningContext, verify } from '@/lib/crypto/ed25519'
+import { rotationStartPayload } from '@/lib/crypto/group'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import type { RewrapGroupKeyResult } from '@/lib/crypto/worker-protocol'
 
@@ -175,8 +181,9 @@ export interface RotationOptions {
    * Users the caller just removed. They are never wrapped to, even if the
    * server still lists them (it is the server's list that cannot be trusted,
    * issue #178). The rotation then cannot complete while the server insists
-   * they are behind, which fails safe. Covers the initiating admin only; an
-   * admin resuming later has no such record.
+   * they are behind, which fails safe. The rotation marker's signed record of
+   * whom its remover removed is excluded the same way, so an admin resuming
+   * later is covered without having to be told.
    */
   readonly exclude?: ReadonlySet<string>
 }
@@ -223,6 +230,16 @@ async function runOnce(
       reason: `could not read your pins: ${describe(err)}`,
       rewrapped: carried,
     }
+  }
+
+  // Whom the rotation's own remover says they removed (#178), checked before
+  // anything is wrapped. Added to what the caller already excludes.
+  if (marker !== undefined) {
+    const started = await verifyRotationStart(deps, own, groupId, marker)
+    if (!started.ok) {
+      return { status: 'incomplete', reason: started.reason, rewrapped: carried }
+    }
+    exclude = new Set([...exclude, started.removedUserId])
   }
 
   const blocked = new Set<string>()
@@ -337,6 +354,90 @@ async function runOnce(
     }
   }
   return { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped }
+}
+
+type RotationStartCheck =
+  | { readonly ok: true; readonly removedUserId: string }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Checks the marker's signed record of whose removal started the rotation. The
+ * signer is the admin named in `startedBy`, and their keys come from the
+ * server like any recipient's, so a pin that disagrees with what is served
+ * stops the run (a first sighting is accepted, as in the roster: the signature
+ * can only ever shrink the recipient set). A marker with no signature, or one
+ * that does not verify, is not trusted and the rotation does not run: carrying
+ * on without it would wrap to whoever the server lists.
+ */
+async function verifyRotationStart(
+  deps: RotationDeps,
+  own: Uint8Array,
+  groupId: string,
+  marker: NonNullable<GroupDetail['rotation']>,
+): Promise<RotationStartCheck> {
+  const { removedUserId, startSignature } = marker
+  if (removedUserId === undefined || startSignature === undefined) {
+    return {
+      ok: false,
+      reason:
+        'this rotation was started without a signed record of who was removed, so it cannot be resumed safely',
+    }
+  }
+  let signature: Uint8Array
+  try {
+    signature = base64ToBytes(startSignature)
+  } catch {
+    return { ok: false, reason: "the rotation's signed start record is malformed" }
+  }
+  const payload = rotationStartPayload(groupId, marker.startedBy, removedUserId, marker.generation)
+
+  let keys: Uint8Array[] | null
+  if (marker.startedBy === deps.selfUserId) {
+    keys = [own]
+  } else {
+    const failure: { err?: unknown } = {}
+    const served = (
+      await deps.getUsers([marker.startedBy], (err) => {
+        failure.err = err
+      })
+    ).get(marker.startedBy)
+    if (served === undefined) {
+      return {
+        ok: false,
+        reason:
+          failure.err === undefined
+            ? `could not fetch the keys of the admin who started this rotation (${marker.startedBy})`
+            : `could not fetch the keys of the admin who started this rotation: ${describe(failure.err)}`,
+      }
+    }
+    let pin: PinRecord | undefined
+    try {
+      pin = (await deps.listPins()).find((p) => p.pinnedUserId === marker.startedBy)
+    } catch (err) {
+      return { ok: false, reason: `could not read your pins: ${describe(err)}` }
+    }
+    const verdict = evaluatePin({
+      pinnerUserId: deps.selfUserId,
+      pinnerSigningPublicKey: own,
+      pinnedUserId: marker.startedBy,
+      pin,
+      served,
+    })
+    if (verdict === 'mismatch' || verdict === 'bad-signature') {
+      return {
+        ok: false,
+        reason: 'the keys served for the admin who started this rotation do not match your pin',
+      }
+    }
+    keys = servedSigningKeySet(served)
+  }
+  if (
+    keys === null ||
+    !keys.some((k) => verify(k, SigningContext.RotationStart, payload, signature))
+  ) {
+    return { ok: false, reason: "the rotation's signed start record does not verify" }
+  }
+  return { ok: true, removedUserId }
 }
 
 type RecipientCheck =

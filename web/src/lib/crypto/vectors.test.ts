@@ -181,6 +181,17 @@ interface VectorFile {
     payload_hex: string
     signature_hex: string
   }[]
+  rotation_start: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    remover_uuid: string
+    subject_uuid: string
+    generation: number
+    payload_hex: string
+    signature_hex: string
+  }[]
   pin: {
     name: string
     private_key_hex: string

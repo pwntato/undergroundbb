@@ -37,6 +37,7 @@ import {
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
+  rotationStartPayload,
   successorClaimPayload,
   successorDesignationPayload,
   trustAnchorPayload,
@@ -462,7 +463,7 @@ describe('decryptGroupNames', () => {
     let own = wrappedGroupKey
     const chain: { generation: number; wrapped: { nonce: string; ciphertext: string } }[] = []
     for (let generation = 0; generation < rotations; generation++) {
-      const step = await startGroupRotation(keys, groupId, fromWire(own), generation)
+      const step = await startGroupRotation(keys, groupId, fromWire(own), generation, 'subject-id')
       chain.push({ generation, wrapped: step.link })
       own = step.removerWrappedKey
     }
@@ -1056,11 +1057,19 @@ describe('group key rotation (#58)', () => {
     ciphertext: base64ToBytes(w.ciphertext),
   })
 
+  const SUBJECT_ID = 'removed-member-id'
+
   async function startedRotation() {
     const admin = await realUserKeys(ADMIN_ID, 'admin-password-rot')
     const oldKey = new Uint8Array(32).fill(7)
     const created = await signGroupCreation(admin, GROUP_ID, oldKey)
-    const started = await startGroupRotation(admin, GROUP_ID, wire(created.groupKeyWrapped), 0)
+    const started = await startGroupRotation(
+      admin,
+      GROUP_ID,
+      wire(created.groupKeyWrapped),
+      0,
+      SUBJECT_ID,
+    )
     return { admin, oldKey, started }
   }
 
@@ -1107,12 +1116,29 @@ describe('group key rotation (#58)', () => {
     ).rejects.toThrow()
   })
 
+  it('signs the rotation start naming the removed member, under the RotationStart context', async () => {
+    const { admin, started } = await startedRotation()
+    const sig = base64ToBytes(started.startSignature)
+    const payload = rotationStartPayload(GROUP_ID, ADMIN_ID, SUBJECT_ID, 1)
+    const pub = admin.signingKey.publicKey
+    expect(ed25519.verify(pub, ed25519.SigningContext.RotationStart, payload, sig)).toBe(true)
+    // Bound to the subject, the generation, the group and the context.
+    for (const other of [
+      rotationStartPayload(GROUP_ID, ADMIN_ID, 'someone-else', 1),
+      rotationStartPayload(GROUP_ID, ADMIN_ID, SUBJECT_ID, 2),
+      rotationStartPayload('other-group', ADMIN_ID, SUBJECT_ID, 1),
+    ]) {
+      expect(ed25519.verify(pub, ed25519.SigningContext.RotationStart, other, sig)).toBe(false)
+    }
+    expect(ed25519.verify(pub, ed25519.SigningContext.RoleGrant, payload, sig)).toBe(false)
+  })
+
   it('mints a fresh key every time', async () => {
     const admin = await realUserKeys(ADMIN_ID, 'admin-password-rot-2')
     const created = await signGroupCreation(admin, GROUP_ID, new Uint8Array(32).fill(7))
     const own = wire(created.groupKeyWrapped)
-    const a = await startGroupRotation(admin, GROUP_ID, own, 0)
-    const b = await startGroupRotation(admin, GROUP_ID, own, 0)
+    const a = await startGroupRotation(admin, GROUP_ID, own, 0, SUBJECT_ID)
+    const b = await startGroupRotation(admin, GROUP_ID, own, 0, SUBJECT_ID)
     expect(a.removerWrappedKey.ciphertext).not.toBe(b.removerWrappedKey.ciphertext)
   })
 
