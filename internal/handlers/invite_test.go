@@ -427,37 +427,15 @@ func TestAcceptInviteSecondAcceptorFails(t *testing.T) {
 // is built directly against the db layer here, with a real signature over
 // the real (already-past) ExpiresAt the inviter would have signed at
 // creation time, exactly the shape TTL's eventual deletion can leave
-// behind. This exercises acceptInvite's own expiry check in isolation from
-// createInvite's floor, which is the actual security control under test.
+// behind (seedExpiredInvite). This exercises acceptInvite's own expiry check
+// in isolation from createInvite's floor, which is the actual security
+// control under test.
 func TestAcceptInviteExpiredFails(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	creator, creatorCookie := loggedInUser(t, h)
 	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
 
-	inviteID, err := idgen.UUID()
-	if err != nil {
-		t.Fatalf("idgen.UUID: %v", err)
-	}
-	pastExpiry := time.Now().Add(-1 * time.Hour)
-	expiresAtStr := pastExpiry.UTC().Format(time.RFC3339)
-	payload := crypto.InviteCreationPayload(inviteID, groupID, creator.signPub, expiresAtStr)
-	sig, err := crypto.Sign(creator.signPriv, crypto.ContextInvite, payload)
-	if err != nil {
-		t.Fatalf("sign invite creation: %v", err)
-	}
-	if err := h.db.CreateInvite(t.Context(), db.CreateInviteInput{
-		InviteID:                inviteID,
-		GroupID:                 groupID,
-		InviterUserID:           creator.userID,
-		InviterSigningPublicKey: creator.signPub,
-		CreationSignature:       sig,
-		// Verbatim, matching what was actually signed above -- see
-		// db.CreateInviteInput.ExpiresAt's own doc comment.
-		ExpiresAt:       expiresAtStr,
-		ExpiresAtParsed: pastExpiry,
-	}); err != nil {
-		t.Fatalf("db.CreateInvite: %v", err)
-	}
+	inviteID := seedExpiredInvite(t, h, creator, groupID)
 
 	invitee, inviteeCookie := loggedInUser(t, h)
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
@@ -466,9 +444,9 @@ func TestAcceptInviteExpiredFails(t *testing.T) {
 	}
 }
 
-// seedExpiredInvite builds an expired-but-not-yet-swept invite the way
-// TestAcceptInviteExpiredFails does: createInvite refuses a past ExpiresAt,
-// so the row is written through the db layer with a real signature.
+// seedExpiredInvite builds an expired-but-not-yet-swept invite with a real
+// signature over the real (already-past) ExpiresAt: createInvite refuses a
+// past ExpiresAt, so the row is written through the db layer.
 func seedExpiredInvite(t *testing.T, h *Handler, creator registeredUser, groupID string) string {
 	t.Helper()
 	inviteID, err := idgen.UUID()
