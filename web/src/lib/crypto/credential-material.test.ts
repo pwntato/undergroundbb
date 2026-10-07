@@ -135,7 +135,7 @@ describe('recovery round trip', () => {
       () => {},
     )
     expect(secondRecovery.recoveryCode).not.toBe(recovered.recoveryCode)
-  }, 30_000)
+  })
 
   it('fails when the recovery code is wrong', async () => {
     const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
@@ -237,7 +237,7 @@ describe('change-password round trip', () => {
     )
     const recoveredKeys = await unwrapProfile('yet-another-password', recovered)
     expect(Array.from(recoveredKeys.signingSeed)).toEqual(Array.from(originalKeys.signingSeed))
-  }, 30_000)
+  })
 
   it('fails when the old password is wrong', async () => {
     const signup = await generateSignupMaterial(USER_ID, 'original-password', () => {})
