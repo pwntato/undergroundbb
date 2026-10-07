@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,6 +311,28 @@ func TestClaimDesignationRefusals(t *testing.T) {
 			}
 			w.assertRefused(t, rec, c.status, c.code)
 		})
+	}
+}
+
+// not_inactive says when to try again: the later of the last login and the
+// designation's day, plus the period (here the login, 30 days ago, plus 90).
+func TestClaimDesignationNotInactiveNamesRetryDay(t *testing.T) {
+	for _, other := range []bool{false, true} {
+		w := newClaimWorld(t)
+		login := daysAgo(30)
+		if other {
+			carol := registerTestUser(t, w.h)
+			addMember(t, w.gid, carol, "admin")
+			setLastLogin(t, carol.userID, login)
+		} else {
+			setLastLogin(t, w.owner.userID, login)
+		}
+		rec := w.claim(t)
+		w.assertRefused(t, rec, http.StatusConflict, "not_inactive")
+		want := "you can try again from " + login.AddDate(0, 0, 90).Format(dayLayout) + " (UTC)"
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("other=%v: body %s lacks %q", other, rec.Body.String(), want)
+		}
 	}
 }
 

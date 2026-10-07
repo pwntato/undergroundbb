@@ -225,10 +225,13 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 			lastLogin = profile.LastLoginDay
 		}
 		if !inactiveFor(claimDay, designationDay, lastLogin, period) {
-			msg := "the admin has been active within the last " + strconv.Itoa(designation.PeriodDays) + " days"
+			who := "the admin"
 			if aid != adminID {
-				msg = "another admin has been active within the last " + strconv.Itoa(designation.PeriodDays) + " days"
+				who = "another admin"
 			}
+			msg := who + " has been active within the last " + strconv.Itoa(designation.PeriodDays) +
+				" days; you can try again from " + inactiveFrom(designationDay, lastLogin, period).Format(dayLayout) +
+				" (UTC) if they do not log in before then"
 			WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
 			return
 		}
@@ -275,9 +278,15 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 // session can outlast the day of its login (up to config.MaxSessionTTL), so
 // the admin's last login can fall days before the designation they signed.
 func inactiveFor(claimDay, designationDay time.Time, lastLoginDay string, period time.Duration) bool {
+	return !claimDay.Before(inactiveFrom(designationDay, lastLoginDay, period))
+}
+
+// inactiveFrom is the first day inactiveFor accepts for an admin, assuming
+// they do not log in again before then.
+func inactiveFrom(designationDay time.Time, lastLoginDay string, period time.Duration) time.Time {
 	base := designationDay
 	if d, err := time.Parse(dayLayout, lastLoginDay); err == nil && d.After(base) {
 		base = d
 	}
-	return claimDay.Sub(base) >= period
+	return base.Add(period)
 }
