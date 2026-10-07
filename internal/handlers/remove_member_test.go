@@ -208,12 +208,27 @@ func TestRemoveMemberRejections(t *testing.T) {
 	}
 }
 
-func rotationBody(gen int64) *removeRotationRequest {
+// rotationBody is a valid Rotating-group removal's rotation half: remover
+// signs the rotation start naming subjectID, as the browser does (#178).
+func rotationBody(t *testing.T, remover registeredUser, gid, subjectID string, gen int64) *removeRotationRequest {
+	t.Helper()
+	sig, err := crypto.Sign(remover.signPriv, crypto.ContextRotationStart, crypto.RotationStartPayload(gid, remover.userID, subjectID, gen))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &removeRotationRequest{
 		Generation:        gen,
 		Link:              wrappedBlob{Nonce: b64(12), Ciphertext: b64(48)},
 		RemoverWrappedKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		StartSignature:    base64.StdEncoding.EncodeToString(sig),
 	}
+}
+
+func bytesAttrB64(item map[string]types.AttributeValue, name string) string {
+	if v, ok := item[name].(*types.AttributeValueMemberB); ok {
+		return base64.StdEncoding.EncodeToString(v.Value)
+	}
+	return ""
 }
 
 func numAttr(item map[string]types.AttributeValue, name string) string {
@@ -235,7 +250,7 @@ func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	addMember(t, gid, bob, "member")
 	addMember(t, gid, carol, "member")
 
-	body := &removeMemberRequest{Rotation: rotationBody(1)}
+	body := &removeMemberRequest{Rotation: rotationBody(t, owner, gid, bob.userID, 1)}
 	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, body); rec.Code != http.StatusNoContent {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
@@ -248,6 +263,25 @@ func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	}
 	if _, ttl := marker["TTL"]; ttl {
 		t.Error("marker carries a TTL")
+	}
+	// The marker records whom this rotation removed, under the remover's
+	// signature, so a resuming admin need not trust the member list (#178).
+	if strAttr(marker, "RemovedUserID") != bob.userID {
+		t.Errorf("marker RemovedUserID = %q, want %q", strAttr(marker, "RemovedUserID"), bob.userID)
+	}
+	if want := body.Rotation.StartSignature; want == "" || bytesAttrB64(marker, "StartSignature") != want {
+		t.Errorf("marker StartSignature = %q, want %q", bytesAttrB64(marker, "StartSignature"), want)
+	}
+	// ... and a member reading the group is served exactly that record.
+	var served struct {
+		Rotation *rotationState `json:"rotation"`
+	}
+	getRec := doGroupRequest(t, h, ownerCookie, http.MethodGet, gid, nil)
+	if err := json.Unmarshal(getRec.Body.Bytes(), &served); err != nil || served.Rotation == nil {
+		t.Fatalf("GET group: %v %s", err, getRec.Body.String())
+	}
+	if served.Rotation.RemovedUserID != bob.userID || served.Rotation.StartSignature != body.Rotation.StartSignature {
+		t.Errorf("served rotation = %+v", *served.Rotation)
 	}
 	link := getRow(t, "GROUP#"+gid, "GENKEY#000000")
 	if link == nil {
@@ -264,7 +298,7 @@ func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	}
 
 	// A second removal while the rotation runs is refused and changes nothing.
-	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(2)})
+	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, carol.userID, 2)})
 	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_in_progress" {
 		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 	}
@@ -285,13 +319,13 @@ func TestRemoveMemberRotatingRejectsBadRotation(t *testing.T) {
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
 
-	badLink := rotationBody(1)
+	badLink := rotationBody(t, owner, gid, bob.userID, 1)
 	badLink.Link.Nonce = "AAAA"
 	cases := map[string]*removeMemberRequest{
 		"no body":            nil,
 		"no rotation":        {},
-		"generation skips":   {Rotation: rotationBody(2)},
-		"generation repeats": {Rotation: rotationBody(0)},
+		"generation skips":   {Rotation: rotationBody(t, owner, gid, bob.userID, 2)},
+		"generation repeats": {Rotation: rotationBody(t, owner, gid, bob.userID, 0)},
 		"short link nonce":   {Rotation: badLink},
 	}
 	for name, body := range cases {
@@ -308,6 +342,46 @@ func TestRemoveMemberRotatingRejectsBadRotation(t *testing.T) {
 	}
 }
 
+// The rotation start must be the remover's own signature naming THIS subject
+// and THIS generation; a missing, malformed or misdirected one is refused and
+// nothing is written, so a marker that no resuming client could verify never
+// lands (#178).
+func TestRemoveMemberRotatingRejectsBadStartSignature(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob, carol := registerTestUser(t, h), registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	addMember(t, gid, carol, "member")
+
+	missing := rotationBody(t, owner, gid, bob.userID, 1)
+	missing.StartSignature = ""
+	short := rotationBody(t, owner, gid, bob.userID, 1)
+	short.StartSignature = b64(10)
+	cases := map[string]*removeRotationRequest{
+		"missing":        missing,
+		"short":          short,
+		"names another":  rotationBody(t, owner, gid, carol.userID, 1),
+		"another group":  rotationBody(t, owner, "00000000-0000-4000-8000-000000000000", bob.userID, 1),
+		"another signer": rotationBody(t, carol, gid, bob.userID, 1),
+		"another gen":    rotationBody(t, owner, gid, bob.userID, 2),
+	}
+	// "another gen" is signed for 2 but sent as 1.
+	cases["another gen"].Generation = 1
+	for name, rot := range cases {
+		rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rot})
+		if rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_signature" {
+			t.Errorf("%s: %d %q %s", name, rec.Code, errCode(t, rec), rec.Body.String())
+		}
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil {
+		t.Error("member removed with a bad rotation signature")
+	}
+	if getRow(t, "GROUP#"+gid, "ROTATION") != nil || getRow(t, "GROUP#"+gid, "GENKEY#000000") != nil {
+		t.Error("rejected requests wrote rotation state")
+	}
+}
+
 // Rotation is a Rotating-group concept; an Open group says so rather than
 // silently ignoring a payload that implies a guarantee it does not give.
 func TestRemoveMemberOpenGroupRefusesRotation(t *testing.T) {
@@ -317,7 +391,7 @@ func TestRemoveMemberOpenGroupRefusesRotation(t *testing.T) {
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
 
-	rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)})
+	rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, bob.userID, 1)})
 	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "rotation_not_applicable" {
 		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 	}
@@ -336,7 +410,7 @@ func TestRemoveMemberRotatingAdminSubjectDemotesAndRotates(t *testing.T) {
 	addMember(t, gid, adm, "admin")
 
 	body := removalGrant(t, owner, gid, adm.userID, backdatedRef(t, gid, owner))
-	body.Rotation = rotationBody(1)
+	body.Rotation = rotationBody(t, owner, gid, adm.userID, 1)
 	if rec := doRemove(t, h, ownerCookie, gid, adm.userID, &body); rec.Code != http.StatusNoContent {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
@@ -621,14 +695,14 @@ func TestRemoveMemberStaleGenerationNeverOverwritesChainLink(t *testing.T) {
 	addMember(t, gid, bob, "member")
 	addMember(t, gid, carol, "member")
 
-	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)}); rec.Code != http.StatusNoContent {
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, bob.userID, 1)}); rec.Code != http.StatusNoContent {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	before := getRow(t, "GROUP#"+gid, "GENKEY#000000")
 	deleteRow(t, "GROUP#"+gid, "ROTATION") // the rotation finished
 	setMemberGeneration(t, gid, owner.userID, 0)
 
-	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(1)})
+	rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, carol.userID, 1)})
 	if rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_stale_generation" {
 		t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
 	}
@@ -650,7 +724,7 @@ func TestPrivateGroupEditRefusedDuringRotation(t *testing.T) {
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
-	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(1)}); rec.Code != http.StatusNoContent {
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, bob.userID, 1)}); rec.Code != http.StatusNoContent {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 

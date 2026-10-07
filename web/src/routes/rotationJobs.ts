@@ -7,8 +7,9 @@
 // rotation marker to N+1 while another job is mid-batch at N, that job's next
 // batch is refused (rotation_not_active) and runRotation restarts from a fresh
 // read -- with the OTHER job's `exclude` set. A catch-up job has none, so it
-// would resume the new rotation without the #178 protection against a server
-// that still lists the removed user.
+// would resume the new rotation without excluding the removed user itself.
+// (The marker's signed record names them too, so the exclusion no longer
+// depends on which job started the rotation; see runRotation.ts, #178.)
 
 import type { MemberRole } from '@/lib/api/groups'
 import {

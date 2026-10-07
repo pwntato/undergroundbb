@@ -105,6 +105,28 @@ func SuccessorDesignationPayload(groupID, adminUUID, successorUUID string, perio
 	return lengthPrefixedConcat(fields)
 }
 
+// RotationStartPayload builds the bytes the admin who removes a member from a
+// Rotating group signs (under ContextRotationStart) when they start the key
+// rotation -- docs/DESIGN.md, "The recipient set is taken from the server"
+// (#178). It binds the removal to the rotation it began: the group, the
+// remover, the removed subject and the generation being rotated to, so a
+// signature cannot be moved to another group, subject or generation. A
+// resuming admin reads the subject from the marker and excludes them from the
+// re-wrap without trusting the server's member list.
+//
+// generation is signed as its decimal string. Same length-prefixed encoding
+// as RoleGrantPayload, and the same warning: this must never change once a
+// real rotation has been signed under it.
+func RotationStartPayload(groupID, removerUUID, subjectUUID string, generation int64) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(removerUUID),
+		[]byte(subjectUUID),
+		[]byte(strconv.FormatInt(generation, 10)),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
 // SuccessorClaimPayload builds the bytes a designated successor signs (under
 // ContextSuccessorClaim) to claim the admin role -- docs/DESIGN.md,
 // "Inactivity: the admin pre-signs a successor". claimSortKey is the new

@@ -121,11 +121,13 @@ export async function runRemoveMember(
         groupId,
         ownWrappedGroupKey: detail.wrappedGroupKey,
         ownGeneration: detail.generation,
+        subjectUserId,
       })
       rotation = {
         generation: minted.generation,
         link: minted.link,
         removerWrappedKey: minted.removerWrappedKey,
+        startSignature: minted.startSignature,
       }
     } catch (err) {
       // A worker call, not a request: nothing was sent.

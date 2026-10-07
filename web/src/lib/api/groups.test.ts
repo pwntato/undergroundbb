@@ -97,6 +97,7 @@ describe('removeMember', () => {
         generation: 2,
         link: { nonce: 'n', ciphertext: 'c' },
         removerWrappedKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' },
+        startSignature: 'sig',
       },
     }
     await removeMember('g1', 'u2', req)

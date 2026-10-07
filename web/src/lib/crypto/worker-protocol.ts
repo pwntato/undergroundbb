@@ -461,12 +461,16 @@ export interface StartGroupRotationRequest {
   readonly groupId: string
   readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   readonly ownGeneration: number
+  /** The member whose removal starts the rotation; named in the signed start (#178). */
+  readonly subjectUserId: string
 }
 
 export interface StartGroupRotationResult {
   readonly generation: number
   readonly link: { nonce: string; ciphertext: string }
   readonly removerWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  /** Base64 signature over rotationStartPayload (#178). */
+  readonly startSignature: string
 }
 
 export interface StartGroupRotationResponse {

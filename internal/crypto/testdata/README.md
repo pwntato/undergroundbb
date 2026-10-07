@@ -63,6 +63,10 @@ why.
 - `successor_claim`: `(group id, successor uuid, designation sort key, claim
   sort key) -> payload`, plus the Ed25519 signature over it — pinning
   `SuccessorClaimPayload` (#161). The role is deliberately not signed.
+- `rotation_start`: `(group id, remover uuid, subject uuid, generation) ->
+  payload`, plus the Ed25519 signature over it — pinning
+  `RotationStartPayload` (#178), what the admin who starts a rotation signs
+  to name the removed member.
 - `member_wrap_aad`: `(group id, member uuid, generation) -> AAD`, plus the
   AES-256-GCM ciphertext that AAD produces under a fixed key/nonce/plaintext
   — pinning `MemberWrapAAD` (#34), the AAD for a single member's own wrapped

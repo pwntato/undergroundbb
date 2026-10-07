@@ -411,6 +411,7 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     req.groupId,
     wrappedFromWire(req.ownWrappedGroupKey),
     req.ownGeneration,
+    req.subjectUserId,
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
 }

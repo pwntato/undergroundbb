@@ -181,6 +181,13 @@ export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
     readonly generation: number
     readonly startedAt: string
     readonly startedBy: string
+    /**
+     * Whose removal began the rotation, and `startedBy`'s base64 signature
+     * over rotationStartPayload naming them (#178). Absent on a marker written
+     * before removals were signed, which a resuming admin cannot trust.
+     */
+    readonly removedUserId?: string
+    readonly startSignature?: string
   }
 }
 
@@ -464,6 +471,8 @@ export interface RemoveRotationRequest {
   readonly generation: number
   readonly link: WireWrappedBlob
   readonly removerWrappedKey: WireWrappedKey
+  /** The remover's base64 signature over rotationStartPayload naming the removed member (#178). */
+  readonly startSignature: string
 }
 
 /**

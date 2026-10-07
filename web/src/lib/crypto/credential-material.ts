@@ -19,6 +19,7 @@ import {
   memberWrapAAD,
   roleGrantPayload,
   successorClaimPayload,
+  rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
 } from './group.js'
@@ -680,17 +681,20 @@ async function unwrapOwnGroupKey(
  * key to THEMSELVES: that wrap is the only durable copy of the minted key
  * anywhere, and every later step (re-wrapping members, resuming after a closed
  * tab) re-derives it from the caller's own MEMBER# entry rather than keeping it
- * in memory. The new key never leaves this module in the clear.
+ * in memory. The new key never leaves this module in the clear. Also signs
+ * the rotation start naming `subjectUserId`, the member being removed.
  */
 export async function startGroupRotation(
   keys: LiveKeys,
   groupId: string,
   ownWrappedGroupKey: Wrapped,
   ownGeneration: number,
+  subjectUserId: string,
 ): Promise<{
   generation: number
   link: { nonce: string; ciphertext: string }
   removerWrappedKey: WireWrapped
+  startSignature: string
 }> {
   const oldKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
   const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
@@ -702,10 +706,18 @@ export async function startGroupRotation(
     newKey,
     memberWrapAAD(groupId, keys.userId, generation),
   )
+  // The signature names whom this rotation removes (#178), so an admin who
+  // resumes it later excludes them without trusting the server's member list.
+  const startSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RotationStart,
+    rotationStartPayload(groupId, keys.userId, subjectUserId, generation),
+  )
   return {
     generation,
     link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
     removerWrappedKey: toWireWrapped(removerWrapped),
+    startSignature: bytesToBase64(startSignature),
   }
 }
 

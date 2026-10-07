@@ -10,6 +10,7 @@ import type { GroupDetail, MemberEntry, MemberRole, RewrapEntry } from '@/lib/ap
 import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
+import { rotationStartPayload } from '@/lib/crypto/group'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import { describeRotation, runRotation, type RotationDeps } from './runRotation'
 
@@ -53,6 +54,42 @@ function pinFor(p: Person, overrideWrapping?: Uint8Array): PinRecord {
   }
 }
 
+type Marker = NonNullable<GroupDetail['rotation']>
+
+const REMOVED = 'r0000000-0000-4000-8000-000000000042'
+
+/**
+ * A rotation marker as the server serves one after a signed removal (#178):
+ * `signer` (default: the caller) names `removed` for `generation`. Overrides
+ * model a marker that was tampered with or predates signing.
+ */
+function startMarker(
+  generation: number,
+  o: {
+    startedBy?: string
+    signer?: SigningKey
+    removed?: string
+    signedFor?: { removed?: string; generation?: number }
+    unsigned?: boolean
+  } = {},
+): Marker {
+  const startedBy = o.startedBy ?? ME
+  const removed = o.removed ?? REMOVED
+  const base = { generation, startedAt: 't', startedBy }
+  if (o.unsigned) return base
+  const payload = rotationStartPayload(
+    GROUP,
+    startedBy,
+    o.signedFor?.removed ?? removed,
+    o.signedFor?.generation ?? generation,
+  )
+  return {
+    ...base,
+    removedUserId: removed,
+    startSignature: b64(sign(o.signer ?? me, SigningContext.RotationStart, payload)),
+  }
+}
+
 interface Row {
   person: Person
   role: MemberRole
@@ -61,7 +98,7 @@ interface Row {
 
 class Fake {
   members = new Map<string, Row>()
-  marker: { generation: number } | undefined = { generation: 1 }
+  marker: Marker | undefined = startMarker(1)
   ownGeneration = 1
   role: GroupDetail['role'] = 'admin'
   visibility: GroupDetail['visibility'] = 'private'
@@ -119,9 +156,7 @@ class Fake {
           expirationDays: 0,
           version: 0,
           wrappedGroupKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' },
-          ...(this.marker
-            ? { rotation: { generation: this.marker.generation, startedAt: 't', startedBy: ME } }
-            : {}),
+          ...(this.marker ? { rotation: this.marker } : {}),
         }) as GroupDetail,
       listAllMembers: async () =>
         [...this.members.values()].map((r): MemberEntry => ({
@@ -301,7 +336,7 @@ describe('runRotation', () => {
   it('treats rotation_not_active at completion as done', async () => {
     const f = new Fake()
     f.add(person(), 'member', 1) // nobody behind; another admin finished it first
-    f.marker = { generation: 1 }
+    f.marker = startMarker(1)
     const deps = f.deps()
     const out = await runRotation(
       {
@@ -319,7 +354,7 @@ describe('runRotation', () => {
     const f = new Fake()
     f.add(person())
     f.onRewrap[0] = () => {
-      f.marker = { generation: 2 } // a newer rotation began meanwhile
+      f.marker = startMarker(2) // a newer rotation began meanwhile
     }
     const deps = f.deps()
     let reads = 0
@@ -342,7 +377,7 @@ describe('runRotation', () => {
     const f = new Fake()
     for (let i = 0; i < 26; i++) f.add(person())
     f.onRewrap[1] = () => {
-      f.marker = { generation: 2 } // superseded after the first batch of 25 landed
+      f.marker = startMarker(2) // superseded after the first batch of 25 landed
       f.ownGeneration = 2
       f.members.get(ME)!.generation = 2
     }
@@ -489,11 +524,124 @@ describe('runRotation', () => {
       const removed = f.add(person())
       f.add(person())
       f.onRewrap[0] = () => {
-        f.marker = { generation: 2 }
+        f.marker = startMarker(2)
         f.ownGeneration = 2
         f.members.get(ME)!.generation = 2
       }
       await runRotation(f.deps(), GROUP, { exclude: new Set([removed.id]) })
+      expect(f.cryptoRecipients.flat()).not.toContain(removed.id)
+    })
+  })
+
+  describe('signed start record (#178)', () => {
+    // An admin other than the caller started the rotation; the caller resumes it.
+    function resumedBy(f: Fake, removed: Person, o: Parameters<typeof startMarker>[1] = {}) {
+      const starter = f.add(person(), 'admin', 1)
+      f.marker = startMarker(1, {
+        startedBy: starter.id,
+        signer: starter.signing,
+        removed: removed.id,
+        ...o,
+      })
+      return starter
+    }
+
+    it('excludes the member the starter named, with no help from the caller', async () => {
+      const f = new Fake()
+      const ok = f.add(person())
+      const removed = f.add(person()) // listed by the server, valid pin
+      resumedBy(f, removed)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(f.cryptoRecipients.flat()).toEqual([ok.id])
+      expect(f.gen(removed)).toBe(0)
+      expect(f.completed).toEqual([])
+      expect(out.status).toBe('incomplete') // the server insists they are behind: fails safe
+    })
+
+    it('accepts a record the caller signed themselves', async () => {
+      const f = new Fake()
+      const removed = f.add(person())
+      f.marker = startMarker(1, { removed: removed.id })
+      await runRotation(f.deps(), GROUP)
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.gen(removed)).toBe(0)
+    })
+
+    it('stops, wrapping to no one, when the marker has no signed record', async () => {
+      const f = new Fake()
+      f.add(person())
+      f.marker = startMarker(1, { unsigned: true })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('signed record')
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.completed).toEqual([])
+    })
+
+    it.each([
+      ['another signer', (f: Fake, r: Person) => resumedBy(f, r, { signer: generateSigningKey() })],
+      ['another subject', (f: Fake, r: Person) => resumedBy(f, r, { signedFor: { removed: 'x' } })],
+      [
+        'another generation',
+        (f: Fake, r: Person) => resumedBy(f, r, { signedFor: { generation: 2 } }),
+      ],
+    ])('stops when the signature is by %s', async (_name, build) => {
+      const f = new Fake()
+      f.add(person())
+      build(f, f.add(person()))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('does not verify')
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it("stops when the starter's served keys disagree with the caller's pin", async () => {
+      const f = new Fake()
+      const removed = f.add(person())
+      const starter = resumedBy(f, removed)
+      // The server now serves different keys for the starter than the pin records.
+      f.pins.set(starter.id, pinFor({ ...starter, signing: generateSigningKey() }))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('do not match your pin')
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it("says why when the starter's keys cannot be fetched", async () => {
+      const f = new Fake()
+      const removed = f.add(person())
+      const starter = resumedBy(f, removed)
+      const deps = f.deps()
+      const out = await runRotation(
+        {
+          ...deps,
+          getUsers: async (ids, onError) => {
+            if (ids.includes(starter.id)) {
+              onError?.(new ApiError(401, 'not authenticated'))
+              return new Map()
+            }
+            return deps.getUsers(ids, onError)
+          },
+        },
+        GROUP,
+      )
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('not authenticated')
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it('keeps excluding the named member after a restart on a newer marker', async () => {
+      const f = new Fake()
+      const removed = f.add(person())
+      f.add(person())
+      resumedBy(f, removed)
+      f.onRewrap[0] = () => {
+        // Another removal supersedes the marker mid-run, naming someone else.
+        f.marker = startMarker(2)
+        f.ownGeneration = 2
+        f.members.get(ME)!.generation = 2
+      }
+      await runRotation(f.deps(), GROUP)
       expect(f.cryptoRecipients.flat()).not.toContain(removed.id)
     })
   })

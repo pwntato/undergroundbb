@@ -634,6 +634,10 @@ type rotationState struct {
 	Generation int64  `json:"generation"`
 	StartedAt  string `json:"startedAt"`
 	StartedBy  string `json:"startedBy"`
+	// RemovedUserID and StartSignature (base64) are the signed record of whose
+	// removal began the rotation (#178); absent on a marker from before it.
+	RemovedUserID  string `json:"removedUserId,omitempty"`
+	StartSignature string `json:"startSignature,omitempty"`
 }
 
 // currentGrantRef is a member's own current grant address: the one recorded
@@ -730,7 +734,15 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if rot != nil {
-			resp.Rotation = &rotationState{Generation: rot.Generation, StartedAt: rot.StartedAt, StartedBy: rot.StartedBy}
+			resp.Rotation = &rotationState{
+				Generation:    rot.Generation,
+				StartedAt:     rot.StartedAt,
+				StartedBy:     rot.StartedBy,
+				RemovedUserID: rot.RemovedUserID,
+			}
+			if len(rot.StartSignature) > 0 {
+				resp.Rotation.StartSignature = base64.StdEncoding.EncodeToString(rot.StartSignature)
+			}
 		}
 	}
 	WriteJSON(w, http.StatusOK, resp)

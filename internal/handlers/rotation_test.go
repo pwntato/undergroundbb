@@ -96,7 +96,7 @@ func startRotation(t *testing.T) rotationFixture {
 	for _, u := range []registeredUser{f.carol, f.dave, f.bobGone} {
 		addMember(t, gid, u, "member")
 	}
-	if rec := doRemove(t, h, ownerCookie, gid, f.bobGone.userID, &removeMemberRequest{Rotation: rotationBody(1)}); rec.Code != http.StatusNoContent {
+	if rec := doRemove(t, h, ownerCookie, gid, f.bobGone.userID, &removeMemberRequest{Rotation: rotationBody(t, f.owner, f.gid, f.bobGone.userID, 1)}); rec.Code != http.StatusNoContent {
 		t.Fatalf("start rotation: %d %s", rec.Code, rec.Body.String())
 	}
 	return f
@@ -196,7 +196,7 @@ func TestRotationCompleteStaleTabHearsNotActive(t *testing.T) {
 	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
 		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := doRemove(t, f.h, f.ownerCookie, f.gid, f.carol.userID, &removeMemberRequest{Rotation: rotationBody(2)}); rec.Code != http.StatusNoContent {
+	if rec := doRemove(t, f.h, f.ownerCookie, f.gid, f.carol.userID, &removeMemberRequest{Rotation: rotationBody(t, f.owner, f.gid, f.carol.userID, 2)}); rec.Code != http.StatusNoContent {
 		t.Fatalf("rotation 2: %d %s", rec.Code, rec.Body.String())
 	}
 	// Now at generation 2 with marker 2; a stale tab completes generation 1.
