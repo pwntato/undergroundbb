@@ -47,7 +47,11 @@ export interface RotationDeps {
   readonly getGroup: (groupId: string) => Promise<GroupDetail>
   /** Every member, following nextCursor. */
   readonly listAllMembers: (groupId: string) => Promise<readonly MemberEntry[]>
-  readonly getUser: (userId: string) => Promise<UserProjection>
+  /** Every readable user among the ids, in one batch call; an absent id could not be fetched. */
+  readonly getUsers: (
+    userIds: readonly string[],
+    onError?: (err: unknown) => void,
+  ) => Promise<ReadonlyMap<string, UserProjection>>
   /** The caller's own current signing public key, base64. */
   readonly ownSigningKey: () => Promise<string>
   /** Every pin the caller holds, following nextCursor. A missing pin reads as first-sight, so a partial list is unsafe. */
@@ -280,8 +284,24 @@ async function runOnce(
     for (let i = 0; i < behind.length; i += MAX_REWRAP_BATCH) {
       const chunk = behind.slice(i, i + MAX_REWRAP_BATCH)
       const recipients: { userId: string; x25519PublicKey: string }[] = []
+      // One batch read for the chunk's keys, before any first-sight pin is
+      // written: the same keys the per-recipient reads would have returned.
+      let fetchFailure: unknown
+      const servedKeys = await deps.getUsers(
+        chunk.map((m) => m.userId),
+        (err) => {
+          fetchFailure = err
+        },
+      )
       for (const m of chunk) {
-        const verdict = await checkRecipient(deps, own, pins, m.userId)
+        const verdict = await checkRecipient(
+          deps,
+          own,
+          pins,
+          m.userId,
+          servedKeys.get(m.userId),
+          fetchFailure,
+        )
         if (verdict.ok) {
           recipients.push({ userId: m.userId, x25519PublicKey: verdict.wrappingPublicKey })
         } else if (verdict.reason === 'blocked') {
@@ -337,15 +357,17 @@ async function checkRecipient(
   own: Uint8Array,
   pins: Map<string, PinRecord>,
   userId: string,
+  served: UserProjection | undefined,
+  fetchFailure?: unknown,
 ): Promise<RecipientCheck> {
-  let served: UserProjection
-  try {
-    served = await deps.getUser(userId)
-  } catch (err) {
+  if (served === undefined) {
     return {
       ok: false,
       reason: 'unavailable',
-      detail: `could not fetch keys for ${userId}: ${describe(err)}`,
+      detail:
+        fetchFailure === undefined
+          ? `could not fetch keys for ${userId}`
+          : `could not fetch keys for ${userId}: ${describe(fetchFailure)}`,
     }
   }
   const verdict = evaluatePin({

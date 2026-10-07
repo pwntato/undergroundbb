@@ -1932,6 +1932,10 @@ user item exposing only the username and the public keys, current and superseded
   the Argon2id salt and the wrapped private keys, which is offline-cracking material, and no ordinary
   read path may hand those out — that blob is available only from `POST /api/auth/challenge`, which
   is rate-limited precisely because it does. The key-pinning flow reads the same projection.
+  `POST /api/users:batch` serves the same projection for up to 100 ids in one request (a
+  `BatchGetItem`), so a large roster costs one call per hundred members rather than one per member;
+  unknown and malformed ids come back in `notFound`, and keys DynamoDB leaves unprocessed after
+  retries fail the request with a 503 rather than being reported as unknown users.
 
 **Email notifications are the exception, and they are strictly poorer for it.** The server composes
 those itself — it decrypts the address to send them — so it can use only what it can read. An email

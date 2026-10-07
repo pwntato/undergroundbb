@@ -95,7 +95,8 @@ export interface GrantCheckDeps {
   readonly listDesignations: (groupId: string, cursor?: string) => Promise<ListDesignationsResponse>
   /** The viewer's clock in ms, for flagging a postdated claim. Defaults to Date.now. */
   readonly now?: () => number
-  readonly getUser: (userId: string) => Promise<UserProjection>
+  /** Every readable user among the ids, in one batch call; an absent id is unreadable. */
+  readonly getUsers: (userIds: readonly string[]) => Promise<ReadonlyMap<string, UserProjection>>
   readonly readPin: (groupId: string) => StoredAnchorPin | null
   readonly writePin: (groupId: string, pin: StoredAnchorPin) => boolean
   /** The signed-in user's id (never pinned; checked against their own key). */
@@ -114,7 +115,6 @@ export interface GrantCheckDeps {
 
 // A history this deep means the server is not honoring nextCursor; stop.
 const MAX_GRANT_PAGES = 100
-const MAX_CONCURRENT_READS = 8
 
 /** Checks every member's role against the signed history. Never throws. */
 export async function checkGrants(
@@ -248,21 +248,15 @@ async function readServedKeys(
 ): Promise<{ served: ReadonlyMap<string, UserProjection>; unreadable: number }> {
   const wanted = [...new Set(ids)]
   const out = new Map<string, UserProjection>()
-  let unreadable = 0
-  let next = 0
-  const worker = async () => {
-    while (next < wanted.length) {
-      const id = wanted[next++] as string
-      try {
-        out.set(id, await deps.getUser(id))
-      } catch {
-        // Fails closed in the verifier ("no key history").
-        unreadable++
-      }
+  if (wanted.length > 0) {
+    try {
+      for (const [id, u] of await deps.getUsers(wanted)) out.set(id, u)
+    } catch {
+      // Nothing was read; every id counts as unreadable below.
     }
   }
-  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_READS, wanted.length) }, worker))
-  return { served: out, unreadable }
+  // Fails closed in the verifier ("no key history") for each one left out.
+  return { served: out, unreadable: wanted.length - out.size }
 }
 
 function historyOf(u: UserProjection): UserKeyHistory {
