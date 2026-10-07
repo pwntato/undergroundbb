@@ -237,7 +237,7 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 	if !retryFrom.IsZero() {
 		msg := "an admin has been active within the last " + strconv.Itoa(designation.PeriodDays) +
 			" days; you can try again from " + retryFrom.Format(dayLayout) +
-			" (UTC) if none of them logs in before then"
+			" (UTC) if no admin logs in before then"
 		WriteErrorWithCode(w, http.StatusConflict, msg, "not_inactive")
 		return
 	}
