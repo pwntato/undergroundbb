@@ -17,6 +17,7 @@ const MINTED = {
   generation: 4,
   link: { nonce: 'ln', ciphertext: 'lc' },
   removerWrappedKey: { ephemeralPub: 'e1', nonce: 'n1', ciphertext: 'c1' },
+  startSignature: 'start-sig',
 }
 
 function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
@@ -91,12 +92,14 @@ describe('runRemoveMember: what the request carries', () => {
       groupId: GROUP,
       ownWrappedGroupKey: OWN_KEY,
       ownGeneration: 3,
+      subjectUserId: SUBJECT,
     })
     expect(calls[0]?.body).toEqual({
       rotation: {
         generation: 4,
         link: MINTED.link,
         removerWrappedKey: MINTED.removerWrappedKey,
+        startSignature: MINTED.startSignature,
       },
     })
   })
