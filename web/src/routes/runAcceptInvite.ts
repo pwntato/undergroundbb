@@ -103,6 +103,17 @@ export function verifyInvite(
   return { ok: true }
 }
 
+/**
+ * What a failed GET /api/invites/{id} means for the accept screen: 404 the
+ * invite is gone, 410 its signed expiry has passed (#158, the same wording as
+ * verifyInvite's 'expired'), anything else a failure worth retrying.
+ */
+export function inviteLoadFailure(err: unknown): 'notFound' | 'expired' | 'networkError' {
+  if (err instanceof ApiError && err.status === 404) return 'notFound'
+  if (err instanceof ApiError && err.status === 410) return 'expired'
+  return 'networkError'
+}
+
 export type AcceptInviteErrorKind =
   | 'definitelyUncommitted'
   | 'ambiguous'

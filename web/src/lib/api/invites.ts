@@ -112,7 +112,9 @@ export interface GetInviteResponse {
 
 /**
  * GET /api/invites/{id} -- issue #39. Throws ApiError(404) if the invite
- * does not exist (never created, or already TTL-swept after expiry).
+ * does not exist (never created, or already TTL-swept after expiry), and
+ * ApiError(410) if it is past its signed expiry and not yet swept (#158); an
+ * invite accepted before it expired stays readable (accepted: true).
  */
 export async function getInvite(inviteId: string): Promise<GetInviteResponse> {
   return getJSON<GetInviteResponse>(`/api/invites/${inviteId}`)

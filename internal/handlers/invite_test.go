@@ -466,6 +466,83 @@ func TestAcceptInviteExpiredFails(t *testing.T) {
 	}
 }
 
+// seedExpiredInvite builds an expired-but-not-yet-swept invite the way
+// TestAcceptInviteExpiredFails does: createInvite refuses a past ExpiresAt,
+// so the row is written through the db layer with a real signature.
+func seedExpiredInvite(t *testing.T, h *Handler, creator registeredUser, groupID string) string {
+	t.Helper()
+	inviteID, err := idgen.UUID()
+	if err != nil {
+		t.Fatalf("idgen.UUID: %v", err)
+	}
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	expiresAtStr := pastExpiry.UTC().Format(time.RFC3339)
+	payload := crypto.InviteCreationPayload(inviteID, groupID, creator.signPub, expiresAtStr)
+	sig, err := crypto.Sign(creator.signPriv, crypto.ContextInvite, payload)
+	if err != nil {
+		t.Fatalf("sign invite creation: %v", err)
+	}
+	if err := h.db.CreateInvite(t.Context(), db.CreateInviteInput{
+		InviteID:                inviteID,
+		GroupID:                 groupID,
+		InviterUserID:           creator.userID,
+		InviterSigningPublicKey: creator.signPub,
+		CreationSignature:       sig,
+		ExpiresAt:               expiresAtStr,
+		ExpiresAtParsed:         pastExpiry,
+	}); err != nil {
+		t.Fatalf("db.CreateInvite: %v", err)
+	}
+	return inviteID
+}
+
+// #158: GET /api/invites/{id} honours the signed expires_at for an invite
+// nobody has accepted, as acceptInvite does (410), instead of serving the
+// group id and inviter keys of a dead link.
+func TestGetInviteExpiredIsGone(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := seedExpiredInvite(t, h, creator, groupID)
+
+	rec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusGone, rec.Body.String())
+	}
+}
+
+// An invite accepted before it expired still reads as accepted afterwards,
+// so the invitee reopening the link sees "already accepted", not "expired".
+func TestGetInviteAcceptedStaysReadableAfterExpiry(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := seedExpiredInvite(t, h, creator, groupID)
+	invitee, _ := loggedInUser(t, h)
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": s("INVITE#" + inviteID), "SK": s("META"),
+		},
+		UpdateExpression:          aws.String("SET InvitedUserID = :u"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":u": s(invitee.userID)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp getInviteResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Accepted {
+		t.Error("Accepted = false for an accepted invite")
+	}
+}
+
 func TestPendingInviteCompletionsAndComplete(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	creator, creatorCookie := loggedInUser(t, h)

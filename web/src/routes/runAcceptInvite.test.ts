@@ -6,6 +6,7 @@ import * as ed25519 from '@/lib/crypto/ed25519'
 import { fingerprint } from '@/lib/crypto/fingerprint'
 import { inviteCreationPayload } from '@/lib/crypto/invite'
 import {
+  inviteLoadFailure,
   isDefinitelyUncommitted,
   runAcceptInvite,
   verifyInvite,
@@ -123,6 +124,18 @@ function makeDeps(overrides: Partial<RunAcceptInviteDeps> = {}): RunAcceptInvite
     ...overrides,
   }
 }
+
+describe('inviteLoadFailure', () => {
+  it('maps 404 to notFound and 410 to expired', () => {
+    expect(inviteLoadFailure(new ApiError(404, 'gone'))).toBe('notFound')
+    expect(inviteLoadFailure(new ApiError(410, 'invite has expired'))).toBe('expired')
+  })
+
+  it('treats anything else as a failure worth retrying', () => {
+    expect(inviteLoadFailure(new ApiError(500, 'boom'))).toBe('networkError')
+    expect(inviteLoadFailure(new TypeError('Failed to fetch'))).toBe('networkError')
+  })
+})
 
 describe('isDefinitelyUncommitted', () => {
   const cases: { readonly err: unknown; readonly want: boolean }[] = [

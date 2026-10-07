@@ -23,7 +23,6 @@
 
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { ApiError } from '@/lib/api/auth'
 import { acceptInvite, getInvite, type GetInviteResponse } from '@/lib/api/invites'
 import { signInviteAcceptance } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
@@ -32,6 +31,7 @@ import {
   verifyInvite,
   type AcceptInviteErrorKind,
   type InviteVerificationFailure,
+  inviteLoadFailure,
 } from './runAcceptInvite'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -166,11 +166,8 @@ export function AcceptInviteScreen() {
         if (cancelled) {
           return
         }
-        if (err instanceof ApiError && err.status === 404) {
-          setState({ kind: 'notFound' })
-          return
-        }
-        setState({ kind: 'networkError' })
+        const failure = inviteLoadFailure(err)
+        setState(failure === 'expired' ? { kind: 'invalid', reason: 'expired' } : { kind: failure })
       }
     })()
     return () => {
