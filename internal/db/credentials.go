@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -49,6 +51,72 @@ func (c *Client) GetUserByID(ctx context.Context, userID string) (*models.User, 
 		return nil, err
 	}
 	return &user, nil
+}
+
+// MaxBatchUsers is DynamoDB's BatchGetItem limit on keys per call, and so the
+// most ids BatchGetUsers reads in one round trip.
+const MaxBatchUsers = 100
+
+// ErrBatchUsersIncomplete is returned when DynamoDB keeps returning
+// UnprocessedKeys (throttling) after the retries BatchGetUsers allows. The
+// caller must not read a missing id as "no such user" in that case.
+var ErrBatchUsersIncomplete = errors.New("db: batch user read left keys unprocessed")
+
+const batchUsersAttempts = 5
+
+// BatchGetUsers reads the PROFILE items of up to MaxBatchUsers distinct user
+// ids in one BatchGetItem and returns those that exist, keyed by id. An id with
+// no PROFILE is simply absent from the map, as GetUserByID's ErrUserNotFound
+// is for one id. Unprocessed keys are retried with a short backoff; if some
+// remain after batchUsersAttempts the call fails with ErrBatchUsersIncomplete
+// rather than reporting them as unknown.
+func (c *Client) BatchGetUsers(ctx context.Context, userIDs []string) (map[string]*models.User, error) {
+	seen := make(map[string]bool, len(userIDs))
+	keys := make([]map[string]types.AttributeValue, 0, len(userIDs))
+	for _, id := range userIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		keys = append(keys, map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + id},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		})
+	}
+	if len(keys) > MaxBatchUsers {
+		return nil, errors.New("db: too many ids for one batch user read")
+	}
+	users := make(map[string]*models.User, len(keys))
+	if len(keys) == 0 {
+		return users, nil
+	}
+	pending := map[string]types.KeysAndAttributes{c.table: {Keys: keys}}
+	for attempt := 0; attempt < batchUsersAttempts && len(pending) > 0; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+			}
+		}
+		out, err := c.ddb.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: pending})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range out.Responses[c.table] {
+			var user models.User
+			if err := attributevalue.UnmarshalMap(item, &user); err != nil {
+				return nil, err
+			}
+			id := strings.TrimPrefix(user.PK, "USER#")
+			users[id] = &user
+		}
+		pending = out.UnprocessedKeys
+	}
+	if len(pending) > 0 {
+		return nil, ErrBatchUsersIncomplete
+	}
+	return users, nil
 }
 
 // RewrapCredentialsInput is everything RewrapCredentials needs to re-wrap
