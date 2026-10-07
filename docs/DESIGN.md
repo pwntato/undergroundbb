@@ -817,7 +817,8 @@ admin, and the successor problem (#161) is left only with account deletion (#77)
 where no remaining admin is acting. In an **Open** group that is the whole of removal. In a
 **Rotating** group the same transaction also starts the rotation: the request carries the new
 generation (exactly one past the remover's own entry point), the `GENKEY#` link wrapping the old
-generation's key under the new one, and the new key wrapped for the remover. The transaction
+generation's key under the new one, the new key wrapped for the remover, and the remover's signed
+rotation start naming the removed member (see "The recipient set is taken from the server"). The transaction
 writes the delete, the `ROTATION` marker, that link and the remover's re-wrap together, so no
 membership can ever point at a generation whose chain link is missing, and the remover, whose
 browser minted the key, durably holds the one copy a resumed rotation must re-use. Only one rotation
@@ -1005,7 +1006,7 @@ replace an admin who is only away.
   UI to designate, revoke and see status, and the successor claim screen (built).
 
 **Finishing a rotation.** `GET /api/groups/{gid}` shows members the marker (`rotation`: generation,
-`startedAt`, `startedBy`). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
+`startedAt`, `startedBy`, and `removedUserId` with `startSignature`, below). `PUT /api/groups/{gid}/rotation/members` moves up to 25 members' entry
 points to the marker's generation in one transaction, so there is no `UnprocessedItems` to chase: the
 marker still names the generation, the caller is an admin whose own entry point is at it (the only
 way to hold the key), and every member exists and is not already past it, or nothing is written
@@ -1040,16 +1041,31 @@ roster's grant check, which can show a mark while "unchecked": there the worst c
 badge, here it is a leaked key. The job re-lists members each pass (state, not a cursor), re-wraps
 only those behind, and runs the same way as a catch-up when no rotation is running.
 
-**The recipient set is taken from the server.** The pin check covers each recipient's *key*, not
-*who* the recipients are: the list of members to re-wrap comes from `listAllMembers`. Against an
-active, dishonest server a rotation therefore only protects as far as the server reports
-membership honestly. It can keep listing a removed member (their pin still matches, so they are
-wrapped the new key and the rotation reports `completed`), or list an account it controls (first
-sight, pinned by trust on first use, wrapped the new key). Closing this needs verifiable
-membership: a signed removal for every subject (today only admin and ambassador subjects get a
-signed demotion) and a check of the invite-acceptance record before wrapping. Tracked in #178;
-until then do not read "fails closed on pins" as defending against a server that
-lies about the member list.
+**The recipient set is taken from the server, and only part of that is closed.** The pin check
+covers each recipient's *key*, not *who* the recipients are: the list of members to re-wrap comes
+from `listAllMembers`. Two attacks follow from a dishonest server, and they are different.
+
+*Keeping a removed member listed* is closed for a rotation that a signed removal started. The
+removal request carries a second signature, the remover's over `RotationStartPayload` (group,
+remover, **removed subject**, generation rotated to, signed under its own
+`underground-bb:rotation-start:v1` context), which the server verifies against the remover's key and
+stores on the `ROTATION` marker as `removedUserId` and `startSignature`. A resuming admin verifies it
+against the starter's keys (checked against the resumer's own pin of the starter), adds the named
+member to the exclusion set whatever the member list says, and **stops, wrapping to no one,** if the
+record is missing, malformed or does not verify. A marker written before this shipped has no record
+and so cannot be resumed from the client; that is a deliberate fail-closed choice, not an oversight.
+The signature can only *shrink* the recipient set, so a lying server gains nothing by forging one
+and loses nothing by omitting a member it should have named: the worst it can make a client do is
+refuse to finish. A rotation still cannot complete while the server insists the excluded member is
+behind, which fails safe.
+
+*What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
+started a rotation (an Open group has none), and nothing binds the set of signed records, the same
+gap the grant history and pins already accept. (2) **Listing an account it made up.** A fabricated
+member is first-sight, TOFU-pinned and wrapped the new key, because nothing yet signs *admission*:
+the invite-acceptance record is deleted when the invite completes, and a plain member has no grant.
+Closing that needs a durable, inviter-signed admission record checked before wrapping, and a
+vouching path for members who joined before it existed. Tracked in #178.
 
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
