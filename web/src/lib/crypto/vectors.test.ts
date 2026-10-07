@@ -22,6 +22,7 @@ import {
   memberWrapAAD,
   roleGrantPayload,
   successorClaimPayload,
+  rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
   type GroupTextField,
@@ -544,6 +545,27 @@ describe('successor claim vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.SuccessorClaim, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins rotationStartPayload's exact encoding (#178).
+describe('rotation start vectors', () => {
+  for (const tc of vectors.rotation_start) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = rotationStartPayload(
+        tc.group_id,
+        tc.remover_uuid,
+        tc.subject_uuid,
+        tc.generation,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.RotationStart, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

@@ -96,6 +96,10 @@ type RemoveRotation struct {
 	// it durably: it is the only copy of the minted key anywhere, so a resumed
 	// rotation re-uses it rather than minting a second one.
 	RemoverWrappedKey models.WrappedKey
+	// StartSignature is the remover's signature over crypto.RotationStartPayload
+	// for (group, remover, subject, CurrentGeneration+1), stored on the marker
+	// so a resuming admin can tell whom this rotation removed (#178).
+	StartSignature []byte
 }
 
 // RemoveDemotion is the signed grant a removal appends for an elevated subject.
@@ -225,6 +229,9 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 			Generation: in.Rotation.CurrentGeneration + 1,
 			StartedAt:  now,
 			StartedBy:  in.RemoverUserID,
+
+			RemovedUserID:  in.SubjectUserID,
+			StartSignature: in.Rotation.StartSignature,
 		})
 		if err != nil {
 			return err

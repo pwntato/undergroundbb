@@ -117,6 +117,33 @@ export function roleGrantPayload(
 }
 
 /**
+ * Builds the bytes the admin who removes a member from a Rotating group signs
+ * (under ed25519.SigningContext.RotationStart) when they start the rotation
+ * (#178). Binds the group, the remover, the removed subject and the
+ * generation rotated to. Must match internal/crypto/group.go's
+ * RotationStartPayload byte for byte, and never change once a real rotation
+ * has been signed under it.
+ */
+export function rotationStartPayload(
+  groupId: string,
+  removerUUID: string,
+  subjectUUID: string,
+  generation: number,
+): Uint8Array {
+  // Go signs strconv.FormatInt, so only an integer may be signed here.
+  if (!Number.isSafeInteger(generation)) {
+    throw new Error('generation must be an integer')
+  }
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(removerUUID),
+    encoder.encode(subjectUUID),
+    encoder.encode(String(generation)),
+  ])
+}
+
+/**
  * Builds the bytes an admin signs (under ed25519.SigningContext.SuccessorDesignation)
  * to name the member who takes over if they go inactive (#161). An empty
  * successorUUID is the revocation form. designationSortKey is the row's own

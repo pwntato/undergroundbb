@@ -199,6 +199,19 @@ type successorDesignationVector struct {
 	SignatureHex       string `json:"signature_hex"`
 }
 
+// rotationStartVector proves RotationStartPayload's exact encoding (#178).
+type rotationStartVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	RemoverUUID  string `json:"remover_uuid"`
+	SubjectUUID  string `json:"subject_uuid"`
+	Generation   int64  `json:"generation"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
 // successorClaimVector proves SuccessorClaimPayload's exact encoding (#161).
 type successorClaimVector struct {
 	Name               string `json:"name"`
@@ -320,6 +333,7 @@ type vectorFile struct {
 	RoleGrant            []roleGrantVector            `json:"role_grant"`
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
+	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	Pin                  []pinVector                  `json:"pin"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
@@ -689,6 +703,30 @@ func main() {
 			GrantorGrantRef: grantRef,
 			PayloadHex:      hex.EncodeToString(nonRootPayload),
 			SignatureHex:    hex.EncodeToString(nonRootSig),
+		})
+	}
+
+	// --- Rotation start (#178) ---
+	{
+		removerPub, removerPriv := fixedEd25519Key("rotation-start-remover-1")
+		groupID := "group-uuid-3"
+		removerUUID := "remover-uuid-1"
+		subjectUUID := "subject-uuid-1"
+		payload := crypto.RotationStartPayload(groupID, removerUUID, subjectUUID, 3)
+		sig, err := crypto.Sign(removerPriv, crypto.ContextRotationStart, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.RotationStart = append(out.RotationStart, rotationStartVector{
+			Name:         "generation 3",
+			PrivateHex:   hex.EncodeToString(removerPriv),
+			PublicHex:    hex.EncodeToString(removerPub),
+			GroupID:      groupID,
+			RemoverUUID:  removerUUID,
+			SubjectUUID:  subjectUUID,
+			Generation:   3,
+			PayloadHex:   hex.EncodeToString(payload),
+			SignatureHex: hex.EncodeToString(sig),
 		})
 	}
 

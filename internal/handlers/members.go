@@ -612,6 +612,10 @@ type removeRotationRequest struct {
 	Generation        int64       `json:"generation"`
 	Link              wrappedBlob `json:"link"`
 	RemoverWrappedKey wrappedKey  `json:"removerWrappedKey"`
+	// StartSignature (base64) is the remover's signature over
+	// crypto.RotationStartPayload naming the removed member (#178), stored on
+	// the marker so a resuming admin knows whom this rotation removed.
+	StartSignature string `json:"startSignature"`
 }
 
 // removeMember implements DELETE /api/groups/{groupId}/members/{userId} --
@@ -710,6 +714,14 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusBadRequest, msg, "rotation_required")
 			return
 		}
+		if rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, subjectID, req.Rotation, rot); msg != "" {
+			if rej.code == "" {
+				WriteError(w, rej.status, msg)
+			} else {
+				WriteErrorWithCode(w, rej.status, msg, rej.code)
+			}
+			return
+		}
 		in.Rotation = rot
 	} else if req.Rotation != nil {
 		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")
@@ -788,6 +800,27 @@ func decodeRemoveRotation(req *removeRotationRequest, callerGeneration int64) (*
 		return nil, "rotation.removerWrappedKey: " + err.Error()
 	}
 	return &db.RemoveRotation{CurrentGeneration: callerGeneration, Link: link, RemoverWrappedKey: wrapped}, ""
+}
+
+// verifyRotationStart checks the remover's signature over the rotation they
+// are starting and stores it on rot. It is checked here as well as by every
+// resuming client so a marker that could never verify is refused up front
+// instead of stalling the rotation for whoever resumes it (#178).
+func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, subjectID string, req *removeRotationRequest, rot *db.RemoveRotation) (removeRejection, string) {
+	sig, err := decodeBase64Field(req.StartSignature, ed25519SignatureSize, maxSignatureLen)
+	if err != nil {
+		return removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: " + err.Error()
+	}
+	remover, err := h.db.GetUserByID(ctx, removerID)
+	if err != nil {
+		return removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
+	}
+	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, rot.CurrentGeneration+1)
+	if !crypto.Verify(remover.SigningPublicKey, crypto.ContextRotationStart, payload, sig) {
+		return removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: does not verify against the caller's current signing key"
+	}
+	rot.StartSignature = sig
+	return removeRejection{}, ""
 }
 
 type removeRejection struct {

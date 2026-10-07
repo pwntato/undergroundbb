@@ -711,6 +711,14 @@ type Rotation struct {
 	StartedAt string `dynamodbav:"StartedAt"`
 	// StartedBy is the admin whose browser minted the new key and holds it.
 	StartedBy string `dynamodbav:"StartedBy"`
+	// RemovedUserID is the member whose removal started this rotation, and
+	// StartSignature is StartedBy's Ed25519 signature over
+	// crypto.RotationStartPayload naming them (#178). A resuming admin
+	// excludes RemovedUserID from the re-wrap without trusting the member
+	// list the server serves. Both are absent on a marker written before
+	// #178, which a client treats as unverifiable.
+	RemovedUserID  string `dynamodbav:"RemovedUserID,omitempty"`
+	StartSignature []byte `dynamodbav:"StartSignature,omitempty"`
 }
 
 // SuccessorDesignation is the GROUP#<gid> / DESIGNATION#<admin uuid>#<day>#<rand>

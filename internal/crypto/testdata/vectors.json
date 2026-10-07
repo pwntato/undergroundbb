@@ -252,6 +252,19 @@
       "signature_hex": "917a1c6eaab8361a1a0305df28125a2e53a4c27ff7766eb37054bcc2797c0094e9e5783d3fbe0299cf7a8b518cc13cceed479eada1b496afdbb115fbf777f802"
     }
   ],
+  "rotation_start": [
+    {
+      "name": "generation 3",
+      "private_key_hex": "d4e4389738e6345bd96a7a72f0b68779d2f5e551730062860ead210e6d69f4195e317b6a09cb59565cb7ec57dddc1d3635775e1b6986a2affa2078bfab48504e",
+      "public_key_hex": "5e317b6a09cb59565cb7ec57dddc1d3635775e1b6986a2affa2078bfab48504e",
+      "group_id": "group-uuid-3",
+      "remover_uuid": "remover-uuid-1",
+      "subject_uuid": "subject-uuid-1",
+      "generation": 3,
+      "payload_hex": "0000000c67726f75702d757569642d330000000e72656d6f7665722d757569642d310000000e7375626a6563742d757569642d310000000133",
+      "signature_hex": "2e8aa20dfca65cc7a8129697004145ccde8ac375156265796cd6c59887ca686ed76b9a00dde3a4b7c058cebe8da045bd4c4a02c98f9cd113f3fc534b5b80f50d"
+    }
+  ],
   "pin": [
     {
       "name": "two_keys",

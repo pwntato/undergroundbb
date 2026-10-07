@@ -31,6 +31,7 @@ type vectorFile struct {
 	RoleGrant            []roleGrantVector            `json:"role_grant"`
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
+	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	Pin                  []pinVector                  `json:"pin"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
@@ -174,6 +175,18 @@ type successorDesignationVector struct {
 	AdminGrantRef      string `json:"admin_grant_ref"`
 	PayloadHex         string `json:"payload_hex"`
 	SignatureHex       string `json:"signature_hex"`
+}
+
+type rotationStartVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	RemoverUUID  string `json:"remover_uuid"`
+	SubjectUUID  string `json:"subject_uuid"`
+	Generation   int64  `json:"generation"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
 }
 
 type successorClaimVector struct {
@@ -734,6 +747,40 @@ func TestVectorSuccessorClaim(t *testing.T) {
 			}
 			if Verify(pub, ContextSuccessorDesignation, wantPayload, wantSig) || Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
 				t.Fatal("claim signature verified under another context")
+			}
+		})
+	}
+}
+
+// TestVectorRotationStart pins RotationStartPayload's exact encoding (#178).
+func TestVectorRotationStart(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.RotationStart) < 1 {
+		t.Fatal("expected at least 1 rotation_start vector")
+	}
+	for _, tc := range v.RotationStart {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := RotationStartPayload(tc.GroupID, tc.RemoverUUID, tc.SubjectUUID, tc.Generation)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("RotationStartPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextRotationStart, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextRotationStart, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			if Verify(pub, ContextRoleGrant, wantPayload, wantSig) || Verify(pub, ContextSuccessorClaim, wantPayload, wantSig) {
+				t.Fatal("rotation-start signature verified under another context")
 			}
 		})
 	}
