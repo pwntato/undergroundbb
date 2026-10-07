@@ -434,6 +434,23 @@ describe('runRotation', () => {
       expect(out.status).toBe('incomplete')
       expect(f.cryptoRecipients).toEqual([])
     })
+
+    it('says why the keys could not be fetched, so a 401 reads as a sign-in problem', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      const out = await runRotation(
+        {
+          ...f.deps(),
+          getUsers: async (_ids, onError) => {
+            onError?.(new ApiError(401, 'not authenticated'))
+            return new Map()
+          },
+        },
+        GROUP,
+      )
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain(`could not fetch keys for ${p.id}: not authenticated`)
+    })
   })
 
   describe('key reads', () => {

@@ -58,7 +58,7 @@ describe('getUsers', () => {
       vi.fn((_url: string, init: RequestInit) => {
         const { ids } = JSON.parse(init.body as string) as { ids: string[] }
         return Promise.resolve(
-          ++call === 1
+          ++call <= 2
             ? response(503, { error: 'try again' })
             : response(200, { users: ids.map(user) }),
         )
@@ -69,6 +69,34 @@ describe('getUsers', () => {
     expect(got.has('id0')).toBe(false)
     expect(got.has('id100')).toBe(true)
     expect(got.size).toBe(50)
+  })
+
+  it('retries a 503 chunk once and keeps the result when the retry works', async () => {
+    let call = 0
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+      const { ids } = JSON.parse(init.body as string) as { ids: string[] }
+      return Promise.resolve(
+        ++call === 1
+          ? response(503, { error: 'try again' })
+          : response(200, { users: ids.map(user) }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onError = vi.fn()
+    const got = await getUsers(['a', 'b'], onError)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(got.size).toBe(2)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a 401, and reports why the chunk failed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(401, { error: 'not authenticated' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onError = vi.fn()
+    expect((await getUsers(['a'], onError)).size).toBe(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({ status: 401, message: 'not authenticated' })
   })
 
   it('treats a network error as unreadable', async () => {
