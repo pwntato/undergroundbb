@@ -648,6 +648,7 @@ export async function completeInvite(
       inviteId,
       inviterGrantRef,
       day,
+      ownGeneration,
     ),
   )
 

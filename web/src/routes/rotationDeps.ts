@@ -7,6 +7,7 @@ import { listAllPins, putPin } from '@/lib/api/pins'
 import {
   completeRotation,
   getGroup,
+  getKeychain,
   listAdmissions,
   listDesignations,
   listGrants,
@@ -32,6 +33,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
   return {
     selfUserId: userId,
     getGroup,
+    getKeychain,
     listAllMembers: (groupId) => listAllMembers({ listMembers }, groupId),
     getUsers,
     listGrants,

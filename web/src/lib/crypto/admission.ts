@@ -53,6 +53,8 @@ export interface AdmissionRecord {
   readonly inviterGrantRef: string
   /** UTC date, YYYY-MM-DD. */
   readonly day: string
+  /** The group-key generation the inviter signed (#178). */
+  readonly generation: number
   readonly signature: string
 }
 
@@ -155,6 +157,7 @@ export function verifyAdmission(input: VerifyAdmissionInput): AdmissionVerdict {
     record.inviteId,
     record.inviterGrantRef,
     record.day,
+    record.generation,
   )
   for (const key of keysOnDay(input.inviterHistory, day)) {
     if (verify(key, SigningContext.Admission, payload, sig)) return { ok: true }

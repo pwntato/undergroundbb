@@ -121,7 +121,10 @@ export function roleGrantPayload(
  * when they complete an invite (#178): the durable record that this inviter
  * admitted this invitee, with these keys, into this group. `inviterGrantRef`
  * is the sort key of the inviter's own current grant (the creator's is the
- * root grant); `day` is the UTC date (YYYY-MM-DD). Must match
+ * root grant); `day` is the UTC date (YYYY-MM-DD); `generation` is the
+ * group-key generation the inviter held, which orders the admission against a
+ * removal (a removal at generation g is older than any admission at g or
+ * later). Must match
  * internal/crypto/group.go's AdmissionPayload byte for byte, and never change
  * once a real admission has been signed under it.
  */
@@ -134,6 +137,7 @@ export function admissionPayload(
   inviteId: string,
   inviterGrantRef: string,
   day: string,
+  generation: number,
 ): Uint8Array {
   const encoder = new TextEncoder()
   return lengthPrefixedConcat([
@@ -145,6 +149,7 @@ export function admissionPayload(
     encoder.encode(inviteId),
     encoder.encode(inviterGrantRef),
     encoder.encode(day),
+    encoder.encode(String(generation)),
   ])
 }
 
