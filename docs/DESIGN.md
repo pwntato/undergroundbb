@@ -589,6 +589,18 @@ part of this guarantee, not an implementation detail.
 Step 3 happens automatically the next time the inviter's client is online; the group key exists in
 plaintext only inside a member's browser, so no server-side process can complete it.
 
+Step 3 also leaves the one durable, signed statement that this inviter admitted this invitee: an
+**admission record** at `GROUP#<gid>` / `ADMISSION#<invitee uuid>`, written in the same transaction as
+the membership (the invite rows are deleted by it, and a plain member has no grant, so nothing else
+signed would say who is a member). The inviter signs `AdmissionPayload` (group, inviter, invitee,
+the invitee's Ed25519 and X25519 keys as signed at step 2, invite id, the inviter's own current grant
+address, UTC day) under `underground-bb:admission:v1`, in the worker, only after the invite MAC has
+bound those keys to the real invitee. The server requires it (400 `admission_required` without; a
+browser on an older bundle reloads), checks the grant address is the inviter's current one (409
+`grantor_ref_stale`), the day is within the grant-day tolerance, and the signature verifies under
+the inviter's current key (400 `bad_signature`), then stores it. A rejoin overwrites it. Members read
+the records at `GET /api/groups/{gid}/admissions`. What checks them is the rotation job, below.
+
 **Two storage details make the ceremony work, and both are easy to get wrong.**
 
 **An invite is single-use, and the write at step 2 is conditional on the invitee field being
@@ -1067,13 +1079,34 @@ client. A browser still on the old bundle sends a Rotating-group removal without
 gets 400 `bad_signature`; reloading fixes it. If a legacy marker is ever stranded, the remedy is
 operator-side, because the remover cannot re-sign after the fact.
 
+*Listing an account it made up* is closed by the admission record (see the invite ceremony above).
+Before a recipient is pinned or wrapped to, the job checks that the inviter's signed admission of
+them verifies (`verifyAdmission`, `lib/crypto/admission.ts`): the record's keys are the ones the
+server serves for that member now; the signature verifies under a key the inviter held on the
+record's day; the grant it names is the inviter's, verified in the chain, admin or ambassador; and
+the inviter has **no other grant dated from that grant's day through the record's day**, the same
+fail-closed treatment of same-day changes as the grant chain (a creator who makes a group and
+invites on day one is fine, since their one grant is the one named; a demotion dated *after* the
+admission does not undo it). The creator is the one member with no record, exempt only against an
+anchor the caller trusts. The check runs *before* the pin check, so an account nobody admitted is
+never pinned either. A recipient that fails is skipped and reported (`unadmitted`), never wrapped
+to, and the rotation does not complete. A chain that cannot be read, a changed anchor or an
+unverifiable root stops the run and wraps to no one. There is no legacy path: a member without a
+record cannot receive a rotated key. This shipped while no members existed, so there are none
+to vouch for; a group whose members predate it would need a re-admission flow first.
+
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
 started a rotation (an Open group has none), and nothing binds the set of signed records, the same
-gap the grant history and pins already accept. (2) **Listing an account it made up.** A fabricated
-member is first-sight, TOFU-pinned and wrapped the new key, because nothing yet signs *admission*:
-the invite-acceptance record is deleted when the invite completes, and a plain member has no grant.
-Closing that needs a durable, inviter-signed admission record checked before wrapping, and a
-vouching path for members who joined before it existed. Tracked in #178.
+gap the grant history and pins already accept; withholding an admission only ever shrinks who is
+wrapped to. (2) **A backdated admission.** The record's day is the inviter's own claim (the server
+holds it to its clock when it writes, but a verifier has no clock), so a server colluding with an
+inviter who has since been demoted can store an admission dated before the demotion, the same gap the
+grant chain accepts for a postdated grant. (3) **Liveness.** An inviter whose keys can no longer be
+read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
+admin re-admits them; there is no re-admission flow yet. Tracked in #178.
+
+**Deploy note (admission).** Reset or recreate any group whose members joined before this shipped;
+they have no record and would be skipped at the next rotation.
 
 **One cost, deliberate:** the same-day exemption above is for *self*-demotion only. A removed
 admin's grants dated the **same UTC day as the removal** are therefore flagged unverified, honest
