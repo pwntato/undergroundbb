@@ -217,15 +217,16 @@ const SORT_KEY = /^GRANT#([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$/
 const DESIGNATION_KEY = /^DESIGNATION#([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$/
 const MIN_PERIOD_DAYS = 30
 const MAX_PERIOD_DAYS = 365
-const DAY_MS = 24 * 60 * 60 * 1000
+export const DAY_MS = 24 * 60 * 60 * 1000
 const ROLES: readonly string[] = ['admin', 'ambassador', 'member']
 
-interface ParsedKey {
+export interface ParsedKey {
   readonly subject: string
   readonly day: number
 }
 
-function parseSortKey(sortKey: string): ParsedKey | null {
+/** The subject and UTC day (ms) a GRANT# sort key addresses, or null if malformed. */
+export function parseSortKey(sortKey: string): ParsedKey | null {
   const m = SORT_KEY.exec(sortKey)
   if (!m) return null
   const day = Date.parse(`${m[2]}T00:00:00.000Z`)
@@ -257,7 +258,7 @@ function decode(b64: string | undefined): Uint8Array | null {
  * bound is dropped rather than guessed at (fails safe). A rotation on the
  * day itself yields two candidates, and a signature under either is accepted.
  */
-function keysOnDay(history: UserKeyHistory, dayStart: number): Uint8Array[] {
+export function keysOnDay(history: UserKeyHistory, dayStart: number): Uint8Array[] {
   const dayEnd = dayStart + DAY_MS
   const out: Uint8Array[] = []
   let currentFrom = -Infinity
