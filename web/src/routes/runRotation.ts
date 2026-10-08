@@ -536,7 +536,9 @@ type SignerKeys =
  * (#62: only the CURRENT key. Once signing keys can rotate, a signer who
  * rotated mid-rotation signed under a superseded key, and as the only admin at
  * this generation nobody could resume; take the served set, as for anyone
- * else, before that ships). Anyone else's come from the server, checked against
+ * else, before that ships; this now also covers every removal the caller ever
+ * signed, which live forever, so the fix is not scoped to resuming a rotation).
+ * Anyone else's come from the server, checked against
  * the caller's pin: a mismatch stops the run, a first sighting is accepted (as
  * in the roster: a forged signature can only ever shrink the recipient set). A
  * signer whose keys cannot be fetched stops it too. `who` names them in the

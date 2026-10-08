@@ -1137,6 +1137,13 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
 admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
 invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
+(7) **A leaver re-listed.** Leaving rotates no key and writes no `GENKEY#` link, so a member who
+left never appears in the removal history. Their old admission (same keys, inviter an admin that day)
+still verifies, and a server colluding with them can list them again, so the next rotation (say, from
+removing someone else) wraps the new key to them without anyone re-inviting them. Milder than a
+removal, since they chose to go and already hold every key up to the leave, but they would receive
+*future* keys. Closing it needs a signed leave record bound to something contiguous, as a removal is,
+and leaving has no rotation to carry one. Tracked in #178.
 
 **Deploy note (removal history).** A `GENKEY#` link written before this shipped has no record, so a
 group that has already rotated can never pass the check and its rotations stop. Reset or recreate
