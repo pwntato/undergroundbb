@@ -17,6 +17,7 @@ import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
 import {
+  admissionPayload,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
@@ -189,6 +190,21 @@ interface VectorFile {
     remover_uuid: string
     subject_uuid: string
     generation: number
+    payload_hex: string
+    signature_hex: string
+  }[]
+  admission: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    inviter_uuid: string
+    invitee_uuid: string
+    invitee_ed25519_hex: string
+    invitee_x25519_hex: string
+    invite_id: string
+    inviter_grant_ref: string
+    day: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -577,6 +593,31 @@ describe('rotation start vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RotationStart, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins admissionPayload's exact encoding (#178).
+describe('admission vectors', () => {
+  for (const tc of vectors.admission) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = admissionPayload(
+        tc.group_id,
+        tc.inviter_uuid,
+        tc.invitee_uuid,
+        hexToBytes(tc.invitee_ed25519_hex),
+        hexToBytes(tc.invitee_x25519_hex),
+        tc.invite_id,
+        tc.inviter_grant_ref,
+        tc.day,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.Admission, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

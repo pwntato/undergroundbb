@@ -117,6 +117,38 @@ export function roleGrantPayload(
 }
 
 /**
+ * Builds the bytes an inviter signs (under ed25519.SigningContext.Admission)
+ * when they complete an invite (#178): the durable record that this inviter
+ * admitted this invitee, with these keys, into this group. `inviterGrantRef`
+ * is the sort key of the inviter's own current grant, or empty for the
+ * creator; `day` is the UTC date (YYYY-MM-DD). Must match
+ * internal/crypto/group.go's AdmissionPayload byte for byte, and never change
+ * once a real admission has been signed under it.
+ */
+export function admissionPayload(
+  groupId: string,
+  inviterUUID: string,
+  inviteeUUID: string,
+  inviteeEd25519: Uint8Array,
+  inviteeX25519: Uint8Array,
+  inviteId: string,
+  inviterGrantRef: string,
+  day: string,
+): Uint8Array {
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(inviterUUID),
+    encoder.encode(inviteeUUID),
+    inviteeEd25519,
+    inviteeX25519,
+    encoder.encode(inviteId),
+    encoder.encode(inviterGrantRef),
+    encoder.encode(day),
+  ])
+}
+
+/**
  * Builds the bytes the admin who removes a member from a Rotating group signs
  * (under ed25519.SigningContext.RotationStart) when they start the rotation
  * (#178). Binds the group, the remover, the removed subject and the
