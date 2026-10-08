@@ -120,8 +120,8 @@ export function roleGrantPayload(
  * Builds the bytes an inviter signs (under ed25519.SigningContext.Admission)
  * when they complete an invite (#178): the durable record that this inviter
  * admitted this invitee, with these keys, into this group. `inviterGrantRef`
- * is the sort key of the inviter's own current grant, or empty for the
- * creator; `day` is the UTC date (YYYY-MM-DD). Must match
+ * is the sort key of the inviter's own current grant (the creator's is the
+ * root grant); `day` is the UTC date (YYYY-MM-DD). Must match
  * internal/crypto/group.go's AdmissionPayload byte for byte, and never change
  * once a real admission has been signed under it.
  */

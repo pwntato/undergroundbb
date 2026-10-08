@@ -759,11 +759,12 @@ func main() {
 		inviteID := "invite-uuid-1"
 		day := "2026-10-07"
 		grantRef := "GRANT#" + inviterUUID + "#2026-09-06#a1b2c3d4e5f6a1b2"
-		// The creator has no grant row, so their admissions carry an empty
-		// ref; the two shapes must produce different payloads.
+		// The inviter's grant ref is signed, so a different ref (here the
+		// creator's root grant) must produce a different payload.
+		rootRef := "GRANT#" + inviterUUID + "#2026-09-01#0f1e2d3c4b5a6978"
 		for _, tc := range []struct{ name, ref string }{
-			{"inviter holds a grant", grantRef},
-			{"inviter is the creator (empty grant ref)", ""},
+			{"inviter holds a promoted grant", grantRef},
+			{"inviter is the creator (root grant ref)", rootRef},
 		} {
 			payload := crypto.AdmissionPayload(groupID, inviterUUID, inviteeUUID, inviteePub, inviteeX, inviteID, tc.ref, day)
 			sig, err := crypto.Sign(inviterPriv, crypto.ContextAdmission, payload)

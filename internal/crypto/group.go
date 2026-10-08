@@ -138,8 +138,8 @@ func RotationStartPayload(groupID, removerUUID, subjectUUID string, generation i
 // inviteeEd25519 and inviteeX25519 are the raw public keys the invitee signed
 // at acceptance, so the record binds the keys the server must then serve for
 // them. inviterGrantRef is the sort key of the inviter's own current grant
-// (empty for the creator, who is anchored by the group's trust anchor, not a
-// grant), and day is the UTC date (YYYY-MM-DD) the verifier uses to pick the
+// (the creator's is the group's root grant; an inviter is always an admin or
+// ambassador, so there is always one), and day is the UTC date (YYYY-MM-DD) the verifier uses to pick the
 // inviter's signing key and judge their role. inviteID is signed so one
 // record cannot stand in for another invite of the same pair.
 //
