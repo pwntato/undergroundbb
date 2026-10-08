@@ -16,8 +16,14 @@ const INVITE_ID = 'invite-uuid-1'
 
 const WRAPPED_KEY = { ephemeralPub: 'ZXBoZW1lcmFs', nonce: 'bm9uY2U=', ciphertext: 'Y2lwaGVy' }
 
+const GRANT_REF = 'GRANT#inviter-uuid-1#2026-09-06#a1b2c3d4e5f6a1b2'
+// 23:59 UTC: the admission is dated by the UTC day, not the local one.
+const NOW = Date.UTC(2026, 9, 7, 23, 59, 0)
+const ADMISSION = { inviterGrantRef: GRANT_REF, day: '2026-10-07', signature: 'c2ln' }
+
 const OWN_MEMBERSHIP: OwnMembershipForCompletion = {
   generation: 0,
+  grantSortKey: GRANT_REF,
   wrappedGroupKey: WRAPPED_KEY,
 }
 
@@ -52,11 +58,12 @@ function toBase64(bytes: Uint8Array): string {
 function makeDeps(overrides: Partial<CompleteInvitesDeps> = {}): CompleteInvitesDeps {
   return {
     userId: USER_ID,
+    now: () => NOW,
     pendingInviteCompletions: vi.fn().mockResolvedValue({ invites: [realPendingInvite()] }),
     getOwnMembership: vi.fn().mockResolvedValue(OWN_MEMBERSHIP),
     completeInviteCrypto: vi
       .fn()
-      .mockResolvedValue({ wrappedGroupKey: WRAPPED_KEY, generation: 0 }),
+      .mockResolvedValue({ wrappedGroupKey: WRAPPED_KEY, generation: 0, admission: ADMISSION }),
     completeInvite: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
@@ -79,10 +86,14 @@ describe('runCompleteInvites', () => {
       invitedEd25519PublicKey: expect.any(String),
       invitedX25519PublicKey: expect.any(String),
       inviteMAC: expect.any(String),
+      inviterGrantRef: GRANT_REF,
+      day: '2026-10-07',
     })
+    // The admission the worker signed goes to the server as signed.
     expect(deps.completeInvite).toHaveBeenCalledWith(INVITE_ID, {
       wrappedGroupKey: WRAPPED_KEY,
       generation: 0,
+      admission: ADMISSION,
     })
   })
 

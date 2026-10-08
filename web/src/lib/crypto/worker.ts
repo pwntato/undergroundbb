@@ -379,6 +379,8 @@ async function completeInvite(req: CompleteInviteRequest): Promise<void> {
     invitedEd25519PublicKey,
     invitedX25519PublicKey,
     inviteMAC,
+    req.inviterGrantRef,
+    req.day,
   )
   post({ kind: 'completeInviteDone', id: req.id, result })
 }

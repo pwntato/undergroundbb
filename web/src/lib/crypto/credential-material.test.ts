@@ -33,6 +33,7 @@ import {
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import {
+  admissionPayload,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
@@ -680,6 +681,8 @@ describe('decryptGroupNames', () => {
 describe('invite handshake round trip', () => {
   const INVITER_ID = '22222222-2222-4222-8222-222222222222'
   const INVITEE_ID = '33333333-3333-4333-8333-333333333333'
+  const ADMISSION_GRANT_REF = `GRANT#${INVITER_ID}#2026-09-06#a1b2c3d4e5f6a1b2`
+  const ADMISSION_DAY = '2026-10-07'
 
   async function realUserKeys(userId: string, password: string) {
     const signup = await generateSignupMaterial(userId, password, () => {})
@@ -818,8 +821,52 @@ describe('invite handshake round trip', () => {
       invitee.signingKey.publicKey,
       invitee.wrappingKey.publicKey,
       base64ToBytes(acceptance.inviteMAC),
+      ADMISSION_GRANT_REF,
+      ADMISSION_DAY,
     )
     expect(completed.generation).toBe(0)
+
+    // The inviter signed an admission of exactly the keys the invitee signed,
+    // under the grant ref and day it was handed (#178). A verifier rebuilds
+    // the payload from the stored record, so it must verify under the
+    // inviter's key and under no other context.
+    const admission = admissionPayload(
+      groupId,
+      INVITER_ID,
+      INVITEE_ID,
+      invitee.signingKey.publicKey,
+      invitee.wrappingKey.publicKey,
+      inviteId,
+      ADMISSION_GRANT_REF,
+      ADMISSION_DAY,
+    )
+    expect(completed.admission.inviterGrantRef).toBe(ADMISSION_GRANT_REF)
+    expect(completed.admission.day).toBe(ADMISSION_DAY)
+    const admissionSig = base64ToBytes(completed.admission.signature)
+    expect(
+      ed25519.verify(
+        inviter.signingKey.publicKey,
+        ed25519.SigningContext.Admission,
+        admission,
+        admissionSig,
+      ),
+    ).toBe(true)
+    expect(
+      ed25519.verify(
+        inviter.signingKey.publicKey,
+        ed25519.SigningContext.RoleGrant,
+        admission,
+        admissionSig,
+      ),
+    ).toBe(false)
+    expect(
+      ed25519.verify(
+        invitee.signingKey.publicKey,
+        ed25519.SigningContext.Admission,
+        admission,
+        admissionSig,
+      ),
+    ).toBe(false)
 
     // The invitee can now unwrap THEIR OWN copy with their own real
     // wrapping private key and the AAD their future MEMBER# item carries.
@@ -937,6 +984,8 @@ describe('invite handshake round trip', () => {
         forgedSigningKey.publicKey,
         forgedWrappingKey.publicKey,
         forgedMAC,
+        ADMISSION_GRANT_REF,
+        ADMISSION_DAY,
       ),
     ).rejects.toThrow(InviteMACError)
   })

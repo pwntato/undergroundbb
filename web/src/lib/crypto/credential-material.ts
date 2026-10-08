@@ -19,6 +19,7 @@ import {
   memberWrapAAD,
   roleGrantPayload,
   successorClaimPayload,
+  admissionPayload,
   rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
@@ -597,9 +598,12 @@ export async function completeInvite(
   invitedEd25519PublicKey: Uint8Array,
   invitedX25519PublicKey: Uint8Array,
   inviteMAC: Uint8Array,
+  inviterGrantRef: string,
+  day: string,
 ): Promise<{
   wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   generation: number
+  admission: { inviterGrantRef: string; day: string; signature: string }
 }> {
   // The real fix for the gap plain Ed25519 verification leaves open (see
   // deriveInviteMACKey's own doc comment): invitedEd25519PublicKey,
@@ -627,6 +631,26 @@ export async function completeInvite(
   const wrapAAD = memberWrapAAD(groupId, invitedUserId, ownGeneration)
   const wrapped = await wrap(invitedX25519PublicKey, groupKey, wrapAAD)
 
+  // The durable record that this inviter admitted this invitee (#178). The
+  // invite rows are deleted at completion and a plain member has no grant, so
+  // this is the only signed statement of who is a member; a rotating admin
+  // checks it before wrapping a new group key to anyone. Signed only after the
+  // MAC above has bound these keys to the real invitee.
+  const admissionSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.Admission,
+    admissionPayload(
+      groupId,
+      keys.userId,
+      invitedUserId,
+      invitedEd25519PublicKey,
+      invitedX25519PublicKey,
+      inviteId,
+      inviterGrantRef,
+      day,
+    ),
+  )
+
   return {
     wrappedGroupKey: {
       ephemeralPub: bytesToBase64(wrapped.ephemeralPub),
@@ -634,6 +658,7 @@ export async function completeInvite(
       ciphertext: bytesToBase64(wrapped.ciphertext),
     },
     generation: ownGeneration,
+    admission: { inviterGrantRef, day, signature: bytesToBase64(admissionSignature) },
   }
 }
 

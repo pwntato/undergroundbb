@@ -10,7 +10,11 @@
 // without jsdom or a real worker.
 
 import { ApiError } from '@/lib/api/auth'
-import type { PendingInviteCompletion, PendingInviteCompletionsResponse } from '@/lib/api/invites'
+import type {
+  PendingInviteCompletion,
+  PendingInviteCompletionsResponse,
+  WireAdmission,
+} from '@/lib/api/invites'
 import { base64ToBytes } from '@/lib/crypto/base64'
 import { InviteMACError } from '@/lib/crypto/credential-material'
 import * as ed25519 from '@/lib/crypto/ed25519'
@@ -20,6 +24,8 @@ import type { CompleteInviteResult } from '@/lib/crypto/worker-protocol'
 /** One group's own membership, the shape completeInvite needs to unwrap the inviter's own copy. */
 export interface OwnMembershipForCompletion {
   readonly generation: number
+  /** The caller's own current grant address, signed into the admission (#178). */
+  readonly grantSortKey: string
   readonly wrappedGroupKey: {
     readonly ephemeralPub: string
     readonly nonce: string
@@ -29,6 +35,8 @@ export interface OwnMembershipForCompletion {
 
 export interface CompleteInvitesDeps {
   readonly userId: string
+  /** The clock, ms since the epoch; the admission is dated by its UTC day. Defaults to Date.now. */
+  readonly now?: () => number
   readonly pendingInviteCompletions: () => Promise<PendingInviteCompletionsResponse>
   /**
    * Returns the caller's own membership (generation + wrapped group key)
@@ -53,6 +61,8 @@ export interface CompleteInvitesDeps {
     readonly invitedEd25519PublicKey: string
     readonly invitedX25519PublicKey: string
     readonly inviteMAC: string
+    readonly inviterGrantRef: string
+    readonly day: string
   }) => Promise<CompleteInviteResult>
   readonly completeInvite: (
     inviteId: string,
@@ -63,6 +73,7 @@ export interface CompleteInvitesDeps {
         readonly ciphertext: string
       }
       readonly generation: number
+      readonly admission: WireAdmission
     },
   ) => Promise<void>
 }
@@ -169,11 +180,14 @@ async function completeOne(
       invitedEd25519PublicKey: invite.invitedEd25519PublicKey,
       invitedX25519PublicKey: invite.invitedX25519PublicKey,
       inviteMAC: invite.inviteMAC,
+      inviterGrantRef: membership.grantSortKey,
+      day: new Date((deps.now ?? Date.now)()).toISOString().slice(0, 10),
     })
 
     await deps.completeInvite(invite.inviteId, {
       wrappedGroupKey: wrapped.wrappedGroupKey,
       generation: wrapped.generation,
+      admission: wrapped.admission,
     })
     return { inviteId: invite.inviteId, ok: true }
   } catch (err) {
