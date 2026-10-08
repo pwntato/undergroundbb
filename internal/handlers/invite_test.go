@@ -446,6 +446,37 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 	}
 }
 
+// #178: the admission signs the generation the inviter holds, the server stores
+// and serves it, and a signature over another generation is refused. Generation
+// 0 everywhere else could not tell a signed generation from a constant.
+func TestCompleteInviteAdmissionSignsInviterGeneration(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	setMemberGeneration(t, groupID, creator.userID, 2)
+
+	body := func(signedGeneration int64) completeInviteRequest {
+		b := completeBody(signedAdmissionAt(t, h, creator, groupID, inviteID, invitee, "", time.Now().UTC().Format("2006-01-02"), signedGeneration))
+		b.Generation = 2
+		return b
+	}
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, body(0))
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_signature" {
+		t.Fatalf("signed generation 0 for an inviter at 2: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, body(2))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	list := doJSON(t, h, http.MethodGet, "/api/groups/"+groupID+"/admissions", creatorCookie, nil)
+	var got listAdmissionsResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &got); err != nil || len(got.Admissions) != 1 {
+		t.Fatalf("list: %v %s", err, list.Body.String())
+	}
+	if got.Admissions[0].Generation != 2 {
+		t.Errorf("served generation = %d, want 2", got.Admissions[0].Generation)
+	}
+}
+
 // signedAdmission is the inviter's admission record for completing inviteID
 // (#178): signed under the inviter's key over the invitee's accepted keys, the
 // inviter's current grant ref and today's UTC date, as the web client does.
