@@ -721,6 +721,34 @@ type Rotation struct {
 	StartSignature []byte `dynamodbav:"StartSignature,omitempty"`
 }
 
+// Admission is the GROUP#<gid> / ADMISSION#<invitee uuid> item (#178,
+// docs/DESIGN.md, "The recipient set is taken from the server"): the inviter's
+// signed record that they admitted this invitee, with these keys, into the
+// group. Written in the same transaction as the membership at CompleteInvite,
+// because the invite rows are deleted then and a plain member has no grant, so
+// nothing else signed says who is a member. A rejoin overwrites it. No TTL,
+// like GRANT#; the group sweep removes it with the rest of the partition.
+//
+// The signature is under crypto.ContextAdmission over crypto.AdmissionPayload.
+// No signing key is stored: a verifier resolves the inviter's key for Day from
+// their key history, as it does for a grant.
+type Admission struct {
+	Record
+
+	// InviteeUserID is duplicated off the sort key so a listing reads it directly.
+	InviteeUserID           string `dynamodbav:"InviteeUserID"`
+	InviterUserID           string `dynamodbav:"InviterUserID"`
+	InviteID                string `dynamodbav:"InviteID"`
+	InviteeEd25519PublicKey []byte `dynamodbav:"InviteeEd25519PublicKey"`
+	InviteeX25519PublicKey  []byte `dynamodbav:"InviteeX25519PublicKey"`
+	// InviterGrantRef is the sort key of the inviter's own current grant when
+	// they signed.
+	InviterGrantRef string `dynamodbav:"InviterGrantRef"`
+	// Day is the signed UTC date (YYYY-MM-DD).
+	Day       string `dynamodbav:"Day"`
+	Signature []byte `dynamodbav:"Signature"`
+}
+
 // SuccessorDesignation is the GROUP#<gid> / DESIGNATION#<admin uuid>#<day>#<rand>
 // item (#161, docs/DESIGN.md, "Inactivity: the admin pre-signs a successor").
 // Append-only, like GRANT#: the newest by day wins, and one with an empty

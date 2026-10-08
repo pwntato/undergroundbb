@@ -256,6 +256,11 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 			ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
 		}})
 	}
+	// The leaver's admission record goes with their membership (#178). Hygiene
+	// for an honest server only: a malicious one can keep it, and only a signed
+	// removal record checked by the verifier could stop that. Last, so no
+	// condition-check index above shifts.
+	items = append(items, admissionDelete(c.table, groupID, userID))
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case elevated && isConditionalCheckFailure(err, grantIndex):

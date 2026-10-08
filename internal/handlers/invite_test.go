@@ -307,6 +307,175 @@ func signedAcceptInviteRequest(t *testing.T, invitee registeredUser, inviteID st
 	}
 }
 
+// acceptedInviteFixture sets up an accepted invite awaiting completion: a
+// group created by creator, and an invitee who has accepted.
+func acceptedInviteFixture(t *testing.T, h *Handler) (creator registeredUser, creatorCookie *http.Cookie, invitee registeredUser, groupID, inviteID string) {
+	t.Helper()
+	creator, creatorCookie = loggedInUser(t, h)
+	groupID = createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID = createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+	var inviteeCookie *http.Cookie
+	invitee, inviteeCookie = loggedInUser(t, h)
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, inviteID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	return creator, creatorCookie, invitee, groupID, inviteID
+}
+
+func completeBody(admission *admissionRequest) completeInviteRequest {
+	return completeInviteRequest{
+		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
+		Generation:      0,
+		Admission:       admission,
+	}
+}
+
+// #178: completing an invite stores the inviter's signed admission, and a
+// member can list it. The record is what lets a rotating admin refuse a member
+// the server made up.
+func TestCompleteInviteStoresAdmission(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+
+	adm := signedAdmission(t, h, creator, groupID, inviteID, invitee)
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	list := doJSON(t, h, http.MethodGet, "/api/groups/"+groupID+"/admissions", creatorCookie, nil)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body: %s", list.Code, list.Body.String())
+	}
+	var resp listAdmissionsResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Admissions) != 1 {
+		t.Fatalf("admissions = %d, want 1", len(resp.Admissions))
+	}
+	got := resp.Admissions[0]
+	if got.InviteeUserID != invitee.userID || got.InviterUserID != creator.userID || got.InviteID != inviteID {
+		t.Errorf("admission names %+v, want invitee %s inviter %s invite %s", got, invitee.userID, creator.userID, inviteID)
+	}
+	if got.InviterGrantRef != adm.InviterGrantRef || got.Day != adm.Day || got.Signature != adm.Signature {
+		t.Errorf("stored admission differs from the signed one: %+v vs %+v", got, adm)
+	}
+	// The stored fields must rebuild the signed payload, or no verifier can.
+	ed, _ := base64.StdEncoding.DecodeString(got.InviteeEd25519PublicKey)
+	x, _ := base64.StdEncoding.DecodeString(got.InviteeX25519PublicKey)
+	sig, _ := base64.StdEncoding.DecodeString(got.Signature)
+	payload := crypto.AdmissionPayload(groupID, got.InviterUserID, got.InviteeUserID, ed, x, got.InviteID, got.InviterGrantRef, got.Day)
+	if !crypto.Verify(creator.signPub, crypto.ContextAdmission, payload, sig) {
+		t.Error("stored admission does not verify under the inviter's key")
+	}
+
+	// Only members may read the list.
+	_, outsiderCookie := loggedInUser(t, h)
+	out := doJSON(t, h, http.MethodGet, "/api/groups/"+groupID+"/admissions", outsiderCookie, nil)
+	if out.Code != http.StatusNotFound {
+		t.Errorf("non-member list status = %d, want 404", out.Code)
+	}
+}
+
+// #178: no admission, no membership. A browser on an old bundle gets a code it
+// can act on, and nothing is written.
+func TestCompleteInviteRequiresAdmission(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	_ = creator
+
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(nil))
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "admission_required" {
+		t.Fatalf("status = %d code = %q, want 400 admission_required, body: %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if m, err := h.db.GetMembership(t.Context(), groupID, invitee.userID); err != nil || m != nil {
+		t.Fatalf("invitee became a member without an admission: %v, %v", m, err)
+	}
+}
+
+// #178: every way the admission can be wrong is refused before anything is
+// written, so a record that could never verify is never stored.
+func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	stranger := registerTestUser(t, h)
+	today := time.Now().UTC().Format("2006-01-02")
+	oldDay := time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02")
+	staleRef := "GRANT#" + creator.userID + "#2020-01-01#0000000000000000"
+
+	good := signedAdmission(t, h, creator, groupID, inviteID, invitee)
+	withSig := func(a *admissionRequest, sig string) *admissionRequest {
+		c := *a
+		c.Signature = sig
+		return &c
+	}
+	// Signed by the wrong key, and over the wrong invitee, both well-formed.
+	byInvitee := signedAdmissionWith(t, h, invitee, groupID, inviteID, invitee, good.InviterGrantRef, today)
+	overStranger := signedAdmissionWith(t, h, creator, groupID, inviteID, stranger, good.InviterGrantRef, today)
+
+	cases := []struct {
+		name   string
+		adm    *admissionRequest
+		status int
+		code   string
+	}{
+		{"signature by another key", withSig(good, byInvitee.Signature), 400, "bad_signature"},
+		{"signature over another invitee", withSig(good, overStranger.Signature), 400, "bad_signature"},
+		{"signature not base64", withSig(good, "!!!"), 400, ""},
+		{"signature empty", withSig(good, ""), 400, ""},
+		{"stale grant ref", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, staleRef, today), 409, "grantor_ref_stale"},
+		{"day too old", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, "", oldDay), 400, ""},
+		{"day malformed", &admissionRequest{InviterGrantRef: good.InviterGrantRef, Day: "07/10/2026", Signature: good.Signature}, 400, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(tc.adm))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d, body: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.code != "" && errCode(t, rec) != tc.code {
+				t.Errorf("code = %q, want %q", errCode(t, rec), tc.code)
+			}
+			if m, err := h.db.GetMembership(t.Context(), groupID, invitee.userID); err != nil || m != nil {
+				t.Fatalf("a refused admission still made the invitee a member: %v, %v", m, err)
+			}
+		})
+	}
+}
+
+// signedAdmission is the inviter's admission record for completing inviteID
+// (#178): signed under the inviter's key over the invitee's accepted keys, the
+// inviter's current grant ref and today's UTC date, as the web client does.
+func signedAdmission(t *testing.T, h *Handler, inviter registeredUser, groupID, inviteID string, invitee registeredUser) *admissionRequest {
+	t.Helper()
+	return signedAdmissionWith(t, h, inviter, groupID, inviteID, invitee, "", time.Now().UTC().Format("2006-01-02"))
+}
+
+// signedAdmissionWith is signedAdmission with the grant ref (empty means the
+// inviter's real current one) and day chosen by the caller, for the refusals.
+func signedAdmissionWith(t *testing.T, h *Handler, inviter registeredUser, groupID, inviteID string, invitee registeredUser, grantRef, day string) *admissionRequest {
+	t.Helper()
+	if grantRef == "" {
+		group, err := h.db.GetGroup(t.Context(), groupID)
+		if err != nil || group == nil {
+			t.Fatalf("GetGroup: %v", err)
+		}
+		m, err := h.db.GetMembership(t.Context(), groupID, inviter.userID)
+		if err != nil || m == nil {
+			t.Fatalf("GetMembership: %v", err)
+		}
+		grantRef, _ = currentGrantRef(m, group, inviter.userID)
+	}
+	payload := crypto.AdmissionPayload(groupID, inviter.userID, invitee.userID, invitee.signPub, invitee.wrapPub, inviteID, grantRef, day)
+	sig, err := crypto.Sign(inviter.signPriv, crypto.ContextAdmission, payload)
+	if err != nil {
+		t.Fatalf("sign admission: %v", err)
+	}
+	return &admissionRequest{InviterGrantRef: grantRef, Day: day, Signature: base64.StdEncoding.EncodeToString(sig)}
+}
+
 func TestAcceptInviteSuccess(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	creator, creatorCookie := loggedInUser(t, h)
@@ -555,6 +724,7 @@ func TestPendingInviteCompletionsAndComplete(t *testing.T) {
 	completeReq := completeInviteRequest{
 		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		Generation:      0,
+		Admission:       signedAdmission(t, h, creator, groupID, inviteID, invitee),
 	}
 	completeRec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
 	if completeRec.Code != http.StatusOK {
@@ -614,6 +784,7 @@ func TestCompleteInviteRejectsNonInviter(t *testing.T) {
 	completeReq := completeInviteRequest{
 		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		Generation:      0,
+		Admission:       signedAdmission(t, h, creator, groupID, inviteID, invitee),
 	}
 	// The invitee themselves tries to complete their own invite -- must fail.
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", inviteeCookie, completeReq)
@@ -762,6 +933,7 @@ func TestCompleteInviteRejectsDemotedInviter(t *testing.T) {
 	completeReq := completeInviteRequest{
 		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		Generation:      0,
+		Admission:       signedAdmission(t, h, creator, groupID, inviteID, invitee),
 	}
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
 	if rec.Code != http.StatusForbidden {
@@ -798,6 +970,7 @@ func TestCompleteInviteRejectsGenerationMismatch(t *testing.T) {
 	completeReq := completeInviteRequest{
 		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		Generation:      1, // the inviter's own real generation is 0
+		Admission:       signedAdmission(t, h, creator, groupID, inviteID, invitee),
 	}
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
 	if rec.Code != http.StatusBadRequest {
@@ -855,6 +1028,7 @@ func TestCompleteInviteAlreadyMemberCleansUpInviteRows(t *testing.T) {
 	completeReq := completeInviteRequest{
 		WrappedGroupKey: wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		Generation:      0,
+		Admission:       signedAdmission(t, h, creator, groupID, inviteID, invitee),
 	}
 	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeReq)
 	if rec.Code != http.StatusConflict {

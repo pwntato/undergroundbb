@@ -14,7 +14,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { ApiError, challenge, verify } from '@/lib/api/auth'
-import { listGroups } from '@/lib/api/groups'
+import { getGroup, listGroups } from '@/lib/api/groups'
 import { completeInvite as completeInviteApi, pendingInviteCompletions } from '@/lib/api/invites'
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeInvite as completeInviteCrypto, completeLogin } from '@/lib/crypto/worker-client'
@@ -109,7 +109,17 @@ export function LoginScreen() {
             if (entry === undefined || entry.wrappedGroupKey === undefined) {
               return null
             }
-            return { generation: entry.generation, wrappedGroupKey: entry.wrappedGroupKey }
+            // The admission signs the inviter's own current grant (#178), which
+            // only the group detail reports.
+            const detail = await getGroup(groupId)
+            if (detail.myGrantSortKey === undefined) {
+              throw new Error('your own grant is not on record for this group')
+            }
+            return {
+              generation: entry.generation,
+              grantSortKey: detail.myGrantSortKey,
+              wrappedGroupKey: entry.wrappedGroupKey,
+            }
           },
           completeInviteCrypto,
           completeInvite: completeInviteApi,

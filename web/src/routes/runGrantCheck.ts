@@ -30,7 +30,9 @@ import {
   checkMemberRole,
   verifyGrantChain,
   type DesignationRecord,
+  type GrantChainResult,
   type GrantRecord,
+  type GrantVerdict,
   type RoleStatus,
   type UserKeyHistory,
 } from '@/lib/crypto/grant-chain'
@@ -116,6 +118,84 @@ export interface GrantCheckDeps {
 // A history this deep means the server is not honoring nextCursor; stop.
 const MAX_GRANT_PAGES = 100
 
+/**
+ * The grant chain as far as this browser can check it: the verifier's result
+ * together with how far the anchor and the key histories were pinned. Both
+ * the roster's marks and the rotation job's admission check are built on it.
+ */
+export interface VerifiedChain {
+  readonly anchor: ListGrantsResponse['anchor']
+  readonly anchorState: AnchorState
+  readonly keys: KeyState
+  readonly blockedKeyUsers: readonly string[]
+  readonly result: GrantChainResult
+  /** The histories the verifier was allowed to use: pin-checked, blocked ones withheld. */
+  readonly keyHistories: ReadonlyMap<string, UserKeyHistory>
+  readonly rootVerdict: GrantVerdict | undefined
+}
+
+/**
+ * Reads the grant history and verifies it. `extraKeyUsers` are people whose
+ * key histories the caller needs checked as well (e.g. inviters, who may have
+ * signed no grant). Throws when the server cannot be read; callers decide
+ * whether that is "unavailable" or "stop".
+ */
+export async function loadVerifiedChain(
+  deps: GrantCheckDeps,
+  groupId: string,
+  extraKeyUsers: readonly string[] = [],
+): Promise<VerifiedChain> {
+  const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
+  // The verifier only looks at designations through a claim row, so a group
+  // with none neither reads them nor lets them affect the check: an unread or
+  // unclaimed designation must not turn the whole members screen unavailable.
+  const claims = grants.filter((g) => g.viaDesignation)
+  const designations = claims.length > 0 ? await readAllDesignations(deps, groupId) : []
+  const cited = new Set(claims.map((g) => g.viaDesignation))
+  const { served, unreadable } = await readServedKeys(deps, [
+    anchor.creatorUserId,
+    ...grants.map((g) => g.grantorUserId),
+    // A claim is signed by its SUBJECT, and rests on a designation signed by
+    // the admin, so both keys are needed to check one. Only cited
+    // designations count: an admin who merely has one is not read.
+    ...claims.map((g) => g.subjectUserId),
+    ...designations.filter((d) => cited.has(d.sortKey)).map((d) => d.adminUserId),
+    ...extraKeyUsers,
+  ])
+  const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served, unreadable)
+
+  const stored = deps.readPin(groupId)
+  const result = verifyGrantChain({
+    groupId,
+    anchor,
+    ...(stored !== null && { pinnedAnchor: stored }),
+    grants,
+    keyHistories,
+    designations,
+    now: (deps.now ?? Date.now)(),
+  })
+
+  const rootVerdict = result.verdicts.get(anchor.rootGrantSortKey)
+  let anchorState: AnchorState
+  if (!anchorsAgree || (stored !== null && !result.anchorPinned)) {
+    anchorState = 'changed'
+  } else if (rootVerdict?.valid !== true) {
+    // Checked before the pin states: a pinned anchor with a root that no
+    // longer verifies is still a chain with no valid start.
+    anchorState = 'root-unverified'
+  } else if (stored !== null) {
+    anchorState = 'pinned'
+  } else {
+    // Trust on first use, and only for an anchor whose root verified.
+    const saved = deps.writePin(groupId, {
+      creatorUserId: anchor.creatorUserId,
+      creatorSigningPublicKey: anchor.creatorSigningPublicKey,
+    })
+    anchorState = saved ? 'first-seen' : 'unpinned'
+  }
+  return { anchor, anchorState, keys, blockedKeyUsers, result, keyHistories, rootVerdict }
+}
+
 /** Checks every member's role against the signed history. Never throws. */
 export async function checkGrants(
   deps: GrantCheckDeps,
@@ -123,53 +203,8 @@ export async function checkGrants(
   members: readonly { readonly userId: string; readonly role: string }[],
 ): Promise<GrantCheck> {
   try {
-    const { anchor, grants, anchorsAgree } = await readAllGrants(deps, groupId)
-    // The verifier only looks at designations through a claim row, so a group
-    // with none neither reads them nor lets them affect the check: an unread or
-    // unclaimed designation must not turn the whole members screen unavailable.
-    const claims = grants.filter((g) => g.viaDesignation)
-    const designations = claims.length > 0 ? await readAllDesignations(deps, groupId) : []
-    const cited = new Set(claims.map((g) => g.viaDesignation))
-    const { served, unreadable } = await readServedKeys(deps, [
-      anchor.creatorUserId,
-      ...grants.map((g) => g.grantorUserId),
-      // A claim is signed by its SUBJECT, and rests on a designation signed by
-      // the admin, so both keys are needed to check one. Only cited
-      // designations count: an admin who merely has one is not read.
-      ...claims.map((g) => g.subjectUserId),
-      ...designations.filter((d) => cited.has(d.sortKey)).map((d) => d.adminUserId),
-    ])
-    const { keyHistories, keys, blockedKeyUsers } = await checkServedKeys(deps, served, unreadable)
-
-    const stored = deps.readPin(groupId)
-    const result = verifyGrantChain({
-      groupId,
-      anchor,
-      ...(stored !== null && { pinnedAnchor: stored }),
-      grants,
-      keyHistories,
-      designations,
-      now: (deps.now ?? Date.now)(),
-    })
-
-    const rootVerdict = result.verdicts.get(anchor.rootGrantSortKey)
-    let anchorState: AnchorState
-    if (!anchorsAgree || (stored !== null && !result.anchorPinned)) {
-      anchorState = 'changed'
-    } else if (rootVerdict?.valid !== true) {
-      // Checked before the pin states: a pinned anchor with a root that no
-      // longer verifies is still a chain with no valid start.
-      anchorState = 'root-unverified'
-    } else if (stored !== null) {
-      anchorState = 'pinned'
-    } else {
-      // Trust on first use, and only for an anchor whose root verified.
-      const saved = deps.writePin(groupId, {
-        creatorUserId: anchor.creatorUserId,
-        creatorSigningPublicKey: anchor.creatorSigningPublicKey,
-      })
-      anchorState = saved ? 'first-seen' : 'unpinned'
-    }
+    const chain = await loadVerifiedChain(deps, groupId)
+    const { anchorState, keys, blockedKeyUsers, result, rootVerdict } = chain
 
     // checkMemberRole calls a grantless member "verified" without looking at
     // the root, so a chain with no valid start is overridden for everyone.

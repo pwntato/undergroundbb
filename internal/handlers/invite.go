@@ -604,6 +604,27 @@ type completeInviteRequest struct {
 	// rather than hardcoded so completing against a rotated group needs no
 	// wire-shape change later.
 	Generation int64 `json:"generation"`
+	// Admission is the inviter's signed record of this admission (#178),
+	// required: without it the new member would be unprovable to a rotating
+	// admin, who refuses to wrap the new group key to anyone no admin vouched
+	// for. A browser still on a bundle from before this field gets 400
+	// admission_required and a reload fixes it.
+	Admission *admissionRequest `json:"admission"`
+}
+
+// admissionRequest is the inviter's part of completeInviteRequest: the
+// signature over crypto.AdmissionPayload, and the two inputs to it the server
+// cannot derive itself (the invitee's keys come from the SENT# row and the
+// invite id from the path).
+type admissionRequest struct {
+	// InviterGrantRef must be the inviter's own current grant (the creator's
+	// is the root grant), the same value the server would demand for a role
+	// change.
+	InviterGrantRef string `json:"inviterGrantRef"`
+	// Day is the UTC date (YYYY-MM-DD) the verifier judges the inviter's role
+	// and key on, held to the same clock tolerance as a grant's.
+	Day       string `json:"day"`
+	Signature string `json:"signature"`
 }
 
 // completeInvite implements POST /api/invites/{id}/complete -- issue #40,
@@ -647,6 +668,24 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Generation < 0 {
 		WriteError(w, http.StatusBadRequest, "generation: must not be negative")
+		return
+	}
+	if req.Admission == nil {
+		WriteErrorWithCode(w, http.StatusBadRequest, "admission: required; reload to get the current app", "admission_required")
+		return
+	}
+	admissionSig, err := decodeBase64Field(req.Admission.Signature, ed25519SignatureSize, maxSignatureLen)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "admission.signature: "+err.Error())
+		return
+	}
+	admissionDay, err := time.Parse("2006-01-02", req.Admission.Day)
+	if err != nil || admissionDay.Format("2006-01-02") != req.Admission.Day {
+		WriteError(w, http.StatusBadRequest, "admission.day: must be a UTC date, YYYY-MM-DD")
+		return
+	}
+	if skew := time.Since(admissionDay.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
+		WriteError(w, http.StatusBadRequest, "admission.day: not within tolerance of the current UTC day")
 		return
 	}
 
@@ -708,6 +747,39 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The admission names the inviter's own current grant, so a verifier can
+	// judge their role from the chain. Checked against the server's record, as
+	// a role change is, so a stale client re-signs instead of storing a record
+	// that can never verify.
+	group, err := h.db.GetGroup(r.Context(), match.GroupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		return
+	}
+	if group == nil {
+		WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
+		return
+	}
+	currentRef, _ := currentGrantRef(inviterMembership, group, userID)
+	if currentRef == "" || req.Admission.InviterGrantRef != currentRef {
+		WriteErrorWithCode(w, http.StatusConflict, "admission.inviterGrantRef is not your current grant; reload and re-sign", "grantor_ref_stale")
+		return
+	}
+	// The signature is checked here as well as by every rotating client, so
+	// a record that could never verify is refused up front instead of
+	// stranding the new member at the next rotation.
+	inviter, err := h.db.GetUserByID(r.Context(), userID)
+	if err != nil || inviter == nil {
+		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		return
+	}
+	admissionPayload := crypto.AdmissionPayload(match.GroupID, userID, match.InvitedUserID,
+		match.InvitedEd25519PublicKey, match.InvitedX25519PublicKey, inviteID, currentRef, req.Admission.Day)
+	if !crypto.Verify(inviter.SigningPublicKey, crypto.ContextAdmission, admissionPayload, admissionSig) {
+		WriteErrorWithCode(w, http.StatusBadRequest, "admission.signature: does not verify against the caller's current signing key", "bad_signature")
+		return
+	}
+
 	err = h.db.CompleteInvite(r.Context(), db.CompleteInviteInput{
 		InviteID:        inviteID,
 		GroupID:         match.GroupID,
@@ -716,6 +788,15 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		Generation:      req.Generation,
 		WrappedGroupKey: wrappedGroupKey,
 		Role:            models.RoleMember,
+		Admission: models.Admission{
+			InviterUserID:           userID,
+			InviteID:                inviteID,
+			InviteeEd25519PublicKey: match.InvitedEd25519PublicKey,
+			InviteeX25519PublicKey:  match.InvitedX25519PublicKey,
+			InviterGrantRef:         currentRef,
+			Day:                     req.Admission.Day,
+			Signature:               admissionSig,
+		},
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrInviteAlreadyCompleted) {

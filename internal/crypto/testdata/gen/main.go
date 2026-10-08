@@ -212,6 +212,23 @@ type rotationStartVector struct {
 	SignatureHex string `json:"signature_hex"`
 }
 
+// admissionVector proves AdmissionPayload's exact encoding (#178).
+type admissionVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	GroupID         string `json:"group_id"`
+	InviterUUID     string `json:"inviter_uuid"`
+	InviteeUUID     string `json:"invitee_uuid"`
+	InviteeEdHex    string `json:"invitee_ed25519_hex"`
+	InviteeXHex     string `json:"invitee_x25519_hex"`
+	InviteID        string `json:"invite_id"`
+	InviterGrantRef string `json:"inviter_grant_ref"`
+	Day             string `json:"day"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
+}
+
 // successorClaimVector proves SuccessorClaimPayload's exact encoding (#161).
 type successorClaimVector struct {
 	Name               string `json:"name"`
@@ -334,6 +351,7 @@ type vectorFile struct {
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
+	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
@@ -728,6 +746,47 @@ func main() {
 			PayloadHex:   hex.EncodeToString(payload),
 			SignatureHex: hex.EncodeToString(sig),
 		})
+	}
+
+	// --- Admission (#178) ---
+	{
+		inviterPub, inviterPriv := fixedEd25519Key("admission-inviter-1")
+		inviteePub, _ := fixedEd25519Key("admission-invitee-1")
+		inviteeX := fixedX25519Key("admission-invitee-1").PublicKey().Bytes()
+		groupID := "group-uuid-4"
+		inviterUUID := "inviter-uuid-1"
+		inviteeUUID := "invitee-uuid-1"
+		inviteID := "invite-uuid-1"
+		day := "2026-10-07"
+		grantRef := "GRANT#" + inviterUUID + "#2026-09-06#a1b2c3d4e5f6a1b2"
+		// The inviter's grant ref is signed, so a different ref (here the
+		// creator's root grant) must produce a different payload.
+		rootRef := "GRANT#" + inviterUUID + "#2026-09-01#0f1e2d3c4b5a6978"
+		for _, tc := range []struct{ name, ref string }{
+			{"inviter holds a promoted grant", grantRef},
+			{"inviter is the creator (root grant ref)", rootRef},
+		} {
+			payload := crypto.AdmissionPayload(groupID, inviterUUID, inviteeUUID, inviteePub, inviteeX, inviteID, tc.ref, day)
+			sig, err := crypto.Sign(inviterPriv, crypto.ContextAdmission, payload)
+			if err != nil {
+				panic(err)
+			}
+			out.Admission = append(out.Admission, admissionVector{
+				Name:            tc.name,
+				PrivateHex:      hex.EncodeToString(inviterPriv),
+				PublicHex:       hex.EncodeToString(inviterPub),
+				GroupID:         groupID,
+				InviterUUID:     inviterUUID,
+				InviteeUUID:     inviteeUUID,
+				InviteeEdHex:    hex.EncodeToString(inviteePub),
+				InviteeXHex:     hex.EncodeToString(inviteeX),
+				InviteID:        inviteID,
+				InviterGrantRef: tc.ref,
+				Day:             day,
+				PayloadHex:      hex.EncodeToString(payload),
+				SignatureHex:    hex.EncodeToString(sig),
+			})
+		}
 	}
 
 	// --- Successor designation and claim (#161) ---

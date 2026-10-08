@@ -211,9 +211,20 @@ export async function pendingInviteCompletions(): Promise<PendingInviteCompletio
  * which invitee this invite belongs to from the caller's OWN pending
  * completions, never from a request-supplied identity.
  */
+/** The inviter's signed record of an admission (#178); see admissionPayload. */
+export interface WireAdmission {
+  /** The inviter's own current grant address (the creator's is the root grant). */
+  readonly inviterGrantRef: string
+  /** UTC date, YYYY-MM-DD. */
+  readonly day: string
+  /** Base64 signature under SigningContext.Admission. */
+  readonly signature: string
+}
+
 export interface CompleteInviteRequest {
   readonly wrappedGroupKey: WireWrappedKey
   readonly generation: number
+  readonly admission: WireAdmission
 }
 
 /**

@@ -10,7 +10,15 @@ import type { GroupDetail, MemberEntry, MemberRole, RewrapEntry } from '@/lib/ap
 import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
-import { rotationStartPayload } from '@/lib/crypto/group'
+import type { AdmissionRecord } from '@/lib/crypto/admission'
+import type { GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
+import {
+  admissionPayload,
+  roleGrantPayload,
+  rotationStartPayload,
+  trustAnchorPayload,
+} from '@/lib/crypto/group'
+import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import { describeRotation, runRotation, type RotationDeps } from './runRotation'
 
@@ -90,6 +98,49 @@ function startMarker(
   }
 }
 
+const ROOT_DAY = '2026-03-01'
+const ADMIT_DAY = '2026-03-10'
+const ROOT_REF = `GRANT#${ME}#${ROOT_DAY}#0000000000000001`
+
+/** A person whose id can appear in a GRANT# address (hex), for an inviter other than the creator. */
+function inviterPerson(): Person {
+  counter++
+  const id = `f${String(counter).padStart(7, '0')}-0000-4000-8000-000000000000`
+  return { id, signing: generateSigningKey(), wrapping: new Uint8Array(32).fill(counter % 250) }
+}
+
+/** An admission of `p` signed by `inviter` under `ref` and `day`, as the server stores one. */
+function admissionOf(
+  p: Person,
+  o: {
+    inviter?: string
+    key?: SigningKey
+    ref?: string
+    day?: string
+    inviteId?: string
+    /** Sign over these keys instead of p's (the record then carries them). */
+    keys?: { ed?: Uint8Array; x?: Uint8Array }
+  } = {},
+): AdmissionRecord {
+  const inviter = o.inviter ?? ME
+  const ed = o.keys?.ed ?? p.signing.publicKey
+  const x = o.keys?.x ?? p.wrapping
+  const ref = o.ref ?? ROOT_REF
+  const day = o.day ?? ADMIT_DAY
+  const inviteId = o.inviteId ?? `invite-${p.id}`
+  const payload = admissionPayload(GROUP, inviter, p.id, ed, x, inviteId, ref, day)
+  return {
+    inviteeUserId: p.id,
+    inviterUserId: inviter,
+    inviteId,
+    inviteeEd25519PublicKey: b64(ed),
+    inviteeX25519PublicKey: b64(x),
+    inviterGrantRef: ref,
+    day,
+    signature: b64(sign(o.key ?? me, SigningContext.Admission, payload)),
+  }
+}
+
 interface Row {
   person: Person
   role: MemberRole
@@ -105,6 +156,32 @@ class Fake {
   pins = new Map<string, PinRecord>()
   pinKeysError: Error | undefined
   listPinsError: Error | undefined
+
+  // The group's signed history: ME created it, so ME's root grant anchors the
+  // chain, and every member `add`ed is admitted by ME unless a test says not.
+  anchor: GrantAnchor = {
+    creatorUserId: ME,
+    creatorSigningPublicKey: b64(me.publicKey),
+    trustAnchorSignature: b64(
+      sign(me, SigningContext.TrustAnchor, trustAnchorPayload(ME, me.publicKey, GROUP)),
+    ),
+    rootGrantSortKey: ROOT_REF,
+  }
+  grants: GrantRecord[] = [
+    {
+      sortKey: ROOT_REF,
+      subjectUserId: ME,
+      grantedRole: 'admin',
+      grantorUserId: ME,
+      signature: b64(
+        sign(me, SigningContext.RoleGrant, roleGrantPayload(GROUP, ME, 'admin', ROOT_REF, '')),
+      ),
+    },
+  ]
+  admissions = new Map<string, AdmissionRecord>()
+  anchorPin: StoredAnchorPin | null = null
+  listAdmissionsError: Error | undefined
+  admissionReads = 0
 
   // call logs
   userReads: string[][] = []
@@ -129,11 +206,70 @@ class Fake {
     role: MemberRole = 'member',
     generation = 0,
     pin: PinRecord | null | 'auto' = 'auto',
+    admission: AdmissionRecord | null | 'auto' = 'auto',
   ): Person {
     this.members.set(p.id, { person: p, role, generation })
+    if (admission === 'auto') this.admissions.set(p.id, admissionOf(p))
+    else if (admission !== null) this.admissions.set(p.id, admission)
     if (pin === 'auto') this.pins.set(p.id, pinFor(p))
     else if (pin !== null) this.pins.set(p.id, pin)
     return p
+  }
+
+  /**
+   * Makes the caller an admin the creator promoted, instead of the creator, so
+   * the creator is a listed member with no admission of their own and the
+   * caller's invitations rest on a promoted admin's grant. Returns the creator
+   * and the caller's grant address.
+   */
+  promoted(): { creator: Person; myGrant: GrantRecord; creatorKey: SigningKey } {
+    const creator = inviterPerson()
+    const creatorKey = creator.signing
+    const rootRef = `GRANT#${creator.id}#${ROOT_DAY}#0000000000000002`
+    this.anchor = {
+      creatorUserId: creator.id,
+      creatorSigningPublicKey: b64(creatorKey.publicKey),
+      trustAnchorSignature: b64(
+        sign(
+          creatorKey,
+          SigningContext.TrustAnchor,
+          trustAnchorPayload(creator.id, creatorKey.publicKey, GROUP),
+        ),
+      ),
+      rootGrantSortKey: rootRef,
+    }
+    const rootGrant: GrantRecord = {
+      sortKey: rootRef,
+      subjectUserId: creator.id,
+      grantedRole: 'admin',
+      grantorUserId: creator.id,
+      signature: b64(
+        sign(
+          creatorKey,
+          SigningContext.RoleGrant,
+          roleGrantPayload(GROUP, creator.id, 'admin', rootRef, ''),
+        ),
+      ),
+    }
+    const myRef = `GRANT#${ME}#2026-03-03#0000000000000003`
+    const myGrant: GrantRecord = {
+      sortKey: myRef,
+      subjectUserId: ME,
+      grantedRole: 'admin',
+      grantorUserId: creator.id,
+      grantorGrantRef: rootRef,
+      signature: b64(
+        sign(
+          creatorKey,
+          SigningContext.RoleGrant,
+          roleGrantPayload(GROUP, ME, 'admin', myRef, rootRef),
+        ),
+      ),
+    }
+    this.grants = [rootGrant, myGrant]
+    // The creator is a member too, behind like the rest, with no admission.
+    this.add(creator, 'admin', 0, 'auto', null)
+    return { creator, myGrant, creatorKey }
   }
 
   gen(p: Person): number {
@@ -172,6 +308,18 @@ class Fake {
             return r ? [[id, served(r.person)] as const] : []
           }),
         )
+      },
+      listGrants: async () => ({ anchor: this.anchor, grants: this.grants }),
+      listDesignations: async () => ({ designations: [] }),
+      listAdmissions: async () => {
+        this.admissionReads++
+        if (this.listAdmissionsError) throw this.listAdmissionsError
+        return { admissions: [...this.admissions.values()] }
+      },
+      readPin: () => this.anchorPin,
+      writePin: (_g, pin) => {
+        this.anchorPin = pin
+        return true
       },
       ownSigningKey: async () => b64(me.publicKey),
       listPins: async () => {
@@ -410,6 +558,9 @@ describe('runRotation', () => {
         f.members.delete(leaver.id) // forces member_changed on the batch
         // the server now serves a different wrapping key for x
         f.members.get(x.id)!.person = { ...x, wrapping: new Uint8Array(32).fill(251) }
+        // An admission for the new key too, so this reaches the PIN check
+        // (a substituted key with no admission is refused earlier, below).
+        f.admissions.set(x.id, admissionOf(x, { keys: { x: new Uint8Array(32).fill(251) } }))
       }
       const out = await runRotation(f.deps(), GROUP)
       expect(out).toEqual({ status: 'blocked', blocked: [x.id], rewrapped: 0 })
@@ -488,6 +639,188 @@ describe('runRotation', () => {
     })
   })
 
+  describe('admissions (#178)', () => {
+    it('does not wrap to, or pin, a member nobody admitted, and does not complete', async () => {
+      const f = new Fake()
+      const real = f.add(person())
+      // The server lists an account it made up: no admission record.
+      const fake = f.add(person(), 'member', 0, null, null)
+
+      const out = await runRotation(f.deps(), GROUP)
+
+      expect(out).toEqual({
+        status: 'blocked',
+        blocked: [],
+        unadmitted: [fake.id],
+        rewrapped: 1,
+      })
+      expect(f.cryptoRecipients.flat()).toEqual([real.id])
+      expect(f.pinned).toEqual([]) // an unadmitted account is not even pinned
+      expect(f.gen(fake)).toBe(0)
+      expect(f.completed).toEqual([])
+    })
+
+    it('refuses an admission the server forged (signed by a key that is not the inviter)', async () => {
+      const f = new Fake()
+      const fake = person()
+      f.add(fake, 'member', 0, null, admissionOf(fake, { key: generateSigningKey() }))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [fake.id] })
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it('refuses a member whose served wrapping key is not the one admitted (key substitution)', async () => {
+      const f = new Fake()
+      const p = person()
+      // Admitted with the real key; the server now serves another.
+      f.add(p, 'member', 0, null, admissionOf(p))
+      f.members.get(p.id)!.person = { ...p, wrapping: new Uint8Array(32).fill(200) }
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.pinned).toEqual([])
+    })
+
+    it("refuses another member's admission relabelled onto an account the server made up", async () => {
+      const f = new Fake()
+      const real = f.add(person())
+      const fake = person()
+      const stolen = { ...f.admissions.get(real.id)!, inviteeUserId: fake.id }
+      f.add(fake, 'member', 0, null, stolen)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [fake.id] })
+      expect(f.cryptoRecipients.flat()).toEqual([real.id])
+    })
+
+    it('exempts the creator, who has no admission, and wraps to members a promoted admin invited', async () => {
+      const f = new Fake()
+      const { creator, myGrant } = f.promoted()
+      const invited = person()
+      f.add(invited, 'member', 0, 'auto', admissionOf(invited, { ref: myGrant.sortKey }))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 2 })
+      expect(new Set(f.cryptoRecipients.flat())).toEqual(new Set([creator.id, invited.id]))
+    })
+
+    it('does not exempt anyone else from a missing admission when the caller is not the creator', async () => {
+      const f = new Fake()
+      const { creator } = f.promoted()
+      const fake = f.add(person(), 'member', 0, null, null)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [fake.id] })
+      expect(f.cryptoRecipients.flat()).toEqual([creator.id])
+    })
+
+    it('refuses an admission by someone who had lost the admin role by then', async () => {
+      const f = new Fake()
+      const { creatorKey, myGrant } = f.promoted()
+      // The creator demoted the caller on 03-05; an admission dated 03-10 that
+      // still cites the old grant cannot be the caller acting as an admin.
+      const demoteRef = `GRANT#${ME}#2026-03-05#0000000000000004`
+      f.grants.push({
+        sortKey: demoteRef,
+        subjectUserId: ME,
+        grantedRole: 'member',
+        grantorUserId: f.anchor.creatorUserId,
+        grantorGrantRef: f.anchor.rootGrantSortKey,
+        signature: b64(
+          sign(
+            creatorKey,
+            SigningContext.RoleGrant,
+            roleGrantPayload(GROUP, ME, 'member', demoteRef, f.anchor.rootGrantSortKey),
+          ),
+        ),
+      })
+      const late = person()
+      f.add(late, 'member', 0, null, admissionOf(late, { ref: myGrant.sortKey, day: '2026-03-10' }))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [late.id] })
+      expect(f.cryptoRecipients.flat()).not.toContain(late.id)
+    })
+
+    it('wraps to a member admitted before the inviter was later demoted', async () => {
+      const f = new Fake()
+      const { creatorKey, myGrant } = f.promoted()
+      const demoteRef = `GRANT#${ME}#2026-03-20#0000000000000005`
+      f.grants.push({
+        sortKey: demoteRef,
+        subjectUserId: ME,
+        grantedRole: 'member',
+        grantorUserId: f.anchor.creatorUserId,
+        grantorGrantRef: f.anchor.rootGrantSortKey,
+        signature: b64(
+          sign(
+            creatorKey,
+            SigningContext.RoleGrant,
+            roleGrantPayload(GROUP, ME, 'member', demoteRef, f.anchor.rootGrantSortKey),
+          ),
+        ),
+      })
+      const early = person()
+      f.add(
+        early,
+        'member',
+        0,
+        'auto',
+        admissionOf(early, { ref: myGrant.sortKey, day: '2026-03-10' }),
+      )
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('completed')
+      expect(f.cryptoRecipients.flat()).toContain(early.id)
+    })
+
+    it.each([
+      [
+        'the records cannot be read',
+        (f: Fake) => (f.listAdmissionsError = new Error('boom')),
+        /boom/,
+      ],
+      [
+        'the group anchor differs from the one pinned',
+        (f: Fake) => {
+          f.anchorPin = {
+            creatorUserId: ME,
+            creatorSigningPublicKey: b64(generateSigningKey().publicKey),
+          }
+        },
+        /anchor changed/,
+      ],
+      [
+        'the root grant is not served',
+        (f: Fake) => {
+          f.grants = []
+        },
+        /root grant/,
+      ],
+    ])('stops without wrapping to anyone when %s', async (_name, break_, reason) => {
+      const f = new Fake()
+      f.add(person())
+      break_(f)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toMatch(reason)
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.rewrapBatches).toEqual([])
+      expect(f.completed).toEqual([])
+    })
+
+    it('reads the admissions only when a recipient needs checking', async () => {
+      const f = new Fake()
+      f.marker = undefined
+      f.add(person(), 'member', 1) // already current: nobody is behind
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'none' })
+      expect(f.admissionReads).toBe(0)
+    })
+
+    it('reads the admissions once per pass, not once per batch or member', async () => {
+      const f = new Fake()
+      for (let i = 0; i < 60; i++) f.add(person())
+      await runRotation(f.deps(), GROUP)
+      expect(f.admissionReads).toBe(1)
+    })
+  })
+
   describe('key reads', () => {
     it('reads each batch of recipients in one call, not one per member', async () => {
       const f = new Fake()
@@ -495,8 +828,11 @@ describe('runRotation', () => {
       const out = await runRotation(f.deps(), GROUP)
       expect(out.status).toBe('completed')
       // 30 behind members at 25 per rewrap batch: two key reads, not thirty.
-      expect(f.userReads.map((ids) => ids.length)).toEqual([25, 5])
-      expect(new Set(f.userReads.flat())).toEqual(new Set(people.map((p) => p.id)))
+      // The single-id read between them is the grant chain's one look at the
+      // creator's keys (#178), made once for the pass, not once per member.
+      expect(f.userReads.map((ids) => ids.length)).toEqual([25, 1, 5])
+      expect(f.userReads[1]).toEqual([ME])
+      expect(new Set(f.userReads.flat())).toEqual(new Set([ME, ...people.map((p) => p.id)]))
     })
   })
 
@@ -673,6 +1009,30 @@ describe('runRotation', () => {
       expect(note?.kind).toBe('error')
       expect(note?.text).toContain('<x>, <y>')
       expect(note?.text).toContain('NOT given the new group key')
+      expect(note?.text).not.toContain('invitation')
+    })
+
+    it('names members no invitation backs, and says so apart from a pin mismatch', () => {
+      const only = describeRotation(
+        { status: 'blocked', blocked: [], unadmitted: ['x'], rewrapped: 0 },
+        label,
+      )
+      expect(only?.kind).toBe('error')
+      expect(only?.text).toContain('<x> is listed as a member')
+      expect(only?.text).toContain('backs them')
+      expect(only?.text).toContain('remove them and invite them again')
+      expect(only?.text).toContain('invitation')
+      expect(only?.text).not.toContain("don't match")
+      expect(only?.text).toContain('NOT given the new group key')
+
+      const both = describeRotation(
+        { status: 'blocked', blocked: ['y'], unadmitted: ['a', 'b'], rewrapped: 0 },
+        label,
+      )
+      expect(both?.text).toContain("<y> don't match")
+      expect(both?.text).toContain('<a>, <b> are listed as members')
+      expect(both?.text).toContain('backs them')
+      expect(both?.text).not.toContain('backs it')
     })
     it('reports an incomplete run as an error with its reason, and cannot-resume as info', () => {
       const inc = describeRotation({ status: 'incomplete', reason: 'offline', rewrapped: 0 }, label)

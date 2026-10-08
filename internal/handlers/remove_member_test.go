@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // createOpenGroup makes a private group whose revocation mode is Open: the
@@ -88,18 +90,48 @@ func memberRole(t *testing.T, gid, userID string) string {
 	return strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+userID), "Role")
 }
 
+// putAdmissionRow stores a stand-in ADMISSION# row for a member (#178), so a
+// test can see whether removing or leaving takes it away.
+func putAdmissionRow(t *testing.T, groupID, userID string) {
+	t.Helper()
+	av, err := attributevalue.MarshalMap(models.Admission{
+		Record:        models.Record{PK: "GROUP#" + groupID, SK: "ADMISSION#" + userID, Type: "Admission"},
+		InviteeUserID: userID,
+	})
+	if err != nil {
+		t.Fatalf("MarshalMap admission: %v", err)
+	}
+	if _, err := rawDDB(t).PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(testTableName()),
+		Item:      av,
+	}); err != nil {
+		t.Fatalf("PutItem admission: %v", err)
+	}
+}
+
 func TestRemoveMemberPlainMemberLeavesNoGrant(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
 	gid := createOpenGroup(t, h, owner, ownerCookie)
 	bob, bobCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
+	carol, _ := loggedInUser(t, h)
+	addMember(t, gid, carol, "member")
+	putAdmissionRow(t, gid, bob.userID)
+	putAdmissionRow(t, gid, carol.userID)
 
 	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, nil); rec.Code != http.StatusNoContent {
 		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
 	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) != nil {
 		t.Error("bob's membership survived")
+	}
+	// The admission goes with the membership; another member's stays.
+	if getRow(t, "GROUP#"+gid, "ADMISSION#"+bob.userID) != nil {
+		t.Error("bob's admission record survived his removal")
+	}
+	if getRow(t, "GROUP#"+gid, "ADMISSION#"+carol.userID) == nil {
+		t.Error("removing bob deleted carol's admission record")
 	}
 	// Removed means gone from the access gate, not just the roster.
 	if rec := doGroupRequest(t, h, bobCookie, http.MethodGet, gid, nil); rec.Code != http.StatusNotFound {

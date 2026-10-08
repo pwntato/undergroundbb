@@ -253,6 +253,9 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 		)
 	}
 
+	// The removed member's admission record goes with their membership (#178);
+	// see admissionDelete. Last, so no condition-check index above shifts.
+	items = append(items, admissionDelete(c.table, in.GroupID, in.SubjectUserID))
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case rotating && isConditionalCheckFailure(err, rotationIndex):

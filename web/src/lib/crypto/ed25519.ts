@@ -39,6 +39,7 @@ export const SigningContext = {
   SuccessorDesignation: 'underground-bb:successor-designation:v1',
   SuccessorClaim: 'underground-bb:successor-claim:v1',
   RotationStart: 'underground-bb:rotation-start:v1',
+  Admission: 'underground-bb:admission:v1',
 } as const
 
 export type SigningContext = (typeof SigningContext)[keyof typeof SigningContext]

@@ -69,6 +69,10 @@ func TestLeaveGroupMemberLeaves(t *testing.T) {
 	gid := createPrivateGroup(t, h, owner, ownerCookie)
 	bob, bobCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
+	carol, _ := loggedInUser(t, h)
+	addMember(t, gid, carol, "member")
+	putAdmissionRow(t, gid, bob.userID)
+	putAdmissionRow(t, gid, carol.userID)
 
 	rec := doLeave(t, h, bobCookie, gid)
 	if rec.Code != http.StatusOK {
@@ -77,6 +81,12 @@ func TestLeaveGroupMemberLeaves(t *testing.T) {
 	var resp leaveGroupResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.GroupDeleted {
 		t.Errorf("resp = %+v err=%v, want groupDeleted false", resp, err)
+	}
+	if getRow(t, "GROUP#"+gid, "ADMISSION#"+bob.userID) != nil {
+		t.Error("bob's admission record survived his leaving")
+	}
+	if getRow(t, "GROUP#"+gid, "ADMISSION#"+carol.userID) == nil {
+		t.Error("bob leaving deleted carol's admission record")
 	}
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) != nil {
 		t.Error("bob's membership still exists")

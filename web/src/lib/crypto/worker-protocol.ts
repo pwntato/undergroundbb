@@ -435,11 +435,17 @@ export interface CompleteInviteRequest {
   readonly invitedEd25519PublicKey: string
   readonly invitedX25519PublicKey: string
   readonly inviteMAC: string
+  /** The inviter's own current grant address, signed into the admission (#178). */
+  readonly inviterGrantRef: string
+  /** UTC date (YYYY-MM-DD) the admission is signed for. */
+  readonly day: string
 }
 
 export interface CompleteInviteResult {
   readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   readonly generation: number
+  /** The inviter's signed admission of the invitee (#178). */
+  readonly admission: { inviterGrantRef: string; day: string; signature: string }
 }
 
 export interface CompleteInviteResponse {
