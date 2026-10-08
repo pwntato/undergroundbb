@@ -160,12 +160,12 @@ export function describeRotation(
       const unadmitted = outcome.unadmitted ?? []
       if (unadmitted.length > 0) {
         parts.push(
-          `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs ${unadmitted.length === 1 ? 'them' : 'it'}.`,
+          `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs them.`,
         )
       }
       return {
         kind: 'error',
-        text: `Key rotation is paused. ${parts.join(' ')} They were NOT given the new group key. Check with them another way before relying on this group.`,
+        text: `Key rotation is paused. ${parts.join(' ')} They were NOT given the new group key. Check with them another way before relying on this group.${unadmitted.length > 0 ? ' To clear an unadmitted member, an admin can remove them and invite them again.' : ''}`,
       }
     }
     case 'cannot-resume':
@@ -450,6 +450,11 @@ async function loadAdmissions(
     const chain = await loadVerifiedChain(deps, groupId, [
       ...new Set(records.map((r) => r.inviterUserId)),
     ])
+    // Only a CHANGED anchor or an unverifiable root stops the run: a first
+    // sighting is trusted, as in the roster, so on a browser that has never
+    // seen this group the check rests on trust on first use (DESIGN.md, "What
+    // stays open"). Failing closed on first sight would not help: opening the
+    // members screen first takes the same pin.
     if (chain.anchorState === 'changed') {
       return {
         ok: false,

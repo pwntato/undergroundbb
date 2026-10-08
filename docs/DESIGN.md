@@ -1101,9 +1101,24 @@ gap the grant history and pins already accept; withholding an admission only eve
 wrapped to. (2) **A backdated admission.** The record's day is the inviter's own claim (the server
 holds it to its clock when it writes, but a verifier has no clock), so a server colluding with an
 inviter who has since been demoted can store an admission dated before the demotion, the same gap the
-grant chain accepts for a postdated grant. (3) **Liveness.** An inviter whose keys can no longer be
+grant chain accepts for a postdated grant. (3) **A removed member re-listed.** The signed rotation
+marker excludes only the member whose removal started *that* rotation. A member removed in an earlier,
+completed rotation is dropped from the roster, and their admission row is deleted with their
+membership (hygiene only), but the server can list them again, and a copy of their old admission
+(same keys, inviter an admin that day) still verifies, so a later rotation would wrap to them. Closing it
+needs a signed removal record checked by the verifier, as the marker's is for the current subject.
+(4) **Trust on first use.** The creator is exempt only against an anchor the caller trusts, and a
+first sighting counts as trusted, as in the roster: the anchor pin is per-browser localStorage, so on a
+browser that has never seen this group the server can serve an invented creator, a chain that creator
+signed, and matching admissions, and the check passes. Failing closed on first sight would not help,
+because opening the members screen first takes the same pin. (5) **Key rotation (#62).** The
+invitee's Ed25519 key is matched against current and superseded keys, but the X25519 key must equal the
+current served wrapping key. Once user key rotation exists, every member who rotates would be
+unadmitted in every group until re-invited, so #62 must bring a signed continuity link this check can
+follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
-admin re-admits them; there is no re-admission flow yet. Tracked in #178.
+admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
+invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
 
 **Deploy note (admission).** Reset or recreate any group whose members joined before this shipped;
 they have no record and would be skipped at the next rotation.

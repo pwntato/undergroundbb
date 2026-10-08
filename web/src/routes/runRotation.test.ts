@@ -1019,6 +1019,8 @@ describe('runRotation', () => {
       )
       expect(only?.kind).toBe('error')
       expect(only?.text).toContain('<x> is listed as a member')
+      expect(only?.text).toContain('backs them')
+      expect(only?.text).toContain('remove them and invite them again')
       expect(only?.text).toContain('invitation')
       expect(only?.text).not.toContain("don't match")
       expect(only?.text).toContain('NOT given the new group key')
@@ -1029,6 +1031,8 @@ describe('runRotation', () => {
       )
       expect(both?.text).toContain("<y> don't match")
       expect(both?.text).toContain('<a>, <b> are listed as members')
+      expect(both?.text).toContain('backs them')
+      expect(both?.text).not.toContain('backs it')
     })
     it('reports an incomplete run as an error with its reason, and cannot-resume as info', () => {
       const inc = describeRotation({ status: 'incomplete', reason: 'offline', rewrapped: 0 }, label)
