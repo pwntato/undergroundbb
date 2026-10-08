@@ -28,8 +28,12 @@
 //     member, the rotation marker carries a signature by the admin who started
 //     it naming whom they removed, and a resuming admin excludes that member
 //     whatever the list says (#178); a marker with no verifiable signature
-//     stops the run. What stays open is the server hiding the marker itself
-//     (DESIGN.md, "The recipient set is taken from the server").
+//     stops the run. A member removed in an EARLIER rotation is covered by the
+//     signed removal record on every GENKEY# chain link below the caller's own
+//     generation (lib/crypto/removal): a missing or forged one stops the run,
+//     and a removed member needs an admission signed at or after the removal's
+//     generation to be a recipient again (DESIGN.md, "The recipient set is
+//     taken from the server").
 //   - Nor does the pin check say anyone ADMITTED the recipient: a first-sight
 //     account is trusted and pinned. So before a recipient is pinned or wrapped
 //     to, the inviter's signed admission of them is checked against the
