@@ -28,28 +28,44 @@
 //     member, the rotation marker carries a signature by the admin who started
 //     it naming whom they removed, and a resuming admin excludes that member
 //     whatever the list says (#178); a marker with no verifiable signature
-//     stops the run. What stays open is the server hiding the marker itself,
-//     and listing an account it made up (DESIGN.md, "The recipient set is
-//     taken from the server").
+//     stops the run. What stays open is the server hiding the marker itself
+//     (DESIGN.md, "The recipient set is taken from the server").
+//   - Nor does the pin check say anyone ADMITTED the recipient: a first-sight
+//     account is trusted and pinned. So before a recipient is pinned or wrapped
+//     to, the inviter's signed admission of them is checked against the
+//     verified grant chain (#178; lib/crypto/admission). The creator is the
+//     one member with none. A recipient with no valid admission is skipped and
+//     reported, never pinned and never wrapped to, so a server cannot add an
+//     account of its own and be handed the new group key. FAILS CLOSED: a
+//     chain that cannot be read or verified stops the run.
 //
 // Plain function over injected deps, like runGrantCheck.ts, so it tests against
 // stubs without a worker or the network.
 
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, MemberEntry, RewrapEntry } from '@/lib/api/groups'
+import type {
+  GroupDetail,
+  ListAdmissionsResponse,
+  MemberEntry,
+  RewrapEntry,
+} from '@/lib/api/groups'
 import { MAX_REWRAP_BATCH } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
+import { verifyAdmission, type AdmissionRecord } from '@/lib/crypto/admission'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationStartPayload } from '@/lib/crypto/group'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import type { RewrapGroupKeyResult } from '@/lib/crypto/worker-protocol'
+import { loadVerifiedChain, type GrantCheckDeps, type VerifiedChain } from './runGrantCheck'
 
 /** Passes before giving up. A pass is a full re-list, so this bounds churn, not batches. */
 const MAX_PASSES = 6
 
-export interface RotationDeps {
+export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
   readonly selfUserId: string
+  /** Every admission record of the group, one page at a time (#178). */
+  readonly listAdmissions: (groupId: string, cursor?: string) => Promise<ListAdmissionsResponse>
   readonly getGroup: (groupId: string) => Promise<GroupDetail>
   /** Every member, following nextCursor. */
   readonly listAllMembers: (groupId: string) => Promise<readonly MemberEntry[]>
@@ -96,6 +112,11 @@ export type RotationOutcome =
   | {
       readonly status: 'blocked'
       readonly blocked: readonly string[]
+      /**
+       * Members no valid inviter-signed admission backs (#178), also NOT
+       * wrapped to. Absent when there are none.
+       */
+      readonly unadmitted?: readonly string[]
       readonly rewrapped: number
     }
   /** The caller is an admin but not at the rotation's generation: another admin who is must resume. */
@@ -129,11 +150,24 @@ export function describeRotation(
         kind: 'info',
         text: `${people(outcome.rewrapped)} who had fallen behind ${outcome.rewrapped === 1 ? 'was' : 'were'} moved to the current group key.`,
       }
-    case 'blocked':
+    case 'blocked': {
+      const parts: string[] = []
+      if (outcome.blocked.length > 0) {
+        parts.push(
+          `The keys the server shows for ${outcome.blocked.map(label).join(', ')} don't match the copy you saved earlier.`,
+        )
+      }
+      const unadmitted = outcome.unadmitted ?? []
+      if (unadmitted.length > 0) {
+        parts.push(
+          `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs ${unadmitted.length === 1 ? 'them' : 'it'}.`,
+        )
+      }
       return {
         kind: 'error',
-        text: `Key rotation is paused. The keys the server shows for ${outcome.blocked.map(label).join(', ')} don't match the copy you saved earlier, so they were NOT given the new group key. Check with them another way before relying on this group.`,
+        text: `Key rotation is paused. ${parts.join(' ')} They were NOT given the new group key. Check with them another way before relying on this group.`,
       }
+    }
     case 'cannot-resume':
       return {
         kind: 'info',
@@ -243,9 +277,15 @@ async function runOnce(
   }
 
   const blocked = new Set<string>()
+  // Members no valid admission backs (#178): skipped like a pin mismatch.
+  const unadmitted = new Set<string>()
   let rewrapped = carried
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
+    // Loaded the first time a pass has a recipient to check, then reused for
+    // the pass; a fresh pass re-reads it, so a member who joined meanwhile
+    // is judged on current records.
+    let admissions: AdmissionContext | undefined
     // Re-read the pins every pass: checkRecipient pins first-sight members
     // mid-run, and a stale map would treat them as first-sight again after a
     // retry and re-pin over whatever key the server serves now.
@@ -271,13 +311,19 @@ async function runOnce(
           m.userId !== deps.selfUserId &&
           m.generation < ownGeneration &&
           !blocked.has(m.userId) &&
+          !unadmitted.has(m.userId) &&
           !exclude.has(m.userId),
       ),
     )
 
     if (behind.length === 0) {
-      if (blocked.size > 0) {
-        return { status: 'blocked', blocked: [...blocked], rewrapped }
+      if (blocked.size > 0 || unadmitted.size > 0) {
+        return {
+          status: 'blocked',
+          blocked: [...blocked],
+          ...(unadmitted.size > 0 && { unadmitted: [...unadmitted] }),
+          rewrapped,
+        }
       }
       if (marker === undefined) {
         return rewrapped > 0 ? { status: 'caught-up', rewrapped } : { status: 'none' }
@@ -311,6 +357,23 @@ async function runOnce(
         },
       )
       for (const m of chunk) {
+        // Before the pin check, which would trust and pin a first-sight key:
+        // an account nobody admitted must not even be pinned (#178). One whose
+        // keys could not be fetched is left to checkRecipient ("unavailable").
+        const servedForM = servedKeys.get(m.userId)
+        if (servedForM !== undefined) {
+          if (admissions === undefined) {
+            const loaded = await loadAdmissions(deps, groupId)
+            if (!loaded.ok) {
+              return { status: 'incomplete', reason: loaded.reason, rewrapped }
+            }
+            admissions = loaded.context
+          }
+          if (!isAdmitted(admissions, groupId, m.userId, servedForM)) {
+            unadmitted.add(m.userId)
+            continue
+          }
+        }
         const verdict = await checkRecipient(
           deps,
           own,
@@ -354,6 +417,83 @@ async function runOnce(
     }
   }
   return { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped }
+}
+
+/** The records and the verified chain a pass checks recipients against. */
+interface AdmissionContext {
+  readonly chain: VerifiedChain
+  readonly byInvitee: ReadonlyMap<string, AdmissionRecord>
+}
+
+// A list this deep means the server is not honoring nextCursor; stop.
+const MAX_ADMISSION_PAGES = 100
+
+async function loadAdmissions(
+  deps: RotationDeps,
+  groupId: string,
+): Promise<
+  | { readonly ok: true; readonly context: AdmissionContext }
+  | { readonly ok: false; readonly reason: string }
+> {
+  try {
+    const records: AdmissionRecord[] = []
+    let cursor: string | undefined
+    for (let page = 0; ; page++) {
+      if (page >= MAX_ADMISSION_PAGES) throw new Error('admission pagination did not terminate')
+      const res = await deps.listAdmissions(groupId, cursor)
+      records.push(...res.admissions)
+      if (!res.nextCursor) break
+      cursor = res.nextCursor
+    }
+    // Inviters may have signed no grant, so their key histories are asked for
+    // by name; loadVerifiedChain pin-checks them like any grantor's.
+    const chain = await loadVerifiedChain(deps, groupId, [
+      ...new Set(records.map((r) => r.inviterUserId)),
+    ])
+    if (chain.anchorState === 'changed') {
+      return {
+        ok: false,
+        reason: 'the group anchor changed since you first saw it, so admissions cannot be checked',
+      }
+    }
+    if (chain.anchorState === 'root-unverified') {
+      return {
+        ok: false,
+        reason: "the group's root grant could not be verified, so admissions cannot be checked",
+      }
+    }
+    return {
+      ok: true,
+      context: { chain, byInvitee: new Map(records.map((r) => [r.inviteeUserId, r])) },
+    }
+  } catch (err) {
+    return { ok: false, reason: `could not check who admitted the members: ${describe(err)}` }
+  }
+}
+
+/**
+ * Whether a recipient was admitted: the creator (the anchor, which the caller
+ * trusts at this point) or a member with a record that verifies against the
+ * chain and the keys the server serves for them now.
+ */
+function isAdmitted(
+  ctx: AdmissionContext,
+  groupId: string,
+  userId: string,
+  served: UserProjection,
+): boolean {
+  if (userId === ctx.chain.anchor.creatorUserId) return true
+  const record = ctx.byInvitee.get(userId)
+  const signingKeys = servedSigningKeySet(served)
+  if (record === undefined || signingKeys === null) return false
+  return verifyAdmission({
+    groupId,
+    record,
+    inviteeSigningKeys: signingKeys,
+    inviteeWrappingKey: served.wrappingPublicKey,
+    chain: ctx.chain.result,
+    inviterHistory: ctx.chain.keyHistories.get(record.inviterUserId),
+  }).ok
 }
 
 type RotationStartCheck =

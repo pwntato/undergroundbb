@@ -3,6 +3,7 @@
 // wire as standard-padded base64, matching decodeBase64Field's own
 // expectation, the same convention auth.ts's endpoints already use.
 
+import type { AdmissionRecord } from '@/lib/crypto/admission'
 import type { DesignationRecord, GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import { ApiError } from './auth.js'
 
@@ -277,6 +278,29 @@ export async function listGrants(groupId: string, cursor?: string): Promise<List
     credentials: 'same-origin',
   })
   return handleJSON<ListGrantsResponse>(res)
+}
+
+/**
+ * GET /api/groups/{id}/admissions -- #178. Every member's inviter-signed
+ * admission record, for a rotating admin to check before wrapping a new group
+ * key to anyone (see lib/crypto/admission). Members only; verified by nothing
+ * server-side beyond the inviter's signature at write time.
+ */
+export interface ListAdmissionsResponse {
+  readonly admissions: readonly AdmissionRecord[]
+  /** Empty on the last page; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+export async function listAdmissions(
+  groupId: string,
+  cursor?: string,
+): Promise<ListAdmissionsResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/admissions${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ListAdmissionsResponse>(res)
 }
 
 /**

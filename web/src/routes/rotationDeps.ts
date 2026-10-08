@@ -4,9 +4,18 @@
 // how a first-sight pin is signed and stored.
 
 import { listAllPins, putPin } from '@/lib/api/pins'
-import { completeRotation, getGroup, listMembers, rewrapMembers } from '@/lib/api/groups'
+import {
+  completeRotation,
+  getGroup,
+  listAdmissions,
+  listDesignations,
+  listGrants,
+  listMembers,
+  rewrapMembers,
+} from '@/lib/api/groups'
 import { getUsers } from '@/lib/api/users'
 import { getOwnSigningKey, rewrapGroupKey, signPin } from '@/lib/crypto/worker-client'
+import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
 import type { RotationDeps } from './runRotation'
@@ -25,6 +34,11 @@ export function makeRotationDeps(userId: string): RotationDeps {
     getGroup,
     listAllMembers: (groupId) => listAllMembers({ listMembers }, groupId),
     getUsers,
+    listGrants,
+    listDesignations,
+    listAdmissions,
+    readPin: (g) => readAnchorPin(userId, g),
+    writePin: (g, pin) => writeAnchorPin(userId, g, pin),
     ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
     listPins: listAllPins,
     pinKeys: makePinKeys(userId),
