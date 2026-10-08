@@ -209,6 +209,18 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 	return nil
 }
 
+// admissionDelete removes a member's ADMISSION# row. Unconditional: a missing
+// row (a member who predates admissions) is a no-op, not an error.
+func admissionDelete(table, groupID, userID string) types.TransactWriteItem {
+	return types.TransactWriteItem{Delete: &types.Delete{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "ADMISSION#" + userID},
+		},
+	}}
+}
+
 // ListAdmissions returns one page of the group's ADMISSION# rows (#178), after
 // afterSortKey, strongly consistent like ListGrants. The second result is the
 // cursor for the next page, or empty at the end.
