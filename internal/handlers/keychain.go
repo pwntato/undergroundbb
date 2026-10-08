@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strconv"
 
@@ -21,6 +22,12 @@ type keychainLink struct {
 	// key sealed under generation+1's.
 	Generation int64       `json:"generation"`
 	Wrapped    wrappedBlob `json:"wrapped"`
+	// RemoverUserID, RemovedUserID and StartSignature are the signed record of
+	// the removal that minted generation+1 (#178); absent on a link written
+	// before they existed. StartSignature is base64.
+	RemoverUserID  string `json:"removerUserId,omitempty"`
+	RemovedUserID  string `json:"removedUserId,omitempty"`
+	StartSignature string `json:"startSignature,omitempty"`
 }
 
 type keychainResponse struct {
@@ -84,7 +91,16 @@ func (h *Handler) keychain(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusInternalServerError, "could not read the key chain")
 			return
 		}
-		resp.Links = append(resp.Links, keychainLink{Generation: gen, Wrapped: encodeWrappedBlob(l.Wrapped)})
+		link := keychainLink{
+			Generation:    gen,
+			Wrapped:       encodeWrappedBlob(l.Wrapped),
+			RemoverUserID: l.RemoverUserID,
+			RemovedUserID: l.RemovedUserID,
+		}
+		if len(l.StartSignature) > 0 {
+			link.StartSignature = base64.StdEncoding.EncodeToString(l.StartSignature)
+		}
+		resp.Links = append(resp.Links, link)
 	}
 	if next >= 0 {
 		resp.NextFrom = &next

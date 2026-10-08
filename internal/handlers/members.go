@@ -600,6 +600,7 @@ type admissionEntry struct {
 	InviteeX25519PublicKey  string `json:"inviteeX25519PublicKey"`
 	InviterGrantRef         string `json:"inviterGrantRef"`
 	Day                     string `json:"day"`
+	Generation              int64  `json:"generation"`
 	Signature               string `json:"signature"`
 }
 
@@ -665,6 +666,7 @@ func (h *Handler) listAdmissions(w http.ResponseWriter, r *http.Request) {
 			InviteeX25519PublicKey:  enc(a.InviteeX25519PublicKey),
 			InviterGrantRef:         a.InviterGrantRef,
 			Day:                     a.Day,
+			Generation:              a.Generation,
 			Signature:               enc(a.Signature),
 		})
 	}

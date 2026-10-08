@@ -774,7 +774,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admissionPayload := crypto.AdmissionPayload(match.GroupID, userID, match.InvitedUserID,
-		match.InvitedEd25519PublicKey, match.InvitedX25519PublicKey, inviteID, currentRef, req.Admission.Day)
+		match.InvitedEd25519PublicKey, match.InvitedX25519PublicKey, inviteID, currentRef, req.Admission.Day, req.Generation)
 	if !crypto.Verify(inviter.SigningPublicKey, crypto.ContextAdmission, admissionPayload, admissionSig) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "admission.signature: does not verify against the caller's current signing key", "bad_signature")
 		return
@@ -795,6 +795,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			InviteeX25519PublicKey:  match.InvitedX25519PublicKey,
 			InviterGrantRef:         currentRef,
 			Day:                     req.Admission.Day,
+			Generation:              req.Generation,
 			Signature:               admissionSig,
 		},
 	})

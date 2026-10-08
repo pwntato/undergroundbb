@@ -225,6 +225,7 @@ type admissionVector struct {
 	InviteID        string `json:"invite_id"`
 	InviterGrantRef string `json:"inviter_grant_ref"`
 	Day             string `json:"day"`
+	Generation      int64  `json:"generation"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
 }
@@ -762,11 +763,17 @@ func main() {
 		// The inviter's grant ref is signed, so a different ref (here the
 		// creator's root grant) must produce a different payload.
 		rootRef := "GRANT#" + inviterUUID + "#2026-09-01#0f1e2d3c4b5a6978"
-		for _, tc := range []struct{ name, ref string }{
-			{"inviter holds a promoted grant", grantRef},
-			{"inviter is the creator (root grant ref)", rootRef},
+		// The generation is signed too, so the same record at another
+		// generation must produce a different payload.
+		for _, tc := range []struct {
+			name, ref  string
+			generation int64
+		}{
+			{"inviter holds a promoted grant", grantRef, 0},
+			{"inviter is the creator (root grant ref)", rootRef, 0},
+			{"admitted under a rotated group key", grantRef, 3},
 		} {
-			payload := crypto.AdmissionPayload(groupID, inviterUUID, inviteeUUID, inviteePub, inviteeX, inviteID, tc.ref, day)
+			payload := crypto.AdmissionPayload(groupID, inviterUUID, inviteeUUID, inviteePub, inviteeX, inviteID, tc.ref, day, tc.generation)
 			sig, err := crypto.Sign(inviterPriv, crypto.ContextAdmission, payload)
 			if err != nil {
 				panic(err)
@@ -783,6 +790,7 @@ func main() {
 				InviteID:        inviteID,
 				InviterGrantRef: tc.ref,
 				Day:             day,
+				Generation:      tc.generation,
 				PayloadHex:      hex.EncodeToString(payload),
 				SignatureHex:    hex.EncodeToString(sig),
 			})

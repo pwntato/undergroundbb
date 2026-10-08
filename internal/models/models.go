@@ -686,10 +686,21 @@ type Pin struct {
 //
 // Wrapped is AES-256-GCM under the new group key (a WrappedBlob, not a
 // WrappedKey: no ECDH is involved), with AAD binding group id and generation.
+//
+// RemoverUserID, RemovedUserID and StartSignature are the signed record of the
+// removal that minted generation n+1 (crypto.RotationStartPayload for
+// (group, remover, removed, n+1)), kept here because the ROTATION marker is
+// deleted when the rotation finishes. Links are contiguous, so a verifier that
+// holds generation G can demand a record for every n < G and see a withheld
+// one as a gap (#178). Absent on a link written before they existed, which a
+// verifier treats as unverifiable.
 type GenerationKey struct {
 	Record
 
-	Wrapped WrappedBlob `dynamodbav:"Wrapped"`
+	Wrapped        WrappedBlob `dynamodbav:"Wrapped"`
+	RemoverUserID  string      `dynamodbav:"RemoverUserID,omitempty"`
+	RemovedUserID  string      `dynamodbav:"RemovedUserID,omitempty"`
+	StartSignature []byte      `dynamodbav:"StartSignature,omitempty"`
 }
 
 // Rotation is the GROUP#<gid> / ROTATION marker: a key rotation that has
@@ -745,8 +756,13 @@ type Admission struct {
 	// they signed.
 	InviterGrantRef string `dynamodbav:"InviterGrantRef"`
 	// Day is the signed UTC date (YYYY-MM-DD).
-	Day       string `dynamodbav:"Day"`
-	Signature []byte `dynamodbav:"Signature"`
+	Day string `dynamodbav:"Day"`
+	// Generation is the signed group-key generation the inviter held (the one
+	// the invitee's key is wrapped under). A removal at generation g makes any
+	// admission below g stale, so a removed member re-listed with their old
+	// record is told apart from a rejoin (#178).
+	Generation int64  `dynamodbav:"Generation"`
+	Signature  []byte `dynamodbav:"Signature"`
 }
 
 // SuccessorDesignation is the GROUP#<gid> / DESIGNATION#<admin uuid>#<day>#<rand>
