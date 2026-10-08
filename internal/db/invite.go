@@ -589,6 +589,11 @@ type CompleteInviteInput struct {
 	// ordinary invite (this issue does not build role-at-invite-time
 	// selection; #37's grant chain is what changes a role after the fact).
 	Role string
+
+	// Admission is the inviter's signed record of this admission (#178),
+	// written in the same transaction. Its keys are the ones the invitee
+	// signed at acceptance, read from the SENT# row, never from the request.
+	Admission models.Admission
 }
 
 // ErrInviteAlreadyCompleted is returned by CompleteInvite when the
@@ -663,6 +668,19 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 		WrappedGroupKey: in.WrappedGroupKey,
 	}
 	membershipItem, err := attributevalue.MarshalMap(membership)
+	if err != nil {
+		return err
+	}
+
+	admission := in.Admission
+	admission.Record = models.Record{
+		PK:        "GROUP#" + in.GroupID,
+		SK:        "ADMISSION#" + in.InvitedUserID,
+		Type:      "Admission",
+		CreatedAt: now,
+	}
+	admission.InviteeUserID = in.InvitedUserID
+	admissionItem, err := attributevalue.MarshalMap(admission)
 	if err != nil {
 		return err
 	}
@@ -749,6 +767,15 @@ func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) err
 						"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
 					},
 					ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
+				},
+			},
+			// The inviter's signed admission record (#178). Unconditional: a
+			// rejoin replaces the previous record, and the membership Put's
+			// own condition already refuses a current member.
+			{
+				Put: &types.Put{
+					TableName: aws.String(c.table),
+					Item:      admissionItem,
 				},
 			},
 		},

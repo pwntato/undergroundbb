@@ -588,6 +588,89 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// admissionEntry is one inviter-signed admission in GET
+// /api/groups/{groupId}/admissions (#178). The invitee's keys are the ones the
+// invitee signed at acceptance: a verifier checks them against the keys the
+// server serves for that user, and rebuilds the payload from these fields.
+type admissionEntry struct {
+	InviteeUserID           string `json:"inviteeUserId"`
+	InviterUserID           string `json:"inviterUserId"`
+	InviteID                string `json:"inviteId"`
+	InviteeEd25519PublicKey string `json:"inviteeEd25519PublicKey"`
+	InviteeX25519PublicKey  string `json:"inviteeX25519PublicKey"`
+	InviterGrantRef         string `json:"inviterGrantRef"`
+	Day                     string `json:"day"`
+	Signature               string `json:"signature"`
+}
+
+type listAdmissionsResponse struct {
+	Admissions []admissionEntry `json:"admissions"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+}
+
+// listAdmissions implements GET /api/groups/{groupId}/admissions (#178):
+// every member's inviter-signed admission record, for a rotating admin to
+// check before wrapping the new group key to anyone. Members only, like the
+// grant history. Pages by sort key; the cursor is the last ADMISSION# key.
+func (h *Handler) listAdmissions(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	limit := defaultGrantPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxGrantPageSize {
+			WriteError(w, http.StatusBadRequest, "limit: must be between 1 and "+strconv.Itoa(maxGrantPageSize))
+			return
+		}
+		limit = n
+	}
+	cursor := r.URL.Query().Get("cursor")
+	if cursor != "" {
+		const prefix = "ADMISSION#"
+		if !strings.HasPrefix(cursor, prefix) || !idgen.ValidUUID(cursor[len(prefix):]) {
+			WriteError(w, http.StatusBadRequest, "cursor: malformed")
+			return
+		}
+	}
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list admissions")
+		return
+	}
+	if m == nil {
+		groupNotFound(w)
+		return
+	}
+	rows, next, err := h.db.ListAdmissions(r.Context(), groupID, cursor, limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not list admissions")
+		return
+	}
+	enc := base64.StdEncoding.EncodeToString
+	entries := make([]admissionEntry, 0, len(rows))
+	for _, a := range rows {
+		entries = append(entries, admissionEntry{
+			InviteeUserID:           a.InviteeUserID,
+			InviterUserID:           a.InviterUserID,
+			InviteID:                a.InviteID,
+			InviteeEd25519PublicKey: enc(a.InviteeEd25519PublicKey),
+			InviteeX25519PublicKey:  enc(a.InviteeX25519PublicKey),
+			InviterGrantRef:         a.InviterGrantRef,
+			Day:                     a.Day,
+			Signature:               enc(a.Signature),
+		})
+	}
+	WriteJSON(w, http.StatusOK, listAdmissionsResponse{Admissions: entries, NextCursor: next})
+}
+
 // removeMemberRequest is the optional body of DELETE
 // /api/groups/{groupId}/members/{userId}. It is the REMOVER's signed grant of
 // "member" to the subject, required exactly when the subject is an admin or

@@ -209,6 +209,42 @@ func (c *Client) ChangeMemberRole(ctx context.Context, in ChangeMemberRoleInput)
 	return nil
 }
 
+// ListAdmissions returns one page of the group's ADMISSION# rows (#178), after
+// afterSortKey, strongly consistent like ListGrants. The second result is the
+// cursor for the next page, or empty at the end.
+func (c *Client) ListAdmissions(ctx context.Context, groupID, afterSortKey string, limit int) ([]models.Admission, string, error) {
+	in := &dynamodb.QueryInput{
+		TableName:              aws.String(c.table),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			":sk": &types.AttributeValueMemberS{Value: "ADMISSION#"},
+		},
+		ConsistentRead: aws.Bool(true),
+		Limit:          aws.Int32(int32(limit + 1)),
+	}
+	if afterSortKey != "" {
+		in.ExclusiveStartKey = map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: afterSortKey},
+		}
+	}
+	out, err := c.ddb.Query(ctx, in)
+	if err != nil {
+		return nil, "", fmt.Errorf("db: list admissions: %w", err)
+	}
+	var rows []models.Admission
+	if err := attributevalue.UnmarshalListOfMaps(out.Items, &rows); err != nil {
+		return nil, "", fmt.Errorf("db: unmarshal admissions: %w", err)
+	}
+	next := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		next = rows[limit-1].SK
+	}
+	return rows, next, nil
+}
+
 // ListGrants returns one page of a group's GRANT# rows in sort-key order
 // (subject uuid, then day), starting strictly after afterSortKey (empty for
 // the first page), plus the last sort key returned when more may follow. The
