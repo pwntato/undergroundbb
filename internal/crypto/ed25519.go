@@ -36,6 +36,9 @@ const (
 	// ContextRotationStart signs the start of a key rotation, naming the
 	// member whose removal began it (#178).
 	ContextRotationStart SigningContext = "underground-bb:rotation-start:v1"
+	// ContextAdmission signs the admission of an invitee into a group, by the
+	// admin or ambassador who invited them (#178).
+	ContextAdmission SigningContext = "underground-bb:admission:v1"
 )
 
 // GenerateSigningKey generates a new Ed25519 keypair.

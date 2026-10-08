@@ -127,6 +127,38 @@ func RotationStartPayload(groupID, removerUUID, subjectUUID string, generation i
 	return lengthPrefixedConcat(fields)
 }
 
+// AdmissionPayload builds the bytes the inviter signs (under ContextAdmission)
+// when they complete an invite -- docs/DESIGN.md, "The recipient set is taken
+// from the server" (#178). It is the durable record that this inviter admitted
+// this invitee, with these keys, into this group: the invite rows are deleted
+// at completion and a plain member has no grant, so without it nothing signed
+// says who is a member. A rotating admin checks it before wrapping the new
+// group key to anyone, so a server cannot list an account it made up.
+//
+// inviteeEd25519 and inviteeX25519 are the raw public keys the invitee signed
+// at acceptance, so the record binds the keys the server must then serve for
+// them. inviterGrantRef is the sort key of the inviter's own current grant
+// (empty for the creator, who is anchored by the group's trust anchor, not a
+// grant), and day is the UTC date (YYYY-MM-DD) the verifier uses to pick the
+// inviter's signing key and judge their role. inviteID is signed so one
+// record cannot stand in for another invite of the same pair.
+//
+// Same length-prefixed encoding as RoleGrantPayload, and the same warning:
+// this must never change once a real admission has been signed under it.
+func AdmissionPayload(groupID, inviterUUID, inviteeUUID string, inviteeEd25519, inviteeX25519 []byte, inviteID, inviterGrantRef, day string) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(inviterUUID),
+		[]byte(inviteeUUID),
+		inviteeEd25519,
+		inviteeX25519,
+		[]byte(inviteID),
+		[]byte(inviterGrantRef),
+		[]byte(day),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
 // SuccessorClaimPayload builds the bytes a designated successor signs (under
 // ContextSuccessorClaim) to claim the admin role -- docs/DESIGN.md,
 // "Inactivity: the admin pre-signs a successor". claimSortKey is the new

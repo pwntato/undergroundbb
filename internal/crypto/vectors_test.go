@@ -32,6 +32,7 @@ type vectorFile struct {
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
+	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
@@ -187,6 +188,22 @@ type rotationStartVector struct {
 	Generation   int64  `json:"generation"`
 	PayloadHex   string `json:"payload_hex"`
 	SignatureHex string `json:"signature_hex"`
+}
+
+type admissionVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	GroupID         string `json:"group_id"`
+	InviterUUID     string `json:"inviter_uuid"`
+	InviteeUUID     string `json:"invitee_uuid"`
+	InviteeEdHex    string `json:"invitee_ed25519_hex"`
+	InviteeXHex     string `json:"invitee_x25519_hex"`
+	InviteID        string `json:"invite_id"`
+	InviterGrantRef string `json:"inviter_grant_ref"`
+	Day             string `json:"day"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
 }
 
 type successorClaimVector struct {
@@ -783,6 +800,46 @@ func TestVectorRotationStart(t *testing.T) {
 				t.Fatal("rotation-start signature verified under another context")
 			}
 		})
+	}
+}
+
+// TestVectorAdmission pins AdmissionPayload's exact encoding (#178).
+func TestVectorAdmission(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.Admission) < 2 {
+		t.Fatalf("expected at least 2 admission vectors, got %d", len(v.Admission))
+	}
+	seen := map[string]bool{}
+	for _, tc := range v.Admission {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := AdmissionPayload(tc.GroupID, tc.InviterUUID, tc.InviteeUUID,
+				mustHex(t, tc.InviteeEdHex), mustHex(t, tc.InviteeXHex), tc.InviteID, tc.InviterGrantRef, tc.Day)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("AdmissionPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			seen[tc.PayloadHex] = true
+			gotSig, err := Sign(priv, ContextAdmission, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextAdmission, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			if Verify(pub, ContextRoleGrant, wantPayload, wantSig) || Verify(pub, ContextRotationStart, wantPayload, wantSig) {
+				t.Fatal("admission signature verified under another context")
+			}
+		})
+	}
+	if len(seen) != len(v.Admission) {
+		t.Fatal("admission vectors with different grant refs must produce different payloads")
 	}
 }
 
