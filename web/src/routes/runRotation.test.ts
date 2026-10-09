@@ -1418,6 +1418,36 @@ describe('runRotation', () => {
         expect(f.mints).toBe(0)
       })
 
+      // PR #209 round 4: a member removed once and re-invited AFTER the removal
+      // is admitted again (isAdmitted), so their leave must be takeable.
+      it('takes over the leave of a member who was removed once and re-invited after the removal', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        f.links = [removalLink(0, { removed: leaver.id })] // removed, removedAt = 1
+        f.admissions.set(leaver.id, admissionOf(leaver, { generation: 1 }))
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+      })
+
+      it('takes over the leave of a creator who was removed once and re-invited after the removal', async () => {
+        const f = new Fake()
+        const { creator, creatorKey, myGrant } = f.promoted()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.admissions.set(creator.id, admissionOf(creator, { generation: 1, ref: myGrant.sortKey }))
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: creatorKey,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0, { removed: creator.id })]
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+      })
+
       it('takes nothing over when the server fabricates the key AND an admission for it, not signed by the inviter', async () => {
         const f = new Fake()
         const leaver = leftBehind(f, 'none')

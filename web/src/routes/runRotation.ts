@@ -600,8 +600,9 @@ async function checkLeaverKey(
   const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)
   if (!loaded.ok) return { ok: false, reason: loaded.reason }
   const { context } = loaded
-  if (context.removedAt.has(leaverId)) return refuse('the removal history already lists them')
-  if (leaverId === context.chain.anchor.creatorUserId) {
+  // Someone removed once and re-invited after the removal is admitted again;
+  // isAdmitted below applies the same generation rule as a rotation recipient.
+  if (leaverId === context.chain.anchor.creatorUserId && !context.removedAt.has(leaverId)) {
     // The creator has no admission: the anchor (trusted at this point, as for
     // a recipient) names their key.
     return signedBy([base64ToBytes(context.chain.anchor.creatorSigningPublicKey)])
