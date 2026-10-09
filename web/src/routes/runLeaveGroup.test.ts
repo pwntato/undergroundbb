@@ -479,6 +479,26 @@ describe('runLeave in a Rotating group (#178)', () => {
     }
   })
 
+  it('reports a 4xx refusal as nothing changed, not as an unconfirmed leave (PR #209 review)', async () => {
+    for (const [status, code] of [
+      [400, 'bad_signature'],
+      [400, 'rotation_not_applicable'],
+      [403, 'forbidden'],
+      [422, 'whatever'],
+    ] as const) {
+      const h = harness({ leave: () => Promise.reject(new ApiError(status, 'x', code)) })
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'refused' })
+    }
+    // ...while a server error or a dropped connection still may have committed.
+    for (const err of [new ApiError(500, 'x', 'internal'), new TypeError('network')]) {
+      const h = harness({ leave: () => Promise.reject(err) })
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'ambiguous' })
+    }
+    expect(leaveFailureMessage('refused')).toContain('nothing was changed')
+    expect(leaveFailureMessage('refused')).not.toContain("couldn't confirm")
+    expect(leaveFailureMessage('refused', 'bob')).toContain("didn't go through")
+  })
+
   it('has a message for every new failure', () => {
     for (const kind of ['rotationInProgress', 'noGroupKey', 'noHolder', 'cannotCheck'] as const) {
       expect(leaveFailureMessage(kind)).toMatch(/Nothing was changed|nothing was changed/)

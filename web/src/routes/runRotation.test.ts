@@ -11,8 +11,10 @@ import type {
   KeychainLink,
   MemberEntry,
   MemberRole,
+  RestartRotationRequest,
   RewrapEntry,
 } from '@/lib/api/groups'
+import type { CheckPendingGroupKeyResult } from '@/lib/crypto/worker-protocol'
 import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
@@ -244,6 +246,19 @@ class Fake {
   listAdmissionsError: Error | undefined
   admissionReads = 0
 
+  // A member who LEFT started this rotation (#178): the new key is waiting
+  // beside the caller's entry, and the person who left is no longer listed but
+  // is still a user the server can serve.
+  pending: { ephemeralPub: string; nonce: string; ciphertext: string } | undefined
+  outsiders = new Map<string, Person>()
+  pendingVerdict: CheckPendingGroupKeyResult = 'ok'
+  checkError: Error | undefined
+  adoptError: Error | undefined
+  restartError: Error | undefined
+  checkCalls: Parameters<RotationDeps['checkPendingCrypto']>[0][] = []
+  adopted: number[] = []
+  restarts: { request: RestartRotationRequest; subject: string }[] = []
+
   // call logs
   userReads: string[][] = []
   rewrapBatches: { generation: number; users: string[] }[] = []
@@ -354,6 +369,7 @@ class Fake {
           version: 0,
           wrappedGroupKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' },
           ...(this.marker ? { rotation: this.marker } : {}),
+          ...(this.pending ? { pendingWrappedGroupKey: this.pending } : {}),
         }) as GroupDetail,
       listAllMembers: async () =>
         [...this.members.values()].map((r): MemberEntry => ({
@@ -366,7 +382,9 @@ class Fake {
         return new Map(
           ids.flatMap((id) => {
             const r = this.members.get(id)
-            return r ? [[id, served(r.person)] as const] : []
+            if (r) return [[id, served(r.person)] as const]
+            const o = this.outsiders.get(id)
+            return o ? [[id, served(o)] as const] : []
           }),
         )
       },
@@ -450,6 +468,62 @@ class Fake {
         }
         this.completed.push(generation)
         this.marker = undefined
+      },
+      checkPendingCrypto: async (req) => {
+        this.checkCalls.push(req)
+        if (this.checkError) throw this.checkError
+        return this.pendingVerdict
+      },
+      adoptRotationKey: async (_g, generation) => {
+        if (this.adoptError) throw this.adoptError
+        this.adopted.push(generation)
+        // The server moves the entry, clears the pending key, and counts it.
+        this.ownGeneration = generation
+        this.members.get(ME)!.generation = generation
+        this.pending = undefined
+        if (this.marker) this.marker = { ...this.marker, adopted: (this.marker.adopted ?? 0) + 1 }
+      },
+      startReplacementCrypto: async (req) => {
+        const generation = req.ownGeneration + 1
+        return {
+          generation,
+          link: { nonce: 'new-link-n', ciphertext: 'new-link-c' },
+          removerWrappedKey: { ephemeralPub: 'ne', nonce: 'nn', ciphertext: 'nc' },
+          startSignature: b64(
+            sign(
+              me,
+              SigningContext.RotationStart,
+              rotationStartPayload(GROUP, ME, req.subjectUserId, generation),
+            ),
+          ),
+          holderWraps: [],
+        }
+      },
+      restartRotation: async (_g, request) => {
+        if (this.restartError) throw this.restartError
+        const subject = this.marker!.removedUserId!
+        this.restarts.push({ request, subject })
+        // The server replaces the leaver's marker and link with the admin's.
+        this.marker = {
+          generation: request.generation,
+          startedAt: 't',
+          startedBy: ME,
+          removedUserId: subject,
+          startSignature: request.startSignature,
+        }
+        this.links = [
+          ...(this.links ?? []).filter((l) => l.generation < request.generation - 1),
+          {
+            generation: request.generation - 1,
+            wrapped: request.link,
+            removerUserId: ME,
+            removedUserId: subject,
+            startSignature: request.startSignature,
+          },
+        ]
+        this.ownGeneration = request.generation
+        this.members.get(ME)!.generation = request.generation
+        this.pending = undefined
       },
     }
   }
@@ -1328,6 +1402,217 @@ describe('runRotation', () => {
       }
       await runRotation(f.deps(), GROUP)
       expect(f.cryptoRecipients.flat()).not.toContain(removed.id)
+    })
+  })
+
+  describe("a leaving member's key (#178)", () => {
+    // ME holds generation 1; a member who has since LEFT started the rotation
+    // to 2 and left the new key waiting beside ME's entry. ME's own key was
+    // never touched, so nothing is lost whichever way the check goes.
+    function leftBehind(f: Fake) {
+      const leaver = person()
+      f.outsiders.set(leaver.id, leaver)
+      f.ownGeneration = 1
+      f.members.get(ME)!.generation = 1
+      f.marker = startMarker(2, {
+        startedBy: leaver.id,
+        signer: leaver.signing,
+        removed: leaver.id,
+      })
+      f.links = [
+        removalLink(0),
+        removalLink(1, { remover: leaver.id, signer: leaver.signing, removed: leaver.id }),
+      ]
+      f.pending = { ephemeralPub: 'pe', nonce: 'pn', ciphertext: 'pc' }
+      return leaver
+    }
+
+    it('adopts a key that checks out, then finishes the rotation from it', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      const bob = f.add(person(), 'member', 1)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.adopted).toEqual([2])
+      expect(f.restarts).toEqual([])
+      expect(f.gen(bob)).toBe(2)
+      expect(f.completed).toEqual([2])
+      // It was checked with exactly what the server served: the caller's own
+      // wrap, the pending wrap and the leaver's link for the caller's generation.
+      expect(f.checkCalls).toHaveLength(1)
+      expect(f.checkCalls[0]).toMatchObject({
+        userId: ME,
+        groupId: GROUP,
+        ownGeneration: 1,
+        ownWrappedGroupKey: { ciphertext: 'c' },
+        pendingWrappedKey: { ciphertext: 'pc' },
+        link: { nonce: 'n', ciphertext: 'c' },
+      })
+    })
+
+    it('never wraps to the leaver, who is no longer listed but could be re-listed', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      // A server re-lists the leaver with their old admission.
+      f.members.set(leaver.id, { person: leaver, role: 'member', generation: 0 })
+      f.admissions.set(leaver.id, admissionOf(leaver))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(f.cryptoRecipients.flat()).not.toContain(leaver.id)
+      expect(out.status).toBe('incomplete') // the rotation cannot finish while they are "behind"
+    })
+
+    for (const verdict of ['link-mismatch', 'pending-unreadable'] as const) {
+      it(`replaces the rotation with its own when the key fails (${verdict}) and nobody adopted`, async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f)
+        const bob = f.add(person(), 'member', 1)
+        f.pendingVerdict = verdict
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toEqual({ status: 'completed', rewrapped: 1, replacedLeaveKey: true })
+        expect(f.adopted).toEqual([])
+        expect(f.restarts).toHaveLength(1)
+        const { request, subject } = f.restarts[0]!
+        expect(subject).toBe(leaver.id)
+        expect(request.generation).toBe(2)
+        // The replacement names the same leaver as removed, signed by the caller.
+        expect(request.startSignature).toBe(
+          b64(
+            sign(me, SigningContext.RotationStart, rotationStartPayload(GROUP, ME, leaver.id, 2)),
+          ),
+        )
+        expect(f.gen(bob)).toBe(2)
+        expect(f.cryptoRecipients.flat()).not.toContain(leaver.id)
+        expect(describeRotation(out, (id) => id)?.text).toMatch(/could not be verified/)
+      })
+    }
+
+    it('waits instead of replacing once an admin has adopted a verified key', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      f.marker = {
+        ...startMarker(2, { startedBy: leaver.id, signer: leaver.signing, removed: leaver.id }),
+        adopted: 1,
+      }
+      f.pendingVerdict = 'link-mismatch'
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.restarts).toEqual([])
+      expect(f.adopted).toEqual([])
+    })
+
+    it('waits when the server says an admin adopted between the check and the restart', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.pendingVerdict = 'link-mismatch'
+      f.restartError = new ApiError(409, 'adopted', 'rotation_adopted')
+      expect((await runRotation(f.deps(), GROUP)).status).toBe('cannot-resume')
+      expect(f.restarts).toEqual([])
+    })
+
+    it('re-reads rather than failing when the rotation moved under an adoption or a restart', async () => {
+      for (const code of ['rotation_not_active', 'no_pending_key', 'conflict_retry']) {
+        const adopting = new Fake()
+        leftBehind(adopting)
+        adopting.adoptError = new ApiError(409, 'moved', code)
+        expect((await runRotation(adopting.deps(), GROUP)).status, code).toBe('cannot-resume')
+      }
+      for (const code of ['rotation_not_active', 'conflict_retry']) {
+        const restarting = new Fake()
+        leftBehind(restarting)
+        restarting.pendingVerdict = 'link-mismatch'
+        restarting.restartError = new ApiError(409, 'moved', code)
+        expect((await runRotation(restarting.deps(), GROUP)).status, code).toBe('cannot-resume')
+      }
+    })
+
+    it('stops, changing nothing, when the check itself cannot run', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.checkError = new Error('own key would not open')
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({
+        status: 'incomplete',
+        reason: expect.stringContaining('own key would not open'),
+      })
+      expect(f.adopted).toEqual([])
+      expect(f.restarts).toEqual([])
+    })
+
+    it('stops on any other adoption or restart failure', async () => {
+      const a = new Fake()
+      leftBehind(a)
+      a.adoptError = new ApiError(500, 'boom', 'internal')
+      expect((await runRotation(a.deps(), GROUP)).status).toBe('incomplete')
+      const r = new Fake()
+      leftBehind(r)
+      r.pendingVerdict = 'link-mismatch'
+      r.restartError = new ApiError(500, 'boom', 'internal')
+      const out = await runRotation(r.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(out).not.toHaveProperty('replacedLeaveKey')
+    })
+
+    it('does not trust a marker whose start record does not verify', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      // Signed by someone other than the leaver it names as starter.
+      f.marker = startMarker(2, {
+        startedBy: leaver.id,
+        signer: generateSigningKey(),
+        removed: leaver.id,
+      })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(f.checkCalls).toEqual([])
+      expect(f.adopted).toEqual([])
+      expect(f.restarts).toEqual([])
+    })
+
+    it("ignores a pending key under a rotation that is not a leaver's", async () => {
+      const f = new Fake()
+      leftBehind(f)
+      // An admin's removal (startedBy is not the removed member).
+      f.marker = startMarker(2, { startedBy: ME, removed: REMOVED })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.checkCalls).toEqual([])
+      expect(f.adopted).toEqual([])
+    })
+
+    it('treats a chain link that is not the one the rotation was signed with as a failed check', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      // The server swaps in a link naming someone else.
+      f.links = [
+        removalLink(0),
+        removalLink(1, { remover: leaver.id, signer: leaver.signing, removed: REMOVED }),
+      ]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(f.checkCalls).toEqual([]) // never even handed to the crypto
+      expect(f.adopted).toEqual([])
+      expect(out).toMatchObject({ replacedLeaveKey: true })
+      expect(f.restarts).toHaveLength(1)
+    })
+
+    it("stops when the leaver's chain link is missing", async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.links = [removalLink(0)]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({
+        status: 'incomplete',
+        reason: expect.stringMatching(/chain link/),
+      })
+      expect(f.adopted).toEqual([])
+      expect(f.restarts).toEqual([])
+    })
+
+    it('is not run for a key that was not handed to this admin', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.pending = undefined // a non-holder admin, behind the marker
+      expect((await runRotation(f.deps(), GROUP)).status).toBe('cannot-resume')
+      expect(f.checkCalls).toEqual([])
     })
   })
 

@@ -772,6 +772,61 @@ export async function startGroupRotation(
   }
 }
 
+/** What {@link checkPendingGroupKey} found. */
+export type PendingKeyVerdict =
+  /** The pending key opens the chain link to exactly the caller's own current key. */
+  | 'ok'
+  /** The pending wrap does not open for this caller at the next generation. */
+  | 'pending-unreadable'
+  /** It opens, but the chain link does not hold the caller's own key under it. */
+  | 'link-mismatch'
+
+/**
+ * #178: whether the key a LEAVING member wrapped for the caller can be trusted
+ * to be the next generation's key. The leaver is the party trusted least at
+ * that moment and the server cannot read the wrap, so the caller checks it
+ * itself before moving onto it: the pending wrap must open for them at
+ * ownGeneration+1, and the GENKEY# link for ownGeneration (their own key under
+ * the new one) must open under it to EXACTLY the key they already hold. A key
+ * that passes can read everything the caller can and was the one the leaver
+ * chained; one that fails would, adopted, replace the caller's only copy with
+ * something that opens nothing.
+ *
+ * Throws only when the caller's OWN key cannot be unwrapped (a local problem,
+ * not a verdict on the leaver).
+ */
+export async function checkPendingGroupKey(
+  keys: LiveKeys,
+  groupId: string,
+  ownWrappedGroupKey: Wrapped,
+  ownGeneration: number,
+  pendingWrappedKey: Wrapped,
+  link: { nonce: Uint8Array; ciphertext: Uint8Array },
+): Promise<PendingKeyVerdict> {
+  const ownKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
+  let newKey: Uint8Array
+  try {
+    newKey = await unwrap(
+      keys.wrappingKey.privateKey,
+      pendingWrappedKey,
+      memberWrapAAD(groupId, keys.userId, ownGeneration + 1),
+    )
+  } catch {
+    return 'pending-unreadable'
+  }
+  if (newKey.length !== KEY_SIZE) return 'pending-unreadable'
+  let chained: Uint8Array
+  try {
+    chained = await decrypt(newKey, link.nonce, link.ciphertext, genKeyAAD(groupId, ownGeneration))
+  } catch {
+    return 'link-mismatch'
+  }
+  if (chained.length !== ownKey.length) return 'link-mismatch'
+  let diff = 0
+  for (let i = 0; i < ownKey.length; i++) diff |= (chained[i] ?? 0) ^ (ownKey[i] ?? 0)
+  return diff === 0 ? 'ok' : 'link-mismatch'
+}
+
 /**
  * #58: re-wraps the caller's CURRENT group key (their own entry at
  * ownGeneration, which during a rotation is the new generation) to each

@@ -189,7 +189,20 @@ export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
      */
     readonly removedUserId?: string
     readonly startSignature?: string
+    /**
+     * How many admins have checked a leaving member's new key and moved onto
+     * it (#178). While zero, an admin whose own check fails may replace the
+     * rotation; once an admin holds a verified key the others wait for it.
+     */
+    readonly adopted?: number
   }
+  /**
+   * The next generation's key as a LEAVING member wrapped it for the caller
+   * (#178). The caller's own `wrappedGroupKey` and `generation` are unchanged
+   * until they check it and adopt it. Present only while a rotation a leaver
+   * started is running and the caller was handed a key.
+   */
+  readonly pendingWrappedGroupKey?: WireWrappedKey
 }
 
 /**
@@ -604,4 +617,39 @@ export function completeRotation(groupId: string, generation: number): Promise<v
   return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/complete`, {
     generation,
   })
+}
+
+/**
+ * POST /api/groups/{id}/rotation/adopt -- #178. An admin whose own check of a
+ * leaving member's key passed (it opens the chain link to their current key)
+ * moves onto it. 409 codes: `no_pending_key` (nothing is waiting for you, or
+ * you are not at the previous generation), `rotation_not_active` (the rotation
+ * finished or was replaced; re-read the group), `conflict_retry`.
+ */
+export function adoptRotationKey(groupId: string, generation: number): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/adopt`, {
+    generation,
+  })
+}
+
+/** An admin's replacement for a rotation a leaver started (#178). */
+export interface RestartRotationRequest {
+  readonly generation: number
+  readonly link: WireWrappedBlob
+  /** The new key wrapped for the caller. */
+  readonly wrappedKey: WireWrappedKey
+  /** The caller's base64 signature over rotationStartPayload naming the leaver. */
+  readonly startSignature: string
+}
+
+/**
+ * POST /api/groups/{id}/rotation/restart -- #178. Replaces a rotation a LEAVER
+ * started, whose key the caller could not verify, with the caller's own. 409
+ * codes: `rotation_adopted` (an admin already holds a verified key; wait to be
+ * re-wrapped from it), `rotation_not_active` (it finished, was replaced, or was
+ * not a leaver's), `rotation_caller_behind`, `conflict_retry`. 400
+ * `bad_signature`.
+ */
+export function restartRotation(groupId: string, req: RestartRotationRequest): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/restart`, req)
 }

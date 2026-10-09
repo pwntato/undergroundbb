@@ -301,6 +301,7 @@ const LEAVE_REASONS: Record<
   noHolder:
     "has no other admin who can take its new key (none is up to date, or their keys or invitations did not check out), so it can't be left yet",
   cannotCheck: "couldn't be checked: its admins' keys could not be read",
+  refused: 'was refused by the server, so it was not left; reload and try again',
   notFound: 'no longer lists you',
   ambiguous: "couldn't be confirmed",
 }

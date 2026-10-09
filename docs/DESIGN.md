@@ -827,13 +827,37 @@ demotion: the `ROTATION` marker, the `GENKEY#` link for the old generation, and 
 other admins. The leaver cannot keep it, because they are departing and the only copy of a freshly minted
 key would go with them. So the leaver's browser wraps it to **every admin at the current generation who
 passes the checks a rotation applies** (the inviter-signed admission with the removal history behind it,
-then the caller's pin; `selectKeyHolders`), capped at 50 because a transaction holds at most 100 items,
-and each such admin's entry point moves to the new generation in the same commit. That is exactly the
-"re-wrap the admins first" step a rotation does anyway, so there is nothing to clean up afterwards, and
-any one of them can finish the re-wrap on their next load; nothing depends on the leaver's tab staying
-open. The leaver signs the same `RotationStartPayload` a remover does, naming **themselves** as the
+then the caller's pin; `selectKeyHolders`), capped at 50 because a transaction holds at most 100 items.
+The leaver signs the same `RotationStartPayload` a remover does, naming **themselves** as the
 removed member, and it is stored on the marker and on the chain link, so the removal history already
 covers them: a leaver re-listed later with their old admission is refused exactly as a removed member is.
+
+**What the leaver sends is never trusted to replace a key someone holds.** The server cannot read the
+wraps, only check their shape, and a leaver is the party we trust least at the moment they hand them
+over. A hostile one could send bytes that open to nothing; written over each admin's entry point, that
+would erase every admin's only copy of the generation-n key, wedge the marker (nothing but a completed
+rotation clears it) and, if the chain link were also bad, silently strand everyone's history. So the leave
+writes each holder's wrap **beside** their entry (`PendingWrappedKey`), leaving `Generation` and
+`WrappedGroupKey` alone. A holder uses it only after checking it (`checkPendingGroupKey`): the pending wrap
+must open for them at generation n+1, and the `GENKEY#n` link must open under it to **exactly the key they
+already hold**, compared byte for byte. If it does, `POST /rotation/adopt` moves their entry point onto it
+and bumps the marker's `Adopted` count in the same transaction, and from there it is an ordinary
+rotation that any adopted admin can finish. Only a marker the leaver started themselves (`startedBy ==
+removedUserId`, which the start signature proves) can have pending keys; one an admin started is
+never adopted from.
+
+If the check **fails**, nothing was lost, because the admin's own key was never touched. While no admin has
+adopted (`Adopted` is zero, so nobody holds a verified key), an admin whose check failed replaces the
+rotation (`POST /rotation/restart`): in one transaction the leaver's marker and link are replaced by the
+admin's own, minted fresh, naming the **same leaver** as removed and signed by the admin, and the admin's
+entry point moves to it. The removal history still covers the leaver. The other holders' leftover pending
+keys are ignored (the marker is no longer a leaver's) and cleared when they are re-wrapped. The
+`Adopted` count is the lock between the two paths: an adoption raises it in the commit that moves the
+admin, and a restart requires it to be absent, so a rotation is never replaced under an admin who already
+moved onto its key. Once any admin has adopted, an admin whose own check failed just waits to be
+re-wrapped from that admin's verified copy (the leaver may have wrapped different material per holder; the
+adopted admin has already proved theirs against the chain).
+
 Each holder's update is conditional on being an admin at the generation the key was wrapped against, so a
 concurrent change is a conflict (`holder_changed`) rather than a half-applied leave. A leave is refused,
 changing nothing, when a rotation is already running (`rotation_in_progress`), when this browser holds no
@@ -1044,7 +1068,10 @@ points to the marker's generation in one transaction, so there is no `Unprocesse
 marker still names the generation, the caller is an admin whose own entry point is at it (the only
 way to hold the key), and every member exists and is not already past it, or nothing is written
 (`member_changed`, and the client re-lists and resends). During a rotation, a member already *at* the
-generation is accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/complete`
+generation is accepted, which makes a retry after a lost response safe, and a re-wrap also clears a
+leaver's leftover `PendingWrappedKey` (see "Leaving a private Rotating group"). `POST /api/groups/{gid}/rotation/adopt`
+and `POST /api/groups/{gid}/rotation/restart` are that section's two moves for a rotation a leaver started.
+`POST /api/groups/{gid}/rotation/complete`
 deletes the marker only when no member is behind (`members_behind`). The scan is a consistent read
 but is not atomic with the delete, and an invite completed by an inviter who was re-wrapped
 mid-request could land a member one generation behind (the `CompleteInvite` transaction conditions
@@ -1158,14 +1185,18 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
 admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
 invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
-(7) **A stalled leave rotation.** A leave's rotation is finished by one of the admins it was handed
-to, on their next load. If none of them returns, the group's new posts stay on the old generation and
-the other members stay behind until an admin at the new generation does, the same stall a removal has
-when its remover disappears. Admins that were behind when the leaver left are not holders and cannot
-resume it.
+(7) **A stalled leave rotation.** A leave's rotation is checked, adopted and finished by one of the
+admins it was handed to, on their next load. If none of them returns, the group's new posts stay on the
+old generation and the other members stay behind until one does, the same stall a removal has when its
+remover disappears. Admins that were behind when the leaver left are not holders and cannot resume it.
+A leaver who sent bad material for some holders and good for others is handled (the good ones adopt and
+re-wrap the rest); one who sent bad material to all of them leaves the group exactly as stuck as a
+removal does until a holder returns and replaces the rotation.
 
 **Deploy note (leave rotation).** A browser still on an older bundle leaves a Rotating group without a
-rotation and gets 400 `rotation_required`; reloading fixes it. No stored data changes.
+rotation and gets 400 `rotation_required`; reloading fixes it. No stored data changes. A leave committed
+before pending keys existed moved its holders straight to the new generation; those groups are unaffected
+(the marker's holders are already at it, as a removal's remover is).
 
 **Deploy note (removal history).** A `GENKEY#` link written before this shipped has no record, so a
 group that has already rotated can never pass the check and its rotations stop. Reset or recreate

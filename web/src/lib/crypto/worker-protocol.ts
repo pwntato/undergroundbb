@@ -496,6 +496,31 @@ export interface StartGroupRotationResponse {
 }
 
 /**
+ * #178: checks the key a leaving member wrapped for the caller before the
+ * caller moves onto it. Carries only wrapped material; the verdict is all that
+ * comes back. See credential-material.ts's checkPendingGroupKey.
+ */
+export interface CheckPendingGroupKeyRequest {
+  readonly kind: 'checkPendingGroupKey'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly ownGeneration: number
+  readonly pendingWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  /** The GENKEY# link for ownGeneration. */
+  readonly link: { nonce: string; ciphertext: string }
+}
+
+export type CheckPendingGroupKeyResult = 'ok' | 'pending-unreadable' | 'link-mismatch'
+
+export interface CheckPendingGroupKeyResponse {
+  readonly kind: 'checkPendingGroupKeyDone'
+  readonly id: string
+  readonly result: CheckPendingGroupKeyResult
+}
+
+/**
  * #58: re-wraps the caller's current group key to a batch of recipients. The
  * recipients' public keys MUST already have been checked against the caller's
  * signed pins by the caller; the worker has no pins.
@@ -664,6 +689,7 @@ export type WorkerRequest =
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
   | StartGroupRotationRequest
+  | CheckPendingGroupKeyRequest
   | RewrapGroupKeyRequest
   | ClearLiveKeysRequest
 
@@ -685,5 +711,6 @@ export type WorkerResponse =
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
   | StartGroupRotationResponse
+  | CheckPendingGroupKeyResponse
   | RewrapGroupKeyResponse
   | WorkerErrorResponse

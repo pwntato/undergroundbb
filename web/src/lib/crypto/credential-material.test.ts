@@ -30,6 +30,7 @@ import {
   signSuccessorClaim,
   signSuccessorDesignation,
   startGroupRotation,
+  checkPendingGroupKey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import {
@@ -52,7 +53,7 @@ import {
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { evaluatePin } from './pin.js'
-import { unwrap } from './x25519.js'
+import { unwrap, wrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -1235,6 +1236,141 @@ describe('group key rotation (#58)', () => {
         memberWrapAAD(GROUP_ID, CAROL_ID, 1),
       ),
     ).rejects.toThrow()
+  })
+
+  describe("checking a leaving member's pending key (#178)", () => {
+    const LEAVER_ID = 'leaving-member-id'
+
+    // A leave as the leaver's browser builds it: the new key wrapped to the
+    // holder (here the "admin"), plus the chain link.
+    async function leaveFor(holderKeys: Awaited<ReturnType<typeof realUserKeys>>) {
+      const leaver = await realUserKeys(LEAVER_ID, 'leaver-password-rot')
+      const oldKey = new Uint8Array(32).fill(7)
+      const created = await signGroupCreation(leaver, GROUP_ID, oldKey)
+      const holderOwn = await wrap(
+        holderKeys.wrappingKey.publicKey,
+        oldKey,
+        memberWrapAAD(GROUP_ID, holderKeys.userId, 0),
+      )
+      const started = await startGroupRotation(
+        leaver,
+        GROUP_ID,
+        wire(created.groupKeyWrapped),
+        0,
+        LEAVER_ID,
+        [{ userId: holderKeys.userId, x25519PublicKey: holderKeys.wrappingKey.publicKey }],
+      )
+      return { oldKey, holderOwn, started }
+    }
+    const link = (l: { nonce: string; ciphertext: string }) => ({
+      nonce: base64ToBytes(l.nonce),
+      ciphertext: base64ToBytes(l.ciphertext),
+    })
+
+    it("accepts an honest leave: the pending key opens the link to the holder's own key", async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-1')
+      const { holderOwn, started } = await leaveFor(admin)
+      const verdict = await checkPendingGroupKey(
+        admin,
+        GROUP_ID,
+        holderOwn,
+        0,
+        wire(started.holderWraps[0]!.wrappedKey),
+        link(started.link),
+      )
+      expect(verdict).toBe('ok')
+    })
+
+    it("rejects a pending wrap that does not open for the holder (garbage, or someone else's)", async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-2')
+      const { holderOwn, started } = await leaveFor(admin)
+      const good = wire(started.holderWraps[0]!.wrappedKey)
+      const garbage = {
+        ephemeralPub: good.ephemeralPub,
+        nonce: good.nonce,
+        ciphertext: new Uint8Array(good.ciphertext.length).fill(9),
+      }
+      expect(
+        await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, garbage, link(started.link)),
+      ).toBe('pending-unreadable')
+      const random = {
+        ephemeralPub: new Uint8Array(32).fill(3),
+        nonce: new Uint8Array(12).fill(4),
+        ciphertext: new Uint8Array(48).fill(5),
+      }
+      expect(
+        await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, random, link(started.link)),
+      ).toBe('pending-unreadable')
+      // Wrapped for a different generation: its AAD binds the generation.
+      const carol = await realUserKeys(CAROL_ID, 'carol-password-chk-2')
+      const other = await wrap(
+        admin.wrappingKey.publicKey,
+        new Uint8Array(32).fill(1),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 5),
+      )
+      expect(
+        await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, other, link(started.link)),
+      ).toBe('pending-unreadable')
+      expect(carol.userId).toBe(CAROL_ID)
+    })
+
+    it("rejects a good wrap whose link seals a different key than the holder's own", async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-3')
+      const { holderOwn, started } = await leaveFor(admin)
+      // The leaver chains a RANDOM key under the new one instead of the old.
+      const newKey = await unwrap(
+        admin.wrappingKey.privateKey,
+        wire(started.holderWraps[0]!.wrappedKey),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+      )
+      const bogus = await encrypt(newKey, new Uint8Array(32).fill(99), genKeyAAD(GROUP_ID, 0))
+      expect(
+        await checkPendingGroupKey(
+          admin,
+          GROUP_ID,
+          holderOwn,
+          0,
+          wire(started.holderWraps[0]!.wrappedKey),
+          { nonce: bogus.nonce, ciphertext: bogus.ciphertext },
+        ),
+      ).toBe('link-mismatch')
+    })
+
+    it('rejects a link that does not open under the key', async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-4')
+      const { holderOwn, started } = await leaveFor(admin)
+      const pending = wire(started.holderWraps[0]!.wrappedKey)
+      const real = link(started.link)
+      const flipped = { nonce: real.nonce, ciphertext: real.ciphertext.map((b) => b ^ 1) }
+      expect(await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, pending, flipped)).toBe(
+        'link-mismatch',
+      )
+      // Presented for another group, the holder's own key (bound to this group)
+      // does not even open: that is a local failure, not a verdict.
+      await expect(
+        checkPendingGroupKey(admin, 'another-group', holderOwn, 0, pending, real),
+      ).rejects.toThrow()
+    })
+
+    it("throws, rather than giving a verdict, when the holder's own key cannot be read", async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-5')
+      const { started } = await leaveFor(admin)
+      const stranger = await wrap(
+        admin.wrappingKey.publicKey,
+        new Uint8Array(32).fill(2),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 4),
+      )
+      await expect(
+        checkPendingGroupKey(
+          admin,
+          GROUP_ID,
+          stranger,
+          0,
+          wire(started.holderWraps[0]!.wrappedKey),
+          link(started.link),
+        ),
+      ).rejects.toThrow()
+    })
   })
 
   it('refuses to re-wrap to the caller or to a malformed key', async () => {

@@ -18,6 +18,7 @@
 /// <reference lib="webworker" />
 
 import {
+  checkPendingGroupKey as checkPendingGroupKeyPure,
   completeChangePassword as completeChangePasswordPure,
   completeInvite as completeInvitePure,
   completeLogin as completeLoginPure,
@@ -39,6 +40,7 @@ import {
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
 import type {
   ChangePasswordMaterial,
+  CheckPendingGroupKeyRequest,
   ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
   CompleteInviteRequest,
@@ -144,6 +146,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
+      return
+    case 'checkPendingGroupKey':
+      await checkPendingGroupKey(req)
       return
     case 'rewrapGroupKey':
       await rewrapGroupKey(req)
@@ -420,6 +425,20 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     })),
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
+}
+
+/** #178: checks a leaving member's pending key for the caller; see checkPendingGroupKey in credential-material.ts. */
+async function checkPendingGroupKey(req: CheckPendingGroupKeyRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 'check the new group key')
+  const result = await checkPendingGroupKeyPure(
+    keys,
+    req.groupId,
+    wrappedFromWire(req.ownWrappedGroupKey),
+    req.ownGeneration,
+    wrappedFromWire(req.pendingWrappedKey),
+    { nonce: base64ToBytes(req.link.nonce), ciphertext: base64ToBytes(req.link.ciphertext) },
+  )
+  post({ kind: 'checkPendingGroupKeyDone', id: req.id, result })
 }
 
 /** #58: re-wraps the caller's current group key to a batch of members. */

@@ -33,6 +33,9 @@ import type {
   RewrapGroupKeyResponse,
   RewrapGroupKeyResult,
   StartGroupRotationRequest,
+  CheckPendingGroupKeyRequest,
+  CheckPendingGroupKeyResponse,
+  CheckPendingGroupKeyResult,
   StartGroupRotationResponse,
   StartGroupRotationResult,
   SignGroupCreationRequest,
@@ -633,6 +636,17 @@ export function startGroupRotation(
   return workerCall<StartGroupRotationResponse, StartGroupRotationResult>(
     (id) => ({ kind: 'startGroupRotation', id, ...req }) satisfies StartGroupRotationRequest,
     'startGroupRotationDone',
+    (res) => res.result,
+  )
+}
+
+/** #178: checks the key a leaving member wrapped for the caller before they adopt it (see checkPendingGroupKey in credential-material.ts). */
+export function checkPendingGroupKey(
+  req: Omit<CheckPendingGroupKeyRequest, 'kind' | 'id'>,
+): Promise<CheckPendingGroupKeyResult> {
+  return workerCall<CheckPendingGroupKeyResponse, CheckPendingGroupKeyResult>(
+    (id) => ({ kind: 'checkPendingGroupKey', id, ...req }) satisfies CheckPendingGroupKeyRequest,
+    'checkPendingGroupKeyDone',
     (res) => res.result,
   )
 }

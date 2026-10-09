@@ -71,6 +71,9 @@ export type LeaveResult =
   | { readonly ok: false; readonly kind: 'noHolder' }
   // The group or its admins' keys could not be read to check them. Nothing changed.
   | { readonly ok: false; readonly kind: 'cannotCheck' }
+  // The server refused the request outright (a 4xx the cases above do not name,
+  // e.g. a signature it could not verify). Nothing was written.
+  | { readonly ok: false; readonly kind: 'refused' }
   // Network failure or 5xx: the leave may or may not have committed.
   | { readonly ok: false; readonly kind: 'ambiguous' }
 
@@ -186,6 +189,11 @@ export async function runLeave(
         if (err.status === 404) {
           return { ok: false, kind: 'notFound' }
         }
+        // Any other 4xx is a definite refusal: nothing was written, so it must
+        // not read as "we couldn't confirm whether you left".
+        if (err.status >= 400 && err.status < 500) {
+          return { ok: false, kind: 'refused' }
+        }
       }
       return { ok: false, kind: 'ambiguous' }
     }
@@ -274,6 +282,8 @@ const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> =
     "No other admin could be trusted with the group's new key (none is up to date, or their keys or invitations did not check out), so you cannot leave yet. Nothing was changed.",
   cannotCheck:
     "We couldn't read the group or its admins' keys to check them, so nothing was changed. Try again.",
+  refused:
+    'The server refused this request, so nothing was changed. Reload the page and try again.',
   notFound: 'You are no longer a member of this group.',
   ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
 }
@@ -292,7 +302,7 @@ export function leaveFailureMessage(
       // The leave may have committed; do not claim it did not.
       return `${promotedName} is now an admin, but we couldn't confirm whether you left. Check your group list before trying again.`
     }
-    if (kind === 'stale' || kind === 'lastAdmin') {
+    if (kind === 'stale' || kind === 'lastAdmin' || kind === 'refused') {
       return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
     }
   }

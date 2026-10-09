@@ -52,6 +52,7 @@ import type {
   KeychainResponse,
   ListAdmissionsResponse,
   MemberEntry,
+  RestartRotationRequest,
   RewrapEntry,
 } from '@/lib/api/groups'
 import { MAX_REWRAP_BATCH } from '@/lib/api/groups'
@@ -62,7 +63,12 @@ import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationStartPayload } from '@/lib/crypto/group'
 import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
-import type { RewrapGroupKeyResult } from '@/lib/crypto/worker-protocol'
+import type {
+  CheckPendingGroupKeyResult,
+  RewrapGroupKeyResult,
+  StartGroupRotationRequest,
+  StartGroupRotationResult,
+} from '@/lib/crypto/worker-protocol'
 import { loadVerifiedChain, type GrantCheckDeps, type VerifiedChain } from './runGrantCheck'
 
 /** Passes before giving up. A pass is a full re-list, so this bounds churn, not batches. */
@@ -104,9 +110,38 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
     req: { readonly generation: number; readonly wraps: readonly RewrapEntry[] },
   ) => Promise<void>
   readonly completeRotation: (groupId: string, generation: number) => Promise<void>
+  /**
+   * Checks the key a LEAVING member wrapped for the caller (#178): opens the
+   * wrap and the chain link, and compares what the link holds to the caller's
+   * own key. See credential-material.ts's checkPendingGroupKey.
+   */
+  readonly checkPendingCrypto: (req: {
+    readonly userId: string
+    readonly groupId: string
+    readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly ownGeneration: number
+    readonly pendingWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly link: { nonce: string; ciphertext: string }
+  }) => Promise<CheckPendingGroupKeyResult>
+  /** Moves the caller onto the pending key their check accepted. */
+  readonly adoptRotationKey: (groupId: string, generation: number) => Promise<void>
+  /** Mints the key of a rotation that replaces a leaver's unverifiable one. */
+  readonly startReplacementCrypto: (
+    req: Omit<StartGroupRotationRequest, 'kind' | 'id'>,
+  ) => Promise<StartGroupRotationResult>
+  readonly restartRotation: (groupId: string, req: RestartRotationRequest) => Promise<void>
 }
 
-export type RotationOutcome =
+export type RotationOutcome = RotationOutcomeBase & {
+  /**
+   * The key a member who LEFT handed to the admins did not check out (#178), so
+   * this run replaced their rotation with one of its own and carried on from
+   * there. Set whatever the run then ended as.
+   */
+  readonly replacedLeaveKey?: true
+}
+
+type RotationOutcomeBase =
   /** Not an admin, or nothing to do: no marker and nobody behind. */
   | { readonly status: 'none' }
   /** A marker was running and is now cleared; `rewrapped` members were moved. */
@@ -138,6 +173,19 @@ export type RotationOutcome =
  * name for the people a pin check blocked.
  */
 export function describeRotation(
+  outcome: RotationOutcome,
+  label: (userId: string) => string,
+): { readonly kind: 'info' | 'error'; readonly text: string } | null {
+  const described = describeBase(outcome, label)
+  if (outcome.replacedLeaveKey !== true) return described
+  const note =
+    'The new group key the member who left handed to the admins could not be verified, so it was replaced with a new one.'
+  return described === null
+    ? { kind: 'info', text: note }
+    : { kind: described.kind, text: `${note} ${described.text}` }
+}
+
+function describeBase(
   outcome: RotationOutcome,
   label: (userId: string) => string,
 ): { readonly kind: 'info' | 'error'; readonly text: string } | null {
@@ -251,6 +299,18 @@ async function runOnce(
 
   const ownGeneration = detail.generation
   const marker = detail.rotation
+  if (
+    marker !== undefined &&
+    marker.generation === ownGeneration + 1 &&
+    detail.pendingWrappedGroupKey !== undefined &&
+    !restarted
+  ) {
+    // A leaver handed this admin the new key (#178). It is checked before it
+    // replaces anything, and the run carries on from fresh state afterwards.
+    const taken = await takeLeaversKey(deps, groupId, detail, marker, carried, exclude)
+    if (taken.status !== 'continue') return taken.outcome
+    return runOnce(deps, groupId, true, carried, exclude)
+  }
   if (marker !== undefined && marker.generation !== ownGeneration) {
     return {
       status: 'cannot-resume',
@@ -425,6 +485,143 @@ async function runOnce(
     }
   }
   return { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped }
+}
+
+type TakeLeaversKey =
+  { readonly status: 'continue' } | { readonly status: 'done'; readonly outcome: RotationOutcome }
+
+/**
+ * A rotation a LEAVER started has put the new key beside this admin's entry
+ * (#178) rather than over it, because the leaver is the party trusted least at
+ * that moment and the server cannot read what they sent. This is the check.
+ *
+ *   - The marker must be the leaver's own signed start (it names them as
+ *     removed, signed by them). Anything else is not a leave and the pending
+ *     key is ignored.
+ *   - The pending key must open for this admin and the chain link must open
+ *     under it to exactly the key this admin already holds. Then it is adopted.
+ *   - If it does NOT, nothing has been lost, because the admin's own key was
+ *     never touched. When no admin has adopted yet (so nobody holds a verified
+ *     key), the admin replaces the leaver's rotation with their own, naming
+ *     the same leaver. When one has, that admin holds a verified copy and will
+ *     re-wrap this one; waiting is right.
+ *
+ * 'continue' means the caller re-reads the group and carries on.
+ */
+async function takeLeaversKey(
+  deps: RotationDeps,
+  groupId: string,
+  detail: GroupDetail,
+  marker: NonNullable<GroupDetail['rotation']>,
+  carried: number,
+  exclude: ReadonlySet<string>,
+): Promise<TakeLeaversKey> {
+  const done = (outcome: RotationOutcome): TakeLeaversKey => ({ status: 'done', outcome })
+  const incomplete = (reason: string): TakeLeaversKey =>
+    done({ status: 'incomplete', reason, rewrapped: carried })
+  const waiting = (): TakeLeaversKey =>
+    done({
+      status: 'cannot-resume',
+      reason: 'another admin already holds the new key and will re-wrap you',
+    })
+  const pending = detail.pendingWrappedGroupKey
+  const ownWrapped = detail.wrappedGroupKey
+  if (pending === undefined || ownWrapped === undefined) {
+    return done({ status: 'cannot-resume', reason: 'no new key is waiting for you' })
+  }
+  if (marker.removedUserId === undefined || marker.startedBy !== marker.removedUserId) {
+    return done({
+      status: 'cannot-resume',
+      reason: 'an admin who already holds the new key must resume',
+    })
+  }
+
+  let own: Uint8Array
+  try {
+    own = base64ToBytes(await deps.ownSigningKey())
+  } catch (err) {
+    return incomplete(`could not read your pins: ${describe(err)}`)
+  }
+  const started = await verifyRotationStart(deps, own, groupId, marker)
+  if (!started.ok) return incomplete(started.reason)
+
+  let link: KeychainResponse['links'][number] | undefined
+  try {
+    const res = await deps.getKeychain(groupId, detail.generation, detail.generation)
+    link = res.links.find((l) => l.generation === detail.generation)
+  } catch (err) {
+    return incomplete(`could not read the group's key chain: ${describe(err)}`)
+  }
+  if (link === undefined) return incomplete("the leaving member's chain link is missing")
+
+  let verdict: CheckPendingGroupKeyResult
+  if (
+    link.startSignature !== marker.startSignature ||
+    link.removedUserId !== marker.removedUserId
+  ) {
+    // The link on file is not the one this rotation was signed with.
+    verdict = 'link-mismatch'
+  } else {
+    try {
+      verdict = await deps.checkPendingCrypto({
+        userId: deps.selfUserId,
+        groupId,
+        ownWrappedGroupKey: ownWrapped,
+        ownGeneration: detail.generation,
+        pendingWrappedKey: pending,
+        link: link.wrapped,
+      })
+    } catch (err) {
+      // Our own key would not open: a local problem, not a verdict on the leaver.
+      return incomplete(`could not check the new group key: ${describe(err)}`)
+    }
+  }
+
+  if (verdict === 'ok') {
+    try {
+      await deps.adoptRotationKey(groupId, marker.generation)
+      return { status: 'continue' }
+    } catch (err) {
+      const code = codeOf(err)
+      if (
+        code === 'rotation_not_active' ||
+        code === 'no_pending_key' ||
+        code === 'conflict_retry'
+      ) {
+        return { status: 'continue' } // the state moved under us; read it again
+      }
+      return incomplete(describe(err))
+    }
+  }
+
+  if ((marker.adopted ?? 0) > 0) return waiting()
+
+  // Nobody holds a verified key: replace the leaver's rotation with ours.
+  try {
+    const minted = await deps.startReplacementCrypto({
+      userId: deps.selfUserId,
+      groupId,
+      ownWrappedGroupKey: ownWrapped,
+      ownGeneration: detail.generation,
+      subjectUserId: started.removedUserId,
+    })
+    await deps.restartRotation(groupId, {
+      generation: minted.generation,
+      link: minted.link,
+      wrappedKey: minted.removerWrappedKey,
+      startSignature: minted.startSignature,
+    })
+  } catch (err) {
+    const code = codeOf(err)
+    if (code === 'rotation_adopted') return waiting()
+    if (code === 'rotation_not_active' || code === 'conflict_retry') {
+      return { status: 'continue' }
+    }
+    return incomplete(describe(err))
+  }
+  // Ours now: run it from fresh state, and say it was replaced.
+  const outcome = await runOnce(deps, groupId, true, carried, exclude)
+  return done({ ...outcome, replacedLeaveKey: true })
 }
 
 export type HolderSelection =
