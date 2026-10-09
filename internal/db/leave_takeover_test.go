@@ -201,6 +201,45 @@ func TestTakeOverLeaveRotationRefusals(t *testing.T) {
 		}
 		unchanged(t, c, g, "bob")
 	})
+	t.Run("a marker whose starter is not the removed member", func(t *testing.T) {
+		c := testClient(t)
+		g := newLeaveGroup(t, c)
+		putTestMember(t, c, g, "a1", "admin")
+		// bob "started" it but it names carl as removed: not a leave. Only the
+		// marker's RemovedUserID condition can refuse this (bob is the leaver
+		// the caller names, and the generation matches).
+		if _, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: map[string]types.AttributeValue{
+			"PK": s("GROUP#" + g), "SK": s(RotationSortKey), "Generation": genAttr(1), "StartedBy": s("bob"), "RemovedUserID": s("carl"),
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.TakeOverLeaveRotation(ctx, takeOverInput(g, "a1")); !errors.Is(err, ErrRotationNotActive) {
+			t.Fatalf("%v", err)
+		}
+		unchanged(t, c, g, "bob")
+	})
+	t.Run("caller's entry is at another generation than the one they minted from", func(t *testing.T) {
+		c := testClient(t)
+		g, _, _ := leftRotatingGroup(t, c)
+		// a1 is already ahead (generation 1), so only the CALLER's own
+		// generation condition can refuse: the marker is at 1 and the link is free.
+		if _, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(c.table), Key: memberKey(g, "a1"),
+			UpdateExpression:          aws.String("SET Generation = :g"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":g": genAttr(1)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.TakeOverLeaveRotation(ctx, takeOverInput(g, "a1")); !errors.Is(err, ErrRewrapCallerBehind) {
+			t.Fatalf("%v", err)
+		}
+		if rot, _ := c.GetRotation(ctx, g); rot.StartedBy != "bob" {
+			t.Fatal("a refused takeover replaced the marker")
+		}
+		if itemExists(t, c, "GROUP#"+g, GenKeySortKey(0)) {
+			t.Fatal("a refused takeover wrote a link")
+		}
+	})
 	t.Run("caller not an admin, or not at the generation", func(t *testing.T) {
 		c := testClient(t)
 		g, _, _ := leftRotatingGroup(t, c)

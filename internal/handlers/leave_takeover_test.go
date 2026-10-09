@@ -55,7 +55,8 @@ func TestTakeOverEndpointMintsTheAdminsRotation(t *testing.T) {
 	// Refusals first; none of them may change anything.
 	bad := ok
 	bad.StartSignature = takeOverBody(t, f, f.bob, 1).StartSignature // signed by someone else
-	wrongGen := takeOverBody(t, f, f.owner, 2)                       // signed correctly FOR 2, so only the generation check refuses it
+	wrongGen := ok
+	wrongGen.Generation = 2 // the signature is for 1, so only the generation check can refuse it
 	for name, tc := range map[string]struct {
 		cookie *http.Cookie
 		body   takeOverRotationRequest
