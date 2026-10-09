@@ -47,6 +47,7 @@ func TestLeaveRotatingGroupWritesOnlyTheSignedMarker(t *testing.T) {
 	dave := registerTestUser(t, h)
 	addMember(t, gid, dave, "member")
 
+	putAdmissionRow(t, gid, carol.userID)
 	before := map[string]map[string]types.AttributeValue{}
 	for _, u := range []registeredUser{owner, bob, dave} {
 		before[u.userID] = getRow(t, "GROUP#"+gid, "MEMBER#"+u.userID)
@@ -58,8 +59,8 @@ func TestLeaveRotatingGroupWritesOnlyTheSignedMarker(t *testing.T) {
 	if getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID) != nil {
 		t.Error("leaver still a member")
 	}
-	if getRow(t, "GROUP#"+gid, "ADMISSION#"+carol.userID) != nil {
-		t.Error("leaver's admission row survived")
+	if getRow(t, "GROUP#"+gid, "ADMISSION#"+carol.userID) == nil {
+		t.Error("the leave deleted the leaver's admission before an admin could check their key")
 	}
 
 	marker := getRow(t, "GROUP#"+gid, "ROTATION")

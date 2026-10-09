@@ -249,6 +249,8 @@ class Fake {
   // no longer listed but are still a user the server can serve.
   outsiders = new Map<string, Person>()
   takeOverError: Error | undefined
+  /** Errors the next takeover calls throw, in order, before succeeding. */
+  takeOverFailures: Error[] = []
   /** How many times the job asked the worker to mint a takeover key. */
   mints = 0
   /** Models a server that accepts a takeover but leaves the leaver's marker as it was. */
@@ -486,6 +488,8 @@ class Fake {
         const hook = this.beforeTakeOver
         this.beforeTakeOver = undefined
         hook?.()
+        const queued = this.takeOverFailures.shift()
+        if (queued) throw queued
         if (this.takeOverError) throw this.takeOverError
         if (this.ignoreTakeOver) return
         const m = this.marker
@@ -1272,9 +1276,13 @@ describe('runRotation', () => {
   describe('a rotation a member started by leaving (#178)', () => {
     // ME holds generation 1; a member who has since LEFT started the rotation
     // to 2 and signed only that they are the member removed. No key exists yet.
-    function leftBehind(f: Fake) {
+    function leftBehind(f: Fake, trust: 'admission' | 'pin' | 'none' = 'admission') {
       const leaver = person()
       f.outsiders.set(leaver.id, leaver)
+      // What makes the leaver's key worth signing a removal for: the inviter's
+      // admission (kept by the leave for exactly this), or the caller's pin.
+      if (trust === 'admission') f.admissions.set(leaver.id, admissionOf(leaver))
+      if (trust === 'pin') f.pins.set(leaver.id, pinFor(leaver))
       f.ownGeneration = 1
       f.members.get(ME)!.generation = 1
       f.marker = startMarker(2, {
@@ -1285,6 +1293,125 @@ describe('runRotation', () => {
       f.links = [removalLink(0)]
       return leaver
     }
+
+    // PR #209 round 3: the takeover is the first path where the client turns a
+    // marker into ITS OWN new signature, so a leaver's key the server merely
+    // served (first sight) is not enough.
+    describe("trusting the leaver's key before signing their removal", () => {
+      it('takes nothing over for a forged leave: an unpinned member, a key the server made up', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/pin|admi/),
+        })
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
+      it('takes nothing over for a genuine-looking leave by someone nobody admitted or pinned', async () => {
+        const f = new Fake()
+        leftBehind(f, 'none')
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
+      it('takes nothing over when the admission is for other keys than the ones served now', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        f.admissions.set(leaver.id, admissionOf(leaver)) // admits the REAL key
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it('takes over on a pin alone, with no admission to check', async () => {
+        const f = new Fake()
+        leftBehind(f, 'pin')
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+        expect(f.admissionReads).toBe(0) // the pin settled it
+      })
+
+      it('takes nothing over when the admissions or the removal history cannot be read', async () => {
+        const f = new Fake()
+        leftBehind(f, 'admission')
+        f.listAdmissionsError = new Error('boom')
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it("accepts the group creator's own key as the anchor says, and no other", async () => {
+        const ok = new Fake()
+        const { creator, creatorKey } = ok.promoted()
+        for (const f of [ok]) {
+          f.members.delete(creator.id)
+          f.pins.delete(creator.id)
+          f.outsiders.set(creator.id, creator)
+          f.marker = startMarker(2, {
+            startedBy: creator.id,
+            signer: creatorKey,
+            removed: creator.id,
+          })
+          f.links = [removalLink(0)]
+        }
+        expect((await runRotation(ok.deps(), GROUP)).status).toBe('completed')
+        expect(ok.takeOvers).toHaveLength(1)
+
+        const forged = new Fake()
+        const c2 = forged.promoted()
+        const fakeKey = generateSigningKey()
+        forged.members.delete(c2.creator.id)
+        forged.pins.delete(c2.creator.id)
+        forged.outsiders.set(c2.creator.id, { ...c2.creator, signing: fakeKey })
+        forged.marker = startMarker(2, {
+          startedBy: c2.creator.id,
+          signer: fakeKey,
+          removed: c2.creator.id,
+        })
+        forged.links = [removalLink(0)]
+        expect((await runRotation(forged.deps(), GROUP)).status).toBe('incomplete')
+        expect(forged.mints).toBe(0)
+      })
+    })
+
+    it('tries the takeover once more after a lost race that left the marker unclaimed', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.takeOverFailures = [new ApiError(409, 'busy', 'conflict_retry')]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('completed')
+      expect(f.takeOvers).toHaveLength(1)
+    })
+
+    it('says to run again, not that another admin must resume, when the retry is busy too', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.takeOverFailures = [
+        new ApiError(409, 'busy', 'conflict_retry'),
+        new ApiError(409, 'busy', 'conflict_retry'),
+      ]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'incomplete', reason: expect.stringMatching(/again/) })
+      expect(f.takeOvers).toEqual([])
+    })
 
     it('mints the key itself, naming the leaver, then re-wraps everyone and finishes', async () => {
       const f = new Fake()

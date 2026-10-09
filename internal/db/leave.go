@@ -317,9 +317,15 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 	}
 	// The leaver's admission record goes with their membership (#178). Hygiene
 	// for an honest server only: a malicious one can keep it, and the signed
-	// removal history (the rotation above) is what the verifier checks. Last,
-	// so no condition-check index above shifts.
-	items = append(items, admissionDelete(c.table, groupID, userID))
+	// removal history is what the verifier checks. A leave that starts a
+	// rotation KEEPS it: the admin who takes the marker over must be able to
+	// check that the leaver's signing key is the one their inviter admitted,
+	// because the takeover signs a removal on the strength of the leaver's
+	// start (TakeOverLeaveRotation deletes it then). Last, so no
+	// condition-check index above shifts.
+	if rot == nil {
+		items = append(items, admissionDelete(c.table, groupID, userID))
+	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case rot != nil && isConditionalCheckFailure(err, rotationIndex):

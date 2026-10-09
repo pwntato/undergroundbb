@@ -835,9 +835,21 @@ the party we trust least at the moment they hand them over. So the leave carries
 which the start signature proves) blocks every other rotation, so nobody can be wrapped to a re-listed
 leaver before the admin's link exists.
 
-**An admin takes the marker over and mints the key.** The first admin whose entry is at the leaver's
-generation to load the group (`takeOverLeave`) verifies the marker's start signature, then does what a
-remover does: mints the next key, writes the `GENKEY#n` link under their **own** signature naming the
+**An admin takes the marker over and mints the key, but only for a leaver whose key it has a reason to
+trust.** The first admin whose entry is at the leaver's generation to load the group (`takeOverLeave`)
+verifies the marker's start signature. That is not enough on its own: the leaver's key is whatever the
+server serves, and the takeover is the one path where the admin's client turns a marker into **its own
+new signature** naming that member as removed. A removal's marker is harmless on first sight (resuming
+needs an entry at the marker's generation, which the server cannot forge, and signs nothing new). Here a
+server could drop an unpinned member, serve a key it made under their id, write a marker signed with it,
+and get an admin to sign that member into the verified removal history. So before taking over the admin
+requires one of: the leaver's served keys match the admin's **pin** of them; the leaver is the group's
+**creator** and the served key is the one the verified anchor names; or the leaver has an **admission**
+that verifies against the grant chain for the keys served now (`isAdmitted`, the same check a rotation
+applies to a recipient). Otherwise it takes nothing over and says why. A server that withholds a member
+can already stall a group, so failing closed costs nothing new. This is why a leave that starts a rotation
+**keeps the leaver's `ADMISSION#` row** and the takeover deletes it in its transaction (a plain leave in
+an Open group still deletes it at once). Having decided to take over, the admin does what a remover does: mints the next key, writes the `GENKEY#n` link under their **own** signature naming the
 leaver, and moves their own entry point (`POST /rotation/takeover`, one transaction). It replaces the
 marker (conditioned on it still being an unclaimed leaver's, at the next generation) and writes the link
 (conditioned on it not existing: a generation is minted once). It then re-wraps everyone else through the

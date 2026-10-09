@@ -38,6 +38,17 @@ func setOwnKey(t *testing.T, c *Client, groupID, userID string, marker byte) mod
 	return k
 }
 
+// putTestAdmission stores a stand-in ADMISSION# row, so a test can see whether
+// a leave or a takeover takes it away.
+func putTestAdmission(t *testing.T, c *Client, groupID, userID string) {
+	t.Helper()
+	if _, err := c.ddb.PutItem(context.Background(), &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: map[string]types.AttributeValue{
+		"PK": s("GROUP#" + groupID), "SK": s("ADMISSION#" + userID), "InviteeUserID": s(userID),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func readMember(t *testing.T, c *Client, groupID, userID string) *models.Membership {
 	t.Helper()
 	m, err := c.GetMembership(context.Background(), groupID, userID)
@@ -55,6 +66,7 @@ func leftRotatingGroup(t *testing.T, c *Client) (g string, own1, own2 models.Wra
 	putTestMember(t, c, g, "a1", "admin")
 	putTestMember(t, c, g, "a2", "admin")
 	putTestMember(t, c, g, "bob", "member")
+	putTestAdmission(t, c, g, "bob")
 	own1 = setOwnKey(t, c, g, "a1", 1)
 	own2 = setOwnKey(t, c, g, "a2", 2)
 	if _, err := c.LeaveGroup(context.Background(), g, "bob", nil, testLeaveRotation(0), true); err != nil {
@@ -79,6 +91,11 @@ func TestLeaveWritesOnlyTheMarker(t *testing.T) {
 	// admin's entry is touched.
 	if itemExists(t, c, "GROUP#"+g, GenKeySortKey(0)) {
 		t.Fatal("the leave wrote a chain link; only an admin may mint one")
+	}
+	// The leaver's admission is KEPT: the admin who takes over checks the
+	// leaver's key against it before signing a removal on the leaver's say-so.
+	if !itemExists(t, c, "GROUP#"+g, "ADMISSION#bob") {
+		t.Fatal("the leave deleted the leaver's admission before an admin could check it")
 	}
 	for id, want := range map[string]models.WrappedKey{"a1": own1, "a2": own2} {
 		m := readMember(t, c, g, id)
@@ -117,6 +134,9 @@ func TestTakeOverLeaveRotationMintsTheAdminsKey(t *testing.T) {
 		!bytes.Equal(links[0].Wrapped.Ciphertext, []byte("C")) || !bytes.Equal(links[0].StartSignature, []byte("admin-start-sig")) {
 		t.Fatalf("link = %+v, %v", links, err)
 	}
+	if itemExists(t, c, "GROUP#"+g, "ADMISSION#bob") {
+		t.Fatal("the takeover left the leaver's admission behind")
+	}
 	a1 := readMember(t, c, g, "a1")
 	if a1.Generation != 1 || !bytes.Equal(a1.WrappedGroupKey.Ciphertext, []byte("NEW")) {
 		t.Fatalf("caller = gen %d key %v", a1.Generation, a1.WrappedGroupKey)
@@ -146,6 +166,9 @@ func TestTakeOverLeaveRotationRefusals(t *testing.T) {
 		rot, _ := c.GetRotation(ctx, g)
 		if rot == nil || rot.StartedBy != startedBy || readMember(t, c, g, "a1").Generation != 0 {
 			t.Fatalf("a refused takeover changed something: %+v", rot)
+		}
+		if startedBy == "bob" && !itemExists(t, c, "GROUP#"+g, "ADMISSION#bob") {
+			t.Fatal("a refused takeover deleted the leaver's admission")
 		}
 	}
 
@@ -205,6 +228,7 @@ func TestTakeOverLeaveRotationRefusals(t *testing.T) {
 		c := testClient(t)
 		g := newLeaveGroup(t, c)
 		putTestMember(t, c, g, "a1", "admin")
+		putTestAdmission(t, c, g, "bob")
 		// bob "started" it but it names carl as removed: not a leave. Only the
 		// marker's RemovedUserID condition can refuse this (bob is the leaver
 		// the caller names, and the generation matches).

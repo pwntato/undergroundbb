@@ -28,7 +28,8 @@ type TakeOverLeaveRotationInput struct {
 }
 
 // TakeOverLeaveRotation turns the marker a leaving member left (#178) into a
-// rotation an admin mints. The leaver supplies only a signed statement that
+// rotation an admin mints, and deletes the leaver's ADMISSION# row, which the
+// leave kept for the admin's check of the leaver's key. The leaver supplies only a signed statement that
 // they are the member being removed; the new key is the admin's, so a hostile
 // leaver never holds it.
 //
@@ -112,6 +113,10 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 				":wrapped": wrapped,
 			},
 		}},
+		// The leave kept the leaver's admission so this admin could check the
+		// leaver's key against it; it has served its purpose. Last, so no
+		// condition-check index above shifts.
+		admissionDelete(c.table, in.GroupID, in.LeaverUserID),
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {

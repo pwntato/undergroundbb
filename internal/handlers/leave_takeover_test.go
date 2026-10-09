@@ -27,6 +27,7 @@ func leftRotating(t *testing.T) leftFixture {
 	gid, owner, bob, carol, ownerCookie, bobCookie, carolCookie := rotatingGroupWith(t, h)
 	dave, daveCookie := loggedInUser(t, h)
 	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, carol.userID)
 	body := &leaveGroupRequest{Rotation: leaveRotation(t, carol, gid, 1)}
 	if rec := doLeaveWith(t, h, carolCookie, gid, body); rec.Code != http.StatusOK {
 		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
@@ -79,6 +80,9 @@ func TestTakeOverEndpointMintsTheAdminsRotation(t *testing.T) {
 	if getRow(t, "GROUP#"+f.gid, "GENKEY#000000") != nil {
 		t.Fatal("a refused takeover wrote a link")
 	}
+	if getRow(t, "GROUP#"+f.gid, "ADMISSION#"+f.carol.userID) == nil {
+		t.Fatal("a refused takeover deleted the leaver's admission")
+	}
 
 	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "takeover", ok); rec.Code != http.StatusNoContent {
 		t.Fatalf("takeover: %d %s", rec.Code, rec.Body.String())
@@ -90,6 +94,9 @@ func TestTakeOverEndpointMintsTheAdminsRotation(t *testing.T) {
 	link := getRow(t, "GROUP#"+f.gid, "GENKEY#000000")
 	if strAttr(link, "RemoverUserID") != f.owner.userID || strAttr(link, "RemovedUserID") != f.carol.userID {
 		t.Fatalf("link = %v", link)
+	}
+	if getRow(t, "GROUP#"+f.gid, "ADMISSION#"+f.carol.userID) != nil {
+		t.Error("the takeover left the leaver's admission behind")
 	}
 	if g := numAttr(getRow(t, "GROUP#"+f.gid, "MEMBER#"+f.owner.userID), "Generation"); g != "1" {
 		t.Fatalf("caller generation = %s, want 1", g)
