@@ -1312,6 +1312,15 @@ describe('group key rotation (#58)', () => {
         await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, other, link(started.link)),
       ).toBe('pending-unreadable')
       expect(carol.userId).toBe(CAROL_ID)
+      // A wrap that opens, but to something that is not a group key.
+      const short = await wrap(
+        admin.wrappingKey.publicKey,
+        new Uint8Array(16).fill(1),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+      )
+      expect(
+        await checkPendingGroupKey(admin, GROUP_ID, holderOwn, 0, short, link(started.link)),
+      ).toBe('pending-unreadable')
     })
 
     it("rejects a good wrap whose link seals a different key than the holder's own", async () => {
