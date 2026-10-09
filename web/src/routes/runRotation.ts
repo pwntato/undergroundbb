@@ -592,12 +592,9 @@ async function checkLeaverKey(
     pin: pins.find((p) => p.pinnedUserId === leaverId),
     served,
   })
-  const servedKeys = servedSigningKeySet(served)
-  if (verdict === 'match') {
-    return servedKeys !== null && signedBy(servedKeys)
-      ? { ok: true }
-      : refuse('the start was not signed by a pinned key')
-  }
+  // A pin covers the whole served set, and verifyRotationStart already checked
+  // the start verifies under a key in it, so a match needs nothing further.
+  if (verdict === 'match') return { ok: true }
   if (verdict !== 'first-sight') return refuse('their keys do not match your pin')
 
   const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)

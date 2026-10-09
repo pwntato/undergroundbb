@@ -1418,6 +1418,27 @@ describe('runRotation', () => {
         expect(f.mints).toBe(0)
       })
 
+      it('takes nothing over when the server fabricates the key AND an admission for it, not signed by the inviter', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        // The record names the forged key, signed by a key that is nobody's
+        // inviter: only the admission's own verification can refuse it.
+        f.admissions.set(leaver.id, admissionOf(forged, { key: generateSigningKey() }))
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/no admission signed/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
       it('takes over on a pin alone, with no admission to check', async () => {
         const f = new Fake()
         leftBehind(f, 'pin')
