@@ -249,6 +249,10 @@ class Fake {
   // no longer listed but are still a user the server can serve.
   outsiders = new Map<string, Person>()
   takeOverError: Error | undefined
+  /** How many times the job asked the worker to mint a takeover key. */
+  mints = 0
+  /** Models a server that accepts a takeover but leaves the leaver's marker as it was. */
+  ignoreTakeOver = false
   takeOvers: { request: TakeOverRotationRequest; subject: string }[] = []
   /** Runs once, before the first takeover reaches the server (a racing admin). */
   beforeTakeOver: (() => void) | undefined
@@ -463,6 +467,7 @@ class Fake {
         this.marker = undefined
       },
       takeOverCrypto: async (req) => {
+        this.mints++
         const generation = req.ownGeneration + 1
         return {
           generation,
@@ -482,6 +487,7 @@ class Fake {
         this.beforeTakeOver = undefined
         hook?.()
         if (this.takeOverError) throw this.takeOverError
+        if (this.ignoreTakeOver) return
         const m = this.marker
         // The server only takes over a leaver's unclaimed marker for the next generation.
         if (!m || m.startedBy !== m.removedUserId || m.generation !== request.generation) {
@@ -1320,6 +1326,7 @@ describe('runRotation', () => {
       })
       const out = await runRotation(f.deps(), GROUP)
       expect(out.status).toBe('incomplete')
+      expect(f.mints).toBe(0)
       expect(f.takeOvers).toEqual([])
     })
 
@@ -1330,6 +1337,7 @@ describe('runRotation', () => {
       f.marker = startMarker(2, { startedBy: ME, removed: REMOVED })
       const out = await runRotation(f.deps(), GROUP)
       expect(out.status).toBe('cannot-resume')
+      expect(f.mints).toBe(0)
       expect(f.takeOvers).toEqual([])
     })
 
@@ -1359,7 +1367,17 @@ describe('runRotation', () => {
       f.ownGeneration = 0
       f.members.get(ME)!.generation = 0
       expect((await runRotation(f.deps(), GROUP)).status).toBe('cannot-resume')
+      expect(f.mints).toBe(0)
       expect(f.takeOvers).toEqual([])
+    })
+
+    it('tries once, not forever, if the marker is still the leaver’s after a takeover', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.ignoreTakeOver = true
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.mints).toBe(1)
     })
   })
 
