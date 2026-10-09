@@ -498,7 +498,7 @@ async function takeOverLeave(
   // signature naming them as removed, so a key seen for the first time is not
   // enough: without this a server can fake a leave for any member the caller
   // has not pinned (PR #209 round 3).
-  const trusted = await checkLeaverKey(deps, own, groupId, detail.generation, started.removedUserId)
+  const trusted = await checkLeaverKey(deps, own, groupId, detail.generation, marker)
   if (!trusted.ok) return incomplete(trusted.reason)
 
   // A lost race on the transaction (`conflict_retry`) can leave the marker
@@ -534,31 +534,45 @@ async function takeOverLeave(
 }
 
 /**
- * Whether the leaver's served signing key is one the caller has a reason to
- * trust, before the caller signs a removal of them on its strength. Either:
- *   - it matches the caller's signed pin of them; or
- *   - it is the key the group's anchor names, for the creator; or
- *   - it is the invitee key on an admission that verifies against the verified
- *     grant chain (the leave keeps that record for this check; the takeover
- *     deletes it), and nothing in the removal history says they were removed
- *     since.
- * A key seen for the first time, with none of these behind it, is refused:
- * a server withholding a member can already stall a group, so failing closed
- * costs nothing new, while trusting it lets the server pick who the caller
- * signs the removal of.
+ * Whether the key that signed the leaver's start is one the caller has a reason
+ * to trust, before the caller signs a removal of them on its strength. The
+ * start's signature must verify under a key that is trusted for a reason that
+ * does not rest on what the server merely served:
+ *   - the caller's signed pin of them (which pins the whole served set); or
+ *   - for the creator, the key the verified anchor names; or
+ *   - for anyone else, the invitee key on an admission that verifies against
+ *     the verified grant chain for the keys served now (the leave keeps that
+ *     record for this check; the takeover deletes it).
+ * It is the SPECIFIC key that must verify, not "some served key": an unpinned
+ * member's served set includes superseded keys the server asserts without
+ * proof, so a fabricated one could sign the start while the member's real key
+ * keeps their admission valid. A key seen for the first time with none of the
+ * above behind it is refused: a server withholding a member can already stall
+ * a group, so failing closed costs nothing new, while trusting it lets the
+ * server pick who the caller signs the removal of (PR #209 round 3).
  */
 async function checkLeaverKey(
   deps: RotationDeps,
   own: Uint8Array,
   groupId: string,
   ownGeneration: number,
-  leaverId: string,
+  marker: NonNullable<GroupDetail['rotation']>,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
+  const leaverId = marker.removedUserId
+  const startSignature = marker.startSignature
+  if (leaverId === undefined || startSignature === undefined) {
+    return { ok: false, reason: "the rotation's signed start record is missing" }
+  }
   const refuse = (why: string) =>
     ({
       ok: false,
-      reason: `the member who left has no pin of yours and no valid admission behind the key served for them, so their leaving was not taken over (${why})`,
+      reason: `the member who left has no pin of yours and no valid admission behind the key that signed their leaving, so it was not taken over (${why})`,
     }) as const
+  const signature = base64ToBytes(startSignature)
+  const payload = rotationStartPayload(groupId, marker.startedBy, leaverId, marker.generation)
+  const signedBy = (keys: readonly Uint8Array[]): boolean =>
+    keys.some((k) => verify(k, SigningContext.RotationStart, payload, signature))
+
   let served: UserProjection | undefined
   let pins: readonly PinRecord[]
   try {
@@ -578,26 +592,32 @@ async function checkLeaverKey(
     pin: pins.find((p) => p.pinnedUserId === leaverId),
     served,
   })
-  if (verdict === 'match') return { ok: true }
+  const servedKeys = servedSigningKeySet(served)
+  if (verdict === 'match') {
+    return servedKeys !== null && signedBy(servedKeys)
+      ? { ok: true }
+      : refuse('the start was not signed by a pinned key')
+  }
   if (verdict !== 'first-sight') return refuse('their keys do not match your pin')
 
   const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)
   if (!loaded.ok) return { ok: false, reason: loaded.reason }
   const { context } = loaded
-  const servedKeys = servedSigningKeySet(served)
-  if (servedKeys === null) return refuse('their served keys are malformed')
+  if (context.removedAt.has(leaverId)) return refuse('the removal history already lists them')
   if (leaverId === context.chain.anchor.creatorUserId) {
     // The creator has no admission: the anchor (trusted at this point, as for
     // a recipient) names their key.
-    const anchorKey = base64ToBytes(context.chain.anchor.creatorSigningPublicKey)
-    const named = servedKeys.some(
-      (k) => k.length === anchorKey.length && k.every((b, i) => b === anchorKey[i]),
-    )
-    if (named && !context.removedAt.has(leaverId)) return { ok: true }
-    return refuse("the key served for them is not the one the group's anchor names")
+    return signedBy([base64ToBytes(context.chain.anchor.creatorSigningPublicKey)])
+      ? { ok: true }
+      : refuse("the start was not signed by the key the group's anchor names")
   }
-  if (isAdmitted(context, groupId, leaverId, served)) return { ok: true }
-  return refuse('no admission signed for the key served for them')
+  if (!isAdmitted(context, groupId, leaverId, served)) {
+    return refuse('no admission signed for the keys served for them')
+  }
+  const record = context.byInvitee.get(leaverId)
+  return record !== undefined && signedBy([base64ToBytes(record.inviteeEd25519PublicKey)])
+    ? { ok: true }
+    : refuse('the start was not signed by the key their admission names')
 }
 
 /** The records and the verified chain a pass checks recipients against. */

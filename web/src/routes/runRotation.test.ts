@@ -249,6 +249,8 @@ class Fake {
   // no longer listed but are still a user the server can serve.
   outsiders = new Map<string, Person>()
   takeOverError: Error | undefined
+  /** Keys the server claims a person superseded, with no proof (it just serves them). */
+  fabricatedSuperseded = new Map<string, SigningKey>()
   /** Errors the next takeover calls throw, in order, before succeeding. */
   takeOverFailures: Error[] = []
   /** How many times the job asked the worker to mint a takeover key. */
@@ -383,7 +385,26 @@ class Fake {
             const r = this.members.get(id)
             if (r) return [[id, served(r.person)] as const]
             const o = this.outsiders.get(id)
-            return o ? [[id, served(o)] as const] : []
+            if (!o) return []
+            const extra = this.fabricatedSuperseded.get(id)
+            const projection = served(o)
+            return [
+              [
+                id,
+                extra
+                  ? {
+                      ...projection,
+                      supersededSigningKeys: [
+                        {
+                          publicKey: b64(extra.publicKey),
+                          from: '2026-01-01',
+                          until: '2026-02-01',
+                        },
+                      ],
+                    }
+                  : projection,
+              ] as const,
+            ]
           }),
         )
       },
@@ -1337,6 +1358,62 @@ describe('runRotation', () => {
           signer: forged.signing,
           removed: leaver.id,
         })
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it("takes nothing over when a fabricated 'superseded' key signed it and the real key keeps the admission valid", async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission') // admits the leaver's REAL key
+        const fabricated = generateSigningKey()
+        f.fabricatedSuperseded.set(leaver.id, fabricated)
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: fabricated,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/key their admission names/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
+      it("takes nothing over when a fabricated 'superseded' key signed it for the creator", async () => {
+        const f = new Fake()
+        const { creator } = f.promoted()
+        const fabricated = generateSigningKey()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.fabricatedSuperseded.set(creator.id, fabricated)
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: fabricated,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0)]
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/anchor names/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
+      it('takes nothing over for a creator the removal history already lists as removed', async () => {
+        const f = new Fake()
+        const { creator, creatorKey } = f.promoted()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: creatorKey,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0, { removed: creator.id })] // removed earlier, at generation 1
         expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
         expect(f.mints).toBe(0)
       })
