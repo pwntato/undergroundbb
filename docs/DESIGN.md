@@ -846,7 +846,8 @@ and get an admin to sign that member into the verified removal history. So befor
 requires one of: the leaver's served keys match the admin's **pin** of them; the leaver is the group's
 **creator** and the served key is the one the verified anchor names; or the leaver has an **admission**
 that verifies against the grant chain for the keys served now (`isAdmitted`, the same check a rotation
-applies to a recipient). Otherwise it takes nothing over and says why. A server that withholds a member
+applies to a recipient, so someone removed earlier and re-invited after the removal still counts; a
+creator the removal history lists needs such an admission too). Otherwise it takes nothing over and says why. A server that withholds a member
 can already stall a group, so failing closed costs nothing new. This is why a leave that starts a rotation
 **keeps the leaver's `ADMISSION#` row** and the takeover deletes it in its transaction (a plain leave in
 an Open group still deletes it at once). Having decided to take over, the admin does what a remover does: mints the next key, writes the `GENKEY#n` link under their **own** signature naming the
