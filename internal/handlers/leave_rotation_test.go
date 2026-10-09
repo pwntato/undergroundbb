@@ -308,7 +308,16 @@ func TestLeaveRotatingGroupWithMaxHolders(t *testing.T) {
 func TestLeavePublicRotatingGroupNeedsNoRotation(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPublicGroup(t, h, owner, ownerCookie)
+	// createPublicGroup makes an Open one; a public group may be set to Rotating.
+	req := signedCreateGroupRequest(t, owner)
+	req.Visibility = "public"
+	req.NameCiphertext, req.DescriptionCiphertext = wrappedBlob{}, wrappedBlob{}
+	req.NamePlaintext, req.DescriptionPlaintext = "Book Club", "We read books"
+	req.RevocationMode = "rotating"
+	if rec := doCreateGroup(t, h, ownerCookie, req); rec.Code != http.StatusCreated {
+		t.Fatalf("create public rotating group: %d %s", rec.Code, rec.Body.String())
+	}
+	gid := req.GroupID
 	bob, bobCookie := loggedInUser(t, h)
 	carol, carolCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
