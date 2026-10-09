@@ -333,7 +333,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         }
       }
       const outcome = await runLeave(
-        { leaveGroup, signRoleGrant, userId },
+        {
+          leaveGroup,
+          signRoleGrant,
+          userId,
+          rotation: { rotationDeps: makeRotationDeps(userId), startGroupRotation },
+        },
         view,
         leavePlan(view, userId, usernames).kind,
       )

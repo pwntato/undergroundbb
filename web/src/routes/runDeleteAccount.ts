@@ -296,6 +296,11 @@ const LEAVE_REASONS: Record<
   authRequired: 'could not be left because your session expired',
   coldKeys: 'needs this browser to sign your leaving, so log in again first',
   grantMissing: "doesn't have your own role on record, so it can't be left from here",
+  rotationInProgress: 'has a key rotation still running, so wait for it to finish and try again',
+  noGroupKey: "needs this browser to hold the group's key to re-key it for your leaving",
+  noHolder:
+    "has no other admin who can take its new key (none is up to date, or their keys or invitations did not check out), so it can't be left yet",
+  cannotCheck: "couldn't be checked: its admins' keys could not be read",
   notFound: 'no longer lists you',
   ambiguous: "couldn't be confirmed",
 }

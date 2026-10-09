@@ -26,7 +26,7 @@ import {
 } from '@/lib/crypto/group'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
-import { describeRotation, runRotation, type RotationDeps } from './runRotation'
+import { describeRotation, runRotation, selectKeyHolders, type RotationDeps } from './runRotation'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const GROUP = 'g0000000-0000-4000-8000-000000000009'
@@ -454,6 +454,133 @@ class Fake {
     }
   }
 }
+
+// Who a leaver may hand the new group key to (#178): the same admission,
+// removal-history and pin checks a rotation applies, but skipping a candidate
+// that fails rather than stopping, since one holder is enough.
+describe('selectKeyHolders', () => {
+  const entry = (p: Person, generation = 1): MemberEntry => ({
+    userId: p.id,
+    role: 'admin',
+    generation,
+  })
+
+  it('returns the admins that pass, with the key that was checked, and wraps to no one itself', async () => {
+    const f = new Fake()
+    const bob = f.add(person(), 'admin', 1)
+    const eve = f.add(person(), 'admin', 1)
+
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(bob), entry(eve)])
+
+    expect(out).toEqual({
+      ok: true,
+      holders: [
+        { userId: bob.id, wrappingPublicKey: b64(bob.wrapping) },
+        { userId: eve.id, wrappingPublicKey: b64(eve.wrapping) },
+      ],
+      blocked: [],
+      unadmitted: [],
+    })
+    expect(f.cryptoRecipients).toEqual([])
+    expect(f.rewrapBatches).toEqual([])
+  })
+
+  it('leaves out an admin nobody admitted, and reports them', async () => {
+    const f = new Fake()
+    const good = f.add(person(), 'admin', 1)
+    const fake = f.add(person(), 'admin', 1, null, null) // the server made this account up
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(fake), entry(good)])
+    expect(out).toMatchObject({ ok: true, unadmitted: [fake.id] })
+    expect(out.ok && out.holders.map((h) => h.userId)).toEqual([good.id])
+    expect(f.pinned).toEqual([]) // an unadmitted account is not even pinned
+  })
+
+  it('leaves out an admin whose served key no longer matches the pin', async () => {
+    const f = new Fake()
+    const good = f.add(person(), 'admin', 1)
+    const swapped = person()
+    f.add(swapped, 'admin', 1, pinFor(swapped, new Uint8Array(32).fill(7)))
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(swapped), entry(good)])
+    expect(out).toMatchObject({ ok: true, blocked: [swapped.id] })
+    expect(out.ok && out.holders.map((h) => h.userId)).toEqual([good.id])
+  })
+
+  it('skips a deleted account and one whose keys cannot be fetched', async () => {
+    const f = new Fake()
+    const good = f.add(person(), 'admin', 1)
+    const gone = f.add(person(), 'admin', 1)
+    const missing = person() // listed by the roster, unknown to the user store
+    const deps = f.deps()
+    const getUsers = deps.getUsers
+    const out = await selectKeyHolders(
+      {
+        ...deps,
+        getUsers: async (ids, onError) => {
+          const all = new Map(await getUsers(ids, onError))
+          const g = all.get(gone.id)
+          if (g !== undefined) all.set(gone.id, { ...g, deleted: true })
+          return all
+        },
+      },
+      GROUP,
+      1,
+      [entry(gone), entry(missing), entry(good)],
+    )
+    expect(out).toEqual({
+      ok: true,
+      holders: [{ userId: good.id, wrappingPublicKey: b64(good.wrapping) }],
+      blocked: [],
+      unadmitted: [],
+    })
+  })
+
+  it('refuses an admin removed earlier who is listed again with their old admission', async () => {
+    const f = new Fake()
+    const good = f.add(person(), 'admin', 1)
+    const x = person()
+    f.add(x, 'admin', 1, 'auto', admissionOf(x, { generation: 0 }))
+    f.links = [removalLink(0, { removed: x.id })] // x was removed at generation 1
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(x), entry(good)])
+    expect(out).toMatchObject({ ok: true, unadmitted: [x.id] })
+    expect(out.ok && out.holders.map((h) => h.userId)).toEqual([good.id])
+  })
+
+  it('pins a first-sight admin as a rotation would, once they pass', async () => {
+    const f = new Fake()
+    const fresh = f.add(person(), 'admin', 1, null)
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(fresh)])
+    expect(out.ok && out.holders.map((h) => h.userId)).toEqual([fresh.id])
+    expect(f.pinned).toEqual([fresh.id])
+  })
+
+  const unreadable: [string, (f: Fake) => void, string][] = [
+    [
+      'the admissions',
+      (f) => (f.listAdmissionsError = new Error('boom')),
+      'who admitted the members',
+    ],
+    ['the removal history', (f) => (f.keychainError = new Error('boom')), 'removal history'],
+    ['the pins', (f) => (f.listPinsError = new Error('boom')), 'your pins'],
+  ]
+  for (const [what, arrange, reason] of unreadable) {
+    it(`stops, naming no holder, when ${what} cannot be read`, async () => {
+      const f = new Fake()
+      const bob = f.add(person(), 'admin', 1)
+      arrange(f)
+      const out = await selectKeyHolders(f.deps(), GROUP, 1, [entry(bob)])
+      expect(out.ok).toBe(false)
+      expect(JSON.stringify(out)).toContain(reason)
+    })
+  }
+
+  it('reads nothing for an empty candidate list', async () => {
+    const f = new Fake()
+    const out = await selectKeyHolders(f.deps(), GROUP, 1, [])
+    expect(out).toEqual({ ok: true, holders: [], blocked: [], unadmitted: [] })
+    expect(f.admissionReads).toBe(0)
+    expect(f.keychainReads).toEqual([])
+  })
+})
 
 describe('runRotation', () => {
   it('re-wraps every member who is behind, admins first, then completes', async () => {

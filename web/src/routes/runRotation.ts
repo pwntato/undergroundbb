@@ -427,6 +427,70 @@ async function runOnce(
   return { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped }
 }
 
+export type HolderSelection =
+  | {
+      readonly ok: true
+      /** Admins the new key may be wrapped to, with the key that was checked. */
+      readonly holders: readonly { readonly userId: string; readonly wrappingPublicKey: string }[]
+      /** Admins whose served keys failed the caller's pin. */
+      readonly blocked: readonly string[]
+      /** Admins no valid admission (or, once removed, no later one) backs. */
+      readonly unadmitted: readonly string[]
+    }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Which of `candidates` a leaver may hand the new group key to (#178). The same
+ * three checks a rotation applies before it wraps to anyone, in the same order:
+ * the inviter-signed admission (and the signed removal history behind it), then
+ * the caller's pins. A deleted account, one whose keys cannot be fetched, or one
+ * that fails a check is left out; a leave needs only one holder, so those are
+ * skipped rather than stopping the run. What DOES stop it is not being able to
+ * read the chain, the removal history or the pins at all, because then nothing
+ * could be checked. A first-sight key is pinned, as a rotation would.
+ */
+export async function selectKeyHolders(
+  deps: RotationDeps,
+  groupId: string,
+  ownGeneration: number,
+  candidates: readonly MemberEntry[],
+): Promise<HolderSelection> {
+  let own: Uint8Array
+  let pins: Map<string, PinRecord>
+  try {
+    own = base64ToBytes(await deps.ownSigningKey())
+    pins = new Map((await deps.listPins()).map((p) => [p.pinnedUserId, p]))
+  } catch (err) {
+    return { ok: false, reason: `could not read your pins: ${describe(err)}` }
+  }
+  if (candidates.length === 0) return { ok: true, holders: [], blocked: [], unadmitted: [] }
+
+  const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)
+  if (!loaded.ok) return { ok: false, reason: loaded.reason }
+
+  const served = await deps.getUsers(candidates.map((m) => m.userId))
+  const holders: { userId: string; wrappingPublicKey: string }[] = []
+  const blocked: string[] = []
+  const unadmitted: string[] = []
+  for (const m of candidates) {
+    const projection = served.get(m.userId)
+    if (projection === undefined || projection.deleted === true) continue
+    if (!isAdmitted(loaded.context, groupId, m.userId, projection)) {
+      unadmitted.push(m.userId)
+      continue
+    }
+    const verdict = await checkRecipient(deps, own, pins, m.userId, projection)
+    if (verdict.ok) {
+      holders.push({ userId: m.userId, wrappingPublicKey: verdict.wrappingPublicKey })
+    } else if (verdict.reason === 'blocked') {
+      blocked.push(m.userId)
+    }
+    // 'unavailable' (a first-sight pin that could not be stored): skip, as an
+    // unreachable account is; another holder will do.
+  }
+  return { ok: true, holders, blocked, unadmitted }
+}
+
 /** The records and the verified chain a pass checks recipients against. */
 interface AdmissionContext {
   readonly chain: VerifiedChain

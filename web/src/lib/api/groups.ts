@@ -453,9 +453,31 @@ export async function changeMemberRole(
  * subject. A plain member sends none.
  */
 export interface LeaveGroupRequest {
-  readonly grantSortKey: string
-  readonly grantorGrantRef: string
-  readonly signature: string
+  readonly grantSortKey?: string
+  readonly grantorGrantRef?: string
+  readonly signature?: string
+  /** Required when leaving a private Rotating group that has other members (#178). */
+  readonly rotation?: LeaveRotationRequest
+}
+
+/**
+ * The key rotation a leave starts (#178). The leaver mints the next generation
+ * but is departing, so the new key goes to `holders`, other admins, in the same
+ * transaction; any of them can then finish the re-wrap. `startSignature` names
+ * the leaver as the removed member.
+ */
+export interface LeaveRotationRequest {
+  readonly generation: number
+  readonly link: { readonly nonce: string; readonly ciphertext: string }
+  readonly startSignature: string
+  readonly holders: readonly {
+    readonly userId: string
+    readonly wrappedKey: {
+      readonly ephemeralPub: string
+      readonly nonce: string
+      readonly ciphertext: string
+    }
+  }[]
 }
 
 /**
@@ -465,14 +487,16 @@ export interface LeaveGroupRequest {
  * the roster or the caller's own grant moved, reload and try again; 409
  * `grant_key_taken` means sign again with a fresh grantSortKey; 400
  * `demotion_required` means an admin or ambassador sent no demotion (their
- * role changed since the roster loaded). `groupDeleted` is true when the
+ * role changed since the roster loaded); 400 `rotation_required` means a
+ * private Rotating group needs the rotation, and 409 `rotation_in_progress`
+ * means one is already running (#178). `groupDeleted` is true when the
  * caller was the only member, so leaving deleted the group.
  */
 export async function leaveGroup(
   groupId: string,
-  demotion?: LeaveGroupRequest,
+  body?: LeaveGroupRequest,
 ): Promise<{ groupDeleted: boolean }> {
-  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, demotion ?? {})
+  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, body ?? {})
 }
 
 /** Like putOrPostJSON for endpoints that answer 204; throws ApiError (with the server's `code`) otherwise. */

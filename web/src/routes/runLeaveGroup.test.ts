@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type { MemberEntry } from '@/lib/api/groups'
 import { leaveFailureMessage, leavePlan, runLeave, type LeaveDeps } from './runLeaveGroup'
+import { selectKeyHolders, type HolderSelection } from './runRotation'
 import type { MembersView } from './runGroupMembers'
+
+vi.mock('./runRotation', () => ({ selectKeyHolders: vi.fn() }))
 
 const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
 const BOB = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -21,6 +24,16 @@ const view = (myRole: MembersView['myRole'], members: MemberEntry[]): MembersVie
   revocationMode: 'open',
   myGeneration: 0,
 })
+
+/** These tests use Open groups, which never rotate: any use of the rotation deps is a bug. */
+const noRotation: LeaveDeps['rotation'] = {
+  rotationDeps: new Proxy({} as never, {
+    get: (_t, name) => {
+      throw new Error(`an Open group must not touch rotation deps (${String(name)})`)
+    },
+  }),
+  startGroupRotation: () => Promise.reject(new Error('an Open group must not start a rotation')),
+}
 
 describe('leavePlan', () => {
   it('deletes the group when the caller is the only member', () => {
@@ -69,7 +82,7 @@ describe('runLeave', () => {
     v: MembersView = memberView,
     plan: 'plain' | 'deletesGroup' | 'needsSuccessor' = 'plain',
     signRoleGrant: LeaveDeps['signRoleGrant'] = neverSign,
-  ) => runLeave({ leaveGroup: leave, signRoleGrant, userId: ME }, v, plan)
+  ) => runLeave({ leaveGroup: leave, signRoleGrant, userId: ME, rotation: noRotation }, v, plan)
 
   it('reports success and whether the group was deleted', async () => {
     expect(await run(() => Promise.resolve({ groupDeleted: true }))).toEqual({
@@ -234,5 +247,241 @@ describe('leaveFailureMessage', () => {
   it('keeps the plain messages when no promotion happened, and for session errors', () => {
     expect(leaveFailureMessage('stale')).toContain('nothing was saved')
     expect(leaveFailureMessage('authRequired', 'bob')).toContain('session has expired')
+  })
+})
+
+// Leaving a private Rotating group re-keys it, handing the new key to other
+// admins (#178). The holder CHECKS live in runRotation.test.ts (selectKeyHolders);
+// this is what runLeave builds from their answer.
+describe('runLeave in a Rotating group (#178)', () => {
+  const holderOf = (userId: string) => ({ userId, wrappingPublicKey: `wk-${userId}` })
+  const wrapped = { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' }
+  const rotatingView = (myRole: MembersView['myRole'], members: MemberEntry[]): MembersView => ({
+    ...view(myRole, members),
+    revocationMode: 'rotating',
+    myGeneration: 2,
+  })
+  const at2 = (userId: string, role: MemberEntry['role'], generation = 2): MemberEntry => ({
+    userId,
+    role,
+    generation,
+  })
+
+  interface Harness {
+    sent: unknown[]
+    minted: unknown[]
+    deps: LeaveDeps
+    selected: ReturnType<typeof vi.fn>
+  }
+  function harness(
+    o: {
+      detail?: Record<string, unknown>
+      members?: MemberEntry[]
+      selection?: HolderSelection
+      leave?: LeaveDeps['leaveGroup']
+      mintError?: Error
+      getGroupError?: Error
+    } = {},
+  ): Harness {
+    const sent: unknown[] = []
+    const minted: unknown[] = []
+    const selected = vi.mocked(selectKeyHolders)
+    selected.mockReset()
+    selected.mockResolvedValue(
+      o.selection ?? { ok: true, holders: [holderOf(BOB)], blocked: [], unadmitted: [] },
+    )
+    const detail = {
+      role: 'member',
+      visibility: 'private',
+      revocationMode: 'rotating',
+      generation: 2,
+      wrappedGroupKey: wrapped,
+      ...o.detail,
+    }
+    const deps: LeaveDeps = {
+      userId: ME,
+      leaveGroup:
+        o.leave ??
+        ((_g, body) => {
+          sent.push(body)
+          return Promise.resolve({ groupDeleted: false })
+        }),
+      signRoleGrant: () => Promise.resolve({ grantSortKey: `GRANT#${ME}#d#1`, signature: 'sig' }),
+      rotation: {
+        rotationDeps: {
+          getGroup: () =>
+            o.getGroupError ? Promise.reject(o.getGroupError) : Promise.resolve(detail),
+          listAllMembers: () =>
+            Promise.resolve(o.members ?? [at2(ME, 'member'), at2(BOB, 'admin'), at2(CAT, 'admin')]),
+        } as never,
+        startGroupRotation: (req) => {
+          minted.push(req)
+          if (o.mintError) return Promise.reject(o.mintError)
+          return Promise.resolve({
+            generation: 3,
+            link: { nonce: 'ln', ciphertext: 'lc' },
+            removerWrappedKey: wrapped,
+            startSignature: 'start-sig',
+            holderWraps: (req.holders ?? []).map((h) => ({
+              userId: h.userId,
+              wrappedKey: wrapped,
+            })),
+          })
+        },
+      },
+    }
+    return { sent, minted, deps, selected }
+  }
+  const plain = rotatingView('member', [at2(ME, 'member'), at2(BOB, 'admin'), at2(CAT, 'admin')])
+
+  it('mints the next key for the holders and sends the rotation with the leave', async () => {
+    const h = harness({
+      selection: { ok: true, holders: [holderOf(BOB), holderOf(CAT)], blocked: [], unadmitted: [] },
+    })
+    expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: true, groupDeleted: false })
+
+    // The new key is minted from our own entry, naming ourselves as the removed member.
+    expect(h.minted).toEqual([
+      {
+        userId: ME,
+        groupId: 'g1',
+        ownWrappedGroupKey: wrapped,
+        ownGeneration: 2,
+        subjectUserId: ME,
+        holders: [
+          { userId: BOB, x25519PublicKey: `wk-${BOB}` },
+          { userId: CAT, x25519PublicKey: `wk-${CAT}` },
+        ],
+      },
+    ])
+    expect(h.sent).toEqual([
+      {
+        rotation: {
+          generation: 3,
+          link: { nonce: 'ln', ciphertext: 'lc' },
+          startSignature: 'start-sig',
+          holders: [
+            { userId: BOB, wrappedKey: wrapped },
+            { userId: CAT, wrappedKey: wrapped },
+          ],
+        },
+      },
+    ])
+  })
+
+  it("offers only other admins at the caller's generation as holders", async () => {
+    const dan = 'dddddddd-4444-4444-8444-444444444444'
+    const eve = 'eeeeeeee-5555-4555-8555-555555555555'
+    const h = harness({
+      members: [
+        at2(ME, 'admin'),
+        at2(BOB, 'admin'),
+        at2(CAT, 'admin', 1), // behind: cannot take the new key forward
+        at2(dan, 'member'),
+        at2(eve, 'ambassador'),
+      ],
+    })
+    await runLeave(h.deps, rotatingView('admin', []), 'plain')
+    const candidates = h.selected.mock.calls[0]?.[3] as MemberEntry[]
+    expect(candidates.map((c) => c.userId)).toEqual([BOB])
+    expect(h.selected.mock.calls[0]?.[2]).toBe(2)
+  })
+
+  it('sends at most 50 holders', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => holderOf(`holder-${String(i)}`))
+    const h = harness({ selection: { ok: true, holders: many, blocked: [], unadmitted: [] } })
+    await runLeave(h.deps, plain, 'plain')
+    const body = h.sent[0] as { rotation: { holders: unknown[] } }
+    expect(body.rotation.holders).toHaveLength(50)
+  })
+
+  it('carries the demotion and the rotation together, minting the key only once across a re-sign', async () => {
+    let calls = 0
+    const bodies: unknown[] = []
+    const h = harness({
+      leave: (_g, body) => {
+        bodies.push(body)
+        calls++
+        return calls === 1
+          ? Promise.reject(new ApiError(409, 'x', 'grant_key_taken'))
+          : Promise.resolve({ groupDeleted: false })
+      },
+    })
+    const adminView = rotatingView('admin', [at2(ME, 'admin'), at2(BOB, 'admin')])
+    expect(await runLeave(h.deps, adminView, 'plain')).toEqual({ ok: true, groupDeleted: false })
+    expect(h.minted).toHaveLength(1)
+    expect(bodies).toHaveLength(2)
+    for (const b of bodies as { grantSortKey?: string; rotation?: { generation: number } }[]) {
+      expect(b.grantSortKey).toBeDefined()
+      expect(b.rotation?.generation).toBe(3)
+    }
+  })
+
+  it('touches nothing when the only member leaves, or the group is not private', async () => {
+    const solo = harness()
+    expect(
+      await runLeave(solo.deps, rotatingView('admin', [at2(ME, 'admin')]), 'deletesGroup'),
+    ).toEqual({
+      ok: true,
+      groupDeleted: false,
+    })
+    expect(solo.minted).toEqual([])
+    expect(solo.selected).not.toHaveBeenCalled()
+
+    const pub = harness({ detail: { visibility: 'public' } })
+    await runLeave(pub.deps, plain, 'plain')
+    expect(pub.minted).toEqual([])
+    expect(pub.sent).toEqual([undefined])
+  })
+
+  const stops: [string, Parameters<typeof harness>[0], string][] = [
+    [
+      'a rotation is already running',
+      { detail: { rotation: { generation: 3 } } },
+      'rotationInProgress',
+    ],
+    ['this browser holds no group key', { detail: { wrappedGroupKey: undefined } }, 'noGroupKey'],
+    [
+      'no admin passes the checks',
+      { selection: { ok: true, holders: [], blocked: [BOB], unadmitted: [CAT] } },
+      'noHolder',
+    ],
+    ['the checks cannot be run', { selection: { ok: false, reason: 'no chain' } }, 'cannotCheck'],
+    ['the group cannot be read', { getGroupError: new Error('network') }, 'cannotCheck'],
+    [
+      'the worker has no live keys',
+      { mintError: Object.assign(new Error('x'), { name: 'LiveKeysError' }) },
+      'ambiguous',
+    ],
+  ]
+  for (const [name, opts, kind] of stops) {
+    it(`sends nothing when ${name}`, async () => {
+      const h = harness(opts)
+      const out = await runLeave(h.deps, plain, 'plain')
+      expect(out).toMatchObject({ ok: false })
+      if (!out.ok && kind !== 'ambiguous') expect(out.kind).toBe(kind)
+      expect(h.sent).toEqual([])
+    })
+  }
+
+  it("maps the server's rotation refusals", async () => {
+    const refuse = (status: number, code: string) =>
+      harness({ leave: () => Promise.reject(new ApiError(status, 'x', code)) })
+    for (const [status, code, kind] of [
+      [409, 'rotation_in_progress', 'rotationInProgress'],
+      [409, 'holder_changed', 'stale'],
+      [409, 'rotation_stale_generation', 'stale'],
+      [400, 'rotation_required', 'stale'],
+      [400, 'bad_holders', 'stale'],
+    ] as const) {
+      const h = refuse(status, code)
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind })
+    }
+  })
+
+  it('has a message for every new failure', () => {
+    for (const kind of ['rotationInProgress', 'noGroupKey', 'noHolder', 'cannotCheck'] as const) {
+      expect(leaveFailureMessage(kind)).toMatch(/Nothing was changed|nothing was changed/)
+    }
   })
 })

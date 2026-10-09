@@ -3,10 +3,18 @@
 // unit-testable under vitest's node environment.
 
 import { ApiError } from '@/lib/api/auth'
-import type { LeaveGroupRequest } from '@/lib/api/groups'
+import type { LeaveGroupRequest, LeaveRotationRequest } from '@/lib/api/groups'
+import type {
+  StartGroupRotationRequest,
+  StartGroupRotationResult,
+} from '@/lib/crypto/worker-protocol'
 import type { MembersView } from './runGroupMembers'
 import { isDeletedUser } from './memberLabel'
 import { isLiveKeysError } from './runListGroups'
+import { selectKeyHolders, type RotationDeps } from './runRotation'
+
+/** The most admins one leave hands the new key to; the server caps it the same (db.MaxLeaveHolders). */
+const MAX_HOLDERS = 50
 
 /** What leaving means for this caller, from the roster they are looking at. */
 export type LeavePlan =
@@ -54,6 +62,15 @@ export type LeaveResult =
   | { readonly ok: false; readonly kind: 'grantMissing' }
   // Not a member any more (already left, or removed): nothing to leave.
   | { readonly ok: false; readonly kind: 'notFound' }
+  // A key rotation is already running; the server refuses a second one. Nothing changed.
+  | { readonly ok: false; readonly kind: 'rotationInProgress' }
+  // This browser has no copy of the group key to mint the next one from. Nothing changed.
+  | { readonly ok: false; readonly kind: 'noGroupKey' }
+  // No other admin could be trusted with the new key (none up to date, or their
+  // keys or invitations did not check out). Nothing changed.
+  | { readonly ok: false; readonly kind: 'noHolder' }
+  // The group or its admins' keys could not be read to check them. Nothing changed.
+  | { readonly ok: false; readonly kind: 'cannotCheck' }
   // Network failure or 5xx: the leave may or may not have committed.
   | { readonly ok: false; readonly kind: 'ambiguous' }
 
@@ -72,6 +89,17 @@ export interface LeaveDeps {
   }) => Promise<{ grantSortKey: string; signature: string }>
   /** The signed-in user's own id. */
   readonly userId: string
+  /** Leaving a private Rotating group re-keys it (#178); what that needs. */
+  readonly rotation: LeaveRotationDeps
+}
+
+export interface LeaveRotationDeps {
+  /** The rotation job's own deps: the same reads and checks pick who gets the new key. */
+  readonly rotationDeps: RotationDeps
+  /** Mints the next key and wraps it to the holders (credential-material.ts's startGroupRotation). */
+  readonly startGroupRotation: (
+    req: Omit<StartGroupRotationRequest, 'kind' | 'id'>,
+  ) => Promise<StartGroupRotationResult>
 }
 
 // Same reasoning as runGroupMembers: a collision on a fresh random address is
@@ -93,6 +121,14 @@ export async function runLeave(
   const ref = view.myGrantSortKey ?? ''
   if (needsDemotion && ref === '') {
     return { ok: false, kind: 'grantMissing' }
+  }
+
+  // Minted once: a re-sign after grant_key_taken resends the same material.
+  let rotation: LeaveRotationRequest | undefined
+  if (plan !== 'deletesGroup' && view.revocationMode === 'rotating') {
+    const prepared = await prepareLeaveRotation(deps, view.groupId)
+    if (!prepared.ok) return prepared
+    rotation = prepared.rotation
   }
 
   for (let attempt = 1; attempt <= MAX_SIGN_ATTEMPTS; attempt++) {
@@ -120,17 +156,27 @@ export async function runLeave(
     }
 
     try {
-      const res = await deps.leaveGroup(view.groupId, demotion)
+      const body: LeaveGroupRequest | undefined =
+        rotation === undefined ? demotion : { ...demotion, rotation }
+      const res = await deps.leaveGroup(view.groupId, body)
       return { ok: true, groupDeleted: res.groupDeleted }
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 409 && err.code === 'grant_key_taken' && attempt < MAX_SIGN_ATTEMPTS) {
           continue
         }
+        if (err.status === 409 && err.code === 'rotation_in_progress') {
+          return { ok: false, kind: 'rotationInProgress' }
+        }
         if (err.status === 409) {
           return { ok: false, kind: err.code === 'last_admin' ? 'lastAdmin' : 'stale' }
         }
-        if (err.status === 400 && err.code === 'demotion_required') {
+        if (
+          err.status === 400 &&
+          (err.code === 'demotion_required' ||
+            err.code === 'rotation_required' ||
+            err.code === 'bad_holders')
+        ) {
           // Promoted since the roster loaded; reload and sign next time.
           return { ok: false, kind: 'stale' }
         }
@@ -147,6 +193,71 @@ export async function runLeave(
   return { ok: false, kind: 'ambiguous' }
 }
 
+type PreparedRotation =
+  | { readonly ok: true; readonly rotation: LeaveRotationRequest | undefined }
+  | Exclude<LeaveResult, { ok: true }>
+
+/**
+ * Mints the next group key for a leave in a private Rotating group and wraps it
+ * to other admins (#178). Re-reads the group first, because the roster the
+ * caller is looking at can be stale and the generation, the running rotation
+ * and the key all decide what can be built. Anything that stops it changes
+ * nothing: the key is minted inside the worker and only sent with the leave.
+ */
+async function prepareLeaveRotation(deps: LeaveDeps, groupId: string): Promise<PreparedRotation> {
+  const rd = deps.rotation.rotationDeps
+  let detail
+  let members
+  try {
+    detail = await rd.getGroup(groupId)
+    if (detail.visibility !== 'private' || detail.revocationMode !== 'rotating') {
+      return { ok: true, rotation: undefined }
+    }
+    members = await rd.listAllMembers(groupId)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return { ok: false, kind: 'authRequired' }
+    if (err instanceof ApiError && err.status === 404) return { ok: false, kind: 'notFound' }
+    return { ok: false, kind: 'cannotCheck' }
+  }
+  if (members.every((m) => m.userId === deps.userId)) {
+    return { ok: true, rotation: undefined } // the only member: leaving deletes the group
+  }
+  if (detail.rotation !== undefined) return { ok: false, kind: 'rotationInProgress' }
+  if (!detail.wrappedGroupKey) return { ok: false, kind: 'noGroupKey' }
+
+  // Only an admin at OUR generation can take the new key forward and finish it.
+  const candidates = members.filter(
+    (m) => m.role === 'admin' && m.userId !== deps.userId && m.generation === detail.generation,
+  )
+  const selection = await selectKeyHolders(rd, groupId, detail.generation, candidates)
+  if (!selection.ok) return { ok: false, kind: 'cannotCheck' }
+  const holders = selection.holders.slice(0, MAX_HOLDERS)
+  if (holders.length === 0) return { ok: false, kind: 'noHolder' }
+
+  try {
+    const minted = await deps.rotation.startGroupRotation({
+      userId: deps.userId,
+      groupId,
+      ownWrappedGroupKey: detail.wrappedGroupKey,
+      ownGeneration: detail.generation,
+      subjectUserId: deps.userId,
+      holders: holders.map((h) => ({ userId: h.userId, x25519PublicKey: h.wrappingPublicKey })),
+    })
+    return {
+      ok: true,
+      rotation: {
+        generation: minted.generation,
+        link: minted.link,
+        startSignature: minted.startSignature,
+        holders: minted.holderWraps.map((w) => ({ userId: w.userId, wrappedKey: w.wrappedKey })),
+      },
+    }
+  } catch (err) {
+    // A worker call, not a request: nothing was sent.
+    return isLiveKeysError(err) ? { ok: false, kind: 'coldKeys' } : { ok: false, kind: 'ambiguous' }
+  }
+}
+
 const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> = {
   lastAdmin:
     'You are the last admin, so you cannot leave yet. The latest roster is shown; choose a successor.',
@@ -155,6 +266,14 @@ const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> =
   coldKeys: 'Log in again so this browser can sign your leaving, then retry. Nothing was changed.',
   grantMissing:
     "Your own role isn't on record for this group, so you can't leave from here yet. Nothing was changed.",
+  rotationInProgress:
+    'A key rotation is still running, so you cannot leave yet. Nothing was changed. Try again once it has finished.',
+  noGroupKey:
+    "This browser doesn't hold the group's key, so it can't re-key the group for you to leave. Nothing was changed.",
+  noHolder:
+    "No other admin could be trusted with the group's new key (none is up to date, or their keys or invitations did not check out), so you cannot leave yet. Nothing was changed.",
+  cannotCheck:
+    "We couldn't read the group or its admins' keys to check them, so nothing was changed. Try again.",
   notFound: 'You are no longer a member of this group.',
   ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
 }
