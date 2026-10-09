@@ -709,6 +709,13 @@ async function unwrapOwnGroupKey(
  * tab) re-derives it from the caller's own MEMBER# entry rather than keeping it
  * in memory. The new key never leaves this module in the clear. Also signs
  * the rotation start naming `subjectUserId`, the member being removed.
+ *
+ * `holders` is for a LEAVE (#178): the caller departs in the same transaction,
+ * so their own copy would vanish with them. The new key is also wrapped to each
+ * holder (memberWrapAAD for that holder at the new generation, the same wrap a
+ * re-wrap would write), and the server moves their entry point in the leave
+ * transaction. Their public keys arrive from the caller, which has ALREADY
+ * checked each against its signed pins and admissions; this cannot.
  */
 export async function startGroupRotation(
   keys: LiveKeys,
@@ -716,11 +723,13 @@ export async function startGroupRotation(
   ownWrappedGroupKey: Wrapped,
   ownGeneration: number,
   subjectUserId: string,
+  holders: readonly { userId: string; x25519PublicKey: Uint8Array }[] = [],
 ): Promise<{
   generation: number
   link: { nonce: string; ciphertext: string }
   removerWrappedKey: WireWrapped
   startSignature: string
+  holderWraps: { userId: string; wrappedKey: WireWrapped }[]
 }> {
   const oldKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
   const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
@@ -739,11 +748,27 @@ export async function startGroupRotation(
     ed25519.SigningContext.RotationStart,
     rotationStartPayload(groupId, keys.userId, subjectUserId, generation),
   )
+  const holderWraps: { userId: string; wrappedKey: WireWrapped }[] = []
+  for (const h of holders) {
+    if (h.userId === keys.userId) {
+      throw new Error('crypto: a leaver cannot be their own key holder')
+    }
+    if (h.x25519PublicKey.length !== X25519_KEY_LEN) {
+      throw new Error('crypto: holder X25519 public key must be 32 bytes')
+    }
+    const wrapped = await wrap(
+      h.x25519PublicKey,
+      newKey,
+      memberWrapAAD(groupId, h.userId, generation),
+    )
+    holderWraps.push({ userId: h.userId, wrappedKey: toWireWrapped(wrapped) })
+  }
   return {
     generation,
     link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
     removerWrappedKey: toWireWrapped(removerWrapped),
     startSignature: bytesToBase64(startSignature),
+    holderWraps,
   }
 }
 

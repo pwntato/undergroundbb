@@ -469,6 +469,11 @@ export interface StartGroupRotationRequest {
   readonly ownGeneration: number
   /** The member whose removal starts the rotation; named in the signed start (#178). */
   readonly subjectUserId: string
+  /**
+   * A leave (#178): the new key is also wrapped to each of these admins, whose
+   * keys the caller has already checked. Absent for a removal.
+   */
+  readonly holders?: readonly { userId: string; x25519PublicKey: string }[]
 }
 
 export interface StartGroupRotationResult {
@@ -477,6 +482,11 @@ export interface StartGroupRotationResult {
   readonly removerWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   /** Base64 signature over rotationStartPayload (#178). */
   readonly startSignature: string
+  /** The new key wrapped to each requested holder; empty for a removal. */
+  readonly holderWraps: readonly {
+    userId: string
+    wrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  }[]
 }
 
 export interface StartGroupRotationResponse {

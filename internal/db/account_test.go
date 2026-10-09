@@ -120,7 +120,7 @@ func TestDeleteAccountRefusesWhileMember(t *testing.T) {
 		t.Error("a refused deletion removed login rows")
 	}
 
-	if _, err := c.LeaveGroup(ctx, gid, in.UserID, nil); err != nil {
+	if _, err := c.LeaveGroup(ctx, gid, in.UserID, nil, nil, false); err != nil {
 		t.Fatalf("LeaveGroup: %v", err)
 	}
 	// Only member, so the group was deleted; now deletion succeeds.

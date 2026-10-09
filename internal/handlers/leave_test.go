@@ -66,7 +66,7 @@ func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 func TestLeaveGroupMemberLeaves(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	bob, bobCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
 	carol, _ := loggedInUser(t, h)
@@ -103,7 +103,7 @@ func TestLeaveGroupMemberLeaves(t *testing.T) {
 func TestLeaveGroupLastAdminGets409ThenSucceedsAfterPromotion(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	bob := registerTestUser(t, h)
 	addMember(t, gid, bob, "member")
 
@@ -129,7 +129,7 @@ func TestLeaveGroupLastAdminGets409ThenSucceedsAfterPromotion(t *testing.T) {
 func TestLeaveGroupOnlyMemberDeletesGroup(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	root := backdatedRef(t, gid, owner)
 
 	rec := doLeave(t, h, ownerCookie, gid)
@@ -147,7 +147,7 @@ func TestLeaveGroupOnlyMemberDeletesGroup(t *testing.T) {
 func TestLeaveGroupAuthAndNotFound(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	_, strangerCookie := loggedInUser(t, h)
 
 	if rec := doLeave(t, h, nil, gid); rec.Code != http.StatusUnauthorized {
@@ -191,7 +191,7 @@ func acceptInvite(t *testing.T, h *Handler, inviteID string) *httptest.ResponseR
 func TestLeaveGroupOnlyMemberClearsTheirInvites(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	accepted := createTestInvite(t, h, owner, ownerCookie, gid, time.Now().Add(24*time.Hour))
 	if rec := acceptInvite(t, h, accepted); rec.Code != http.StatusOK {
 		t.Fatalf("accept: %d %s", rec.Code, rec.Body.String())
@@ -223,8 +223,8 @@ func TestLeaveGroupOnlyMemberClearsTheirInvites(t *testing.T) {
 func TestLeaveGroupOnlyClearsTheLeaversInvitesToThatGroup(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
-	otherGid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
+	otherGid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	amb, ambCookie := loggedInUser(t, h)
 	addMember(t, gid, amb, "member")
 	addMember(t, otherGid, amb, "member")
@@ -265,7 +265,7 @@ func setupTwoAdmins(t *testing.T) (h *Handler, gid string, owner, bob registered
 	t.Helper()
 	h = New(config.FromEnv(), testDB(t))
 	owner, ownerCookie = loggedInUser(t, h)
-	gid = createPrivateGroup(t, h, owner, ownerCookie)
+	gid = createOpenPrivateGroup(t, h, owner, ownerCookie)
 	bob, bobCookie = loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
 	req := signedRoleRequest(t, owner, gid, bob.userID, "admin", backdatedRef(t, gid, owner))

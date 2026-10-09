@@ -414,6 +414,10 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     wrappedFromWire(req.ownWrappedGroupKey),
     req.ownGeneration,
     req.subjectUserId,
+    (req.holders ?? []).map((h) => ({
+      userId: h.userId,
+      x25519PublicKey: base64ToBytes(h.x25519PublicKey),
+    })),
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
 }
