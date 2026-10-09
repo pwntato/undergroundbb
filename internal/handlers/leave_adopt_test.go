@@ -124,15 +124,20 @@ func TestRestartEndpointReplacesTheLeaversRotation(t *testing.T) {
 		cookie *http.Cookie
 		body   restartRotationRequest
 		status int
-		code   string
+		code   string // "-" means the response carries no code
 	}{
 		"unauthenticated": {nil, ok, http.StatusUnauthorized, ""},
 		"member":          {f.daveCookie, ok, http.StatusForbidden, ""},
 		"bad signature":   {f.ownerCookie, bad, http.StatusBadRequest, "bad_signature"},
-		"wrong gen":       {f.ownerCookie, wrongGen, http.StatusBadRequest, ""},
+		// Signed correctly FOR generation 2, so only the generation check can refuse it.
+		"wrong gen": {f.ownerCookie, wrongGen, http.StatusBadRequest, "-"},
 	} {
 		rec := doRotationCall(t, f.h, tc.cookie, http.MethodPost, f.gid, "restart", tc.body)
-		if rec.Code != tc.status || (tc.code != "" && errCode(t, rec) != tc.code) {
+		want := tc.code
+		if want == "-" {
+			want = ""
+		}
+		if rec.Code != tc.status || (tc.code != "" && errCode(t, rec) != want) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
 		}
 	}

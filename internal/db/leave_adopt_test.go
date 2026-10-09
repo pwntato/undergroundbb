@@ -282,6 +282,13 @@ func TestRestartLeaveRotationRefusals(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
+		// A link that looks like the leaver's, so only the MARKER's own condition
+		// (an admin started it) can refuse; the link's would let it through.
+		if _, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: map[string]types.AttributeValue{
+			"PK": s("GROUP#" + g), "SK": s(GenKeySortKey(0)), "RemoverUserID": s("bob"), "RemovedUserID": s("bob"),
+		}}); err != nil {
+			t.Fatal(err)
+		}
 		if err := c.RestartLeaveRotation(ctx, restartInput(g, "a1")); !errors.Is(err, ErrRotationNotActive) {
 			t.Fatalf("%v", err)
 		}
