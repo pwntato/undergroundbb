@@ -301,3 +301,27 @@ func TestLeaveRotatingGroupWithMaxHolders(t *testing.T) {
 		}
 	}
 }
+
+// A public group holds no group key (its text is plaintext), so there is
+// nothing to re-key even when its revocation mode says Rotating: leaving must
+// not demand a rotation nobody could build, and must not accept one.
+func TestLeavePublicRotatingGroupNeedsNoRotation(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPublicGroup(t, h, owner, ownerCookie)
+	bob, bobCookie := loggedInUser(t, h)
+	carol, carolCookie := loggedInUser(t, h)
+	addMember(t, gid, bob, "member")
+	addMember(t, gid, carol, "member")
+
+	rec := doLeaveWith(t, h, bobCookie, gid, &leaveGroupRequest{Rotation: leaveRotation(t, bob, gid, 1, owner)})
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "rotation_not_applicable" {
+		t.Fatalf("with a rotation: %d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+	}
+	if rec := doLeave(t, h, carolCookie, gid); rec.Code != http.StatusOK {
+		t.Fatalf("without one: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "ROTATION") != nil {
+		t.Error("a public group's leave started a rotation")
+	}
+}

@@ -819,6 +819,27 @@ left before this shipped has no demotion, and an admin promoted and leaving on t
 unverifiable one (the order within a day is unknowable), so both show as unverified on rejoin. Both
 fail safe: a flag, never a false "verified". Involuntary departure needs someone else's signature.
 
+**Leaving a private Rotating group re-keys it (#178).** A leaver who kept the current key would go on
+reading everything posted until the next removal, and a server colluding with them could re-list them so
+that a later rotation wraps to them. So a leave in such a group (other members remaining; the only
+member's leave deletes the group) also starts a rotation, in the same transaction as the delete and the
+demotion: the `ROTATION` marker, the `GENKEY#` link for the old generation, and the new key handed to
+other admins. The leaver cannot keep it, because they are departing and the only copy of a freshly minted
+key would go with them. So the leaver's browser wraps it to **every admin at the current generation who
+passes the checks a rotation applies** (the inviter-signed admission with the removal history behind it,
+then the caller's pin; `selectKeyHolders`), capped at 50 because a transaction holds at most 100 items,
+and each such admin's entry point moves to the new generation in the same commit. That is exactly the
+"re-wrap the admins first" step a rotation does anyway, so there is nothing to clean up afterwards, and
+any one of them can finish the re-wrap on their next load; nothing depends on the leaver's tab staying
+open. The leaver signs the same `RotationStartPayload` a remover does, naming **themselves** as the
+removed member, and it is stored on the marker and on the chain link, so the removal history already
+covers them: a leaver re-listed later with their old admission is refused exactly as a removed member is.
+Each holder's update is conditional on being an admin at the generation the key was wrapped against, so a
+concurrent change is a conflict (`holder_changed`) rather than a half-applied leave. A leave is refused,
+changing nothing, when a rotation is already running (`rotation_in_progress`), when this browser holds no
+group key, when no other admin passes the checks, or when they cannot be read. Open groups, public groups
+and DMs hold no key to rotate and are unchanged.
+
 **Removal is signed by the remover.** `DELETE /api/groups/{gid}/members/{uid}` is Admin-only, and
 for an admin or ambassador subject the request carries the remover's signed grant of `member` to
 them, appended in the same transaction that deletes the membership. That is an ordinary admin
@@ -1137,13 +1158,14 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
 admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
 invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
-(7) **A leaver re-listed.** Leaving rotates no key and writes no `GENKEY#` link, so a member who
-left never appears in the removal history. Their old admission (same keys, inviter an admin that day)
-still verifies, and a server colluding with them can list them again, so the next rotation (say, from
-removing someone else) wraps the new key to them without anyone re-inviting them. Milder than a
-removal, since they chose to go and already hold every key up to the leave, but they would receive
-*future* keys. Closing it needs a signed leave record bound to something contiguous, as a removal is,
-and leaving has no rotation to carry one. Tracked in #178.
+(7) **A stalled leave rotation.** A leave's rotation is finished by one of the admins it was handed
+to, on their next load. If none of them returns, the group's new posts stay on the old generation and
+the other members stay behind until an admin at the new generation does, the same stall a removal has
+when its remover disappears. Admins that were behind when the leaver left are not holders and cannot
+resume it.
+
+**Deploy note (leave rotation).** A browser still on an older bundle leaves a Rotating group without a
+rotation and gets 400 `rotation_required`; reloading fixes it. No stored data changes.
 
 **Deploy note (removal history).** A `GENKEY#` link written before this shipped has no record, so a
 group that has already rotated can never pass the check and its rotations stop. Reset or recreate
