@@ -6,7 +6,13 @@
 
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, MemberEntry, MemberRole, RewrapEntry } from '@/lib/api/groups'
+import type {
+  GroupDetail,
+  KeychainLink,
+  MemberEntry,
+  MemberRole,
+  RewrapEntry,
+} from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
@@ -98,6 +104,39 @@ function startMarker(
   }
 }
 
+/**
+ * The chain link for `generation` as the server serves one after a signed
+ * removal (#178): `signer` (default: the caller) names `removed` for
+ * generation + 1. Overrides model a link that was blanked or forged.
+ */
+function removalLink(
+  generation: number,
+  o: {
+    remover?: string
+    signer?: SigningKey
+    removed?: string
+    signedFor?: { removed?: string; generation?: number }
+    unsigned?: boolean
+  } = {},
+): KeychainLink {
+  const remover = o.remover ?? ME
+  const removed = o.removed ?? REMOVED
+  const base = { generation, wrapped: { nonce: 'n', ciphertext: 'c' } }
+  if (o.unsigned) return base
+  const payload = rotationStartPayload(
+    GROUP,
+    remover,
+    o.signedFor?.removed ?? removed,
+    o.signedFor?.generation ?? generation + 1,
+  )
+  return {
+    ...base,
+    removerUserId: remover,
+    removedUserId: removed,
+    startSignature: b64(sign(o.signer ?? me, SigningContext.RotationStart, payload)),
+  }
+}
+
 const ROOT_DAY = '2026-03-01'
 const ADMIT_DAY = '2026-03-10'
 const ROOT_REF = `GRANT#${ME}#${ROOT_DAY}#0000000000000001`
@@ -117,6 +156,8 @@ function admissionOf(
     key?: SigningKey
     ref?: string
     day?: string
+    /** Signed group-key generation (default 0). */
+    generation?: number
     inviteId?: string
     /** Sign over these keys instead of p's (the record then carries them). */
     keys?: { ed?: Uint8Array; x?: Uint8Array }
@@ -128,7 +169,17 @@ function admissionOf(
   const ref = o.ref ?? ROOT_REF
   const day = o.day ?? ADMIT_DAY
   const inviteId = o.inviteId ?? `invite-${p.id}`
-  const payload = admissionPayload(GROUP, inviter, p.id, ed, x, inviteId, ref, day)
+  const payload = admissionPayload(
+    GROUP,
+    inviter,
+    p.id,
+    ed,
+    x,
+    inviteId,
+    ref,
+    day,
+    o.generation ?? 0,
+  )
   return {
     inviteeUserId: p.id,
     inviterUserId: inviter,
@@ -137,6 +188,7 @@ function admissionOf(
     inviteeX25519PublicKey: b64(x),
     inviterGrantRef: ref,
     day,
+    generation: o.generation ?? 0,
     signature: b64(sign(o.key ?? me, SigningContext.Admission, payload)),
   }
 }
@@ -179,6 +231,15 @@ class Fake {
     },
   ]
   admissions = new Map<string, AdmissionRecord>()
+  /**
+   * The chain links the server serves (#178). Unset means an honest history:
+   * one link per generation below ownGeneration, each the caller removing
+   * REMOVED. A test sets it to model who was removed, or what a server hides.
+   */
+  links: KeychainLink[] | undefined
+  keychainPageSize = 1000
+  keychainError: Error | undefined
+  keychainReads: [number, number][] = []
   anchorPin: StoredAnchorPin | null = null
   listAdmissionsError: Error | undefined
   admissionReads = 0
@@ -308,6 +369,16 @@ class Fake {
             return r ? [[id, served(r.person)] as const] : []
           }),
         )
+      },
+      getKeychain: async (_g, from, to) => {
+        this.keychainReads.push([from, to])
+        if (this.keychainError) throw this.keychainError
+        const all =
+          this.links ?? Array.from({ length: this.ownGeneration }, (_, n) => removalLink(n))
+        const inRange = all.filter((l) => l.generation >= from && l.generation <= to)
+        const page = inRange.slice(0, this.keychainPageSize)
+        const next = inRange[this.keychainPageSize]
+        return { links: page, ...(next !== undefined && { nextFrom: next.generation }) }
       },
       listGrants: async () => ({ anchor: this.anchor, grants: this.grants }),
       listDesignations: async () => ({ designations: [] }),
@@ -636,6 +707,157 @@ describe('runRotation', () => {
       )
       expect(out.status).toBe('incomplete')
       expect(JSON.stringify(out)).toContain(`could not fetch keys for ${p.id}: not authenticated`)
+    })
+  })
+
+  describe('removal history (#178)', () => {
+    // The signed removal at generation 1 (link 0) names `x`, who is still
+    // listed by the server and still holds the admission they had before.
+    function relisted(f: Fake, admissionGeneration: number): Person {
+      const x = person()
+      f.add(x, 'member', 0, 'auto', admissionOf(x, { generation: admissionGeneration }))
+      f.links = [removalLink(0, { removed: x.id })]
+      return x
+    }
+
+    it('refuses a removed member the server re-lists with their old admission', async () => {
+      const f = new Fake()
+      const real = f.add(person())
+      const x = relisted(f, 0)
+
+      const out = await runRotation(f.deps(), GROUP)
+
+      expect(out).toEqual({ status: 'blocked', blocked: [], unadmitted: [x.id], rewrapped: 1 })
+      expect(f.cryptoRecipients.flat()).toEqual([real.id])
+      expect(f.pinned).toEqual([])
+      expect(f.completed).toEqual([])
+    })
+
+    it('wraps to a removed member who was invited again after the removal', async () => {
+      const f = new Fake()
+      const x = relisted(f, 1)
+
+      const out = await runRotation(f.deps(), GROUP)
+
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.cryptoRecipients.flat()).toEqual([x.id])
+    })
+
+    it('judges a repeat removal against the newest one', async () => {
+      const f = new Fake()
+      f.ownGeneration = 2
+      f.marker = startMarker(2)
+      f.members.get(ME)!.generation = 2
+      const x = person()
+      // Removed at generation 1, invited again at generation 1, removed again at 2.
+      f.add(x, 'member', 0, 'auto', admissionOf(x, { generation: 1 }))
+      f.links = [removalLink(0, { removed: x.id }), removalLink(1, { removed: x.id })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [x.id] })
+    })
+
+    it('refuses the creator re-listed after another admin removed them, until invited again', async () => {
+      const f = new Fake()
+      const { creator } = f.promoted()
+      f.links = [removalLink(0, { removed: creator.id })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [creator.id] })
+      expect(f.cryptoRecipients.flat()).not.toContain(creator.id)
+    })
+
+    it('still exempts a creator nobody removed', async () => {
+      const f = new Fake()
+      const { creator } = f.promoted()
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.cryptoRecipients.flat()).toEqual([creator.id])
+    })
+
+    it('accepts a record signed by another admin whose served keys match the pin', async () => {
+      const f = new Fake()
+      const eve = f.add(person(), 'admin')
+      const x = person()
+      f.add(x, 'member', 0, 'auto', admissionOf(x, { generation: 0 }))
+      f.links = [removalLink(0, { remover: eve.id, signer: eve.signing, removed: x.id })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [x.id] })
+      expect(f.cryptoRecipients.flat()).toEqual([eve.id])
+    })
+
+    it('stops when the other admin who signed a removal serves keys that do not match the pin', async () => {
+      const f = new Fake()
+      const eve = f.add(person(), 'admin')
+      f.pins.set(eve.id, pinFor({ ...eve, signing: generateSigningKey() }))
+      f.links = [removalLink(0, { remover: eve.id, signer: eve.signing })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('do not match your pin')
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    const stops: [string, (f: Fake) => void, string][] = [
+      ['a generation is missing from the chain', (f) => (f.links = []), 'missing the removal'],
+      [
+        'a link is blanked',
+        (f) => (f.links = [removalLink(0, { unsigned: true })]),
+        'without a signed record',
+      ],
+      [
+        'a link is signed by another key',
+        (f) => (f.links = [removalLink(0, { signer: generateSigningKey() })]),
+        'does not verify',
+      ],
+      [
+        'a link names someone else than the signature covers',
+        (f) => (f.links = [removalLink(0, { signedFor: { removed: 'someone-else' } })]),
+        'does not verify',
+      ],
+      [
+        'a link is replayed at another generation',
+        (f) => (f.links = [removalLink(0, { signedFor: { generation: 2 } })]),
+        'does not verify',
+      ],
+      [
+        'a link lists a generation twice',
+        (f) => (f.links = [removalLink(0), removalLink(0)]),
+        'twice',
+      ],
+      [
+        'the chain cannot be read',
+        (f) => (f.keychainError = new Error('boom')),
+        "could not read the group's removal history: boom",
+      ],
+    ]
+    for (const [name, arrange, reason] of stops) {
+      it(`wraps to no one when ${name}`, async () => {
+        const f = new Fake()
+        f.add(person())
+        arrange(f)
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(JSON.stringify(out)).toContain(reason)
+        expect(f.cryptoRecipients).toEqual([])
+        expect(f.completed).toEqual([])
+      })
+    }
+
+    it('reads every page of the chain', async () => {
+      const f = new Fake()
+      f.ownGeneration = 3
+      f.marker = startMarker(3)
+      f.members.get(ME)!.generation = 3
+      f.keychainPageSize = 1
+      f.add(person())
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.keychainReads.map(([from]) => from)).toEqual([0, 1, 2])
+    })
+
+    it('does not read the chain when nobody needs checking', async () => {
+      const f = new Fake()
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 0 })
+      expect(f.keychainReads).toEqual([])
     })
   })
 

@@ -141,11 +141,15 @@ func RotationStartPayload(groupID, removerUUID, subjectUUID string, generation i
 // (the creator's is the group's root grant; an inviter is always an admin or
 // ambassador, so there is always one), and day is the UTC date (YYYY-MM-DD) the verifier uses to pick the
 // inviter's signing key and judge their role. inviteID is signed so one
-// record cannot stand in for another invite of the same pair.
+// record cannot stand in for another invite of the same pair. generation is
+// the group-key generation the inviter held (the one the new member's key is
+// wrapped under), signed as its decimal string: a removal at generation g is
+// older than any admission at generation g or later, which is how a verifier
+// tells a rejoin from a removed member re-listed with their old record (#178).
 //
 // Same length-prefixed encoding as RoleGrantPayload, and the same warning:
 // this must never change once a real admission has been signed under it.
-func AdmissionPayload(groupID, inviterUUID, inviteeUUID string, inviteeEd25519, inviteeX25519 []byte, inviteID, inviterGrantRef, day string) []byte {
+func AdmissionPayload(groupID, inviterUUID, inviteeUUID string, inviteeEd25519, inviteeX25519 []byte, inviteID, inviterGrantRef, day string, generation int64) []byte {
 	fields := [][]byte{
 		[]byte(groupID),
 		[]byte(inviterUUID),
@@ -155,6 +159,7 @@ func AdmissionPayload(groupID, inviterUUID, inviteeUUID string, inviteeEd25519, 
 		[]byte(inviteID),
 		[]byte(inviterGrantRef),
 		[]byte(day),
+		[]byte(strconv.FormatInt(generation, 10)),
 	}
 	return lengthPrefixedConcat(fields)
 }

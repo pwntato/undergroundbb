@@ -202,6 +202,7 @@ type admissionVector struct {
 	InviteID        string `json:"invite_id"`
 	InviterGrantRef string `json:"inviter_grant_ref"`
 	Day             string `json:"day"`
+	Generation      int64  `json:"generation"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
 }
@@ -806,8 +807,8 @@ func TestVectorRotationStart(t *testing.T) {
 // TestVectorAdmission pins AdmissionPayload's exact encoding (#178).
 func TestVectorAdmission(t *testing.T) {
 	v := loadVectors(t)
-	if len(v.Admission) < 2 {
-		t.Fatalf("expected at least 2 admission vectors, got %d", len(v.Admission))
+	if len(v.Admission) < 3 {
+		t.Fatalf("expected at least 3 admission vectors, got %d", len(v.Admission))
 	}
 	seen := map[string]bool{}
 	for _, tc := range v.Admission {
@@ -818,7 +819,7 @@ func TestVectorAdmission(t *testing.T) {
 			wantSig := mustHex(t, tc.SignatureHex)
 
 			gotPayload := AdmissionPayload(tc.GroupID, tc.InviterUUID, tc.InviteeUUID,
-				mustHex(t, tc.InviteeEdHex), mustHex(t, tc.InviteeXHex), tc.InviteID, tc.InviterGrantRef, tc.Day)
+				mustHex(t, tc.InviteeEdHex), mustHex(t, tc.InviteeXHex), tc.InviteID, tc.InviterGrantRef, tc.Day, tc.Generation)
 			if !bytes.Equal(gotPayload, wantPayload) {
 				t.Fatalf("AdmissionPayload = %x, want %x", gotPayload, wantPayload)
 			}
@@ -839,7 +840,7 @@ func TestVectorAdmission(t *testing.T) {
 		})
 	}
 	if len(seen) != len(v.Admission) {
-		t.Fatal("admission vectors with different grant refs must produce different payloads")
+		t.Fatal("admission vectors with different grant refs or generations must produce different payloads")
 	}
 }
 

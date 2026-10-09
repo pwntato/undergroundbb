@@ -205,6 +205,7 @@ interface VectorFile {
     invite_id: string
     inviter_grant_ref: string
     day: string
+    generation: number
     payload_hex: string
     signature_hex: string
   }[]
@@ -614,6 +615,7 @@ describe('admission vectors', () => {
         tc.invite_id,
         tc.inviter_grant_ref,
         tc.day,
+        tc.generation,
       )
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 

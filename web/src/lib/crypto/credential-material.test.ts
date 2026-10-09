@@ -839,6 +839,7 @@ describe('invite handshake round trip', () => {
       inviteId,
       ADMISSION_GRANT_REF,
       ADMISSION_DAY,
+      completed.generation,
     )
     expect(completed.admission.inviterGrantRef).toBe(ADMISSION_GRANT_REF)
     expect(completed.admission.day).toBe(ADMISSION_DAY)

@@ -68,11 +68,13 @@ why.
   `RotationStartPayload` (#178), what the admin who starts a rotation signs
   to name the removed member.
 - `admission`: `(group id, inviter uuid, invitee uuid, invitee ed25519 key,
-  invitee x25519 key, invite id, inviter grant ref, day) -> payload`, plus
+  invitee x25519 key, invite id, inviter grant ref, day, generation) ->
+  payload`, plus
   the Ed25519 signature over it — pinning `AdmissionPayload` (#178), what an
-  inviter signs when they complete an invite. Two cases: an inviter with a
-  promoted grant and the creator (root grant ref), proving the grant ref is
-  part of what is signed.
+  inviter signs when they complete an invite. Three cases: an inviter with a
+  promoted grant, the creator (root grant ref), and an admission under a
+  rotated group key (generation 3), proving the grant ref and the generation
+  are part of what is signed.
 - `member_wrap_aad`: `(group id, member uuid, generation) -> AAD`, plus the
   AES-256-GCM ciphertext that AAD produces under a fixed key/nonce/plaintext
   — pinning `MemberWrapAAD` (#34), the AAD for a single member's own wrapped

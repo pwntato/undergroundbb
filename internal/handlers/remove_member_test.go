@@ -322,6 +322,19 @@ func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	if _, ttl := link["TTL"]; ttl {
 		t.Error("chain link carries a TTL")
 	}
+	// The removal record outlives the marker: it is also on the durable chain
+	// link, where a verifier holding a later generation finds it (#178).
+	if strAttr(link, "RemoverUserID") != owner.userID || strAttr(link, "RemovedUserID") != bob.userID {
+		t.Errorf("link remover/removed = %q/%q", strAttr(link, "RemoverUserID"), strAttr(link, "RemovedUserID"))
+	}
+	if want := body.Rotation.StartSignature; want == "" || bytesAttrB64(link, "StartSignature") != want {
+		t.Errorf("link StartSignature = %q, want %q", bytesAttrB64(link, "StartSignature"), want)
+	}
+	chain := decodeKeychain(t, doKeychain(t, h, ownerCookie, gid, "from=0&to=0"))
+	if len(chain.Links) != 1 || chain.Links[0].RemoverUserID != owner.userID ||
+		chain.Links[0].RemovedUserID != bob.userID || chain.Links[0].StartSignature != body.Rotation.StartSignature {
+		t.Errorf("keychain did not serve the removal record: %+v", chain.Links)
+	}
 	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID), "Generation"); g != "1" {
 		t.Errorf("remover generation = %s, want 1", g)
 	}

@@ -115,6 +115,8 @@ interface Admit {
   inviterKey?: SigningKey
   ref?: string
   day?: string
+  /** Signed group-key generation (default 0). */
+  generation?: number
   signedKeys?: { ed?: Uint8Array; x?: Uint8Array }
   signedFor?: { group?: string; invitee?: string; inviteId?: string }
 }
@@ -137,6 +139,7 @@ function admission(w: World, o: Admit = {}): AdmissionRecord {
     inviteId,
     ref,
     day,
+    o.generation ?? 0,
   )
   return {
     inviteeUserId: MEMBER,
@@ -146,6 +149,7 @@ function admission(w: World, o: Admit = {}): AdmissionRecord {
     inviteeX25519PublicKey: b64(x),
     inviterGrantRef: ref,
     day,
+    generation: o.generation ?? 0,
     signature: b64(sign(key, SigningContext.Admission, payload)),
   }
 }

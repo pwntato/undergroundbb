@@ -1095,18 +1095,36 @@ unverifiable root stops the run and wraps to no one. There is no legacy path: a 
 record cannot receive a rotated key. This shipped while no members existed, so there are none
 to vouch for; a group whose members predate it would need a re-admission flow first.
 
+*Re-listing a removed member* is closed by the removal history. The marker's record is deleted when
+its rotation finishes, so the same signed record (`removerUserId`, `removedUserId`, `startSignature`)
+is also written on the durable `GENKEY#<n>` link the removal creates, in the same transaction, and
+served by the keychain endpoint. Links are contiguous, one per generation, so a verifier that holds
+generation G requires a verifying record for **every** n < G: a withheld, blanked, forged or replayed
+one is a gap and **stops the run, wrapping to no one**, instead of passing as "nobody was ever
+removed". The caller's own generation cannot be understated to hide the newest removals, because it
+is authenticated by the AAD of its own wrapped key. That is what makes this different from
+withholding an admission, which only ever shrinks who is wrapped to: omitting a removal would grow
+it, so removals are bound to the chain and admissions are not.
+
+The admission now signs the group-key generation the inviter held (the one the new member's key is
+wrapped under; the server already requires it to equal the inviter's own). A member removed at
+generation g is only a valid recipient again if their admission was signed at generation g or later:
+generation g's key exists only after the removal, so such an admission is a fresh invitation. Their
+old admission still verifies on everything else, which is exactly why it is rejected on this rule.
+The creator is exempt only while nobody has removed them. The removers' keys come from the server and
+are checked against the caller's pin like the marker's starter; a first sighting is accepted because a
+forged record can only exclude someone.
+
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
-started a rotation (an Open group has none), and nothing binds the set of signed records, the same
-gap the grant history and pins already accept; withholding an admission only ever shrinks who is
-wrapped to. (2) **A backdated admission.** The record's day is the inviter's own claim (the server
+started a rotation (an Open group has none, so there is no key to withhold and no chain link to
+carry a record), and nothing binds the set of signed records, the same gap the grant history and
+pins already accept; withholding an admission only ever shrinks who is wrapped to. Removals in a
+Rotating group are the exception: see "Re-listing a removed member" above. (2) **A backdated admission.** The record's day is the inviter's own claim (the server
 holds it to its clock when it writes, but a verifier has no clock), so a server colluding with an
 inviter who has since been demoted can store an admission dated before the demotion, the same gap the
-grant chain accepts for a postdated grant. (3) **A removed member re-listed.** The signed rotation
-marker excludes only the member whose removal started *that* rotation. A member removed in an earlier,
-completed rotation is dropped from the roster, and their admission row is deleted with their
-membership (hygiene only), but the server can list them again, and a copy of their old admission
-(same keys, inviter an admin that day) still verifies, so a later rotation would wrap to them. Closing it
-needs a signed removal record checked by the verifier, as the marker's is for the current subject.
+grant chain accepts for a postdated grant. (3) **A backdated generation.** The admission's generation is the inviter's own claim, like its day:
+a server colluding with an inviter who still holds the key can store a record that claims a
+generation above a removal it post-dates. It needs a live inviter's cooperation, the same gap as (2).
 (4) **Trust on first use.** The creator is exempt only against an anchor the caller trusts, and a
 first sighting counts as trusted, as in the roster: the anchor pin is per-browser localStorage, so on a
 browser that has never seen this group the server can serve an invented creator, a chain that creator
@@ -1119,6 +1137,20 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
 admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
 invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
+(7) **A leaver re-listed.** Leaving rotates no key and writes no `GENKEY#` link, so a member who
+left never appears in the removal history. Their old admission (same keys, inviter an admin that day)
+still verifies, and a server colluding with them can list them again, so the next rotation (say, from
+removing someone else) wraps the new key to them without anyone re-inviting them. Milder than a
+removal, since they chose to go and already hold every key up to the leave, but they would receive
+*future* keys. Closing it needs a signed leave record bound to something contiguous, as a removal is,
+and leaving has no rotation to carry one. Tracked in #178.
+
+**Deploy note (removal history).** A `GENKEY#` link written before this shipped has no record, so a
+group that has already rotated can never pass the check and its rotations stop. Reset or recreate
+any such group, together with the admission note below. A remover whose account was deleted, or whose
+keys the server will not serve, also stops the check for as long as their link exists (the same
+liveness cost the marker's own record has); there is no way around it that a lying server could not
+use too. An admission signed before the generation was added does not verify, for the same reason.
 
 **Deploy note (admission).** Reset or recreate any group whose members joined before this shipped;
 they have no record and would be skipped at the next rotation.

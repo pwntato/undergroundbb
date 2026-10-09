@@ -366,7 +366,7 @@ func TestCompleteInviteStoresAdmission(t *testing.T) {
 	ed, _ := base64.StdEncoding.DecodeString(got.InviteeEd25519PublicKey)
 	x, _ := base64.StdEncoding.DecodeString(got.InviteeX25519PublicKey)
 	sig, _ := base64.StdEncoding.DecodeString(got.Signature)
-	payload := crypto.AdmissionPayload(groupID, got.InviterUserID, got.InviteeUserID, ed, x, got.InviteID, got.InviterGrantRef, got.Day)
+	payload := crypto.AdmissionPayload(groupID, got.InviterUserID, got.InviteeUserID, ed, x, got.InviteID, got.InviterGrantRef, got.Day, got.Generation)
 	if !crypto.Verify(creator.signPub, crypto.ContextAdmission, payload, sig) {
 		t.Error("stored admission does not verify under the inviter's key")
 	}
@@ -426,6 +426,7 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 		{"signature not base64", withSig(good, "!!!"), 400, ""},
 		{"signature empty", withSig(good, ""), 400, ""},
 		{"stale grant ref", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, staleRef, today), 409, "grantor_ref_stale"},
+		{"signed generation differs from the request's", signedAdmissionAt(t, h, creator, groupID, inviteID, invitee, good.InviterGrantRef, today, 1), 400, "bad_signature"},
 		{"day too old", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, "", oldDay), 400, ""},
 		{"day malformed", &admissionRequest{InviterGrantRef: good.InviterGrantRef, Day: "07/10/2026", Signature: good.Signature}, 400, ""},
 	}
@@ -445,6 +446,37 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 	}
 }
 
+// #178: the admission signs the generation the inviter holds, the server stores
+// and serves it, and a signature over another generation is refused. Generation
+// 0 everywhere else could not tell a signed generation from a constant.
+func TestCompleteInviteAdmissionSignsInviterGeneration(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	setMemberGeneration(t, groupID, creator.userID, 2)
+
+	body := func(signedGeneration int64) completeInviteRequest {
+		b := completeBody(signedAdmissionAt(t, h, creator, groupID, inviteID, invitee, "", time.Now().UTC().Format("2006-01-02"), signedGeneration))
+		b.Generation = 2
+		return b
+	}
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, body(0))
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_signature" {
+		t.Fatalf("signed generation 0 for an inviter at 2: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, body(2))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	list := doJSON(t, h, http.MethodGet, "/api/groups/"+groupID+"/admissions", creatorCookie, nil)
+	var got listAdmissionsResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &got); err != nil || len(got.Admissions) != 1 {
+		t.Fatalf("list: %v %s", err, list.Body.String())
+	}
+	if got.Admissions[0].Generation != 2 {
+		t.Errorf("served generation = %d, want 2", got.Admissions[0].Generation)
+	}
+}
+
 // signedAdmission is the inviter's admission record for completing inviteID
 // (#178): signed under the inviter's key over the invitee's accepted keys, the
 // inviter's current grant ref and today's UTC date, as the web client does.
@@ -457,6 +489,13 @@ func signedAdmission(t *testing.T, h *Handler, inviter registeredUser, groupID, 
 // inviter's real current one) and day chosen by the caller, for the refusals.
 func signedAdmissionWith(t *testing.T, h *Handler, inviter registeredUser, groupID, inviteID string, invitee registeredUser, grantRef, day string) *admissionRequest {
 	t.Helper()
+	return signedAdmissionAt(t, h, inviter, groupID, inviteID, invitee, grantRef, day, 0)
+}
+
+// signedAdmissionAt is signedAdmissionWith with the signed group-key generation
+// chosen by the caller; the request itself still says generation 0.
+func signedAdmissionAt(t *testing.T, h *Handler, inviter registeredUser, groupID, inviteID string, invitee registeredUser, grantRef, day string, generation int64) *admissionRequest {
+	t.Helper()
 	if grantRef == "" {
 		group, err := h.db.GetGroup(t.Context(), groupID)
 		if err != nil || group == nil {
@@ -468,7 +507,7 @@ func signedAdmissionWith(t *testing.T, h *Handler, inviter registeredUser, group
 		}
 		grantRef, _ = currentGrantRef(m, group, inviter.userID)
 	}
-	payload := crypto.AdmissionPayload(groupID, inviter.userID, invitee.userID, invitee.signPub, invitee.wrapPub, inviteID, grantRef, day)
+	payload := crypto.AdmissionPayload(groupID, inviter.userID, invitee.userID, invitee.signPub, invitee.wrapPub, inviteID, grantRef, day, generation)
 	sig, err := crypto.Sign(inviter.signPriv, crypto.ContextAdmission, payload)
 	if err != nil {
 		t.Fatalf("sign admission: %v", err)

@@ -28,8 +28,12 @@
 //     member, the rotation marker carries a signature by the admin who started
 //     it naming whom they removed, and a resuming admin excludes that member
 //     whatever the list says (#178); a marker with no verifiable signature
-//     stops the run. What stays open is the server hiding the marker itself
-//     (DESIGN.md, "The recipient set is taken from the server").
+//     stops the run. A member removed in an EARLIER rotation is covered by the
+//     signed removal record on every GENKEY# chain link below the caller's own
+//     generation (lib/crypto/removal): a missing or forged one stops the run,
+//     and a removed member needs an admission signed at or after the removal's
+//     generation to be a recipient again (DESIGN.md, "The recipient set is
+//     taken from the server").
 //   - Nor does the pin check say anyone ADMITTED the recipient: a first-sight
 //     account is trusted and pinned. So before a recipient is pinned or wrapped
 //     to, the inviter's signed admission of them is checked against the
@@ -45,6 +49,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type {
   GroupDetail,
+  KeychainResponse,
   ListAdmissionsResponse,
   MemberEntry,
   RewrapEntry,
@@ -55,6 +60,7 @@ import { verifyAdmission, type AdmissionRecord } from '@/lib/crypto/admission'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationStartPayload } from '@/lib/crypto/group'
+import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import type { RewrapGroupKeyResult } from '@/lib/crypto/worker-protocol'
 import { loadVerifiedChain, type GrantCheckDeps, type VerifiedChain } from './runGrantCheck'
@@ -67,6 +73,8 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
   /** Every admission record of the group, one page at a time (#178). */
   readonly listAdmissions: (groupId: string, cursor?: string) => Promise<ListAdmissionsResponse>
   readonly getGroup: (groupId: string) => Promise<GroupDetail>
+  /** The GENKEY# chain links for generations from..to inclusive, one page at a time (#178). */
+  readonly getKeychain: (groupId: string, from: number, to: number) => Promise<KeychainResponse>
   /** Every member, following nextCursor. */
   readonly listAllMembers: (groupId: string) => Promise<readonly MemberEntry[]>
   /** Every readable user among the ids, in one batch call; an absent id could not be fetched. */
@@ -160,7 +168,7 @@ export function describeRotation(
       const unadmitted = outcome.unadmitted ?? []
       if (unadmitted.length > 0) {
         parts.push(
-          `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs them.`,
+          `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs them (for someone removed earlier, one made after the removal).`,
         )
       }
       return {
@@ -363,7 +371,7 @@ async function runOnce(
         const servedForM = servedKeys.get(m.userId)
         if (servedForM !== undefined) {
           if (admissions === undefined) {
-            const loaded = await loadAdmissions(deps, groupId)
+            const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)
             if (!loaded.ok) {
               return { status: 'incomplete', reason: loaded.reason, rewrapped }
             }
@@ -423,6 +431,8 @@ async function runOnce(
 interface AdmissionContext {
   readonly chain: VerifiedChain
   readonly byInvitee: ReadonlyMap<string, AdmissionRecord>
+  /** Whom the signed removal history says was removed, and at which generation (#178). */
+  readonly removedAt: ReadonlyMap<string, number>
 }
 
 // A list this deep means the server is not honoring nextCursor; stop.
@@ -430,7 +440,9 @@ const MAX_ADMISSION_PAGES = 100
 
 async function loadAdmissions(
   deps: RotationDeps,
+  own: Uint8Array,
   groupId: string,
+  ownGeneration: number,
 ): Promise<
   | { readonly ok: true; readonly context: AdmissionContext }
   | { readonly ok: false; readonly reason: string }
@@ -467,9 +479,15 @@ async function loadAdmissions(
         reason: "the group's root grant could not be verified, so admissions cannot be checked",
       }
     }
+    const removals = await loadRemovals(deps, own, groupId, ownGeneration)
+    if (!removals.ok) return { ok: false, reason: removals.reason }
     return {
       ok: true,
-      context: { chain, byInvitee: new Map(records.map((r) => [r.inviteeUserId, r])) },
+      context: {
+        chain,
+        byInvitee: new Map(records.map((r) => [r.inviteeUserId, r])),
+        removedAt: removals.removedAt,
+      },
     }
   } catch (err) {
     return { ok: false, reason: `could not check who admitted the members: ${describe(err)}` }
@@ -479,7 +497,12 @@ async function loadAdmissions(
 /**
  * Whether a recipient was admitted: the creator (the anchor, which the caller
  * trusts at this point) or a member with a record that verifies against the
- * chain and the keys the server serves for them now.
+ * chain and the keys the server serves for them now. Someone the signed
+ * removal history says was removed (at generation g) must also hold an
+ * admission signed at generation g or later, i.e. a fresh invitation after the
+ * removal: their old record still verifies, and a server that re-lists them is
+ * otherwise indistinguishable from a rejoin (#178). That includes the creator,
+ * who is exempt only while nobody removed them.
  */
 function isAdmitted(
   ctx: AdmissionContext,
@@ -487,10 +510,12 @@ function isAdmitted(
   userId: string,
   served: UserProjection,
 ): boolean {
-  if (userId === ctx.chain.anchor.creatorUserId) return true
+  const removedAt = ctx.removedAt.get(userId)
+  if (userId === ctx.chain.anchor.creatorUserId && removedAt === undefined) return true
   const record = ctx.byInvitee.get(userId)
   const signingKeys = servedSigningKeySet(served)
   if (record === undefined || signingKeys === null) return false
+  if (removedAt !== undefined && record.generation < removedAt) return false
   return verifyAdmission({
     groupId,
     record,
@@ -499,6 +524,123 @@ function isAdmitted(
     chain: ctx.chain.result,
     inviterHistory: ctx.chain.keyHistories.get(record.inviterUserId),
   }).ok
+}
+
+type SignerKeys =
+  | { readonly ok: true; readonly keys: ReadonlyMap<string, Uint8Array[] | null> }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * The signing keys to try for each signer of a record the rotation relies on,
+ * fetched in one batch. The caller's own key is its current one, with no fetch
+ * (#62: only the CURRENT key. Once signing keys can rotate, a signer who
+ * rotated mid-rotation signed under a superseded key, and as the only admin at
+ * this generation nobody could resume; take the served set, as for anyone
+ * else, before that ships; this now also covers every removal the caller ever
+ * signed, which live forever, so the fix is not scoped to resuming a rotation).
+ * Anyone else's come from the server, checked against
+ * the caller's pin: a mismatch stops the run, a first sighting is accepted (as
+ * in the roster: a forged signature can only ever shrink the recipient set). A
+ * signer whose keys cannot be fetched stops it too. `who` names them in the
+ * reason.
+ */
+async function resolveSignerKeys(
+  deps: RotationDeps,
+  own: Uint8Array,
+  signers: readonly string[],
+  who: string,
+): Promise<SignerKeys> {
+  const keys = new Map<string, Uint8Array[] | null>()
+  const others = signers.filter((id) => id !== deps.selfUserId)
+  if (signers.includes(deps.selfUserId)) keys.set(deps.selfUserId, [own])
+  if (others.length === 0) return { ok: true, keys }
+
+  const failure: { err?: unknown } = {}
+  const served = await deps.getUsers(others, (err) => {
+    failure.err = err
+  })
+  let pins: readonly PinRecord[]
+  try {
+    pins = await deps.listPins()
+  } catch (err) {
+    return { ok: false, reason: `could not read your pins: ${describe(err)}` }
+  }
+  for (const id of others) {
+    const projection = served.get(id)
+    if (projection === undefined) {
+      return {
+        ok: false,
+        reason:
+          failure.err === undefined
+            ? `could not fetch the keys of ${who} (${id})`
+            : `could not fetch the keys of ${who}: ${describe(failure.err)}`,
+      }
+    }
+    const verdict = evaluatePin({
+      pinnerUserId: deps.selfUserId,
+      pinnerSigningPublicKey: own,
+      pinnedUserId: id,
+      pin: pins.find((p) => p.pinnedUserId === id),
+      served: projection,
+    })
+    if (verdict === 'mismatch' || verdict === 'bad-signature') {
+      return { ok: false, reason: `the keys served for ${who} do not match your pin` }
+    }
+    keys.set(id, servedSigningKeySet(projection))
+  }
+  return { ok: true, keys }
+}
+
+// A chain this long means the server is not honoring nextFrom; stop.
+const MAX_KEYCHAIN_PAGES = 100
+
+type RemovalCheck =
+  | { readonly ok: true; readonly removedAt: ReadonlyMap<string, number> }
+  | { readonly ok: false; readonly reason: string }
+
+/**
+ * Loads and verifies the group's removal history from the GENKEY# chain (#178):
+ * a signed record for every generation below the caller's own. A missing,
+ * blank or forged one stops the run, because carrying on would take the
+ * server's word that nobody was ever removed. The caller's generation is
+ * authenticated by the AAD of its own wrapped key, so the server cannot
+ * understate it to hide the newest removals.
+ */
+async function loadRemovals(
+  deps: RotationDeps,
+  own: Uint8Array,
+  groupId: string,
+  currentGeneration: number,
+): Promise<RemovalCheck> {
+  if (currentGeneration === 0) return { ok: true, removedAt: new Map() }
+  const links: KeychainResponse['links'][number][] = []
+  try {
+    let from = 0
+    for (let page = 0; ; page++) {
+      if (page >= MAX_KEYCHAIN_PAGES) throw new Error('key chain pagination did not terminate')
+      const res = await deps.getKeychain(groupId, from, currentGeneration - 1)
+      links.push(...res.links)
+      if (res.nextFrom === undefined) break
+      if (res.nextFrom <= from) throw new Error('key chain pagination did not advance')
+      from = res.nextFrom
+    }
+  } catch (err) {
+    return { ok: false, reason: `could not read the group's removal history: ${describe(err)}` }
+  }
+  const signers = await resolveSignerKeys(
+    deps,
+    own,
+    removersOf(links),
+    'an admin who removed a member',
+  )
+  if (!signers.ok) return signers
+  const verdict = verifyRemovals({
+    groupId,
+    currentGeneration,
+    links,
+    keysFor: (id) => signers.keys.get(id) ?? null,
+  })
+  return verdict.ok ? { ok: true, removedAt: verdict.removedAt } : verdict
 }
 
 type RotationStartCheck =
@@ -536,50 +678,14 @@ async function verifyRotationStart(
   }
   const payload = rotationStartPayload(groupId, marker.startedBy, removedUserId, marker.generation)
 
-  let keys: Uint8Array[] | null
-  if (marker.startedBy === deps.selfUserId) {
-    // #62: only the CURRENT key. Once signing keys can rotate, a starter who
-    // rotated mid-rotation signed under a superseded key, and as the only
-    // admin at this generation nobody could resume; take the served set (as the
-    // other branch does) before that ships.
-    keys = [own]
-  } else {
-    const failure: { err?: unknown } = {}
-    const served = (
-      await deps.getUsers([marker.startedBy], (err) => {
-        failure.err = err
-      })
-    ).get(marker.startedBy)
-    if (served === undefined) {
-      return {
-        ok: false,
-        reason:
-          failure.err === undefined
-            ? `could not fetch the keys of the admin who started this rotation (${marker.startedBy})`
-            : `could not fetch the keys of the admin who started this rotation: ${describe(failure.err)}`,
-      }
-    }
-    let pin: PinRecord | undefined
-    try {
-      pin = (await deps.listPins()).find((p) => p.pinnedUserId === marker.startedBy)
-    } catch (err) {
-      return { ok: false, reason: `could not read your pins: ${describe(err)}` }
-    }
-    const verdict = evaluatePin({
-      pinnerUserId: deps.selfUserId,
-      pinnerSigningPublicKey: own,
-      pinnedUserId: marker.startedBy,
-      pin,
-      served,
-    })
-    if (verdict === 'mismatch' || verdict === 'bad-signature') {
-      return {
-        ok: false,
-        reason: 'the keys served for the admin who started this rotation do not match your pin',
-      }
-    }
-    keys = servedSigningKeySet(served)
-  }
+  const resolved = await resolveSignerKeys(
+    deps,
+    own,
+    [marker.startedBy],
+    'the admin who started this rotation',
+  )
+  if (!resolved.ok) return resolved
+  const keys = resolved.keys.get(marker.startedBy) ?? null
   if (
     keys === null ||
     !keys.some((k) => verify(k, SigningContext.RotationStart, payload, signature))

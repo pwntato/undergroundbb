@@ -214,7 +214,10 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 				Type:      "GenerationKey",
 				CreatedAt: now,
 			},
-			Wrapped: in.Rotation.Link,
+			Wrapped:        in.Rotation.Link,
+			RemoverUserID:  in.RemoverUserID,
+			RemovedUserID:  in.SubjectUserID,
+			StartSignature: in.Rotation.StartSignature,
 		})
 		if err != nil {
 			return err

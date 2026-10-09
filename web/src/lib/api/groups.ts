@@ -384,6 +384,14 @@ export async function claimDesignation(
 export interface KeychainLink {
   readonly generation: number
   readonly wrapped: { readonly nonce: string; readonly ciphertext: string }
+  /**
+   * The signed record of the removal that minted generation + 1 (#178; see
+   * lib/crypto/removal). Absent on a link written before it existed.
+   */
+  readonly removerUserId?: string
+  readonly removedUserId?: string
+  /** Base64 signature under SigningContext.RotationStart. */
+  readonly startSignature?: string
 }
 
 export interface KeychainResponse {
