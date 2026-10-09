@@ -1430,6 +1430,17 @@ describe('runRotation', () => {
         expect(f.takeOvers).toHaveLength(1)
       })
 
+      it('takes nothing over for a removed member whose only admission is from before the removal', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        f.links = [removalLink(0, { removed: leaver.id })] // removed, removedAt = 1
+        f.admissions.set(leaver.id, admissionOf(leaver, { generation: 0 }))
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
       it('takes over the leave of a creator who was removed once and re-invited after the removal', async () => {
         const f = new Fake()
         const { creator, creatorKey, myGrant } = f.promoted()
