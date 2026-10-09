@@ -18,7 +18,6 @@
 /// <reference lib="webworker" />
 
 import {
-  checkPendingGroupKey as checkPendingGroupKeyPure,
   completeChangePassword as completeChangePasswordPure,
   completeInvite as completeInvitePure,
   completeLogin as completeLoginPure,
@@ -27,6 +26,7 @@ import {
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
   rewrapGroupKey as rewrapGroupKeyPure,
+  signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
@@ -40,7 +40,6 @@ import {
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
 import type {
   ChangePasswordMaterial,
-  CheckPendingGroupKeyRequest,
   ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
   CompleteInviteRequest,
@@ -52,6 +51,7 @@ import type {
   GetOwnSigningKeyRequest,
   RecoveryMaterial,
   RewrapGroupKeyRequest,
+  SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
@@ -147,8 +147,8 @@ async function handle(req: WorkerRequest): Promise<void> {
     case 'startGroupRotation':
       await startGroupRotation(req)
       return
-    case 'checkPendingGroupKey':
-      await checkPendingGroupKey(req)
+    case 'signLeaveRotationStart':
+      signLeaveRotationStart(req)
       return
     case 'rewrapGroupKey':
       await rewrapGroupKey(req)
@@ -419,26 +419,15 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     wrappedFromWire(req.ownWrappedGroupKey),
     req.ownGeneration,
     req.subjectUserId,
-    (req.holders ?? []).map((h) => ({
-      userId: h.userId,
-      x25519PublicKey: base64ToBytes(h.x25519PublicKey),
-    })),
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
 }
 
-/** #178: checks a leaving member's pending key for the caller; see checkPendingGroupKey in credential-material.ts. */
-async function checkPendingGroupKey(req: CheckPendingGroupKeyRequest): Promise<void> {
-  const keys = requireLiveKeysFor(req.userId, 'check the new group key')
-  const result = await checkPendingGroupKeyPure(
-    keys,
-    req.groupId,
-    wrappedFromWire(req.ownWrappedGroupKey),
-    req.ownGeneration,
-    wrappedFromWire(req.pendingWrappedKey),
-    { nonce: base64ToBytes(req.link.nonce), ciphertext: base64ToBytes(req.link.ciphertext) },
-  )
-  post({ kind: 'checkPendingGroupKeyDone', id: req.id, result })
+/** #178: signs the rotation start a leave carries; mints nothing. */
+function signLeaveRotationStart(req: SignLeaveRotationStartRequest): void {
+  const keys = requireLiveKeysFor(req.userId, 'sign your leaving')
+  const result = signLeaveRotationStartPure(keys, req.groupId, req.ownGeneration)
+  post({ kind: 'signLeaveRotationStartDone', id: req.id, result })
 }
 
 /** #58: re-wraps the caller's current group key to a batch of members. */

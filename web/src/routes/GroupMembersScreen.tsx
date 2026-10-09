@@ -20,7 +20,12 @@ import {
   type MemberRole,
 } from '@/lib/api/groups'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
-import { getOwnSigningKey, signRoleGrant, startGroupRotation } from '@/lib/crypto/worker-client'
+import {
+  getOwnSigningKey,
+  signLeaveRotationStart,
+  signRoleGrant,
+  startGroupRotation,
+} from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUsers } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
@@ -337,7 +342,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           leaveGroup,
           signRoleGrant,
           userId,
-          rotation: { rotationDeps: makeRotationDeps(userId), startGroupRotation },
+          rotation: { rotationDeps: makeRotationDeps(userId), signLeaveRotationStart },
         },
         view,
         leavePlan(view, userId, usernames).kind,

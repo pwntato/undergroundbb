@@ -469,11 +469,6 @@ export interface StartGroupRotationRequest {
   readonly ownGeneration: number
   /** The member whose removal starts the rotation; named in the signed start (#178). */
   readonly subjectUserId: string
-  /**
-   * A leave (#178): the new key is also wrapped to each of these admins, whose
-   * keys the caller has already checked. Absent for a removal.
-   */
-  readonly holders?: readonly { userId: string; x25519PublicKey: string }[]
 }
 
 export interface StartGroupRotationResult {
@@ -482,11 +477,6 @@ export interface StartGroupRotationResult {
   readonly removerWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   /** Base64 signature over rotationStartPayload (#178). */
   readonly startSignature: string
-  /** The new key wrapped to each requested holder; empty for a removal. */
-  readonly holderWraps: readonly {
-    userId: string
-    wrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
-  }[]
 }
 
 export interface StartGroupRotationResponse {
@@ -496,28 +486,28 @@ export interface StartGroupRotationResponse {
 }
 
 /**
- * #178: checks the key a leaving member wrapped for the caller before the
- * caller moves onto it. Carries only wrapped material; the verdict is all that
- * comes back. See credential-material.ts's checkPendingGroupKey.
+ * #178: signs the rotation start a LEAVE carries, naming the caller as the
+ * member removed. No key is minted. See credential-material.ts's
+ * signLeaveRotationStart.
  */
-export interface CheckPendingGroupKeyRequest {
-  readonly kind: 'checkPendingGroupKey'
+export interface SignLeaveRotationStartRequest {
+  readonly kind: 'signLeaveRotationStart'
   readonly id: string
   readonly userId: string
   readonly groupId: string
-  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
   readonly ownGeneration: number
-  readonly pendingWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
-  /** The GENKEY# link for ownGeneration. */
-  readonly link: { nonce: string; ciphertext: string }
 }
 
-export type CheckPendingGroupKeyResult = 'ok' | 'pending-unreadable' | 'link-mismatch'
+export interface SignLeaveRotationStartResult {
+  readonly generation: number
+  /** Base64 signature over rotationStartPayload (#178). */
+  readonly startSignature: string
+}
 
-export interface CheckPendingGroupKeyResponse {
-  readonly kind: 'checkPendingGroupKeyDone'
+export interface SignLeaveRotationStartResponse {
+  readonly kind: 'signLeaveRotationStartDone'
   readonly id: string
-  readonly result: CheckPendingGroupKeyResult
+  readonly result: SignLeaveRotationStartResult
 }
 
 /**
@@ -689,7 +679,7 @@ export type WorkerRequest =
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
   | StartGroupRotationRequest
-  | CheckPendingGroupKeyRequest
+  | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
   | ClearLiveKeysRequest
 
@@ -711,6 +701,6 @@ export type WorkerResponse =
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
   | StartGroupRotationResponse
-  | CheckPendingGroupKeyResponse
+  | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse
   | WorkerErrorResponse

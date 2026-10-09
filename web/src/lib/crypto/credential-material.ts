@@ -709,13 +709,6 @@ async function unwrapOwnGroupKey(
  * tab) re-derives it from the caller's own MEMBER# entry rather than keeping it
  * in memory. The new key never leaves this module in the clear. Also signs
  * the rotation start naming `subjectUserId`, the member being removed.
- *
- * `holders` is for a LEAVE (#178): the caller departs in the same transaction,
- * so their own copy would vanish with them. The new key is also wrapped to each
- * holder (memberWrapAAD for that holder at the new generation, the same wrap a
- * re-wrap would write), and the server moves their entry point in the leave
- * transaction. Their public keys arrive from the caller, which has ALREADY
- * checked each against its signed pins and admissions; this cannot.
  */
 export async function startGroupRotation(
   keys: LiveKeys,
@@ -723,13 +716,11 @@ export async function startGroupRotation(
   ownWrappedGroupKey: Wrapped,
   ownGeneration: number,
   subjectUserId: string,
-  holders: readonly { userId: string; x25519PublicKey: Uint8Array }[] = [],
 ): Promise<{
   generation: number
   link: { nonce: string; ciphertext: string }
   removerWrappedKey: WireWrapped
   startSignature: string
-  holderWraps: { userId: string; wrappedKey: WireWrapped }[]
 }> {
   const oldKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
   const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
@@ -748,83 +739,33 @@ export async function startGroupRotation(
     ed25519.SigningContext.RotationStart,
     rotationStartPayload(groupId, keys.userId, subjectUserId, generation),
   )
-  const holderWraps: { userId: string; wrappedKey: WireWrapped }[] = []
-  for (const h of holders) {
-    if (h.userId === keys.userId) {
-      throw new Error('crypto: a leaver cannot be their own key holder')
-    }
-    if (h.x25519PublicKey.length !== X25519_KEY_LEN) {
-      throw new Error('crypto: holder X25519 public key must be 32 bytes')
-    }
-    const wrapped = await wrap(
-      h.x25519PublicKey,
-      newKey,
-      memberWrapAAD(groupId, h.userId, generation),
-    )
-    holderWraps.push({ userId: h.userId, wrappedKey: toWireWrapped(wrapped) })
-  }
   return {
     generation,
     link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
     removerWrappedKey: toWireWrapped(removerWrapped),
     startSignature: bytesToBase64(startSignature),
-    holderWraps,
   }
 }
 
-/** What {@link checkPendingGroupKey} found. */
-export type PendingKeyVerdict =
-  /** The pending key opens the chain link to exactly the caller's own current key. */
-  | 'ok'
-  /** The pending wrap does not open for this caller at the next generation. */
-  | 'pending-unreadable'
-  /** It opens, but the chain link does not hold the caller's own key under it. */
-  | 'link-mismatch'
-
 /**
- * #178: whether the key a LEAVING member wrapped for the caller can be trusted
- * to be the next generation's key. The leaver is the party trusted least at
- * that moment and the server cannot read the wrap, so the caller checks it
- * itself before moving onto it: the pending wrap must open for them at
- * ownGeneration+1, and the GENKEY# link for ownGeneration (their own key under
- * the new one) must open under it to EXACTLY the key they already hold. A key
- * that passes can read everything the caller can and was the one the leaver
- * chained; one that fails would, adopted, replace the caller's only copy with
- * something that opens nothing.
- *
- * Throws only when the caller's OWN key cannot be unwrapped (a local problem,
- * not a verdict on the leaver).
+ * #178: the one thing a LEAVING member contributes to the rotation their leave
+ * starts: a signature over the rotation start naming THEMSELVES as the member
+ * removed, for the generation after their own. They mint no key and wrap
+ * nothing, so a hostile leaver never holds the next generation's key; an admin
+ * at their generation takes the marker over and mints it (startGroupRotation).
  */
-export async function checkPendingGroupKey(
+export function signLeaveRotationStart(
   keys: LiveKeys,
   groupId: string,
-  ownWrappedGroupKey: Wrapped,
   ownGeneration: number,
-  pendingWrappedKey: Wrapped,
-  link: { nonce: Uint8Array; ciphertext: Uint8Array },
-): Promise<PendingKeyVerdict> {
-  const ownKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
-  let newKey: Uint8Array
-  try {
-    newKey = await unwrap(
-      keys.wrappingKey.privateKey,
-      pendingWrappedKey,
-      memberWrapAAD(groupId, keys.userId, ownGeneration + 1),
-    )
-  } catch {
-    return 'pending-unreadable'
-  }
-  if (newKey.length !== KEY_SIZE) return 'pending-unreadable'
-  let chained: Uint8Array
-  try {
-    chained = await decrypt(newKey, link.nonce, link.ciphertext, genKeyAAD(groupId, ownGeneration))
-  } catch {
-    return 'link-mismatch'
-  }
-  if (chained.length !== ownKey.length) return 'link-mismatch'
-  let diff = 0
-  for (let i = 0; i < ownKey.length; i++) diff |= (chained[i] ?? 0) ^ (ownKey[i] ?? 0)
-  return diff === 0 ? 'ok' : 'link-mismatch'
+): { generation: number; startSignature: string } {
+  const generation = ownGeneration + 1
+  const startSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RotationStart,
+    rotationStartPayload(groupId, keys.userId, keys.userId, generation),
+  )
+  return { generation, startSignature: bytesToBase64(startSignature) }
 }
 
 /**

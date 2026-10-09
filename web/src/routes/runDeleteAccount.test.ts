@@ -57,7 +57,8 @@ const noRotation: LeaveDeps['rotation'] = {
       throw new Error(`an Open group must not touch rotation deps (${String(name)})`)
     },
   }),
-  startGroupRotation: () => Promise.reject(new Error('an Open group must not start a rotation')),
+  signLeaveRotationStart: () =>
+    Promise.reject(new Error('an Open group must not start a rotation')),
 }
 
 function deps(over: Partial<DeleteAccountDeps> = {}): DeleteAccountDeps & { calls: string[] } {

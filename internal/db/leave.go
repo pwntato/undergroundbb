@@ -134,60 +134,33 @@ type LeaveDemotion struct {
 	Signature        []byte
 }
 
-// MaxLeaveHolders caps how many admins one leave re-wraps the new key to. A
-// DynamoDB transaction holds at most 100 items and the rest of a leave needs a
-// handful; anyone beyond the cap is re-wrapped by the ordinary rotation batch.
-const MaxLeaveHolders = 50
-
 // ErrRotationRequired is returned when a member of a Rotating group leaves
-// while others remain and sends no rotation: the key they hold would otherwise
-// keep working for them (#178).
+// while others remain and sends no rotation start: the key they hold would
+// otherwise keep working for them (#178).
 var ErrRotationRequired = errors.New("db: leaving a Rotating group needs a key rotation")
 
 // ErrRotationNotApplicable is returned when an Open group's leave carries a
 // rotation: an Open group has no key to rotate.
 var ErrRotationNotApplicable = errors.New("db: an Open group does not rotate keys on leave")
 
-// ErrLeaveHolders is returned when the holders named by a leave's rotation are
-// empty, too many, repeated, or include the leaver.
-var ErrLeaveHolders = errors.New("db: a leave's rotation needs 1 to MaxLeaveHolders distinct admins other than the leaver")
-
-// ErrLeaveHolderChanged is returned when a holder's entry is no longer an
-// admin at the generation the new key was wrapped against (their role or key
-// moved since the request was built). Nothing was written.
-var ErrLeaveHolderChanged = errors.New("db: a key holder changed during leave, retry")
-
-// LeaveHolder is one admin the leaver's new group key is wrapped to.
-type LeaveHolder struct {
-	UserID     string
-	WrappedKey models.WrappedKey
-}
-
 // LeaveRotation is what a Rotating-group leave commits besides the delete
-// (#178). The leaver mints the next generation exactly as a remover does, but
-// they are departing, so the only copy of the minted key cannot stay with
-// them: it goes to Holders, who find it waiting on their entry
-// (Membership.PendingWrappedKey).
+// (#178): the ROTATION marker, carrying the leaver's signed statement that
+// they are the member being removed. Nothing else.
 //
-// It is deliberately NOT written over their Generation and WrappedGroupKey.
-// The server can only check the shape of what a leaver sends, and a leaver who
-// is leaving hostile could send bytes that open to nothing, wiping the only
-// copy of the key every admin holds. A holder instead adopts the pending key
-// (AdoptPendingKey) after opening Link with it and finding their own key
-// inside; if no holder's pending key checks out, an admin replaces the
-// rotation (RestartLeaveRotation).
+// The leaver mints no key and wraps nothing. A key a leaver generates is a key
+// a leaver can keep, so a hostile one would read everything posted after they
+// left; and anything the server accepted from them to put over an admin's key
+// could only be shape-checked. Instead the marker blocks every other rotation
+// until an admin at the leaver's generation takes it over
+// (TakeOverLeaveRotation): that admin mints the key, writes the chain link
+// under their own signature naming the leaver, and re-wraps everyone else.
 type LeaveRotation struct {
 	// CurrentGeneration is the leaver's own entry-point generation; the
 	// rotation goes to CurrentGeneration+1 and every conditional hangs on it.
 	CurrentGeneration int64
-	// Link is generation CurrentGeneration's key under the new one, stored as
-	// GENKEY#<CurrentGeneration>.
-	Link models.WrappedBlob
 	// StartSignature is the leaver's signature over crypto.RotationStartPayload
-	// naming themselves as the removed member. Stored on the marker AND the
-	// chain link, as for a removal.
+	// naming themselves as the removed member.
 	StartSignature []byte
-	Holders        []LeaveHolder
 }
 
 // LeaveGroup removes userID from the group -- issues #66 and #55.
@@ -207,12 +180,12 @@ type LeaveRotation struct {
 // other's row deleted or in conflict).
 //
 // In a Rotating group (rotating true) leaving while others remain also starts
-// a key rotation in the same transaction (rot, required): the marker, the
-// GENKEY# link, and each holder's entry point at the new generation. Otherwise
-// the leaver would keep a key that still works for everything posted until the
-// next removal, and a server colluding with them could re-list them and have
-// the next rotation wrap to them (#178). The only member leaving deletes the
-// group and needs no rotation.
+// a key rotation in the same transaction (rot, required): the marker, which an
+// admin then takes over and mints the key for. Otherwise the leaver would keep
+// a key that still works for everything posted until the next removal, and a
+// server colluding with them could re-list them and have the next rotation
+// wrap to them (#178). The only member leaving deletes the group and needs no
+// rotation.
 func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotion *LeaveDemotion, rot *LeaveRotation, rotating bool) (groupDeleted bool, err error) {
 	roles, err := c.memberRoles(ctx, groupID)
 	if err != nil {
@@ -230,10 +203,6 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 		return false, ErrRotationRequired
 	case !rotating && rot != nil:
 		return false, ErrRotationNotApplicable
-	case rot != nil:
-		if err := checkLeaveHolders(rot.Holders, userID); err != nil {
-			return false, err
-		}
 	}
 
 	successor := ""
@@ -271,7 +240,8 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 		}
 	}
 	if rot != nil {
-		// The new key was minted from the leaver's entry at this generation.
+		// The signed start names this generation; a leaver whose entry moved on
+		// since is a stale view, not a rotation from the wrong generation.
 		deleteNames["#gen"] = "Generation"
 		deleteCond += " AND #gen = :cur"
 		deleteValues[":cur"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(rot.CurrentGeneration, 10)}
@@ -313,21 +283,16 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 	}
 	profileCheckIndex := -1
 	if role == models.RoleAdmin {
-		// A transaction may touch an item once. When the successor is also a
-		// key holder, the holder's update already conditions on them being an
-		// admin, which is the same check, so the separate one is skipped.
-		if !holdsKey(rot, successor) {
-			adminCheckIndex = len(items)
-			items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
-				TableName:                aws.String(c.table),
-				Key:                      memberKey(groupID, successor),
-				ConditionExpression:      aws.String("#role = :admin"),
-				ExpressionAttributeNames: map[string]string{"#role": "Role"},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
-				},
-			}})
-		}
+		adminCheckIndex = len(items)
+		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+			TableName:                aws.String(c.table),
+			Key:                      memberKey(groupID, successor),
+			ConditionExpression:      aws.String("#role = :admin"),
+			ExpressionAttributeNames: map[string]string{"#role": "Role"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
+			},
+		}})
 		// ...and that admin's account must still be live when this commits, so
 		// a deletion between the read above and here cannot strand the group.
 		profileCheckIndex = len(items)
@@ -342,13 +307,13 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 	}
 	rotationIndex := -1
 	if rot != nil {
-		var rotItems []types.TransactWriteItem
-		rotItems, err = c.leaveRotationItems(groupID, userID, rot)
+		var markerItem types.TransactWriteItem
+		markerItem, err = c.leaveMarker(groupID, userID, rot)
 		if err != nil {
 			return false, err
 		}
 		rotationIndex = len(items)
-		items = append(items, rotItems...)
+		items = append(items, markerItem)
 	}
 	// The leaver's admission record goes with their membership (#178). Hygiene
 	// for an honest server only: a malicious one can keep it, and the signed
@@ -359,10 +324,6 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 		switch {
 		case rot != nil && isConditionalCheckFailure(err, rotationIndex):
 			return false, ErrRotationInProgress
-		case rot != nil && isConditionalCheckFailure(err, rotationIndex+1):
-			return false, ErrRotationStaleGeneration
-		case rot != nil && anyConditionalCheckFailure(err, rotationIndex+2, len(rot.Holders)):
-			return false, ErrLeaveHolderChanged
 		case elevated && isConditionalCheckFailure(err, grantIndex):
 			return false, ErrLeaveGrantKeyTaken
 		case isConditionalCheckFailure(err, deleteIndex),
@@ -523,45 +484,11 @@ func (c *Client) deleteOwnInvites(ctx context.Context, groupID, userID string) e
 	return c.batchDelete(ctx, keys)
 }
 
-// checkLeaveHolders enforces the holder rules the transaction cannot express:
-// a bounded, repeat-free set that does not include the leaver.
-func checkLeaveHolders(holders []LeaveHolder, leaver string) error {
-	if len(holders) == 0 || len(holders) > MaxLeaveHolders {
-		return ErrLeaveHolders
-	}
-	seen := make(map[string]bool, len(holders))
-	for _, h := range holders {
-		if h.UserID == "" || h.UserID == leaver || seen[h.UserID] {
-			return ErrLeaveHolders
-		}
-		seen[h.UserID] = true
-	}
-	return nil
-}
-
-// leaveRotationItems builds the rotation half of a leave, in the order
-// LeaveGroup's error mapping expects: marker, link, then one update per
-// holder. The marker's condition is the "one rotation at a time" rule; the
-// link's is the guard that a generation is only ever minted once; a holder's
-// is that they are still an admin at the generation the key was wrapped for.
-// A holder's entry point is NOT moved: the wrap lands beside it as pending.
-func (c *Client) leaveRotationItems(groupID, leaver string, rot *LeaveRotation) ([]types.TransactWriteItem, error) {
+// leaveMarker builds the ROTATION marker a leave writes. StartedBy and
+// RemovedUserID are both the leaver: that pair is how a marker no admin has
+// taken over yet is recognised (TakeOverLeaveRotation, and every client).
+func (c *Client) leaveMarker(groupID, leaver string, rot *LeaveRotation) (types.TransactWriteItem, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	link, err := attributevalue.MarshalMap(models.GenerationKey{
-		Record: models.Record{
-			PK:        "GROUP#" + groupID,
-			SK:        GenKeySortKey(rot.CurrentGeneration),
-			Type:      "GenerationKey",
-			CreatedAt: now,
-		},
-		Wrapped:        rot.Link,
-		RemoverUserID:  leaver,
-		RemovedUserID:  leaver,
-		StartSignature: rot.StartSignature,
-	})
-	if err != nil {
-		return nil, err
-	}
 	marker, err := attributevalue.MarshalMap(models.Rotation{
 		Record: models.Record{
 			PK:        "GROUP#" + groupID,
@@ -576,61 +503,11 @@ func (c *Client) leaveRotationItems(groupID, leaver string, rot *LeaveRotation) 
 		StartSignature: rot.StartSignature,
 	})
 	if err != nil {
-		return nil, err
+		return types.TransactWriteItem{}, err
 	}
-	items := []types.TransactWriteItem{
-		{Put: &types.Put{
-			TableName:           aws.String(c.table),
-			Item:                marker,
-			ConditionExpression: aws.String("attribute_not_exists(PK)"),
-		}},
-		{Put: &types.Put{
-			TableName:           aws.String(c.table),
-			Item:                link,
-			ConditionExpression: aws.String("attribute_not_exists(PK)"),
-		}},
-	}
-	for _, h := range rot.Holders {
-		wrapped, err := attributevalue.Marshal(h.WrappedKey)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, types.TransactWriteItem{Update: &types.Update{
-			TableName:                aws.String(c.table),
-			Key:                      memberKey(groupID, h.UserID),
-			ConditionExpression:      aws.String("#role = :admin AND #gen = :cur"),
-			UpdateExpression:         aws.String("SET #pending = :wrapped"),
-			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation", "#pending": "PendingWrappedKey"},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":admin":   &types.AttributeValueMemberS{Value: models.RoleAdmin},
-				":cur":     &types.AttributeValueMemberN{Value: strconv.FormatInt(rot.CurrentGeneration, 10)},
-				":wrapped": wrapped,
-			},
-		}})
-	}
-	return items, nil
-}
-
-// anyConditionalCheckFailure reports whether the transaction was cancelled by
-// a failed condition on any of n consecutive items starting at first.
-func anyConditionalCheckFailure(err error, first, n int) bool {
-	for i := first; i < first+n; i++ {
-		if isConditionalCheckFailure(err, i) {
-			return true
-		}
-	}
-	return false
-}
-
-// holdsKey reports whether userID is one of rot's key holders.
-func holdsKey(rot *LeaveRotation, userID string) bool {
-	if rot == nil {
-		return false
-	}
-	for _, h := range rot.Holders {
-		if h.UserID == userID {
-			return true
-		}
-	}
-	return false
+	return types.TransactWriteItem{Put: &types.Put{
+		TableName:           aws.String(c.table),
+		Item:                marker,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	}}, nil
 }

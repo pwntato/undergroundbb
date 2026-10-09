@@ -32,10 +32,10 @@ import type {
   RewrapGroupKeyRequest,
   RewrapGroupKeyResponse,
   RewrapGroupKeyResult,
+  SignLeaveRotationStartRequest,
+  SignLeaveRotationStartResponse,
+  SignLeaveRotationStartResult,
   StartGroupRotationRequest,
-  CheckPendingGroupKeyRequest,
-  CheckPendingGroupKeyResponse,
-  CheckPendingGroupKeyResult,
   StartGroupRotationResponse,
   StartGroupRotationResult,
   SignGroupCreationRequest,
@@ -640,13 +640,14 @@ export function startGroupRotation(
   )
 }
 
-/** #178: checks the key a leaving member wrapped for the caller before they adopt it (see checkPendingGroupKey in credential-material.ts). */
-export function checkPendingGroupKey(
-  req: Omit<CheckPendingGroupKeyRequest, 'kind' | 'id'>,
-): Promise<CheckPendingGroupKeyResult> {
-  return workerCall<CheckPendingGroupKeyResponse, CheckPendingGroupKeyResult>(
-    (id) => ({ kind: 'checkPendingGroupKey', id, ...req }) satisfies CheckPendingGroupKeyRequest,
-    'checkPendingGroupKeyDone',
+/** #178: signs the rotation start a leave carries, naming the caller. Mints no key (see signLeaveRotationStart in credential-material.ts). */
+export function signLeaveRotationStart(
+  req: Omit<SignLeaveRotationStartRequest, 'kind' | 'id'>,
+): Promise<SignLeaveRotationStartResult> {
+  return workerCall<SignLeaveRotationStartResponse, SignLeaveRotationStartResult>(
+    (id) =>
+      ({ kind: 'signLeaveRotationStart', id, ...req }) satisfies SignLeaveRotationStartRequest,
+    'signLeaveRotationStartDone',
     (res) => res.result,
   )
 }

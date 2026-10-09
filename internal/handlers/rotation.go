@@ -136,48 +136,9 @@ func (h *Handler) completeRotation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// adoptRotationKey implements POST /api/groups/{groupId}/rotation/adopt
-// (#178): an admin whose leave-supplied key passed their own check moves onto
-// it. The server cannot read the key; the CLIENT's check (the chain link opens
-// under it to the admin's own current key) is what makes this safe to ask for.
-func (h *Handler) adoptRotationKey(w http.ResponseWriter, r *http.Request) {
-	userID, ok := sessionUserID(r)
-	if !ok {
-		WriteError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	groupID := r.PathValue("groupId")
-	if !idgen.ValidUUID(groupID) {
-		groupNotFound(w)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxChangeRoleBodyBytes)
-	var req completeRotationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteError(w, http.StatusBadRequest, "malformed request body")
-		return
-	}
-	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not adopt the new key")
-		return
-	}
-	if caller == nil {
-		groupNotFound(w)
-		return
-	}
-	if caller.Role != models.RoleAdmin {
-		WriteError(w, http.StatusForbidden, "only a group admin can adopt a rotation's key")
-		return
-	}
-	if !h.writeRotationErr(w, h.db.AdoptPendingKey(r.Context(), groupID, userID, req.Generation), "could not adopt the new key") {
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-// restartRotationRequest replaces a rotation a leaver started: the same
-// material a removal's rotation carries, minted by the calling admin.
-type restartRotationRequest struct {
+// takeOverRotationRequest is the same material a removal's rotation carries,
+// minted by the calling admin in place of the bare marker a leaver left.
+type takeOverRotationRequest struct {
 	Generation int64       `json:"generation"`
 	Link       wrappedBlob `json:"link"`
 	// WrappedKey is the new key wrapped for the caller (their only copy).
@@ -185,13 +146,13 @@ type restartRotationRequest struct {
 	StartSignature string     `json:"startSignature"`
 }
 
-// restartRotation implements POST /api/groups/{groupId}/rotation/restart
-// (#178): an admin whose check of a leaver's key FAILED replaces the leaver's
-// rotation with their own, which names the same leaver as removed. Refused
-// once any admin has adopted the leaver's key (409 rotation_adopted: that
-// admin holds a verified copy and re-wraps the rest), or when the running
-// rotation was not started by a leaver.
-func (h *Handler) restartRotation(w http.ResponseWriter, r *http.Request) {
+// takeOverRotation implements POST /api/groups/{groupId}/rotation/takeover
+// (#178): an admin at the leaver's generation turns the marker a leaving member
+// wrote into a rotation the admin mints. The leaver only signed the start, so
+// they never hold the new key. Refused (409 rotation_not_active) when the
+// running rotation is not an unclaimed leaver's: another admin got there first,
+// it finished, or it was a removal's.
+func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
 		WriteError(w, http.StatusUnauthorized, "not authenticated")
@@ -203,14 +164,14 @@ func (h *Handler) restartRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRewrapBodyBytes)
-	var req restartRotationRequest
+	var req takeOverRotationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not restart the rotation")
+		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
 		return
 	}
 	if caller == nil {
@@ -218,16 +179,16 @@ func (h *Handler) restartRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if caller.Role != models.RoleAdmin {
-		WriteError(w, http.StatusForbidden, "only a group admin can restart a rotation")
+		WriteError(w, http.StatusForbidden, "only a group admin can take over a rotation")
 		return
 	}
 	marker, err := h.db.GetRotation(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not restart the rotation")
+		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
 		return
 	}
 	if marker == nil || marker.RemovedUserID == "" || marker.StartedBy != marker.RemovedUserID || marker.Generation != caller.Generation+1 {
-		h.writeRotationErr(w, db.ErrRotationNotActive, "could not restart the rotation")
+		h.writeRotationErr(w, db.ErrRotationNotActive, "could not take over the rotation")
 		return
 	}
 	if req.Generation != caller.Generation+1 {
@@ -253,7 +214,7 @@ func (h *Handler) restartRotation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	in := db.RestartLeaveRotationInput{
+	in := db.TakeOverLeaveRotationInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
 		LeaverUserID:      marker.RemovedUserID,
@@ -262,7 +223,7 @@ func (h *Handler) restartRotation(w http.ResponseWriter, r *http.Request) {
 		CallerWrappedKey:  wrapped,
 		StartSignature:    sig,
 	}
-	if !h.writeRotationErr(w, h.db.RestartLeaveRotation(r.Context(), in), "could not restart the rotation") {
+	if !h.writeRotationErr(w, h.db.TakeOverLeaveRotation(r.Context(), in), "could not take over the rotation") {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -281,10 +242,6 @@ func (h *Handler) writeRotationErr(w http.ResponseWriter, err error, fallback st
 		WriteErrorWithCode(w, http.StatusConflict, "a member in the batch left or changed; re-list members and resend", "member_changed")
 	case errors.Is(err, db.ErrMembersBehind):
 		WriteErrorWithCode(w, http.StatusConflict, "some members are not yet on the new key generation", "members_behind")
-	case errors.Is(err, db.ErrNoPendingKey):
-		WriteErrorWithCode(w, http.StatusConflict, "no key from the leaving member is waiting for you", "no_pending_key")
-	case errors.Is(err, db.ErrRotationAdopted):
-		WriteErrorWithCode(w, http.StatusConflict, "an admin already adopted this rotation's key; wait to be re-wrapped from it", "rotation_adopted")
 	case errors.Is(err, db.ErrRoleChangeConflict):
 		WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
 	default:

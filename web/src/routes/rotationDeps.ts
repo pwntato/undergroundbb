@@ -5,7 +5,6 @@
 
 import { listAllPins, putPin } from '@/lib/api/pins'
 import {
-  adoptRotationKey,
   completeRotation,
   getGroup,
   getKeychain,
@@ -13,12 +12,11 @@ import {
   listDesignations,
   listGrants,
   listMembers,
-  restartRotation,
+  takeOverRotation,
   rewrapMembers,
 } from '@/lib/api/groups'
 import { getUsers } from '@/lib/api/users'
 import {
-  checkPendingGroupKey,
   getOwnSigningKey,
   rewrapGroupKey,
   signPin,
@@ -55,9 +53,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
     rewrapCrypto: rewrapGroupKey,
     rewrapMembers,
     completeRotation,
-    checkPendingCrypto: checkPendingGroupKey,
-    adoptRotationKey,
-    startReplacementCrypto: startGroupRotation,
-    restartRotation,
+    takeOverCrypto: startGroupRotation,
+    takeOverRotation,
   }
 }

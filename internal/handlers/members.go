@@ -100,10 +100,6 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 
 const maxChangeRoleBodyBytes = 8 * 1024
 
-// maxLeaveBodyBytes is larger because a leave in a Rotating group carries up to
-// db.MaxLeaveHolders wrapped keys (about 250 bytes each).
-const maxLeaveBodyBytes = 32 * 1024
-
 // changeRoleRequest is the wire shape of PUT /api/groups/{id}/members/{uid}/role.
 // The client signs crypto.RoleGrantPayload(groupID, subjectUserID, role,
 // grantSortKey, grantorGrantRef) under crypto.ContextRoleGrant with its own
@@ -304,25 +300,17 @@ type leaveGroupRequest struct {
 	Rotation *leaveRotationRequest `json:"rotation"`
 }
 
-// leaveRotationRequest is the key rotation a leave starts in a private
-// Rotating group (#178, docs/DESIGN.md "The recipient set is taken from the
-// server"). The leaver mints the next group key as a remover would, but they
-// are departing, so the only copy of it goes to Holders: other admins, each
-// with the new key wrapped to them, whose entry points move to the new
-// generation in the same transaction. Any holder then finishes the rotation.
+// leaveRotationRequest is the rotation a leave starts in a private Rotating
+// group (#178, docs/DESIGN.md "The recipient set is taken from the server"):
+// only the leaver's signed statement that they are the member being removed.
+// The leaver mints no key, so a hostile leaver never holds the next one; an
+// admin takes the marker over and mints it (takeOverRotation).
 type leaveRotationRequest struct {
 	// Generation must be exactly one past the leaver's own entry point.
-	Generation int64       `json:"generation"`
-	Link       wrappedBlob `json:"link"`
+	Generation int64 `json:"generation"`
 	// StartSignature (base64) is the leaver's signature over
 	// crypto.RotationStartPayload naming THEMSELVES as the removed member.
-	StartSignature string               `json:"startSignature"`
-	Holders        []leaveHolderRequest `json:"holders"`
-}
-
-type leaveHolderRequest struct {
-	UserID     string     `json:"userId"`
-	WrappedKey wrappedKey `json:"wrappedKey"`
+	StartSignature string `json:"startSignature"`
 }
 
 // empty reports whether the DEMOTION half of the body is absent; the rotation
@@ -362,7 +350,7 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxLeaveBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxChangeRoleBodyBytes)
 	var req leaveGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		WriteError(w, http.StatusBadRequest, "malformed request body")
@@ -434,17 +422,11 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID, demotion, rot, rotating)
 	switch {
 	case errors.Is(err, db.ErrRotationRequired):
-		WriteErrorWithCode(w, http.StatusBadRequest, "leaving a Rotating group needs a key rotation: generation, link, startSignature and holders", "rotation_required")
+		WriteErrorWithCode(w, http.StatusBadRequest, "leaving a Rotating group needs a key rotation: generation and startSignature", "rotation_required")
 	case errors.Is(err, db.ErrRotationNotApplicable):
 		WriteErrorWithCode(w, http.StatusBadRequest, "this group does not rotate keys on leave", "rotation_not_applicable")
-	case errors.Is(err, db.ErrLeaveHolders):
-		WriteErrorWithCode(w, http.StatusBadRequest, "rotation.holders: 1 to 50 distinct admins other than you", "bad_holders")
-	case errors.Is(err, db.ErrLeaveHolderChanged):
-		WriteErrorWithCode(w, http.StatusConflict, "an admin's role or key changed; reload and try again", "holder_changed")
 	case errors.Is(err, db.ErrRotationInProgress):
 		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; try leaving again once it has finished", "rotation_in_progress")
-	case errors.Is(err, db.ErrRotationStaleGeneration):
-		WriteErrorWithCode(w, http.StatusConflict, "your key is behind the group's current generation; reload and try again", "rotation_stale_generation")
 	case errors.Is(err, db.ErrNotMember):
 		groupNotFound(w)
 	case errors.Is(err, db.ErrLastAdmin):
@@ -467,40 +449,19 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildLeaveRotation validates the rotation half of a leave: the generation is
-// exactly one past the caller's own, the link and every holder's wrapped key
-// decode, the holders are a bounded set of well-formed ids (the server cannot
-// read the wraps, so it checks shape, not content; repeats and the caller are
-// db.LeaveGroup's), and the start signature verifies under the caller's CURRENT
-// key naming the caller themselves as the removed member. Whether each holder
-// is still an admin at the caller's generation is the transaction's condition,
-// not a read here.
+// exactly one past the caller's own, and the start signature verifies under the
+// caller's CURRENT key naming the caller themselves as the removed member.
+// Whether the caller is still at that generation is the transaction's
+// condition, not a read here.
 func (h *Handler) buildLeaveRotation(ctx context.Context, groupID, userID string, callerGeneration int64, req *leaveRotationRequest) (*db.LeaveRotation, removeRejection, string) {
 	if req.Generation != callerGeneration+1 {
 		return nil, removeRejection{http.StatusBadRequest, "rotation_required"}, fmt.Sprintf("rotation.generation: must be %d (one past your own key generation)", callerGeneration+1)
-	}
-	link, err := decodeWrappedBlob(req.Link)
-	if err != nil {
-		return nil, removeRejection{http.StatusBadRequest, "rotation_required"}, "rotation.link: " + err.Error()
-	}
-	if len(req.Holders) == 0 || len(req.Holders) > db.MaxLeaveHolders {
-		return nil, removeRejection{http.StatusBadRequest, "bad_holders"}, "rotation.holders: 1 to 50 distinct admins other than you"
-	}
-	holders := make([]db.LeaveHolder, 0, len(req.Holders))
-	for _, hr := range req.Holders {
-		if !idgen.ValidUUID(hr.UserID) {
-			return nil, removeRejection{http.StatusBadRequest, "bad_holders"}, "rotation.holders: malformed user id"
-		}
-		wk, err := decodeWrappedKey(hr.WrappedKey)
-		if err != nil {
-			return nil, removeRejection{http.StatusBadRequest, "bad_holders"}, "rotation.holders.wrappedKey: " + err.Error()
-		}
-		holders = append(holders, db.LeaveHolder{UserID: hr.UserID, WrappedKey: wk})
 	}
 	sig, rej, msg := h.verifyRotationStart(ctx, userID, groupID, userID, req.StartSignature, callerGeneration)
 	if msg != "" {
 		return nil, rej, msg
 	}
-	return &db.LeaveRotation{CurrentGeneration: callerGeneration, Link: link, StartSignature: sig, Holders: holders}, removeRejection{}, ""
+	return &db.LeaveRotation{CurrentGeneration: callerGeneration, StartSignature: sig}, removeRejection{}, ""
 }
 
 // buildLeaveDemotion validates a leave request's signed self-demotion the way
