@@ -431,3 +431,135 @@ func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing
 		t.Fatalf("retry err = %v, want ErrLastAdmin", err)
 	}
 }
+
+// --- Leaving a Rotating group starts a key rotation (#178) ---
+
+func testLeaveRotation(gen int64, holders ...string) *LeaveRotation {
+	rot := &LeaveRotation{
+		CurrentGeneration: gen,
+		Link:              models.WrappedBlob{Nonce: []byte("n"), Ciphertext: []byte("c")},
+		StartSignature:    []byte("start-sig"),
+	}
+	for _, h := range holders {
+		rot.Holders = append(rot.Holders, LeaveHolder{UserID: h, WrappedKey: models.WrappedKey{EphemeralPub: []byte("e"), Nonce: []byte("n"), Ciphertext: []byte("c")}})
+	}
+	return rot
+}
+
+func memberGeneration(t *testing.T, c *Client, groupID, userID string) string {
+	t.Helper()
+	out, err := c.ddb.GetItem(context.Background(), getItemInput(c.table, "GROUP#"+groupID, "MEMBER#"+userID))
+	if err != nil || out.Item == nil {
+		t.Fatalf("get member %s: %v", userID, err)
+	}
+	return out.Item["Generation"].(*types.AttributeValueMemberN).Value
+}
+
+func TestLeaveGroupRotationRules(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "admin2", "admin")
+	putTestMember(t, c, g, "bob", "member")
+	ctx := context.Background()
+
+	// A Rotating group needs the rotation; an Open one must not carry one.
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, nil, true); !errors.Is(err, ErrRotationRequired) {
+		t.Fatalf("no rotation in a Rotating group: %v", err)
+	}
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(0, "admin1"), false); !errors.Is(err, ErrRotationNotApplicable) {
+		t.Fatalf("rotation in an Open group: %v", err)
+	}
+	// Holder sets: none, repeated, the leaver, too many.
+	many := make([]string, 0, MaxLeaveHolders+1)
+	for i := 0; i <= MaxLeaveHolders; i++ {
+		many = append(many, fmt.Sprintf("h%d", i))
+	}
+	for name, rot := range map[string]*LeaveRotation{
+		"none":     testLeaveRotation(0),
+		"repeated": testLeaveRotation(0, "admin1", "admin1"),
+		"leaver":   testLeaveRotation(0, "admin1", "bob"),
+		"too many": testLeaveRotation(0, many...),
+	} {
+		if _, err := c.LeaveGroup(ctx, g, "bob", nil, rot, true); !errors.Is(err, ErrLeaveHolders) {
+			t.Fatalf("%s holders: %v", name, err)
+		}
+	}
+	// The leaver must still be at the generation the key was minted from: a
+	// stale view (their entry moved on) is a conflict, not a rotation from the
+	// wrong generation.
+	// (The holder is at 5 so only the leaver's own condition can fail.)
+	if _, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(g, "admin1"),
+		UpdateExpression:          aws.String("SET Generation = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":g": &types.AttributeValueMemberN{Value: "5"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(5, "admin1"), true); !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("leaver at another generation: %v", err)
+	}
+	if _, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(c.table),
+		Key:                       memberKey(g, "admin1"),
+		UpdateExpression:          aws.String("SET Generation = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":g": &types.AttributeValueMemberN{Value: "0"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || itemExists(t, c, "GROUP#"+g, RotationSortKey) {
+		t.Fatal("a refused leave changed something")
+	}
+	if memberGeneration(t, c, g, "admin1") != "0" {
+		t.Fatal("a refused leave moved a holder")
+	}
+
+	// A good leave commits all of it, and a second leave while the rotation
+	// runs is refused.
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(0, "admin1", "admin2"), true); err != nil {
+		t.Fatal(err)
+	}
+	if itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || !itemExists(t, c, "GROUP#"+g, RotationSortKey) || !itemExists(t, c, "GROUP#"+g, GenKeySortKey(0)) {
+		t.Fatal("leave did not commit membership, marker and link together")
+	}
+	if memberGeneration(t, c, g, "admin1") != "1" || memberGeneration(t, c, g, "admin2") != "1" {
+		t.Fatal("holders did not move to the new generation")
+	}
+	putTestMember(t, c, g, "dan", "member")
+	if _, err := c.LeaveGroup(ctx, g, "dan", nil, testLeaveRotation(0, "admin1"), true); !errors.Is(err, ErrRotationInProgress) {
+		t.Fatalf("second rotation: %v", err)
+	}
+}
+
+// An admin leaving is checked against a live successor; when that successor is
+// also a key holder the transaction would touch their row twice, which DynamoDB
+// refuses. The holder's own condition (admin, at the generation) covers it.
+func TestLeaveGroupSuccessorWhoIsAlsoAHolder(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "admin2", "admin")
+	putTestMember(t, c, g, "bob", "member")
+	// Every other admin is the holder, so the successor is among them.
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), testLeaveRotation(0, "admin2"), true); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if memberGeneration(t, c, g, "admin2") != "1" {
+		t.Fatal("holder did not move")
+	}
+}
+
+func TestLeaveGroupHolderWhoIsNotAnAdminIsAConflict(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "bob", "member")
+	putTestMember(t, c, g, "cat", "member")
+	if _, err := c.LeaveGroup(context.Background(), g, "bob", nil, testLeaveRotation(0, "admin1", "cat"), true); !errors.Is(err, ErrLeaveHolderChanged) {
+		t.Fatalf("non-admin holder: %v", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || memberGeneration(t, c, g, "admin1") != "0" {
+		t.Fatal("a refused leave changed something")
+	}
+}
