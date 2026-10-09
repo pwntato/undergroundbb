@@ -166,8 +166,16 @@ type LeaveHolder struct {
 // LeaveRotation is what a Rotating-group leave commits besides the delete
 // (#178). The leaver mints the next generation exactly as a remover does, but
 // they are departing, so the only copy of the minted key cannot stay with
-// them: it goes to Holders, each admin's entry point moving to the new
-// generation in the same transaction. Any holder can then finish the rotation.
+// them: it goes to Holders, who find it waiting on their entry
+// (Membership.PendingWrappedKey).
+//
+// It is deliberately NOT written over their Generation and WrappedGroupKey.
+// The server can only check the shape of what a leaver sends, and a leaver who
+// is leaving hostile could send bytes that open to nothing, wiping the only
+// copy of the key every admin holds. A holder instead adopts the pending key
+// (AdoptPendingKey) after opening Link with it and finding their own key
+// inside; if no holder's pending key checks out, an admin replaces the
+// rotation (RestartLeaveRotation).
 type LeaveRotation struct {
 	// CurrentGeneration is the leaver's own entry-point generation; the
 	// rotation goes to CurrentGeneration+1 and every conditional hangs on it.
@@ -536,6 +544,7 @@ func checkLeaveHolders(holders []LeaveHolder, leaver string) error {
 // holder. The marker's condition is the "one rotation at a time" rule; the
 // link's is the guard that a generation is only ever minted once; a holder's
 // is that they are still an admin at the generation the key was wrapped for.
+// A holder's entry point is NOT moved: the wrap lands beside it as pending.
 func (c *Client) leaveRotationItems(groupID, leaver string, rot *LeaveRotation) ([]types.TransactWriteItem, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	link, err := attributevalue.MarshalMap(models.GenerationKey{
@@ -590,12 +599,11 @@ func (c *Client) leaveRotationItems(groupID, leaver string, rot *LeaveRotation) 
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(groupID, h.UserID),
 			ConditionExpression:      aws.String("#role = :admin AND #gen = :cur"),
-			UpdateExpression:         aws.String("SET #gen = :next, #wrapped = :wrapped"),
-			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation", "#wrapped": "WrappedGroupKey"},
+			UpdateExpression:         aws.String("SET #pending = :wrapped"),
+			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation", "#pending": "PendingWrappedKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":admin":   &types.AttributeValueMemberS{Value: models.RoleAdmin},
 				":cur":     &types.AttributeValueMemberN{Value: strconv.FormatInt(rot.CurrentGeneration, 10)},
-				":next":    &types.AttributeValueMemberN{Value: strconv.FormatInt(rot.CurrentGeneration+1, 10)},
 				":wrapped": wrapped,
 			},
 		}})

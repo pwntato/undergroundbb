@@ -455,6 +455,16 @@ func memberGeneration(t *testing.T, c *Client, groupID, userID string) string {
 	return out.Item["Generation"].(*types.AttributeValueMemberN).Value
 }
 
+func memberHasAttr(t *testing.T, c *Client, groupID, userID, attr string) bool {
+	t.Helper()
+	out, err := c.ddb.GetItem(context.Background(), getItemInput(c.table, "GROUP#"+groupID, "MEMBER#"+userID))
+	if err != nil || out.Item == nil {
+		t.Fatalf("get member %s: %v", userID, err)
+	}
+	_, ok := out.Item[attr]
+	return ok
+}
+
 func TestLeaveGroupRotationRules(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
@@ -523,8 +533,14 @@ func TestLeaveGroupRotationRules(t *testing.T) {
 	if itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || !itemExists(t, c, "GROUP#"+g, RotationSortKey) || !itemExists(t, c, "GROUP#"+g, GenKeySortKey(0)) {
 		t.Fatal("leave did not commit membership, marker and link together")
 	}
-	if memberGeneration(t, c, g, "admin1") != "1" || memberGeneration(t, c, g, "admin2") != "1" {
-		t.Fatal("holders did not move to the new generation")
+	// A holder's entry is NOT moved by the leave: the wrap waits beside it.
+	for _, h := range []string{"admin1", "admin2"} {
+		if memberGeneration(t, c, g, h) != "0" {
+			t.Fatalf("%s moved to the new generation on the leaver's say-so", h)
+		}
+		if !memberHasAttr(t, c, g, h, "PendingWrappedKey") {
+			t.Fatalf("%s has no pending key", h)
+		}
 	}
 	putTestMember(t, c, g, "dan", "member")
 	if _, err := c.LeaveGroup(ctx, g, "dan", nil, testLeaveRotation(0, "admin1"), true); !errors.Is(err, ErrRotationInProgress) {
@@ -545,8 +561,8 @@ func TestLeaveGroupSuccessorWhoIsAlsoAHolder(t *testing.T) {
 	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), testLeaveRotation(0, "admin2"), true); err != nil {
 		t.Fatalf("leave: %v", err)
 	}
-	if memberGeneration(t, c, g, "admin2") != "1" {
-		t.Fatal("holder did not move")
+	if !memberHasAttr(t, c, g, "admin2", "PendingWrappedKey") {
+		t.Fatal("holder has no pending key")
 	}
 }
 

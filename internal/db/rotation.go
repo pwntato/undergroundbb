@@ -174,9 +174,9 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		items = append(items, types.TransactWriteItem{Update: &types.Update{
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, w.UserID),
-			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped"),
+			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped REMOVE #pending"),
 			ConditionExpression:      aws.String(memberCond),
-			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey"},
+			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey", "#pending": "PendingWrappedKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":gen":     genAttr(in.Generation),
 				":wrapped": wrapped,

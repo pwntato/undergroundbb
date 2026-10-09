@@ -3,7 +3,10 @@ package handlers
 import (
 	"encoding/base64"
 	"net/http"
+	"reflect"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -55,6 +58,10 @@ func TestLeaveRotatingGroupStartsRotationAndHandsKeyToAdmins(t *testing.T) {
 	dave := registerTestUser(t, h)
 	addMember(t, gid, dave, "member")
 
+	before := map[string]map[string]types.AttributeValue{
+		owner.userID: getRow(t, "GROUP#"+gid, "MEMBER#"+owner.userID),
+		bob.userID:   getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID),
+	}
 	body := &leaveGroupRequest{Rotation: leaveRotation(t, carol, gid, 1, owner, bob)}
 	if rec := doLeaveWith(t, h, carolCookie, gid, body); rec.Code != http.StatusOK {
 		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
@@ -89,19 +96,35 @@ func TestLeaveRotatingGroupStartsRotationAndHandsKeyToAdmins(t *testing.T) {
 		t.Errorf("keychain = %+v", chain.Links)
 	}
 
-	// Every named holder moved to the new generation with their wrap; a member
-	// nobody named stays behind for the ordinary re-wrap batch.
+	// Every named holder has the leaver's wrap waiting BESIDE their entry: the
+	// entry itself is untouched, so nothing the leaver sent can replace the
+	// key an admin already holds. A member nobody named has no pending key and
+	// stays behind for the ordinary re-wrap batch.
 	for _, u := range []registeredUser{owner, bob} {
-		row := getRow(t, "GROUP#"+gid, "MEMBER#"+u.userID)
-		if numAttr(row, "Generation") != "1" {
-			t.Errorf("holder %s generation = %s, want 1", u.userID, numAttr(row, "Generation"))
-		}
-		if _, ok := row["WrappedGroupKey"]; !ok {
-			t.Errorf("holder %s has no wrapped key", u.userID)
-		}
+		assertHolderPending(t, gid, u, before[u.userID])
 	}
-	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+dave.userID), "Generation"); g != "0" {
+	dRow := getRow(t, "GROUP#"+gid, "MEMBER#"+dave.userID)
+	if g := numAttr(dRow, "Generation"); g != "0" {
 		t.Errorf("bystander generation = %s, want 0", g)
+	}
+	if _, ok := dRow["PendingWrappedKey"]; ok {
+		t.Error("a member nobody named has a pending key")
+	}
+}
+
+// assertHolderPending checks a holder's entry is exactly as it was (same
+// generation 0, same wrapped key) with a pending key beside it.
+func assertHolderPending(t *testing.T, gid string, u registeredUser, before map[string]types.AttributeValue) {
+	t.Helper()
+	row := getRow(t, "GROUP#"+gid, "MEMBER#"+u.userID)
+	if g := numAttr(row, "Generation"); g != "0" {
+		t.Errorf("holder %s generation = %s, want 0 (unchanged until they adopt)", u.userID, g)
+	}
+	if !reflect.DeepEqual(row["WrappedGroupKey"], before["WrappedGroupKey"]) {
+		t.Errorf("holder %s WrappedGroupKey was overwritten by the leave", u.userID)
+	}
+	if _, ok := row["PendingWrappedKey"]; !ok {
+		t.Errorf("holder %s has no pending key", u.userID)
 	}
 }
 
@@ -256,6 +279,7 @@ func TestLeaveRotatingGroupAsAdminSendsDemotionAndRotation(t *testing.T) {
 	// The creator (an admin) leaves with a signed self-demotion AND a rotation;
 	// the other admin is the holder.
 	ref := backdatedRef(t, gid, owner)
+	bobBefore := getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID)
 	body := signedLeave(t, owner, gid, ref)
 	body.Rotation = leaveRotation(t, owner, gid, 1, bob)
 	rec := doLeaveWith(t, h, ownerCookie, gid, &body)
@@ -271,9 +295,7 @@ func TestLeaveRotatingGroupAsAdminSendsDemotionAndRotation(t *testing.T) {
 	if getRow(t, "GROUP#"+gid, "ROTATION") == nil || getRow(t, "GROUP#"+gid, "GENKEY#000000") == nil {
 		t.Error("no marker or link")
 	}
-	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "Generation"); g != "1" {
-		t.Errorf("holder generation = %s, want 1", g)
-	}
+	assertHolderPending(t, gid, bob, bobBefore)
 }
 
 // The cap is the most holders one transaction can carry with the rest of a
@@ -296,8 +318,8 @@ func TestLeaveRotatingGroupWithMaxHolders(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	for _, u := range holders {
-		if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+u.userID), "Generation"); g != "1" {
-			t.Fatalf("holder %s generation = %s, want 1", u.userID, g)
+		if _, ok := getRow(t, "GROUP#"+gid, "MEMBER#"+u.userID)["PendingWrappedKey"]; !ok {
+			t.Fatalf("holder %s has no pending key", u.userID)
 		}
 	}
 }

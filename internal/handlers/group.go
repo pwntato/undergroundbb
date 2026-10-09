@@ -627,6 +627,11 @@ type groupDetailResponse struct {
 	// when none is running. While present, new posts still use generation
 	// Rotation.Generation-1.
 	Rotation *rotationState `json:"rotation,omitempty"`
+	// PendingWrappedGroupKey is the next generation's key as a leaving member
+	// wrapped it for the caller, who has not checked it yet (#178). The
+	// caller's WrappedGroupKey and generation are unchanged until they adopt
+	// it. Only present while a rotation a leaver started is running.
+	PendingWrappedGroupKey *wrappedKey `json:"pendingWrappedGroupKey,omitempty"`
 }
 
 // rotationState is the wire shape of the ROTATION marker.
@@ -638,6 +643,9 @@ type rotationState struct {
 	// removal began the rotation (#178); absent on a marker from before it.
 	RemovedUserID  string `json:"removedUserId,omitempty"`
 	StartSignature string `json:"startSignature,omitempty"`
+	// Adopted is how many admins have checked and moved onto a leaver's key.
+	// While it is zero an admin whose own check fails may replace the rotation.
+	Adopted int64 `json:"adopted,omitempty"`
 }
 
 // currentGrantRef is a member's own current grant address: the one recorded
@@ -739,9 +747,14 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 				StartedAt:     rot.StartedAt,
 				StartedBy:     rot.StartedBy,
 				RemovedUserID: rot.RemovedUserID,
+				Adopted:       rot.Adopted,
 			}
 			if len(rot.StartSignature) > 0 {
 				resp.Rotation.StartSignature = base64.StdEncoding.EncodeToString(rot.StartSignature)
+			}
+			if m.PendingWrappedKey != nil && rot.StartedBy == rot.RemovedUserID && rot.Generation == m.Generation+1 {
+				pk := encodeWrappedKey(*m.PendingWrappedKey)
+				resp.PendingWrappedGroupKey = &pk
 			}
 		}
 	}

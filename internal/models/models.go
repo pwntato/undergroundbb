@@ -432,6 +432,17 @@ type Membership struct {
 	// for a group creator on groups created before this field existed --
 	// there the current grant is Group.RootGrantSortKey.
 	GrantSortKey string `dynamodbav:"GrantSortKey,omitempty"`
+
+	// PendingWrappedKey is the next generation's key as a LEAVING member
+	// wrapped it for this admin (#178), waiting for the admin to check it. It
+	// is written beside Generation and WrappedGroupKey and never over them:
+	// the leaver is the one party we trust least at that moment, and the
+	// server can only check the shape of what they send, so nothing they
+	// supply may replace the key an admin already holds. The admin adopts it
+	// (AdoptPendingKey) only after opening the chain link with it and finding
+	// their own key inside. Removed by every write that moves the member to
+	// the rotation's generation (adoption, a re-wrap, a restart).
+	PendingWrappedKey *WrappedKey `dynamodbav:"PendingWrappedKey,omitempty"`
 }
 
 // RoleGrant is a GROUP#<gid> / GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand> item --
@@ -730,6 +741,12 @@ type Rotation struct {
 	// #178, which a client treats as unverifiable.
 	RemovedUserID  string `dynamodbav:"RemovedUserID,omitempty"`
 	StartSignature []byte `dynamodbav:"StartSignature,omitempty"`
+	// Adopted counts the admins who have checked a leaving member's new key
+	// and moved onto it (db.AdoptPendingKey). While it is zero, a marker a
+	// LEAVER started (StartedBy == RemovedUserID) can still be replaced by
+	// an admin (db.RestartLeaveRotation); once one admin holds a verified key
+	// the others wait to be re-wrapped from it instead.
+	Adopted int64 `dynamodbav:"Adopted,omitempty"`
 }
 
 // Admission is the GROUP#<gid> / ADMISSION#<invitee uuid> item (#178,
