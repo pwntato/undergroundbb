@@ -1352,6 +1352,73 @@ describe('group key rotation (#58)', () => {
       ).rejects.toThrow()
     })
 
+    it('survives a hostile leave: garbage for every holder, the admins still read, and a replacement rotation finishes (PR #209 review)', async () => {
+      const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-6')
+      const carol = await realUserKeys(CAROL_ID, 'carol-password-chk-6')
+      const oldKey = new Uint8Array(32).fill(7)
+      // Both admins hold generation 0 (the leave does not touch these).
+      const adminOwn = await wrap(
+        admin.wrappingKey.publicKey,
+        oldKey,
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 0),
+      )
+      const carolOwn = await wrap(
+        carol.wrappingKey.publicKey,
+        oldKey,
+        memberWrapAAD(GROUP_ID, CAROL_ID, 0),
+      )
+      // What the hostile leaver stored: random bytes for the wrap and the link.
+      const garbageWrap = {
+        ephemeralPub: new Uint8Array(32).fill(8),
+        nonce: new Uint8Array(12).fill(8),
+        ciphertext: new Uint8Array(48).fill(8),
+      }
+      const garbageLink = {
+        nonce: new Uint8Array(12).fill(9),
+        ciphertext: new Uint8Array(48).fill(9),
+      }
+      expect(
+        await checkPendingGroupKey(admin, GROUP_ID, adminOwn, 0, garbageWrap, garbageLink),
+      ).toBe('pending-unreadable')
+
+      // The admin's own key is exactly what it was, so history is still readable.
+      expect(
+        await unwrap(admin.wrappingKey.privateKey, adminOwn, memberWrapAAD(GROUP_ID, ADMIN_ID, 0)),
+      ).toEqual(oldKey)
+
+      // The admin replaces the rotation, naming the same leaver, and finishes it
+      // by re-wrapping the other admin from their own new entry.
+      const replaced = await startGroupRotation(admin, GROUP_ID, adminOwn, 0, LEAVER_ID)
+      const wraps = await rewrapGroupKey(admin, GROUP_ID, wire(replaced.removerWrappedKey), 1, [
+        { userId: CAROL_ID, x25519PublicKey: carol.wrappingKey.publicKey },
+      ])
+      const carolNew = await unwrap(
+        carol.wrappingKey.privateKey,
+        wire(wraps[0]!.wrappedKey),
+        memberWrapAAD(GROUP_ID, CAROL_ID, 1),
+      )
+      // Carol, on the new key, walks the new chain link back to the old key.
+      const walked = await decrypt(
+        carolNew,
+        base64ToBytes(replaced.link.nonce),
+        base64ToBytes(replaced.link.ciphertext),
+        genKeyAAD(GROUP_ID, 0),
+      )
+      expect(walked).toEqual(oldKey)
+      expect(
+        await unwrap(carol.wrappingKey.privateKey, carolOwn, memberWrapAAD(GROUP_ID, CAROL_ID, 0)),
+      ).toEqual(oldKey)
+      // And it names the leaver, signed by the admin.
+      expect(
+        ed25519.verify(
+          admin.signingKey.publicKey,
+          ed25519.SigningContext.RotationStart,
+          rotationStartPayload(GROUP_ID, ADMIN_ID, LEAVER_ID, 1),
+          base64ToBytes(replaced.startSignature),
+        ),
+      ).toBe(true)
+    })
+
     it("throws, rather than giving a verdict, when the holder's own key cannot be read", async () => {
       const admin = await realUserKeys(ADMIN_ID, 'admin-password-chk-5')
       const { started } = await leaveFor(admin)
