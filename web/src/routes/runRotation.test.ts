@@ -12,6 +12,7 @@ import type {
   MemberEntry,
   MemberRole,
   RewrapEntry,
+  TakeOverRotationRequest,
 } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
@@ -244,6 +245,22 @@ class Fake {
   listAdmissionsError: Error | undefined
   admissionReads = 0
 
+  // A member who LEFT started this rotation (#178) and minted no key. They are
+  // no longer listed but are still a user the server can serve.
+  outsiders = new Map<string, Person>()
+  takeOverError: Error | undefined
+  /** Keys the server claims a person superseded, with no proof (it just serves them). */
+  fabricatedSuperseded = new Map<string, SigningKey>()
+  /** Errors the next takeover calls throw, in order, before succeeding. */
+  takeOverFailures: Error[] = []
+  /** How many times the job asked the worker to mint a takeover key. */
+  mints = 0
+  /** Models a server that accepts a takeover but leaves the leaver's marker as it was. */
+  ignoreTakeOver = false
+  takeOvers: { request: TakeOverRotationRequest; subject: string }[] = []
+  /** Runs once, before the first takeover reaches the server (a racing admin). */
+  beforeTakeOver: (() => void) | undefined
+
   // call logs
   userReads: string[][] = []
   rewrapBatches: { generation: number; users: string[] }[] = []
@@ -366,7 +383,28 @@ class Fake {
         return new Map(
           ids.flatMap((id) => {
             const r = this.members.get(id)
-            return r ? [[id, served(r.person)] as const] : []
+            if (r) return [[id, served(r.person)] as const]
+            const o = this.outsiders.get(id)
+            if (!o) return []
+            const extra = this.fabricatedSuperseded.get(id)
+            const projection = served(o)
+            return [
+              [
+                id,
+                extra
+                  ? {
+                      ...projection,
+                      supersededSigningKeys: [
+                        {
+                          publicKey: b64(extra.publicKey),
+                          from: '2026-01-01',
+                          until: '2026-02-01',
+                        },
+                      ],
+                    }
+                  : projection,
+              ] as const,
+            ]
           }),
         )
       },
@@ -450,6 +488,58 @@ class Fake {
         }
         this.completed.push(generation)
         this.marker = undefined
+      },
+      takeOverCrypto: async (req) => {
+        this.mints++
+        const generation = req.ownGeneration + 1
+        return {
+          generation,
+          link: { nonce: 'new-link-n', ciphertext: 'new-link-c' },
+          removerWrappedKey: { ephemeralPub: 'ne', nonce: 'nn', ciphertext: 'nc' },
+          startSignature: b64(
+            sign(
+              me,
+              SigningContext.RotationStart,
+              rotationStartPayload(GROUP, ME, req.subjectUserId, generation),
+            ),
+          ),
+        }
+      },
+      takeOverRotation: async (_g, request) => {
+        const hook = this.beforeTakeOver
+        this.beforeTakeOver = undefined
+        hook?.()
+        const queued = this.takeOverFailures.shift()
+        if (queued) throw queued
+        if (this.takeOverError) throw this.takeOverError
+        if (this.ignoreTakeOver) return
+        const m = this.marker
+        // The server only takes over a leaver's unclaimed marker for the next generation.
+        if (!m || m.startedBy !== m.removedUserId || m.generation !== request.generation) {
+          throw new ApiError(409, 'not active', 'rotation_not_active')
+        }
+        const subject = m.removedUserId!
+        this.takeOvers.push({ request, subject })
+        // It replaces the leaver's marker with the admin's and writes the link.
+        this.marker = {
+          generation: request.generation,
+          startedAt: 't',
+          startedBy: ME,
+          removedUserId: subject,
+          startSignature: request.startSignature,
+        }
+        this.links = [
+          ...(this.links ?? []).filter((l) => l.generation < request.generation - 1),
+          {
+            generation: request.generation - 1,
+            wrapped: request.link,
+            removerUserId: ME,
+            removedUserId: subject,
+            startSignature: request.startSignature,
+          },
+        ]
+        this.ownGeneration = request.generation
+        this.members.get(ME)!.generation = request.generation
       },
     }
   }
@@ -1201,6 +1291,359 @@ describe('runRotation', () => {
       }
       await runRotation(f.deps(), GROUP)
       expect(f.cryptoRecipients.flat()).not.toContain(removed.id)
+    })
+  })
+
+  describe('a rotation a member started by leaving (#178)', () => {
+    // ME holds generation 1; a member who has since LEFT started the rotation
+    // to 2 and signed only that they are the member removed. No key exists yet.
+    function leftBehind(f: Fake, trust: 'admission' | 'pin' | 'none' = 'admission') {
+      const leaver = person()
+      f.outsiders.set(leaver.id, leaver)
+      // What makes the leaver's key worth signing a removal for: the inviter's
+      // admission (kept by the leave for exactly this), or the caller's pin.
+      if (trust === 'admission') f.admissions.set(leaver.id, admissionOf(leaver))
+      if (trust === 'pin') f.pins.set(leaver.id, pinFor(leaver))
+      f.ownGeneration = 1
+      f.members.get(ME)!.generation = 1
+      f.marker = startMarker(2, {
+        startedBy: leaver.id,
+        signer: leaver.signing,
+        removed: leaver.id,
+      })
+      f.links = [removalLink(0)]
+      return leaver
+    }
+
+    // PR #209 round 3: the takeover is the first path where the client turns a
+    // marker into ITS OWN new signature, so a leaver's key the server merely
+    // served (first sight) is not enough.
+    describe("trusting the leaver's key before signing their removal", () => {
+      it('takes nothing over for a forged leave: an unpinned member, a key the server made up', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/pin|admi/),
+        })
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
+      it('takes nothing over for a genuine-looking leave by someone nobody admitted or pinned', async () => {
+        const f = new Fake()
+        leftBehind(f, 'none')
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
+      it('takes nothing over when the admission is for other keys than the ones served now', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        f.admissions.set(leaver.id, admissionOf(leaver)) // admits the REAL key
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it("takes nothing over when a fabricated 'superseded' key signed it and the real key keeps the admission valid", async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission') // admits the leaver's REAL key
+        const fabricated = generateSigningKey()
+        f.fabricatedSuperseded.set(leaver.id, fabricated)
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: fabricated,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/key their admission names/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
+      it("takes nothing over when a fabricated 'superseded' key signed it for the creator", async () => {
+        const f = new Fake()
+        const { creator } = f.promoted()
+        const fabricated = generateSigningKey()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.fabricatedSuperseded.set(creator.id, fabricated)
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: fabricated,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0)]
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/anchor names/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
+      it('takes nothing over for a creator the removal history already lists as removed', async () => {
+        const f = new Fake()
+        const { creator, creatorKey } = f.promoted()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: creatorKey,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0, { removed: creator.id })] // removed earlier, at generation 1
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      // PR #209 round 4: a member removed once and re-invited AFTER the removal
+      // is admitted again (isAdmitted), so their leave must be takeable.
+      it('takes over the leave of a member who was removed once and re-invited after the removal', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        f.links = [removalLink(0, { removed: leaver.id })] // removed, removedAt = 1
+        f.admissions.set(leaver.id, admissionOf(leaver, { generation: 1 }))
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+      })
+
+      it('takes nothing over for a removed member whose only admission is from before the removal', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        f.links = [removalLink(0, { removed: leaver.id })] // removed, removedAt = 1
+        f.admissions.set(leaver.id, admissionOf(leaver, { generation: 0 }))
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+        expect(f.takeOvers).toEqual([])
+      })
+
+      it('takes over the leave of a creator who was removed once and re-invited after the removal', async () => {
+        const f = new Fake()
+        const { creator, creatorKey, myGrant } = f.promoted()
+        f.members.delete(creator.id)
+        f.pins.delete(creator.id)
+        f.outsiders.set(creator.id, creator)
+        f.admissions.set(creator.id, admissionOf(creator, { generation: 1, ref: myGrant.sortKey }))
+        f.marker = startMarker(2, {
+          startedBy: creator.id,
+          signer: creatorKey,
+          removed: creator.id,
+        })
+        f.links = [removalLink(0, { removed: creator.id })]
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+      })
+
+      it('takes nothing over when the server fabricates the key AND an admission for it, not signed by the inviter', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'none')
+        const forged = { ...leaver, signing: generateSigningKey() }
+        f.outsiders.set(leaver.id, forged)
+        // The record names the forged key, signed by a key that is nobody's
+        // inviter: only the admission's own verification can refuse it.
+        f.admissions.set(leaver.id, admissionOf(forged, { key: generateSigningKey() }))
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: forged.signing,
+          removed: leaver.id,
+        })
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({
+          status: 'incomplete',
+          reason: expect.stringMatching(/no admission signed/),
+        })
+        expect(f.mints).toBe(0)
+      })
+
+      it('takes over on a pin alone, with no admission to check', async () => {
+        const f = new Fake()
+        leftBehind(f, 'pin')
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('completed')
+        expect(f.takeOvers).toHaveLength(1)
+        expect(f.admissionReads).toBe(0) // the pin settled it
+      })
+
+      it('takes nothing over when the admissions or the removal history cannot be read', async () => {
+        const f = new Fake()
+        leftBehind(f, 'admission')
+        f.listAdmissionsError = new Error('boom')
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it("accepts the group creator's own key as the anchor says, and no other", async () => {
+        const ok = new Fake()
+        const { creator, creatorKey } = ok.promoted()
+        for (const f of [ok]) {
+          f.members.delete(creator.id)
+          f.pins.delete(creator.id)
+          f.outsiders.set(creator.id, creator)
+          f.marker = startMarker(2, {
+            startedBy: creator.id,
+            signer: creatorKey,
+            removed: creator.id,
+          })
+          f.links = [removalLink(0)]
+        }
+        expect((await runRotation(ok.deps(), GROUP)).status).toBe('completed')
+        expect(ok.takeOvers).toHaveLength(1)
+
+        const forged = new Fake()
+        const c2 = forged.promoted()
+        const fakeKey = generateSigningKey()
+        forged.members.delete(c2.creator.id)
+        forged.pins.delete(c2.creator.id)
+        forged.outsiders.set(c2.creator.id, { ...c2.creator, signing: fakeKey })
+        forged.marker = startMarker(2, {
+          startedBy: c2.creator.id,
+          signer: fakeKey,
+          removed: c2.creator.id,
+        })
+        forged.links = [removalLink(0)]
+        expect((await runRotation(forged.deps(), GROUP)).status).toBe('incomplete')
+        expect(forged.mints).toBe(0)
+      })
+    })
+
+    it('tries the takeover once more after a lost race that left the marker unclaimed', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.takeOverFailures = [new ApiError(409, 'busy', 'conflict_retry')]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('completed')
+      expect(f.takeOvers).toHaveLength(1)
+    })
+
+    it('says to run again, not that another admin must resume, when the retry is busy too', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.takeOverFailures = [
+        new ApiError(409, 'busy', 'conflict_retry'),
+        new ApiError(409, 'busy', 'conflict_retry'),
+      ]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'incomplete', reason: expect.stringMatching(/again/) })
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it('mints the key itself, naming the leaver, then re-wraps everyone and finishes', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      const bob = f.add(person(), 'member', 1)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.takeOvers).toHaveLength(1)
+      const { request, subject } = f.takeOvers[0]!
+      expect(subject).toBe(leaver.id)
+      expect(request.generation).toBe(2)
+      // Signed by the admin, naming the same leaver as removed.
+      expect(request.startSignature).toBe(
+        b64(sign(me, SigningContext.RotationStart, rotationStartPayload(GROUP, ME, leaver.id, 2))),
+      )
+      expect(f.gen(bob)).toBe(2)
+      expect(f.completed).toEqual([2])
+    })
+
+    it('never wraps to the leaver, who is no longer listed but could be re-listed', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      // A server re-lists the leaver with their old admission.
+      f.members.set(leaver.id, { person: leaver, role: 'member', generation: 0 })
+      f.admissions.set(leaver.id, admissionOf(leaver))
+      const out = await runRotation(f.deps(), GROUP)
+      expect(f.cryptoRecipients.flat()).not.toContain(leaver.id)
+      expect(out.status).toBe('incomplete') // the rotation cannot finish while they are "behind"
+    })
+
+    it('does not trust a marker whose start record does not verify', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      // Signed by someone other than the leaver it names as starter.
+      f.marker = startMarker(2, {
+        startedBy: leaver.id,
+        signer: generateSigningKey(),
+        removed: leaver.id,
+      })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(f.mints).toBe(0)
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it("does not take over an admin's rotation", async () => {
+      const f = new Fake()
+      leftBehind(f)
+      // An admin's removal (startedBy is not the removed member).
+      f.marker = startMarker(2, { startedBy: ME, removed: REMOVED })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.mints).toBe(0)
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it('stands back when another admin took it over first', async () => {
+      const f = new Fake()
+      const leaver = leftBehind(f)
+      f.beforeTakeOver = () => {
+        // The other admin wins the race: the marker is theirs now, at generation 2.
+        f.marker = startMarker(2, { startedBy: 'other-admin', removed: leaver.id })
+      }
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it('stops on any other takeover failure', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.takeOverError = new ApiError(500, 'boom', 'internal')
+      expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it('does not take over when this admin is not at the leaver’s generation', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.ownGeneration = 0
+      f.members.get(ME)!.generation = 0
+      expect((await runRotation(f.deps(), GROUP)).status).toBe('cannot-resume')
+      expect(f.mints).toBe(0)
+      expect(f.takeOvers).toEqual([])
+    })
+
+    it('tries once, not forever, if the marker is still the leaver’s after a takeover', async () => {
+      const f = new Fake()
+      leftBehind(f)
+      f.ignoreTakeOver = true
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('cannot-resume')
+      expect(f.mints).toBe(1)
     })
   })
 

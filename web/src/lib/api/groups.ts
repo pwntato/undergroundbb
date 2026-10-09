@@ -453,9 +453,21 @@ export async function changeMemberRole(
  * subject. A plain member sends none.
  */
 export interface LeaveGroupRequest {
-  readonly grantSortKey: string
-  readonly grantorGrantRef: string
-  readonly signature: string
+  readonly grantSortKey?: string
+  readonly grantorGrantRef?: string
+  readonly signature?: string
+  /** Required when leaving a private Rotating group that has other members (#178). */
+  readonly rotation?: LeaveRotationRequest
+}
+
+/**
+ * The rotation a leave starts (#178): only the leaver's signed statement that
+ * they are the member removed. They mint no key; an admin takes the marker
+ * over (takeOverRotation) and mints it.
+ */
+export interface LeaveRotationRequest {
+  readonly generation: number
+  readonly startSignature: string
 }
 
 /**
@@ -465,14 +477,16 @@ export interface LeaveGroupRequest {
  * the roster or the caller's own grant moved, reload and try again; 409
  * `grant_key_taken` means sign again with a fresh grantSortKey; 400
  * `demotion_required` means an admin or ambassador sent no demotion (their
- * role changed since the roster loaded). `groupDeleted` is true when the
+ * role changed since the roster loaded); 400 `rotation_required` means a
+ * private Rotating group needs the rotation, and 409 `rotation_in_progress`
+ * means one is already running (#178). `groupDeleted` is true when the
  * caller was the only member, so leaving deleted the group.
  */
 export async function leaveGroup(
   groupId: string,
-  demotion?: LeaveGroupRequest,
+  body?: LeaveGroupRequest,
 ): Promise<{ groupDeleted: boolean }> {
-  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, demotion ?? {})
+  return putOrPostJSON('POST', `/api/groups/${encodeURIComponent(groupId)}/leave`, body ?? {})
 }
 
 /** Like putOrPostJSON for endpoints that answer 204; throws ApiError (with the server's `code`) otherwise. */
@@ -580,4 +594,25 @@ export function completeRotation(groupId: string, generation: number): Promise<v
   return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/complete`, {
     generation,
   })
+}
+
+/** An admin's rotation in place of the bare marker a leaver left (#178). */
+export interface TakeOverRotationRequest {
+  readonly generation: number
+  readonly link: WireWrappedBlob
+  /** The new key wrapped for the caller. */
+  readonly wrappedKey: WireWrappedKey
+  /** The caller's base64 signature over rotationStartPayload naming the leaver. */
+  readonly startSignature: string
+}
+
+/**
+ * POST /api/groups/{id}/rotation/takeover -- #178. An admin at the leaver's
+ * generation turns the marker a leaving member left into a rotation the admin
+ * mints. 409 codes: `rotation_not_active` (it finished, another admin got there
+ * first, or it was not a leaver's), `rotation_caller_behind`, `conflict_retry`.
+ * 400 `bad_signature`.
+ */
+export function takeOverRotation(groupId: string, req: TakeOverRotationRequest): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/takeover`, req)
 }

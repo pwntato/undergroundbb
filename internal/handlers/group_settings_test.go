@@ -43,6 +43,19 @@ func createPrivateGroup(t *testing.T, h *Handler, user registeredUser, cookie *h
 	return req.GroupID
 }
 
+// createOpenPrivateGroup is a private group whose revocation mode is Open, for
+// tests of leaving and account deletion that are not about key rotation: an
+// Open group rotates nothing, so a leave there needs no rotation body.
+func createOpenPrivateGroup(t *testing.T, h *Handler, user registeredUser, cookie *http.Cookie) string {
+	t.Helper()
+	req := signedCreateGroupRequest(t, user)
+	req.RevocationMode = "open"
+	if rec := doCreateGroup(t, h, cookie, req); rec.Code != http.StatusCreated {
+		t.Fatalf("create open private group: %d %s", rec.Code, rec.Body.String())
+	}
+	return req.GroupID
+}
+
 func createPublicGroup(t *testing.T, h *Handler, user registeredUser, cookie *http.Cookie) string {
 	t.Helper()
 	req := signedCreateGroupRequest(t, user)

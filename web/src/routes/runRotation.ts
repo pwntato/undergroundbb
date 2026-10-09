@@ -53,6 +53,7 @@ import type {
   ListAdmissionsResponse,
   MemberEntry,
   RewrapEntry,
+  TakeOverRotationRequest,
 } from '@/lib/api/groups'
 import { MAX_REWRAP_BATCH } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
@@ -62,7 +63,11 @@ import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationStartPayload } from '@/lib/crypto/group'
 import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
-import type { RewrapGroupKeyResult } from '@/lib/crypto/worker-protocol'
+import type {
+  RewrapGroupKeyResult,
+  StartGroupRotationRequest,
+  StartGroupRotationResult,
+} from '@/lib/crypto/worker-protocol'
 import { loadVerifiedChain, type GrantCheckDeps, type VerifiedChain } from './runGrantCheck'
 
 /** Passes before giving up. A pass is a full re-list, so this bounds churn, not batches. */
@@ -104,6 +109,15 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
     req: { readonly generation: number; readonly wraps: readonly RewrapEntry[] },
   ) => Promise<void>
   readonly completeRotation: (groupId: string, generation: number) => Promise<void>
+  /**
+   * Mints the key of a rotation a LEAVING member started (#178): the same
+   * startGroupRotation a removal uses, naming the leaver.
+   */
+  readonly takeOverCrypto: (
+    req: Omit<StartGroupRotationRequest, 'kind' | 'id'>,
+  ) => Promise<StartGroupRotationResult>
+  /** Replaces the leaver's bare marker with the rotation `takeOverCrypto` minted. */
+  readonly takeOverRotation: (groupId: string, req: TakeOverRotationRequest) => Promise<void>
 }
 
 export type RotationOutcome =
@@ -251,6 +265,19 @@ async function runOnce(
 
   const ownGeneration = detail.generation
   const marker = detail.rotation
+  if (
+    marker !== undefined &&
+    marker.generation === ownGeneration + 1 &&
+    marker.removedUserId !== undefined &&
+    marker.startedBy === marker.removedUserId &&
+    !restarted
+  ) {
+    // A member left and started this rotation (#178), but minted no key: that is
+    // this admin's to do. Carry on from fresh state afterwards.
+    const taken = await takeOverLeave(deps, groupId, detail, marker, carried)
+    if (taken.status !== 'continue') return taken.outcome
+    return runOnce(deps, groupId, true, carried, exclude)
+  }
   if (marker !== undefined && marker.generation !== ownGeneration) {
     return {
       status: 'cannot-resume',
@@ -425,6 +452,170 @@ async function runOnce(
     }
   }
   return { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped }
+}
+
+type TakeOver =
+  { readonly status: 'continue' } | { readonly status: 'done'; readonly outcome: RotationOutcome }
+
+/**
+ * A member LEFT and started this rotation (#178), but the rotation has no key:
+ * the leaver signs that they are the member removed and nothing else, because a
+ * key they minted is a key a hostile leaver keeps. The first admin at the
+ * leaver's generation to load the group mints it here, exactly as a remover
+ * would, naming the leaver, and the run carries on to re-wrap everyone else.
+ *
+ *   - The marker's signed start must verify as the leaver's own (it names them
+ *     as removed, signed by them); an unverifiable marker is never taken over.
+ *   - Two admins racing settle on the server: the loser's takeover is refused
+ *     (`rotation_not_active`), they re-read, and are re-wrapped like any member.
+ *
+ * 'continue' means the caller re-reads the group and carries on.
+ */
+async function takeOverLeave(
+  deps: RotationDeps,
+  groupId: string,
+  detail: GroupDetail,
+  marker: NonNullable<GroupDetail['rotation']>,
+  carried: number,
+): Promise<TakeOver> {
+  const done = (outcome: RotationOutcome): TakeOver => ({ status: 'done', outcome })
+  const incomplete = (reason: string): TakeOver =>
+    done({ status: 'incomplete', reason, rewrapped: carried })
+  const ownWrapped = detail.wrappedGroupKey
+  if (ownWrapped === undefined) return done({ status: 'none' })
+
+  let own: Uint8Array
+  try {
+    own = base64ToBytes(await deps.ownSigningKey())
+  } catch (err) {
+    return incomplete(`could not read your pins: ${describe(err)}`)
+  }
+  const started = await verifyRotationStart(deps, own, groupId, marker)
+  if (!started.ok) return incomplete(started.reason)
+
+  // The start only proves the leaver's key signed it, and the leaver's key is
+  // whatever the server serves. This path turns the marker into the CALLER'S
+  // signature naming them as removed, so a key seen for the first time is not
+  // enough: without this a server can fake a leave for any member the caller
+  // has not pinned (PR #209 round 3).
+  const trusted = await checkLeaverKey(deps, own, groupId, detail.generation, marker)
+  if (!trusted.ok) return incomplete(trusted.reason)
+
+  // A lost race on the transaction (`conflict_retry`) can leave the marker
+  // unclaimed, so it gets one more try before giving up.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const minted = await deps.takeOverCrypto({
+        userId: deps.selfUserId,
+        groupId,
+        ownWrappedGroupKey: ownWrapped,
+        ownGeneration: detail.generation,
+        subjectUserId: started.removedUserId,
+      })
+      await deps.takeOverRotation(groupId, {
+        generation: minted.generation,
+        link: minted.link,
+        wrappedKey: minted.removerWrappedKey,
+        startSignature: minted.startSignature,
+      })
+      return { status: 'continue' }
+    } catch (err) {
+      const code = codeOf(err)
+      if (code === 'rotation_not_active') {
+        return { status: 'continue' } // another admin got there first; read it again
+      }
+      if (code === 'conflict_retry') {
+        if (attempt < 2) continue
+        return incomplete('the group was busy while taking over the rotation; run again')
+      }
+      return incomplete(describe(err))
+    }
+  }
+}
+
+/**
+ * Whether the key that signed the leaver's start is one the caller has a reason
+ * to trust, before the caller signs a removal of them on its strength. The
+ * start's signature must verify under a key that is trusted for a reason that
+ * does not rest on what the server merely served:
+ *   - the caller's signed pin of them (which pins the whole served set); or
+ *   - for the creator, the key the verified anchor names; or
+ *   - for anyone else, the invitee key on an admission that verifies against
+ *     the verified grant chain for the keys served now (the leave keeps that
+ *     record for this check; the takeover deletes it).
+ * It is the SPECIFIC key that must verify, not "some served key": an unpinned
+ * member's served set includes superseded keys the server asserts without
+ * proof, so a fabricated one could sign the start while the member's real key
+ * keeps their admission valid. A key seen for the first time with none of the
+ * above behind it is refused: a server withholding a member can already stall
+ * a group, so failing closed costs nothing new, while trusting it lets the
+ * server pick who the caller signs the removal of (PR #209 round 3).
+ */
+async function checkLeaverKey(
+  deps: RotationDeps,
+  own: Uint8Array,
+  groupId: string,
+  ownGeneration: number,
+  marker: NonNullable<GroupDetail['rotation']>,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
+  const leaverId = marker.removedUserId
+  const startSignature = marker.startSignature
+  if (leaverId === undefined || startSignature === undefined) {
+    return { ok: false, reason: "the rotation's signed start record is missing" }
+  }
+  const refuse = (why: string) =>
+    ({
+      ok: false,
+      reason: `the member who left has no pin of yours and no valid admission behind the key that signed their leaving, so it was not taken over (${why})`,
+    }) as const
+  const signature = base64ToBytes(startSignature)
+  const payload = rotationStartPayload(groupId, marker.startedBy, leaverId, marker.generation)
+  const signedBy = (keys: readonly Uint8Array[]): boolean =>
+    keys.some((k) => verify(k, SigningContext.RotationStart, payload, signature))
+
+  let served: UserProjection | undefined
+  let pins: readonly PinRecord[]
+  try {
+    served = (await deps.getUsers([leaverId])).get(leaverId)
+    pins = await deps.listPins()
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `could not check the keys of the member who left: ${describe(err)}`,
+    }
+  }
+  if (served === undefined) return refuse('their keys could not be fetched')
+  const verdict = evaluatePin({
+    pinnerUserId: deps.selfUserId,
+    pinnerSigningPublicKey: own,
+    pinnedUserId: leaverId,
+    pin: pins.find((p) => p.pinnedUserId === leaverId),
+    served,
+  })
+  // A pin covers the whole served set, and verifyRotationStart already checked
+  // the start verifies under a key in it, so a match needs nothing further.
+  if (verdict === 'match') return { ok: true }
+  if (verdict !== 'first-sight') return refuse('their keys do not match your pin')
+
+  const loaded = await loadAdmissions(deps, own, groupId, ownGeneration)
+  if (!loaded.ok) return { ok: false, reason: loaded.reason }
+  const { context } = loaded
+  // Someone removed once and re-invited after the removal is admitted again;
+  // isAdmitted below applies the same generation rule as a rotation recipient.
+  if (leaverId === context.chain.anchor.creatorUserId && !context.removedAt.has(leaverId)) {
+    // The creator has no admission: the anchor (trusted at this point, as for
+    // a recipient) names their key.
+    return signedBy([base64ToBytes(context.chain.anchor.creatorSigningPublicKey)])
+      ? { ok: true }
+      : refuse("the start was not signed by the key the group's anchor names")
+  }
+  if (!isAdmitted(context, groupId, leaverId, served)) {
+    return refuse('no admission signed for the keys served for them')
+  }
+  const record = context.byInvitee.get(leaverId)
+  return record !== undefined && signedBy([base64ToBytes(record.inviteeEd25519PublicKey)])
+    ? { ok: true }
+    : refuse('the start was not signed by the key their admission names')
 }
 
 /** The records and the verified chain a pass checks recipients against. */

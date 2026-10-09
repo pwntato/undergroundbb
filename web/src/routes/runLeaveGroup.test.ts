@@ -22,6 +22,17 @@ const view = (myRole: MembersView['myRole'], members: MemberEntry[]): MembersVie
   myGeneration: 0,
 })
 
+/** These tests use Open groups, which never rotate: any use of the rotation deps is a bug. */
+const noRotation: LeaveDeps['rotation'] = {
+  rotationDeps: new Proxy({} as never, {
+    get: (_t, name) => {
+      throw new Error(`an Open group must not touch rotation deps (${String(name)})`)
+    },
+  }),
+  signLeaveRotationStart: () =>
+    Promise.reject(new Error('an Open group must not start a rotation')),
+}
+
 describe('leavePlan', () => {
   it('deletes the group when the caller is the only member', () => {
     expect(leavePlan(view('admin', [m(ME, 'admin')]), ME)).toEqual({ kind: 'deletesGroup' })
@@ -69,7 +80,7 @@ describe('runLeave', () => {
     v: MembersView = memberView,
     plan: 'plain' | 'deletesGroup' | 'needsSuccessor' = 'plain',
     signRoleGrant: LeaveDeps['signRoleGrant'] = neverSign,
-  ) => runLeave({ leaveGroup: leave, signRoleGrant, userId: ME }, v, plan)
+  ) => runLeave({ leaveGroup: leave, signRoleGrant, userId: ME, rotation: noRotation }, v, plan)
 
   it('reports success and whether the group was deleted', async () => {
     expect(await run(() => Promise.resolve({ groupDeleted: true }))).toEqual({
@@ -234,5 +245,195 @@ describe('leaveFailureMessage', () => {
   it('keeps the plain messages when no promotion happened, and for session errors', () => {
     expect(leaveFailureMessage('stale')).toContain('nothing was saved')
     expect(leaveFailureMessage('authRequired', 'bob')).toContain('session has expired')
+  })
+})
+
+// Leaving a private Rotating group starts a re-key (#178). The leaver signs only
+// that they are the member removed: they mint no key and wrap nothing, so a
+// hostile leaver never holds the next one. An admin takes the marker over
+// (runRotation.test.ts).
+describe('runLeave in a Rotating group (#178)', () => {
+  const wrapped = { ephemeralPub: 'e', nonce: 'n', ciphertext: 'c' }
+  const rotatingView = (myRole: MembersView['myRole'], members: MemberEntry[]): MembersView => ({
+    ...view(myRole, members),
+    revocationMode: 'rotating',
+    myGeneration: 2,
+  })
+  const at2 = (userId: string, role: MemberEntry['role'], generation = 2): MemberEntry => ({
+    userId,
+    role,
+    generation,
+  })
+
+  interface Harness {
+    sent: unknown[]
+    signed: unknown[]
+    deps: LeaveDeps
+  }
+  function harness(
+    o: {
+      detail?: Record<string, unknown>
+      members?: MemberEntry[]
+      leave?: LeaveDeps['leaveGroup']
+      signError?: Error
+      getGroupError?: Error
+    } = {},
+  ): Harness {
+    const sent: unknown[] = []
+    const signed: unknown[] = []
+    const detail = {
+      role: 'member',
+      visibility: 'private',
+      revocationMode: 'rotating',
+      generation: 2,
+      wrappedGroupKey: wrapped,
+      ...o.detail,
+    }
+    const deps: LeaveDeps = {
+      userId: ME,
+      leaveGroup:
+        o.leave ??
+        ((_g, body) => {
+          sent.push(body)
+          return Promise.resolve({ groupDeleted: false })
+        }),
+      signRoleGrant: () => Promise.resolve({ grantSortKey: `GRANT#${ME}#d#1`, signature: 'sig' }),
+      rotation: {
+        rotationDeps: {
+          getGroup: () =>
+            o.getGroupError ? Promise.reject(o.getGroupError) : Promise.resolve(detail),
+          listAllMembers: () =>
+            Promise.resolve(o.members ?? [at2(ME, 'member'), at2(BOB, 'admin'), at2(CAT, 'admin')]),
+        } as never,
+        signLeaveRotationStart: (req) => {
+          signed.push(req)
+          if (o.signError) return Promise.reject(o.signError)
+          return Promise.resolve({ generation: req.ownGeneration + 1, startSignature: 'start-sig' })
+        },
+      },
+    }
+    return { sent, signed, deps }
+  }
+  const plain = rotatingView('member', [at2(ME, 'member'), at2(BOB, 'admin'), at2(CAT, 'admin')])
+
+  it('signs the start naming the leaver and sends it with the leave, and nothing else', async () => {
+    const h = harness()
+    expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: true, groupDeleted: false })
+
+    // Signed from the caller's own generation as the server reports it.
+    expect(h.signed).toEqual([{ userId: ME, groupId: 'g1', ownGeneration: 2 }])
+    // No link, no holders, no wrapped key: a leaver supplies no key material.
+    expect(h.sent).toEqual([{ rotation: { generation: 3, startSignature: 'start-sig' } }])
+  })
+
+  it('needs no group key in this browser, since it mints none', async () => {
+    const h = harness({ detail: { wrappedGroupKey: undefined } })
+    expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: true, groupDeleted: false })
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('carries the demotion and the rotation together, signing the start only once across a re-sign', async () => {
+    let calls = 0
+    const bodies: unknown[] = []
+    const h = harness({
+      leave: (_g, body) => {
+        bodies.push(body)
+        calls++
+        return calls === 1
+          ? Promise.reject(new ApiError(409, 'x', 'grant_key_taken'))
+          : Promise.resolve({ groupDeleted: false })
+      },
+    })
+    const adminView = rotatingView('admin', [at2(ME, 'admin'), at2(BOB, 'admin')])
+    expect(await runLeave(h.deps, adminView, 'plain')).toEqual({ ok: true, groupDeleted: false })
+    expect(h.signed).toHaveLength(1)
+    expect(bodies).toHaveLength(2)
+    for (const b of bodies as { grantSortKey?: string; rotation?: { generation: number } }[]) {
+      expect(b.grantSortKey).toBeDefined()
+      expect(b.rotation?.generation).toBe(3)
+    }
+  })
+
+  it('touches nothing when the only member leaves, or the group is not private', async () => {
+    const solo = harness()
+    expect(
+      await runLeave(solo.deps, rotatingView('admin', [at2(ME, 'admin')]), 'deletesGroup'),
+    ).toEqual({
+      ok: true,
+      groupDeleted: false,
+    })
+    expect(solo.signed).toEqual([])
+
+    const pub = harness({ detail: { visibility: 'public' } })
+    await runLeave(pub.deps, plain, 'plain')
+    expect(pub.signed).toEqual([])
+    expect(pub.sent).toEqual([undefined])
+
+    // The roster the caller looked at was stale: they are in fact alone now.
+    const alone = harness({ members: [at2(ME, 'member')] })
+    await runLeave(alone.deps, plain, 'plain')
+    expect(alone.signed).toEqual([])
+    expect(alone.sent).toEqual([undefined])
+  })
+
+  const stops: [string, Parameters<typeof harness>[0], string][] = [
+    [
+      'a rotation is already running',
+      { detail: { rotation: { generation: 3 } } },
+      'rotationInProgress',
+    ],
+    ['the group cannot be read', { getGroupError: new Error('network') }, 'cannotCheck'],
+    [
+      'the worker has no live keys',
+      { signError: Object.assign(new Error('x'), { name: 'LiveKeysError' }) },
+      'ambiguous',
+    ],
+  ]
+  for (const [name, opts, kind] of stops) {
+    it(`sends nothing when ${name}`, async () => {
+      const h = harness(opts)
+      const out = await runLeave(h.deps, plain, 'plain')
+      expect(out).toMatchObject({ ok: false })
+      if (!out.ok && kind !== 'ambiguous') expect(out.kind).toBe(kind)
+      expect(h.sent).toEqual([])
+    })
+  }
+
+  it("maps the server's rotation refusals", async () => {
+    const refuse = (status: number, code: string) =>
+      harness({ leave: () => Promise.reject(new ApiError(status, 'x', code)) })
+    for (const [status, code, kind] of [
+      [409, 'rotation_in_progress', 'rotationInProgress'],
+      [400, 'rotation_required', 'stale'],
+    ] as const) {
+      const h = refuse(status, code)
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind })
+    }
+  })
+
+  it('reports a 4xx refusal as nothing changed, not as an unconfirmed leave (PR #209 review)', async () => {
+    for (const [status, code] of [
+      [400, 'bad_signature'],
+      [400, 'rotation_not_applicable'],
+      [403, 'forbidden'],
+      [422, 'whatever'],
+    ] as const) {
+      const h = harness({ leave: () => Promise.reject(new ApiError(status, 'x', code)) })
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'refused' })
+    }
+    // ...while a server error or a dropped connection still may have committed.
+    for (const err of [new ApiError(500, 'x', 'internal'), new TypeError('network')]) {
+      const h = harness({ leave: () => Promise.reject(err) })
+      expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'ambiguous' })
+    }
+    expect(leaveFailureMessage('refused')).toContain('nothing was changed')
+    expect(leaveFailureMessage('refused')).not.toContain("couldn't confirm")
+    expect(leaveFailureMessage('refused', 'bob')).toContain("didn't go through")
+  })
+
+  it('has a message for every new failure', () => {
+    for (const kind of ['rotationInProgress', 'cannotCheck'] as const) {
+      expect(leaveFailureMessage(kind)).toMatch(/Nothing was changed|nothing was changed/)
+    }
   })
 })

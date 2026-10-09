@@ -819,6 +819,52 @@ left before this shipped has no demotion, and an admin promoted and leaving on t
 unverifiable one (the order within a day is unknowable), so both show as unverified on rejoin. Both
 fail safe: a flag, never a false "verified". Involuntary departure needs someone else's signature.
 
+**Leaving a private Rotating group re-keys it (#178).** A leaver who kept the current key would go on
+reading everything posted until the next removal, and a server colluding with them could re-list them so
+that a later rotation wraps to them. So a leave in such a group (other members remaining; the only
+member's leave deletes the group) also starts a rotation, in the same transaction as the delete and the
+demotion. What it writes is **only the `ROTATION` marker**, carrying the same `RotationStartPayload`
+signature a remover makes, naming the leaver **themselves** as the removed member.
+
+**The leaver never mints, wraps or sends a key.** A key the leaver generated is a key a hostile leaver
+keeps (a patched client logs it before wrapping it to anyone), and every later post would then be readable
+by them: the rotation would cut off only an honest leaver. Anything the server accepted from a leaver to
+put over an admin's entry would also be unverifiable, since the server cannot read wraps and a leaver is
+the party we trust least at the moment they hand them over. So the leave carries none: no new key, no
+`GENKEY#` link, no holder wraps, and no admin's entry is touched. The marker (`startedBy == removedUserId`,
+which the start signature proves) blocks every other rotation, so nobody can be wrapped to a re-listed
+leaver before the admin's link exists.
+
+**An admin takes the marker over and mints the key, but only for a leaver whose key it has a reason to
+trust.** The first admin whose entry is at the leaver's generation to load the group (`takeOverLeave`)
+verifies the marker's start signature. That is not enough on its own: the leaver's key is whatever the
+server serves, and the takeover is the one path where the admin's client turns a marker into **its own
+new signature** naming that member as removed. A removal's marker is harmless on first sight (resuming
+needs an entry at the marker's generation, which the server cannot forge, and signs nothing new). Here a
+server could drop an unpinned member, serve a key it made under their id, write a marker signed with it,
+and get an admin to sign that member into the verified removal history. So before taking over the admin
+requires one of: the leaver's served keys match the admin's **pin** of them; the leaver is the group's
+**creator** and the served key is the one the verified anchor names; or the leaver has an **admission**
+that verifies against the grant chain for the keys served now (`isAdmitted`, the same check a rotation
+applies to a recipient, so someone removed earlier and re-invited after the removal still counts; a
+creator the removal history lists needs such an admission too). Otherwise it takes nothing over and says why. A server that withholds a member
+can already stall a group, so failing closed costs nothing new. This is why a leave that starts a rotation
+**keeps the leaver's `ADMISSION#` row** and the takeover deletes it in its transaction (a plain leave in
+an Open group still deletes it at once). Having decided to take over, the admin does what a remover does: mints the next key, writes the `GENKEY#n` link under their **own** signature naming the
+leaver, and moves their own entry point (`POST /rotation/takeover`, one transaction). It replaces the
+marker (conditioned on it still being an unclaimed leaver's, at the next generation) and writes the link
+(conditioned on it not existing: a generation is minted once). It then re-wraps everyone else through the
+ordinary rotation path. Two admins racing settle on the marker condition: the loser is refused
+(`rotation_not_active`), re-reads, and is re-wrapped by the winner like any member. The removal history
+covers the leaver through the admin-signed link, as it already does after any removal, so a leaver
+re-listed later with their old admission is refused exactly as a removed member is.
+
+A leave is refused, changing nothing, when a rotation is already running (`rotation_in_progress`) or the
+group cannot be read. Open groups, public groups and DMs hold no key to rotate and are unchanged. Posts
+made between the leave and the takeover are still on generation n, which the leaver holds, exactly as
+posts made between a removal and its re-wrap are; the rotation closes that window for everything after
+it.
+
 **Removal is signed by the remover.** `DELETE /api/groups/{gid}/members/{uid}` is Admin-only, and
 for an admin or ambassador subject the request carries the remover's signed grant of `member` to
 them, appended in the same transaction that deletes the membership. That is an ordinary admin
@@ -1023,7 +1069,9 @@ points to the marker's generation in one transaction, so there is no `Unprocesse
 marker still names the generation, the caller is an admin whose own entry point is at it (the only
 way to hold the key), and every member exists and is not already past it, or nothing is written
 (`member_changed`, and the client re-lists and resends). During a rotation, a member already *at* the
-generation is accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/complete`
+generation is accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/takeover`
+is the admin's move for a rotation a leaver started (see "Leaving a private Rotating group").
+`POST /api/groups/{gid}/rotation/complete`
 deletes the marker only when no member is behind (`members_behind`). The scan is a consistent read
 but is not atomic with the delete, and an invite completed by an inviter who was re-wrapped
 mid-request could land a member one generation behind (the `CompleteInvite` transaction conditions
@@ -1137,13 +1185,14 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
 admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
 invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
-(7) **A leaver re-listed.** Leaving rotates no key and writes no `GENKEY#` link, so a member who
-left never appears in the removal history. Their old admission (same keys, inviter an admin that day)
-still verifies, and a server colluding with them can list them again, so the next rotation (say, from
-removing someone else) wraps the new key to them without anyone re-inviting them. Milder than a
-removal, since they chose to go and already hold every key up to the leave, but they would receive
-*future* keys. Closing it needs a signed leave record bound to something contiguous, as a removal is,
-and leaving has no rotation to carry one. Tracked in #178.
+(7) **A stalled leave rotation.** A leave's rotation is taken over and finished by an admin at the
+leaver's generation, on their next load. If none returns, the group's new posts stay on the old generation
+and the other members stay behind until one does, the same stall a removal has when its remover
+disappears. Unlike a design where the leaver picks who can resume, any admin at the generation can, so a
+leaver cannot stall the group by naming only an inactive one.
+
+**Deploy note (leave rotation).** A browser still on an older bundle leaves a Rotating group without a
+rotation and gets 400 `rotation_required`; reloading fixes it. No stored data changes.
 
 **Deploy note (removal history).** A `GENKEY#` link written before this shipped has no record, so a
 group that has already rotated can never pass the check and its rotations stop. Reset or recreate

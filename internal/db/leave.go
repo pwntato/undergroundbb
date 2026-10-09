@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -132,6 +134,35 @@ type LeaveDemotion struct {
 	Signature        []byte
 }
 
+// ErrRotationRequired is returned when a member of a Rotating group leaves
+// while others remain and sends no rotation start: the key they hold would
+// otherwise keep working for them (#178).
+var ErrRotationRequired = errors.New("db: leaving a Rotating group needs a key rotation")
+
+// ErrRotationNotApplicable is returned when an Open group's leave carries a
+// rotation: an Open group has no key to rotate.
+var ErrRotationNotApplicable = errors.New("db: an Open group does not rotate keys on leave")
+
+// LeaveRotation is what a Rotating-group leave commits besides the delete
+// (#178): the ROTATION marker, carrying the leaver's signed statement that
+// they are the member being removed. Nothing else.
+//
+// The leaver mints no key and wraps nothing. A key a leaver generates is a key
+// a leaver can keep, so a hostile one would read everything posted after they
+// left; and anything the server accepted from them to put over an admin's key
+// could only be shape-checked. Instead the marker blocks every other rotation
+// until an admin at the leaver's generation takes it over
+// (TakeOverLeaveRotation): that admin mints the key, writes the chain link
+// under their own signature naming the leaver, and re-wraps everyone else.
+type LeaveRotation struct {
+	// CurrentGeneration is the leaver's own entry-point generation; the
+	// rotation goes to CurrentGeneration+1 and every conditional hangs on it.
+	CurrentGeneration int64
+	// StartSignature is the leaver's signature over crypto.RotationStartPayload
+	// naming themselves as the removed member.
+	StartSignature []byte
+}
+
 // LeaveGroup removes userID from the group -- issues #66 and #55.
 //
 //   - Anyone but the last Admin: their MEMBER# row is deleted, and so are
@@ -148,9 +179,14 @@ type LeaveDemotion struct {
 // role, so two admins leaving at once cannot both succeed (one sees the
 // other's row deleted or in conflict).
 //
-// Leaving does not rotate keys. A member of a Rotating group keeps the
-// generation keys they already hold until #58 exists.
-func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotion *LeaveDemotion) (groupDeleted bool, err error) {
+// In a Rotating group (rotating true) leaving while others remain also starts
+// a key rotation in the same transaction (rot, required): the marker, which an
+// admin then takes over and mints the key for. Otherwise the leaver would keep
+// a key that still works for everything posted until the next removal, and a
+// server colluding with them could re-list them and have the next rotation
+// wrap to them (#178). The only member leaving deletes the group and needs no
+// rotation.
+func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotion *LeaveDemotion, rot *LeaveRotation, rotating bool) (groupDeleted bool, err error) {
 	roles, err := c.memberRoles(ctx, groupID)
 	if err != nil {
 		return false, err
@@ -161,6 +197,12 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 	}
 	if len(roles) == 1 {
 		return c.deleteGroup(ctx, groupID, userID)
+	}
+	switch {
+	case rotating && rot == nil:
+		return false, ErrRotationRequired
+	case !rotating && rot != nil:
+		return false, ErrRotationNotApplicable
 	}
 
 	successor := ""
@@ -196,6 +238,13 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 		} else {
 			deleteCond += " AND attribute_not_exists(#gsk)"
 		}
+	}
+	if rot != nil {
+		// The signed start names this generation; a leaver whose entry moved on
+		// since is a stale view, not a rotation from the wrong generation.
+		deleteNames["#gen"] = "Generation"
+		deleteCond += " AND #gen = :cur"
+		deleteValues[":cur"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(rot.CurrentGeneration, 10)}
 	}
 	const (
 		deleteIndex = 0
@@ -256,13 +305,31 @@ func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotio
 			ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
 		}})
 	}
+	rotationIndex := -1
+	if rot != nil {
+		var markerItem types.TransactWriteItem
+		markerItem, err = c.leaveMarker(groupID, userID, rot)
+		if err != nil {
+			return false, err
+		}
+		rotationIndex = len(items)
+		items = append(items, markerItem)
+	}
 	// The leaver's admission record goes with their membership (#178). Hygiene
-	// for an honest server only: a malicious one can keep it, and only a signed
-	// removal record checked by the verifier could stop that. Last, so no
+	// for an honest server only: a malicious one can keep it, and the signed
+	// removal history is what the verifier checks. A leave that starts a
+	// rotation KEEPS it: the admin who takes the marker over must be able to
+	// check that the leaver's signing key is the one their inviter admitted,
+	// because the takeover signs a removal on the strength of the leaver's
+	// start (TakeOverLeaveRotation deletes it then). Last, so no
 	// condition-check index above shifts.
-	items = append(items, admissionDelete(c.table, groupID, userID))
+	if rot == nil {
+		items = append(items, admissionDelete(c.table, groupID, userID))
+	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
+		case rot != nil && isConditionalCheckFailure(err, rotationIndex):
+			return false, ErrRotationInProgress
 		case elevated && isConditionalCheckFailure(err, grantIndex):
 			return false, ErrLeaveGrantKeyTaken
 		case isConditionalCheckFailure(err, deleteIndex),
@@ -421,4 +488,32 @@ func (c *Client) deleteOwnInvites(ctx context.Context, groupID, userID string) e
 		start = out.LastEvaluatedKey
 	}
 	return c.batchDelete(ctx, keys)
+}
+
+// leaveMarker builds the ROTATION marker a leave writes. StartedBy and
+// RemovedUserID are both the leaver: that pair is how a marker no admin has
+// taken over yet is recognised (TakeOverLeaveRotation, and every client).
+func (c *Client) leaveMarker(groupID, leaver string, rot *LeaveRotation) (types.TransactWriteItem, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	marker, err := attributevalue.MarshalMap(models.Rotation{
+		Record: models.Record{
+			PK:        "GROUP#" + groupID,
+			SK:        RotationSortKey,
+			Type:      "Rotation",
+			CreatedAt: now,
+		},
+		Generation:     rot.CurrentGeneration + 1,
+		StartedAt:      now,
+		StartedBy:      leaver,
+		RemovedUserID:  leaver,
+		StartSignature: rot.StartSignature,
+	})
+	if err != nil {
+		return types.TransactWriteItem{}, err
+	}
+	return types.TransactWriteItem{Put: &types.Put{
+		TableName:           aws.String(c.table),
+		Item:                marker,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	}}, nil
 }

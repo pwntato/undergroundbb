@@ -32,6 +32,9 @@ import type {
   RewrapGroupKeyRequest,
   RewrapGroupKeyResponse,
   RewrapGroupKeyResult,
+  SignLeaveRotationStartRequest,
+  SignLeaveRotationStartResponse,
+  SignLeaveRotationStartResult,
   StartGroupRotationRequest,
   StartGroupRotationResponse,
   StartGroupRotationResult,
@@ -633,6 +636,18 @@ export function startGroupRotation(
   return workerCall<StartGroupRotationResponse, StartGroupRotationResult>(
     (id) => ({ kind: 'startGroupRotation', id, ...req }) satisfies StartGroupRotationRequest,
     'startGroupRotationDone',
+    (res) => res.result,
+  )
+}
+
+/** #178: signs the rotation start a leave carries, naming the caller. Mints no key (see signLeaveRotationStart in credential-material.ts). */
+export function signLeaveRotationStart(
+  req: Omit<SignLeaveRotationStartRequest, 'kind' | 'id'>,
+): Promise<SignLeaveRotationStartResult> {
+  return workerCall<SignLeaveRotationStartResponse, SignLeaveRotationStartResult>(
+    (id) =>
+      ({ kind: 'signLeaveRotationStart', id, ...req }) satisfies SignLeaveRotationStartRequest,
+    'signLeaveRotationStartDone',
     (res) => res.result,
   )
 }

@@ -15,7 +15,7 @@ import {
   type AccountPlanEntry,
   type DeleteAccountDeps,
 } from './runDeleteAccount'
-import { leavePlan } from './runLeaveGroup'
+import { leavePlan, type LeaveDeps } from './runLeaveGroup'
 
 const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
 const BOB = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -50,11 +50,23 @@ const adminGroup = entry(view('g-admin', 'admin', [m(ME, 'admin'), m(BOB, 'admin
 const soloGroup = entry(view('g-solo', 'admin', [m(ME, 'admin')]))
 const lastAdminGroup = entry(view('g-last', 'admin', [m(ME, 'admin'), m(BOB, 'member')]))
 
+/** These tests use Open groups, which never rotate: any use of the rotation deps is a bug. */
+const noRotation: LeaveDeps['rotation'] = {
+  rotationDeps: new Proxy({} as never, {
+    get: (_t, name) => {
+      throw new Error(`an Open group must not touch rotation deps (${String(name)})`)
+    },
+  }),
+  signLeaveRotationStart: () =>
+    Promise.reject(new Error('an Open group must not start a rotation')),
+}
+
 function deps(over: Partial<DeleteAccountDeps> = {}): DeleteAccountDeps & { calls: string[] } {
   const calls: string[] = []
   return {
     calls,
     userId: ME,
+    rotation: noRotation,
     leaveGroup: vi.fn((groupId: string) => {
       calls.push(`leave:${groupId}`)
       return Promise.resolve({ groupDeleted: groupId === 'g-solo' })

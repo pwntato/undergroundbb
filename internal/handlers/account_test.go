@@ -34,7 +34,7 @@ func TestDeleteAccountRequiresSession(t *testing.T) {
 func TestDeleteAccountRefusesWhileInAGroupThenSucceedsAfterLeaving(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	bob, bobCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
 
@@ -80,7 +80,7 @@ func TestDeleteAccountRefusesWhileInAGroupThenSucceedsAfterLeaving(t *testing.T)
 func TestDeleteAccountLastAdminMustPromoteFirst(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
 	bob, _ := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")
 

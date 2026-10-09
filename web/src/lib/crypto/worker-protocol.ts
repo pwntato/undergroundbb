@@ -486,6 +486,31 @@ export interface StartGroupRotationResponse {
 }
 
 /**
+ * #178: signs the rotation start a LEAVE carries, naming the caller as the
+ * member removed. No key is minted. See credential-material.ts's
+ * signLeaveRotationStart.
+ */
+export interface SignLeaveRotationStartRequest {
+  readonly kind: 'signLeaveRotationStart'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownGeneration: number
+}
+
+export interface SignLeaveRotationStartResult {
+  readonly generation: number
+  /** Base64 signature over rotationStartPayload (#178). */
+  readonly startSignature: string
+}
+
+export interface SignLeaveRotationStartResponse {
+  readonly kind: 'signLeaveRotationStartDone'
+  readonly id: string
+  readonly result: SignLeaveRotationStartResult
+}
+
+/**
  * #58: re-wraps the caller's current group key to a batch of recipients. The
  * recipients' public keys MUST already have been checked against the caller's
  * signed pins by the caller; the worker has no pins.
@@ -654,6 +679,7 @@ export type WorkerRequest =
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
   | StartGroupRotationRequest
+  | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
   | ClearLiveKeysRequest
 
@@ -675,5 +701,6 @@ export type WorkerResponse =
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
   | StartGroupRotationResponse
+  | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse
   | WorkerErrorResponse

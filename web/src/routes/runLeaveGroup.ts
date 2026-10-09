@@ -3,10 +3,15 @@
 // unit-testable under vitest's node environment.
 
 import { ApiError } from '@/lib/api/auth'
-import type { LeaveGroupRequest } from '@/lib/api/groups'
+import type { LeaveGroupRequest, LeaveRotationRequest } from '@/lib/api/groups'
+import type {
+  SignLeaveRotationStartRequest,
+  SignLeaveRotationStartResult,
+} from '@/lib/crypto/worker-protocol'
 import type { MembersView } from './runGroupMembers'
 import { isDeletedUser } from './memberLabel'
 import { isLiveKeysError } from './runListGroups'
+import type { RotationDeps } from './runRotation'
 
 /** What leaving means for this caller, from the roster they are looking at. */
 export type LeavePlan =
@@ -54,6 +59,13 @@ export type LeaveResult =
   | { readonly ok: false; readonly kind: 'grantMissing' }
   // Not a member any more (already left, or removed): nothing to leave.
   | { readonly ok: false; readonly kind: 'notFound' }
+  // A key rotation is already running; the server refuses a second one. Nothing changed.
+  | { readonly ok: false; readonly kind: 'rotationInProgress' }
+  // The group could not be read to build the rotation start. Nothing changed.
+  | { readonly ok: false; readonly kind: 'cannotCheck' }
+  // The server refused the request outright (a 4xx the cases above do not name,
+  // e.g. a signature it could not verify). Nothing was written.
+  | { readonly ok: false; readonly kind: 'refused' }
   // Network failure or 5xx: the leave may or may not have committed.
   | { readonly ok: false; readonly kind: 'ambiguous' }
 
@@ -72,6 +84,17 @@ export interface LeaveDeps {
   }) => Promise<{ grantSortKey: string; signature: string }>
   /** The signed-in user's own id. */
   readonly userId: string
+  /** Leaving a private Rotating group starts a re-key (#178); what that needs. */
+  readonly rotation: LeaveRotationDeps
+}
+
+export interface LeaveRotationDeps {
+  /** The rotation job's reads: the group (for the caller's generation) and its roster. */
+  readonly rotationDeps: Pick<RotationDeps, 'getGroup' | 'listAllMembers'>
+  /** Signs the start naming the leaver. Mints no key (credential-material.ts's signLeaveRotationStart). */
+  readonly signLeaveRotationStart: (
+    req: Omit<SignLeaveRotationStartRequest, 'kind' | 'id'>,
+  ) => Promise<SignLeaveRotationStartResult>
 }
 
 // Same reasoning as runGroupMembers: a collision on a fresh random address is
@@ -93,6 +116,14 @@ export async function runLeave(
   const ref = view.myGrantSortKey ?? ''
   if (needsDemotion && ref === '') {
     return { ok: false, kind: 'grantMissing' }
+  }
+
+  // Minted once: a re-sign after grant_key_taken resends the same material.
+  let rotation: LeaveRotationRequest | undefined
+  if (plan !== 'deletesGroup' && view.revocationMode === 'rotating') {
+    const prepared = await prepareLeaveRotation(deps, view.groupId)
+    if (!prepared.ok) return prepared
+    rotation = prepared.rotation
   }
 
   for (let attempt = 1; attempt <= MAX_SIGN_ATTEMPTS; attempt++) {
@@ -120,17 +151,25 @@ export async function runLeave(
     }
 
     try {
-      const res = await deps.leaveGroup(view.groupId, demotion)
+      const body: LeaveGroupRequest | undefined =
+        rotation === undefined ? demotion : { ...demotion, rotation }
+      const res = await deps.leaveGroup(view.groupId, body)
       return { ok: true, groupDeleted: res.groupDeleted }
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 409 && err.code === 'grant_key_taken' && attempt < MAX_SIGN_ATTEMPTS) {
           continue
         }
+        if (err.status === 409 && err.code === 'rotation_in_progress') {
+          return { ok: false, kind: 'rotationInProgress' }
+        }
         if (err.status === 409) {
           return { ok: false, kind: err.code === 'last_admin' ? 'lastAdmin' : 'stale' }
         }
-        if (err.status === 400 && err.code === 'demotion_required') {
+        if (
+          err.status === 400 &&
+          (err.code === 'demotion_required' || err.code === 'rotation_required')
+        ) {
           // Promoted since the roster loaded; reload and sign next time.
           return { ok: false, kind: 'stale' }
         }
@@ -140,11 +179,64 @@ export async function runLeave(
         if (err.status === 404) {
           return { ok: false, kind: 'notFound' }
         }
+        // Any other 4xx is a definite refusal: nothing was written, so it must
+        // not read as "we couldn't confirm whether you left".
+        if (err.status >= 400 && err.status < 500) {
+          return { ok: false, kind: 'refused' }
+        }
       }
       return { ok: false, kind: 'ambiguous' }
     }
   }
   return { ok: false, kind: 'ambiguous' }
+}
+
+type PreparedRotation =
+  | { readonly ok: true; readonly rotation: LeaveRotationRequest | undefined }
+  | Exclude<LeaveResult, { ok: true }>
+
+/**
+ * Signs the rotation start a leave in a private Rotating group carries (#178).
+ * Re-reads the group first, because the roster the caller is looking at can be
+ * stale and the caller's generation, a running rotation and the group's mode
+ * all decide what can be built. The leaver mints no key and wraps nothing: a
+ * key they generated would be a key they could keep, so an admin takes the
+ * marker over and mints it. Anything that stops this changes nothing.
+ */
+async function prepareLeaveRotation(deps: LeaveDeps, groupId: string): Promise<PreparedRotation> {
+  const rd = deps.rotation.rotationDeps
+  let detail
+  let members
+  try {
+    detail = await rd.getGroup(groupId)
+    if (detail.visibility !== 'private' || detail.revocationMode !== 'rotating') {
+      return { ok: true, rotation: undefined }
+    }
+    members = await rd.listAllMembers(groupId)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return { ok: false, kind: 'authRequired' }
+    if (err instanceof ApiError && err.status === 404) return { ok: false, kind: 'notFound' }
+    return { ok: false, kind: 'cannotCheck' }
+  }
+  if (members.every((m) => m.userId === deps.userId)) {
+    return { ok: true, rotation: undefined } // the only member: leaving deletes the group
+  }
+  if (detail.rotation !== undefined) return { ok: false, kind: 'rotationInProgress' }
+
+  try {
+    const signed = await deps.rotation.signLeaveRotationStart({
+      userId: deps.userId,
+      groupId,
+      ownGeneration: detail.generation,
+    })
+    return {
+      ok: true,
+      rotation: { generation: signed.generation, startSignature: signed.startSignature },
+    }
+  } catch (err) {
+    // A worker call, not a request: nothing was sent.
+    return isLiveKeysError(err) ? { ok: false, kind: 'coldKeys' } : { ok: false, kind: 'ambiguous' }
+  }
 }
 
 const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> = {
@@ -155,6 +247,12 @@ const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> =
   coldKeys: 'Log in again so this browser can sign your leaving, then retry. Nothing was changed.',
   grantMissing:
     "Your own role isn't on record for this group, so you can't leave from here yet. Nothing was changed.",
+  rotationInProgress:
+    'A key rotation is still running, so you cannot leave yet. Nothing was changed. Try again once it has finished.',
+  cannotCheck:
+    "We couldn't read the group to prepare your leaving, so nothing was changed. Try again.",
+  refused:
+    'The server refused this request, so nothing was changed. Reload the page and try again.',
   notFound: 'You are no longer a member of this group.',
   ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
 }
@@ -173,7 +271,7 @@ export function leaveFailureMessage(
       // The leave may have committed; do not claim it did not.
       return `${promotedName} is now an admin, but we couldn't confirm whether you left. Check your group list before trying again.`
     }
-    if (kind === 'stale' || kind === 'lastAdmin') {
+    if (kind === 'stale' || kind === 'lastAdmin' || kind === 'refused') {
       return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
     }
   }

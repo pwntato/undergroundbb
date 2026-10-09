@@ -12,10 +12,16 @@ import {
   listDesignations,
   listGrants,
   listMembers,
+  takeOverRotation,
   rewrapMembers,
 } from '@/lib/api/groups'
 import { getUsers } from '@/lib/api/users'
-import { getOwnSigningKey, rewrapGroupKey, signPin } from '@/lib/crypto/worker-client'
+import {
+  getOwnSigningKey,
+  rewrapGroupKey,
+  signPin,
+  startGroupRotation,
+} from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
@@ -47,5 +53,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
     rewrapCrypto: rewrapGroupKey,
     rewrapMembers,
     completeRotation,
+    takeOverCrypto: startGroupRotation,
+    takeOverRotation,
   }
 }

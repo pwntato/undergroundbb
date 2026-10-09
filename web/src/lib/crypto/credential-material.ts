@@ -748,6 +748,27 @@ export async function startGroupRotation(
 }
 
 /**
+ * #178: the one thing a LEAVING member contributes to the rotation their leave
+ * starts: a signature over the rotation start naming THEMSELVES as the member
+ * removed, for the generation after their own. They mint no key and wrap
+ * nothing, so a hostile leaver never holds the next generation's key; an admin
+ * at their generation takes the marker over and mints it (startGroupRotation).
+ */
+export function signLeaveRotationStart(
+  keys: LiveKeys,
+  groupId: string,
+  ownGeneration: number,
+): { generation: number; startSignature: string } {
+  const generation = ownGeneration + 1
+  const startSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RotationStart,
+    rotationStartPayload(groupId, keys.userId, keys.userId, generation),
+  )
+  return { generation, startSignature: bytesToBase64(startSignature) }
+}
+
+/**
  * #58: re-wraps the caller's CURRENT group key (their own entry at
  * ownGeneration, which during a rotation is the new generation) to each
  * recipient, for PUT /api/groups/{gid}/rotation/members. The AAD names the

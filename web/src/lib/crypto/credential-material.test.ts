@@ -29,6 +29,7 @@ import {
   signRoleGrant,
   signSuccessorClaim,
   signSuccessorDesignation,
+  signLeaveRotationStart,
   startGroupRotation,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -1122,6 +1123,38 @@ describe('group key rotation (#58)', () => {
     )
     return { admin, oldKey, started }
   }
+
+  it('a leave signs only the start naming the leaver, and mints or wraps nothing (#178)', async () => {
+    const leaver = await realUserKeys(ADMIN_ID, 'leaver-password-rot')
+    const signed = signLeaveRotationStart(leaver, GROUP_ID, 4)
+    // Exactly a generation and a signature: there is no key material to leak.
+    expect(Object.keys(signed).sort()).toEqual(['generation', 'startSignature'])
+    expect(signed.generation).toBe(5)
+    // It verifies as the leaver naming THEMSELVES for the next generation...
+    expect(
+      ed25519.verify(
+        leaver.signingKey.publicKey,
+        ed25519.SigningContext.RotationStart,
+        rotationStartPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 5),
+        base64ToBytes(signed.startSignature),
+      ),
+    ).toBe(true)
+    // ...and only that: not for someone else, another generation or another group.
+    for (const payload of [
+      rotationStartPayload(GROUP_ID, ADMIN_ID, SUBJECT_ID, 5),
+      rotationStartPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 4),
+      rotationStartPayload('another-group', ADMIN_ID, ADMIN_ID, 5),
+    ]) {
+      expect(
+        ed25519.verify(
+          leaver.signingKey.publicKey,
+          ed25519.SigningContext.RotationStart,
+          payload,
+          base64ToBytes(signed.startSignature),
+        ),
+      ).toBe(false)
+    }
+  })
 
   it('mints generation+1 whose chain link walks back to the old key', async () => {
     const { admin, oldKey, started } = await startedRotation()

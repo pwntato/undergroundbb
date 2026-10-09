@@ -26,6 +26,7 @@ import {
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
   rewrapGroupKey as rewrapGroupKeyPure,
+  signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
@@ -50,6 +51,7 @@ import type {
   GetOwnSigningKeyRequest,
   RecoveryMaterial,
   RewrapGroupKeyRequest,
+  SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
@@ -144,6 +146,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
+      return
+    case 'signLeaveRotationStart':
+      signLeaveRotationStart(req)
       return
     case 'rewrapGroupKey':
       await rewrapGroupKey(req)
@@ -416,6 +421,13 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     req.subjectUserId,
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
+}
+
+/** #178: signs the rotation start a leave carries; mints nothing. */
+function signLeaveRotationStart(req: SignLeaveRotationStartRequest): void {
+  const keys = requireLiveKeysFor(req.userId, 'sign your leaving')
+  const result = signLeaveRotationStartPure(keys, req.groupId, req.ownGeneration)
+  post({ kind: 'signLeaveRotationStartDone', id: req.id, result })
 }
 
 /** #58: re-wraps the caller's current group key to a batch of members. */

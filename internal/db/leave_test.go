@@ -80,7 +80,7 @@ func TestLeaveGroupPlainMemberLeaves(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "bob", "member")
 
-	deleted, err := c.LeaveGroup(context.Background(), g, "bob", nil)
+	deleted, err := c.LeaveGroup(context.Background(), g, "bob", nil, nil, false)
 	if err != nil || deleted {
 		t.Fatalf("deleted=%v err=%v, want false/nil", deleted, err)
 	}
@@ -98,7 +98,7 @@ func TestLeaveGroupLastAdminBlockedWhileOthersRemain(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "amb", "ambassador")
 
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); !errors.Is(err, ErrLastAdmin) {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("err = %v, want ErrLastAdmin", err)
 	}
 	if !itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
@@ -112,7 +112,7 @@ func TestLeaveGroupAdminMayLeaveWhenAnotherAdminExists(t *testing.T) {
 	putTestMember(t, c, g, "admin1", "admin")
 	putTestMember(t, c, g, "admin2", "admin")
 
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") || !itemExists(t, c, "GROUP#"+g, "MEMBER#admin2") {
@@ -136,7 +136,7 @@ func TestLeaveGroupOnlyMemberDeletesWholePartition(t *testing.T) {
 		}
 	}
 
-	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil)
+	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil, nil, false)
 	if err != nil || !deleted {
 		t.Fatalf("deleted=%v err=%v, want true/nil", deleted, err)
 	}
@@ -158,10 +158,10 @@ func TestLeaveGroupNotMember(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
 	putTestMember(t, c, g, "admin1", "admin")
-	if _, err := c.LeaveGroup(context.Background(), g, "stranger", nil); !errors.Is(err, ErrNotMember) {
+	if _, err := c.LeaveGroup(context.Background(), g, "stranger", nil, nil, false); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("err = %v, want ErrNotMember", err)
 	}
-	if _, err := c.LeaveGroup(context.Background(), "test-group-nonexistent-"+randomSuffix(t), "stranger", nil); !errors.Is(err, ErrNotMember) {
+	if _, err := c.LeaveGroup(context.Background(), "test-group-nonexistent-"+randomSuffix(t), "stranger", nil, nil, false); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("unknown group: err = %v, want ErrNotMember", err)
 	}
 }
@@ -182,7 +182,7 @@ func TestLeaveGroupTwoAdminsLeavingNeverStrandsTheGroup(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, errs[i] = c.LeaveGroup(context.Background(), g, id, testDemotion(id))
+				_, errs[i] = c.LeaveGroup(context.Background(), g, id, testDemotion(id), nil, false)
 			}()
 		}
 		wg.Wait()
@@ -208,7 +208,7 @@ func TestLeaveGroupElevatedNeedsDemotionAndWritesIt(t *testing.T) {
 	putTestMember(t, c, g, "amb", "ambassador")
 
 	for _, id := range []string{"a1", "amb"} {
-		if _, err := c.LeaveGroup(ctx, g, id, nil); !errors.Is(err, ErrDemotionRequired) {
+		if _, err := c.LeaveGroup(ctx, g, id, nil, nil, false); !errors.Is(err, ErrDemotionRequired) {
 			t.Fatalf("%s without demotion: err = %v, want ErrDemotionRequired", id, err)
 		}
 		if !itemExists(t, c, "GROUP#"+g, "MEMBER#"+id) {
@@ -218,7 +218,7 @@ func TestLeaveGroupElevatedNeedsDemotionAndWritesIt(t *testing.T) {
 
 	for _, id := range []string{"a1", "amb"} {
 		d := testDemotion(id)
-		if _, err := c.LeaveGroup(ctx, g, id, d); err != nil {
+		if _, err := c.LeaveGroup(ctx, g, id, d, nil, false); err != nil {
 			t.Fatalf("%s leave: %v", id, err)
 		}
 		if itemExists(t, c, "GROUP#"+g, "MEMBER#"+id) {
@@ -246,7 +246,7 @@ func TestLeaveGroupMemberWithDemotionConflicts(t *testing.T) {
 	putTestMember(t, c, g, "a", "admin")
 	putTestMember(t, c, g, "m", "member")
 	d := testDemotion("m")
-	if _, err := c.LeaveGroup(context.Background(), g, "m", d); !errors.Is(err, ErrLeaveConflict) {
+	if _, err := c.LeaveGroup(context.Background(), g, "m", d, nil, false); !errors.Is(err, ErrLeaveConflict) {
 		t.Fatalf("err = %v, want ErrLeaveConflict", err)
 	}
 	if !itemExists(t, c, "GROUP#"+g, "MEMBER#m") || itemExists(t, c, "GROUP#"+g, d.GrantSortKey) {
@@ -273,12 +273,12 @@ func TestLeaveGroupStaleGrantRefWritesNothing(t *testing.T) {
 	}
 
 	stale := testDemotion("a1") // HasStoredGrant false: signed against the fallback
-	if _, err := c.LeaveGroup(ctx, g, "a1", stale); !errors.Is(err, ErrLeaveConflict) {
+	if _, err := c.LeaveGroup(ctx, g, "a1", stale, nil, false); !errors.Is(err, ErrLeaveConflict) {
 		t.Fatalf("stale fallback: err = %v, want ErrLeaveConflict", err)
 	}
 	wrong := testDemotion("a1")
 	wrong.HasStoredGrant, wrong.GrantorGrantRef = true, "GRANT#old"
-	if _, err := c.LeaveGroup(ctx, g, "a1", wrong); !errors.Is(err, ErrLeaveConflict) {
+	if _, err := c.LeaveGroup(ctx, g, "a1", wrong, nil, false); !errors.Is(err, ErrLeaveConflict) {
 		t.Fatalf("wrong ref: err = %v, want ErrLeaveConflict", err)
 	}
 	if !itemExists(t, c, "GROUP#"+g, "MEMBER#a1") || itemExists(t, c, "GROUP#"+g, stale.GrantSortKey) {
@@ -287,7 +287,7 @@ func TestLeaveGroupStaleGrantRefWritesNothing(t *testing.T) {
 
 	ok := testDemotion("a1")
 	ok.HasStoredGrant, ok.GrantorGrantRef = true, "GRANT#current"
-	if _, err := c.LeaveGroup(ctx, g, "a1", ok); err != nil {
+	if _, err := c.LeaveGroup(ctx, g, "a1", ok, nil, false); err != nil {
 		t.Fatalf("matching ref: %v", err)
 	}
 }
@@ -306,7 +306,7 @@ func TestLeaveGroupDemotionKeyTakenWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.LeaveGroup(ctx, g, "a1", d); !errors.Is(err, ErrLeaveGrantKeyTaken) {
+	if _, err := c.LeaveGroup(ctx, g, "a1", d, nil, false); !errors.Is(err, ErrLeaveGrantKeyTaken) {
 		t.Fatalf("err = %v, want ErrLeaveGrantKeyTaken", err)
 	}
 	if !itemExists(t, c, "GROUP#"+g, "MEMBER#a1") {
@@ -319,7 +319,7 @@ func TestLeaveGroupSoleAdminNeedsNoDemotion(t *testing.T) {
 	c := testClient(t)
 	g := newLeaveGroup(t, c)
 	putTestMember(t, c, g, "solo", "admin")
-	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil)
+	deleted, err := c.LeaveGroup(context.Background(), g, "solo", nil, nil, false)
 	if err != nil || !deleted {
 		t.Fatalf("deleted=%v err=%v", deleted, err)
 	}
@@ -359,7 +359,7 @@ func TestLeaveGroupDeletedCoAdminDoesNotCountAsAnotherAdmin(t *testing.T) {
 	putTestMember(t, c, g, "bob", "member")
 	putTombstone(t, c, ghost)
 
-	_, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	_, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false)
 	if !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("err = %v, want ErrLastAdmin", err)
 	}
@@ -381,7 +381,7 @@ func TestLeaveGroupLiveCoAdminAmongDeletedOnesIsEnough(t *testing.T) {
 	putTestMember(t, c, g, "zed", "admin")
 	putTombstone(t, c, ghost)
 
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); err != nil {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") {
@@ -416,7 +416,7 @@ func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing
 		})
 	})
 
-	_, err := racing.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"))
+	_, err := racing.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false)
 	if !fired {
 		t.Fatal("the tombstone was never written, so this tested nothing")
 	}
@@ -427,7 +427,81 @@ func TestLeaveGroupSuccessorDeletedBetweenReadAndTransactionIsRefused(t *testing
 		t.Fatal("admin1 left although the only other admin was deleted")
 	}
 	// The retry now sees the tombstone up front.
-	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1")); !errors.Is(err, ErrLastAdmin) {
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), nil, false); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("retry err = %v, want ErrLastAdmin", err)
+	}
+}
+
+// --- Leaving a Rotating group starts a key rotation (#178) ---
+
+func testLeaveRotation(gen int64) *LeaveRotation {
+	return &LeaveRotation{CurrentGeneration: gen, StartSignature: []byte("start-sig")}
+}
+
+func memberGeneration(t *testing.T, c *Client, groupID, userID string) string {
+	t.Helper()
+	out, err := c.ddb.GetItem(context.Background(), getItemInput(c.table, "GROUP#"+groupID, "MEMBER#"+userID))
+	if err != nil || out.Item == nil {
+		t.Fatalf("get member %s: %v", userID, err)
+	}
+	return out.Item["Generation"].(*types.AttributeValueMemberN).Value
+}
+
+func TestLeaveGroupRotationRules(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "bob", "member")
+	ctx := context.Background()
+
+	// A Rotating group needs the rotation; an Open one must not carry one.
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, nil, true); !errors.Is(err, ErrRotationRequired) {
+		t.Fatalf("no rotation in a Rotating group: %v", err)
+	}
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(0), false); !errors.Is(err, ErrRotationNotApplicable) {
+		t.Fatalf("rotation in an Open group: %v", err)
+	}
+	// The leaver must still be at the generation the start was signed for: a
+	// stale view (their entry moved on) is a conflict, not a rotation from the
+	// wrong generation.
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(5), true); !errors.Is(err, ErrLeaveConflict) {
+		t.Fatalf("leaver at another generation: %v", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || itemExists(t, c, "GROUP#"+g, RotationSortKey) {
+		t.Fatal("a refused leave changed something")
+	}
+
+	// A good leave commits the membership delete and the marker together, and
+	// a second leave while the rotation runs is refused.
+	if _, err := c.LeaveGroup(ctx, g, "bob", nil, testLeaveRotation(0), true); err != nil {
+		t.Fatal(err)
+	}
+	if itemExists(t, c, "GROUP#"+g, "MEMBER#bob") || !itemExists(t, c, "GROUP#"+g, RotationSortKey) {
+		t.Fatal("leave did not commit membership and marker together")
+	}
+	if memberGeneration(t, c, g, "admin1") != "0" {
+		t.Fatal("the leave moved an admin")
+	}
+	putTestMember(t, c, g, "dan", "member")
+	if _, err := c.LeaveGroup(ctx, g, "dan", nil, testLeaveRotation(0), true); !errors.Is(err, ErrRotationInProgress) {
+		t.Fatalf("second rotation: %v", err)
+	}
+	if !itemExists(t, c, "GROUP#"+g, "MEMBER#dan") {
+		t.Fatal("a refused leave deleted the member")
+	}
+}
+
+// An admin leaving in a Rotating group demotes themselves, names a live
+// successor and starts the rotation in one transaction.
+func TestLeaveGroupAdminWithRotation(t *testing.T) {
+	c := testClient(t)
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "admin1", "admin")
+	putTestMember(t, c, g, "admin2", "admin")
+	if _, err := c.LeaveGroup(context.Background(), g, "admin1", testDemotion("admin1"), testLeaveRotation(0), true); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if itemExists(t, c, "GROUP#"+g, "MEMBER#admin1") || !itemExists(t, c, "GROUP#"+g, RotationSortKey) {
+		t.Fatal("leave did not commit")
 	}
 }

@@ -136,6 +136,98 @@ func (h *Handler) completeRotation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// takeOverRotationRequest is the same material a removal's rotation carries,
+// minted by the calling admin in place of the bare marker a leaver left.
+type takeOverRotationRequest struct {
+	Generation int64       `json:"generation"`
+	Link       wrappedBlob `json:"link"`
+	// WrappedKey is the new key wrapped for the caller (their only copy).
+	WrappedKey     wrappedKey `json:"wrappedKey"`
+	StartSignature string     `json:"startSignature"`
+}
+
+// takeOverRotation implements POST /api/groups/{groupId}/rotation/takeover
+// (#178): an admin at the leaver's generation turns the marker a leaving member
+// wrote into a rotation the admin mints. The leaver only signed the start, so
+// they never hold the new key. Refused (409 rotation_not_active) when the
+// running rotation is not an unclaimed leaver's: another admin got there first,
+// it finished, or it was a removal's.
+func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRewrapBodyBytes)
+	var req takeOverRotationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
+		return
+	}
+	if caller == nil {
+		groupNotFound(w)
+		return
+	}
+	if caller.Role != models.RoleAdmin {
+		WriteError(w, http.StatusForbidden, "only a group admin can take over a rotation")
+		return
+	}
+	marker, err := h.db.GetRotation(r.Context(), groupID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
+		return
+	}
+	if marker == nil || marker.RemovedUserID == "" || marker.StartedBy != marker.RemovedUserID || marker.Generation != caller.Generation+1 {
+		h.writeRotationErr(w, db.ErrRotationNotActive, "could not take over the rotation")
+		return
+	}
+	if req.Generation != caller.Generation+1 {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("generation: must be %d (one past your own key generation)", caller.Generation+1))
+		return
+	}
+	link, err := decodeWrappedBlob(req.Link)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "link: "+err.Error())
+		return
+	}
+	wrapped, err := decodeWrappedKey(req.WrappedKey)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "wrappedKey: "+err.Error())
+		return
+	}
+	sig, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, marker.RemovedUserID, req.StartSignature, caller.Generation)
+	if msg != "" {
+		if rej.code == "" {
+			WriteError(w, rej.status, msg)
+		} else {
+			WriteErrorWithCode(w, rej.status, msg, rej.code)
+		}
+		return
+	}
+	in := db.TakeOverLeaveRotationInput{
+		GroupID:           groupID,
+		CallerUserID:      userID,
+		LeaverUserID:      marker.RemovedUserID,
+		CurrentGeneration: caller.Generation,
+		Link:              link,
+		CallerWrappedKey:  wrapped,
+		StartSignature:    sig,
+	}
+	if !h.writeRotationErr(w, h.db.TakeOverLeaveRotation(r.Context(), in), "could not take over the rotation") {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // writeRotationErr maps the shared rotation errors; it reports whether it
 // wrote a response (true for any non-nil err).
 func (h *Handler) writeRotationErr(w http.ResponseWriter, err error, fallback string) bool {

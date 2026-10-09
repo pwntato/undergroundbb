@@ -295,8 +295,26 @@ type leaveGroupRequest struct {
 	GrantSortKey    string `json:"grantSortKey"`
 	GrantorGrantRef string `json:"grantorGrantRef"`
 	Signature       string `json:"signature"`
+	// Rotation is required when leaving a private Rotating group that has
+	// other members (#178): see leaveRotationRequest.
+	Rotation *leaveRotationRequest `json:"rotation"`
 }
 
+// leaveRotationRequest is the rotation a leave starts in a private Rotating
+// group (#178, docs/DESIGN.md "The recipient set is taken from the server"):
+// only the leaver's signed statement that they are the member being removed.
+// The leaver mints no key, so a hostile leaver never holds the next one; an
+// admin takes the marker over and mints it (takeOverRotation).
+type leaveRotationRequest struct {
+	// Generation must be exactly one past the leaver's own entry point.
+	Generation int64 `json:"generation"`
+	// StartSignature (base64) is the leaver's signature over
+	// crypto.RotationStartPayload naming THEMSELVES as the removed member.
+	StartSignature string `json:"startSignature"`
+}
+
+// empty reports whether the DEMOTION half of the body is absent; the rotation
+// half is judged separately by the group's mode.
 func (r leaveGroupRequest) empty() bool {
 	return r.GrantSortKey == "" && r.GrantorGrantRef == "" && r.Signature == ""
 }
@@ -379,8 +397,36 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		demotion = d
 	}
 
-	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID, demotion)
+	// A private Rotating group re-keys when a member leaves (#178). The server
+	// cannot tell here whether anyone else remains, so db.LeaveGroup decides
+	// whether the rotation is required; this only validates one that was sent.
+	rotating := group.RevocationMode != models.RevocationOpen && group.Visibility == models.VisibilityPrivate
+	var rot *db.LeaveRotation
+	if req.Rotation != nil && rotating {
+		var rej removeRejection
+		var msg string
+		rot, rej, msg = h.buildLeaveRotation(r.Context(), groupID, userID, caller.Generation, req.Rotation)
+		if msg != "" {
+			if rej.code == "" {
+				WriteError(w, rej.status, msg)
+			} else {
+				WriteErrorWithCode(w, rej.status, msg, rej.code)
+			}
+			return
+		}
+	} else if req.Rotation != nil {
+		WriteErrorWithCode(w, http.StatusBadRequest, "this group does not rotate keys on leave", "rotation_not_applicable")
+		return
+	}
+
+	deleted, err := h.db.LeaveGroup(r.Context(), groupID, userID, demotion, rot, rotating)
 	switch {
+	case errors.Is(err, db.ErrRotationRequired):
+		WriteErrorWithCode(w, http.StatusBadRequest, "leaving a Rotating group needs a key rotation: generation and startSignature", "rotation_required")
+	case errors.Is(err, db.ErrRotationNotApplicable):
+		WriteErrorWithCode(w, http.StatusBadRequest, "this group does not rotate keys on leave", "rotation_not_applicable")
+	case errors.Is(err, db.ErrRotationInProgress):
+		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; try leaving again once it has finished", "rotation_in_progress")
 	case errors.Is(err, db.ErrNotMember):
 		groupNotFound(w)
 	case errors.Is(err, db.ErrLastAdmin):
@@ -400,6 +446,22 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	}
+}
+
+// buildLeaveRotation validates the rotation half of a leave: the generation is
+// exactly one past the caller's own, and the start signature verifies under the
+// caller's CURRENT key naming the caller themselves as the removed member.
+// Whether the caller is still at that generation is the transaction's
+// condition, not a read here.
+func (h *Handler) buildLeaveRotation(ctx context.Context, groupID, userID string, callerGeneration int64, req *leaveRotationRequest) (*db.LeaveRotation, removeRejection, string) {
+	if req.Generation != callerGeneration+1 {
+		return nil, removeRejection{http.StatusBadRequest, "rotation_required"}, fmt.Sprintf("rotation.generation: must be %d (one past your own key generation)", callerGeneration+1)
+	}
+	sig, rej, msg := h.verifyRotationStart(ctx, userID, groupID, userID, req.StartSignature, callerGeneration)
+	if msg != "" {
+		return nil, rej, msg
+	}
+	return &db.LeaveRotation{CurrentGeneration: callerGeneration, StartSignature: sig}, removeRejection{}, ""
 }
 
 // buildLeaveDemotion validates a leave request's signed self-demotion the way
@@ -799,7 +861,8 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusBadRequest, msg, "rotation_required")
 			return
 		}
-		if rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, subjectID, req.Rotation, rot); msg != "" {
+		sig, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, subjectID, req.Rotation.StartSignature, rot.CurrentGeneration)
+		if msg != "" {
 			if rej.code == "" {
 				WriteError(w, rej.status, msg)
 			} else {
@@ -807,6 +870,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		rot.StartSignature = sig
 		in.Rotation = rot
 	} else if req.Rotation != nil {
 		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")
@@ -891,21 +955,20 @@ func decodeRemoveRotation(req *removeRotationRequest, callerGeneration int64) (*
 // are starting and stores it on rot. It is checked here as well as by every
 // resuming client so a marker that could never verify is refused up front
 // instead of stalling the rotation for whoever resumes it (#178).
-func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, subjectID string, req *removeRotationRequest, rot *db.RemoveRotation) (removeRejection, string) {
-	sig, err := decodeBase64Field(req.StartSignature, ed25519SignatureSize, maxSignatureLen)
+func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, subjectID, startSignature string, currentGeneration int64) (sig []byte, rej removeRejection, msg string) {
+	sig, err := decodeBase64Field(startSignature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
-		return removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: " + err.Error()
+		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: " + err.Error()
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
-		return removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
+		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not start the rotation"
 	}
-	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, rot.CurrentGeneration+1)
+	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, currentGeneration+1)
 	if !crypto.Verify(remover.SigningPublicKey, crypto.ContextRotationStart, payload, sig) {
-		return removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: does not verify against the caller's current signing key"
+		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: does not verify against the caller's current signing key"
 	}
-	rot.StartSignature = sig
-	return removeRejection{}, ""
+	return sig, removeRejection{}, ""
 }
 
 type removeRejection struct {

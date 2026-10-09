@@ -8,7 +8,12 @@ import { Link, useNavigate } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ApiError, deleteAccount } from '@/lib/api/auth'
 import { getKeychain, leaveGroup, listGroups, listMembers, getGroup } from '@/lib/api/groups'
-import { decryptGroupNames, signRoleGrant } from '@/lib/crypto/worker-client'
+import {
+  decryptGroupNames,
+  signRoleGrant,
+  signLeaveRotationStart,
+} from '@/lib/crypto/worker-client'
+import { makeRotationDeps } from './rotationDeps'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
@@ -150,6 +155,7 @@ export function DeleteAccountScreen() {
         signRoleGrant,
         deleteAccount,
         userId,
+        rotation: { rotationDeps: makeRotationDeps(userId), signLeaveRotationStart },
         replan: async () => {
           const planned = await loadPlan(userId)
           if (planned.ok) {
