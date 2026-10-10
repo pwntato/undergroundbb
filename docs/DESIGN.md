@@ -1164,15 +1164,18 @@ are checked against the caller's pin like the marker's starter; a first sighting
 forged record can only exclude someone.
 
 *Re-admitting a member.* An admission can stop verifying through no fault of the member: the inviter's
-keys can no longer be read, or the inviter's grants changed on the admission's own day. Every rotation then
+keys can no longer be read, or the inviter's current grant shares its day with another grant to them (the
+verifier rejects a record when any other grant to the inviter is dated from the ref grant's day through the
+admission's day, so the condition lasts until their role changes again). Every rotation then
 pauses on that member (`unadmitted`). `POST /api/groups/{gid}/members/{uid}/readmit` lets a current admin or
 ambassador replace the record with a fresh one: the same `AdmissionPayload`, signed over the member's
 **current** keys, with a client-chosen UUID in the invite slot (there is no invite; nothing looks it up).
 The server checks what it can read: the caller holds the role, generation and grant they signed (the
 transaction re-checks all three), the signature verifies over the keys the server stores for the member and
-under the caller's current key, the day is held to a grant's clock tolerance and is not before the caller's own grant day (the client
-verifier rejects a record dated before its inviter's grant, and this endpoint overwrites a working record;
-`completeInvite` has the same check), the member still exists with
+under the caller's current key, the day is held to a grant's clock tolerance and follows the caller's own grant day, and no other grant to the caller
+is dated from the ref grant's day through the admission's day (`grantor_role_changed_same_day`). Both are
+the verifier's rules, and a record that fails them would replace a working one with one no client accepts;
+`completeInvite` applies the same two checks, through one helper), the member still exists with
 an account that is not deleted, and the caller is not re-admitting themselves. A running rotation does
 **not** block it, because a rotation paused on an unadmitted member is exactly when it is needed. The
 server cannot tell *who* is safe to re-admit: a member a removal named looks the same as one whose inviter
@@ -1199,12 +1202,11 @@ invitee's Ed25519 key is matched against current and superseded keys, but the X2
 current served wrapping key. Once user key rotation exists, every member who rotates would be
 unadmitted in every group until re-invited, so #62 must bring a signed continuity link this check can
 follow. (6) **Liveness.** An inviter whose keys can no longer be
-read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
+read, or whose current grant shares a day with another grant to them, leaves their invitees unadmitted until an
 admin re-admits them. The server endpoint exists (above); the web flow is part 5b of #178, and until it
-lands the workaround is to remove the member and invite them again. The server cannot check the verifier's
-other day rule (a record is rejected when the inviter has another grant dated between the ref grant's day
-and the admission day), because it does not read the caller's grant rows; a client must refuse to sign a
-re-admission when the caller's role changed earlier on the same UTC day.
+lands the workaround is to remove the member and invite them again. The server refuses to store an
+admission its own caller's grants would make unverifiable, so an admin or ambassador in that state cannot
+re-admit anyone until their role changes again; another admin can.
 (7) **A stalled leave rotation.** A leave's rotation is taken over and finished by an admin at the
 leaver's generation, on their next load. If none returns, the group's new posts stay on the old generation
 and the other members stay behind until one does, the same stall a removal has when its remover
