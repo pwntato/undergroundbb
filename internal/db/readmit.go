@@ -78,16 +78,21 @@ func (c *Client) ReadmitMember(ctx context.Context, in ReadmitMemberInput) error
 	if err != nil {
 		return err
 	}
-	callerCond := "#role IN (:admin, :amb) AND #gen = :gen AND attribute_not_exists(#grant)"
+	// The caller must still hold the role, generation and grant they signed. A
+	// creator whose membership stores no grant signed the root grant, and must
+	// still have none stored.
 	callerNames := map[string]string{"#role": "Role", "#gen": "Generation", "#grant": "GrantSortKey"}
 	callerValues := map[string]types.AttributeValue{
 		":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
 		":amb":   &types.AttributeValueMemberS{Value: models.RoleAmbassador},
 		":gen":   genAttr(in.CallerGeneration),
 	}
+	callerCond := "#role IN (:admin, :amb) AND #gen = :gen AND "
 	if in.CallerHasStoredGrant {
-		callerCond = "#role IN (:admin, :amb) AND #gen = :gen AND #grant = :ref"
+		callerCond += "#grant = :ref"
 		callerValues[":ref"] = &types.AttributeValueMemberS{Value: in.CallerGrantRef}
+	} else {
+		callerCond += "attribute_not_exists(#grant)"
 	}
 	items := []types.TransactWriteItem{
 		{ConditionCheck: &types.ConditionCheck{

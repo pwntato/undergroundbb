@@ -81,6 +81,15 @@ func TestReadmitMemberReplacesTheAdmission(t *testing.T) {
 	if got := admissionSignature(t, c, g, "bob"); got != "sig-newer" {
 		t.Fatalf("admission signature = %q, want sig-newer", got)
 	}
+	// A creator whose membership stores no grant signed the root grant.
+	putTestMember(t, c, g, "a2", "admin")
+	in.CallerUserID, in.CallerHasStoredGrant, in.Signature = "a2", false, []byte("sig-creator")
+	if err := c.ReadmitMember(context.Background(), in); err != nil {
+		t.Fatalf("ReadmitMember by a creator with no stored grant: %v", err)
+	}
+	if got := admissionSignature(t, c, g, "bob"); got != "sig-creator" {
+		t.Fatalf("admission signature = %q, want sig-creator", got)
+	}
 }
 
 func TestReadmitMemberRefusalsChangeNothing(t *testing.T) {
@@ -103,6 +112,17 @@ func TestReadmitMemberRefusalsChangeNothing(t *testing.T) {
 			in.CallerHasStoredGrant = true
 		}, ErrReadmitCallerChanged},
 		"creator signed the root grant but now holds a stored one": {func(t *testing.T, c *Client, g string, in *ReadmitMemberInput) {
+			in.CallerHasStoredGrant = false
+		}, ErrReadmitCallerChanged},
+		"creator demoted to member": {func(t *testing.T, c *Client, g string, in *ReadmitMemberInput) {
+			putTestMember(t, c, g, "a2", "member")
+			in.CallerUserID = "a2"
+			in.CallerHasStoredGrant = false
+		}, ErrReadmitCallerChanged},
+		"creator on another generation": {func(t *testing.T, c *Client, g string, in *ReadmitMemberInput) {
+			putTestMember(t, c, g, "a2", "admin")
+			in.CallerUserID = "a2"
+			in.CallerGeneration = 1
 			in.CallerHasStoredGrant = false
 		}, ErrReadmitCallerChanged},
 		"member left": {func(t *testing.T, c *Client, g string, in *ReadmitMemberInput) {
