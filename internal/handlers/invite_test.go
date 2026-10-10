@@ -446,6 +446,25 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 	}
 }
 
+// An admission dated before the inviter's own grant is one verifyAdmission
+// rejects, so it is refused rather than stored. Signed over the grant it names
+// and today, so only the grant-day check can refuse it.
+func TestCompleteInviteRejectsDayBeforeInviterGrant(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	tomorrowRef := testGrantSortKey(t, creator.userID, time.Now().AddDate(0, 0, 1))
+	setGrantSortKey(t, groupID, creator.userID, tomorrowRef)
+	today := time.Now().UTC().Format("2006-01-02")
+	adm := signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, tomorrowRef, today)
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
+	}
+	if m, err := h.db.GetMembership(t.Context(), groupID, invitee.userID); err != nil || m != nil {
+		t.Fatalf("a refused admission still made the invitee a member: %v, %v", m, err)
+	}
+}
+
 // #178: the admission signs the generation the inviter holds, the server stores
 // and serves it, and a signature over another generation is refused. Generation
 // 0 everywhere else could not tell a signed generation from a constant.
