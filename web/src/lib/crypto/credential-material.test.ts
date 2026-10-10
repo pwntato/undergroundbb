@@ -7,6 +7,7 @@
 // path silently using the wrong KDF input) only shows up when the actual
 // derivations run end to end.
 
+import { fingerprint } from './fingerprint.js'
 import { describe, expect, it } from 'vitest'
 import { decrypt, encrypt, KEY_SIZE } from './aesgcm.js'
 import { deriveKey, type Argon2idParams } from './argon2.js'
@@ -24,6 +25,7 @@ import {
   rewrapGroupKey,
   signGroupCreation,
   signInviteAcceptance,
+  ownFingerprint,
   signInviteCreation,
   signPin,
   signReadmission,
@@ -698,6 +700,17 @@ describe('invite handshake round trip', () => {
     })
     return keys
   }
+
+  it('ownFingerprint is fingerprint(signing, wrapping), in that order', async () => {
+    const keys = await realUserKeys(INVITER_ID, 'inviter-password')
+    const expected = fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
+    expect(ownFingerprint(keys)).toBe(expected)
+    expect(ownFingerprint(keys)).not.toBe(
+      fingerprint(keys.wrappingKey.publicKey, keys.signingKey.publicKey),
+    )
+    const created = await signInviteCreation(keys, 'invite-fp', 'group-fp', '2026-10-03T00:00:00Z')
+    expect(created.inviterFingerprint).toBe(expected)
+  })
 
   it('signs a verifiable step-1 creation payload', async () => {
     const inviter = await realUserKeys(INVITER_ID, 'inviter-password')

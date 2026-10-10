@@ -25,6 +25,7 @@ import {
   decryptGroupNames as decryptGroupNamesPure,
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
+  ownFingerprint,
   rewrapGroupKey as rewrapGroupKeyPure,
   signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
@@ -39,7 +40,6 @@ import {
   type LiveKeys,
 } from './credential-material.js'
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
-import { fingerprint } from './fingerprint.js'
 import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
@@ -338,7 +338,7 @@ function getOwnFingerprint(req: GetOwnFingerprintRequest): void {
   post({
     kind: 'getOwnFingerprintDone',
     id: req.id,
-    fingerprint: fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey),
+    fingerprint: ownFingerprint(keys),
   })
 }
 

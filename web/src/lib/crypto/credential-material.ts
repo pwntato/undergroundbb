@@ -457,6 +457,16 @@ export function signPin(
 }
 
 /**
+ * The user's own key fingerprint (fingerprint.ts) over their two current public
+ * keys, in the same argument order the invite path and an admin's view of the
+ * served keys use, so a member reading this out matches what an admin compares
+ * (#178).
+ */
+export function ownFingerprint(keys: LiveKeys): string {
+  return fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
+}
+
+/**
  * #38: signs step 1 of the invite handshake -- the inviter's own
  * Ed25519 signature over crypto.InviteCreationPayload (Go)/
  * inviteCreationPayload (TS), binding the invite id, group id, the
@@ -499,7 +509,7 @@ export async function signInviteCreation(
 ): Promise<{ creationSignature: string; inviterFingerprint: string; inviteMACKey: string }> {
   const payload = inviteCreationPayload(inviteId, groupId, keys.signingKey.publicKey, expiresAt)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Invite, payload)
-  const inviterFingerprint = fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
+  const inviterFingerprint = ownFingerprint(keys)
   const macKey = deriveInviteMACKey(keys.signingKey.seed, inviteId)
   return {
     creationSignature: bytesToBase64(signature),
