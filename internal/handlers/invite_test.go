@@ -465,6 +465,24 @@ func TestCompleteInviteRejectsDayBeforeInviterGrant(t *testing.T) {
 	}
 }
 
+// A second grant to the inviter on the ref grant's day makes every admission
+// they sign unverifiable, so completeInvite refuses it too.
+func TestCompleteInviteRejectsSameDayGrants(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	// The creator's root grant is dated today and stays the ref; a second grant
+	// on that day is the only thing that can refuse the admission.
+	putRaw(t, groupID, testGrantSortKey(t, creator.userID, time.Now()), nil)
+	adm := signedAdmission(t, h, creator, groupID, inviteID, invitee)
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "grantor_role_changed_same_day" {
+		t.Fatalf("status = %d, want 409 grantor_role_changed_same_day, body: %s", rec.Code, rec.Body.String())
+	}
+	if m, err := h.db.GetMembership(t.Context(), groupID, invitee.userID); err != nil || m != nil {
+		t.Fatalf("a refused admission still made the invitee a member: %v, %v", m, err)
+	}
+}
+
 // #178: the admission signs the generation the inviter holds, the server stores
 // and serves it, and a signature over another generation is refused. Generation
 // 0 everywhere else could not tell a signed generation from a constant.

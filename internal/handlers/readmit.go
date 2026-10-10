@@ -122,10 +122,7 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "day: not within tolerance of the current UTC day")
 		return
 	}
-	// verifyAdmission rejects a record dated before its inviter's own grant,
-	// and this endpoint overwrites a working record, so refuse it here.
-	if grantDay, ok := idgen.ValidGrantSortKey(currentRef, userID); !ok || grantDay.After(admissionDay) {
-		WriteError(w, http.StatusBadRequest, "day: before your own grant's day")
+	if !h.admissionGrantDaysOK(w, r, groupID, userID, currentRef, admissionDay, "day", "could not re-admit") {
 		return
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
@@ -185,4 +182,33 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteError(w, http.StatusInternalServerError, "could not re-admit")
 	}
+}
+
+// admissionGrantDaysOK enforces the two day rules verifyAdmission applies to
+// the inviter's grants, so the server never stores a record no client accepts:
+// the ref grant is not dated after the admission, and no other grant to the
+// inviter is dated in [ref day, admission day]. The second is permanent once an
+// earlier grant shares the ref's day. It writes the refusal and returns false.
+func (h *Handler) admissionGrantDaysOK(w http.ResponseWriter, r *http.Request, groupID, inviterID, currentRef string, admissionDay time.Time, dayField, failMsg string) bool {
+	grantDay, ok := idgen.ValidGrantSortKey(currentRef, inviterID)
+	if !ok || grantDay.After(admissionDay) {
+		WriteError(w, http.StatusBadRequest, dayField+": before your own grant's day")
+		return false
+	}
+	grants, err := h.db.ListGrantsTo(r.Context(), groupID, inviterID)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, failMsg)
+		return false
+	}
+	for _, g := range grants {
+		if g.SK == currentRef {
+			continue
+		}
+		// An unparseable sibling is refused too, as the verifier does.
+		if d, ok := idgen.ValidGrantSortKey(g.SK, inviterID); !ok || (!d.Before(grantDay) && !d.After(admissionDay)) {
+			WriteErrorWithCode(w, http.StatusConflict, "your role changed on or after your current grant's day; an admission you sign cannot verify", "grantor_role_changed_same_day")
+			return false
+		}
+	}
+	return true
 }

@@ -131,6 +131,36 @@ func TestReadmitRefusesDayBeforeOwnGrant(t *testing.T) {
 	}
 }
 
+// An earlier grant dated the same day as the current one means no admission the
+// caller signs can ever verify (admission.ts: "the inviter's role changed on or
+// before the day of the admission"). Signed over the current ref and today, so
+// only the sibling-grant scan can refuse it.
+func TestReadmitRefusesSameDayGrants(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, _, _, _, _, _, _ := rotatingGroupWith(t, h)
+	amb, ambCookie := loggedInUser(t, h)
+	addMember(t, gid, amb, "ambassador")
+	dave, _ := loggedInUser(t, h)
+	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, dave.userID)
+	before := strAttr(admissionRow(t, gid, dave.userID), "InviterUserID")
+
+	day := time.Now().AddDate(0, 0, -3)
+	first := testGrantSortKey(t, amb.userID, day)
+	second := testGrantSortKey(t, amb.userID, day)
+	putRaw(t, gid, first, nil)
+	putRaw(t, gid, second, nil)
+	setGrantSortKey(t, gid, amb.userID, second)
+	body := readmitBody(t, h, amb, gid, dave, 0)
+	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+gid+"/members/"+dave.userID+"/readmit", ambCookie, body)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "grantor_role_changed_same_day" {
+		t.Fatalf("two grants on one day: %d %s", rec.Code, rec.Body.String())
+	}
+	if strAttr(admissionRow(t, gid, dave.userID), "InviterUserID") != before {
+		t.Fatal("a refused re-admission replaced the admission")
+	}
+}
+
 func TestReadmitEndpointAmbassadorAndRunningRotation(t *testing.T) {
 	f := leftRotating(t) // a rotation is running: carol left, owner and bob are admins
 	amb, ambCookie := loggedInUser(t, f.h)
