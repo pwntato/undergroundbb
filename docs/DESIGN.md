@@ -1164,9 +1164,11 @@ are checked against the caller's pin like the marker's starter; a first sighting
 forged record can only exclude someone.
 
 *Re-admitting a member.* An admission can stop verifying through no fault of the member: the inviter's
-keys can no longer be read, or the inviter's current grant shares its day with another grant to them (the
-verifier rejects a record when any other grant to the inviter is dated from the ref grant's day through the
-admission's day, so the condition lasts until their role changes again). Every rotation then
+keys can no longer be read, or another grant to the inviter is dated from the ref grant's day through the
+admission's day (the verifier rejects the record then). That happens two ways: their role changed later on the
+admission's own day, which breaks a record that was valid when stored, or, when it is signed, their current
+grant already shares a day with an earlier one, which lasts until their role changes again and which the
+server now refuses at signing time. Every rotation then
 pauses on that member (`unadmitted`). `POST /api/groups/{gid}/members/{uid}/readmit` lets a current admin or
 ambassador replace the record with a fresh one: the same `AdmissionPayload`, signed over the member's
 **current** keys, with a client-chosen UUID in the invite slot (there is no invite; nothing looks it up).
@@ -1202,7 +1204,9 @@ invitee's Ed25519 key is matched against current and superseded keys, but the X2
 current served wrapping key. Once user key rotation exists, every member who rotates would be
 unadmitted in every group until re-invited, so #62 must bring a signed continuity link this check can
 follow. (6) **Liveness.** An inviter whose keys can no longer be
-read, or whose current grant shares a day with another grant to them, leaves their invitees unadmitted until an
+read, or who has another grant dated from the ref grant's day through an admission's day (their role changed
+later on that admission's own day, or their current grant shares a day with an earlier one), leaves their
+invitees unadmitted until an
 admin re-admits them. The server endpoint exists (above); the web flow is part 5b of #178, and until it
 lands the workaround is to remove the member and invite them again. The server refuses to store an
 admission its own caller's grants would make unverifiable, so an admin or ambassador in that state cannot
