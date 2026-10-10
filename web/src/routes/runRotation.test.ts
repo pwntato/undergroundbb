@@ -28,6 +28,9 @@ import {
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import { describeRotation, runRotation, type RotationDeps } from './runRotation'
+import { prepareReadmit, readmitFailureMessage, runReadmit, type ReadmitDeps } from './runReadmit'
+import { fingerprint } from '@/lib/crypto/fingerprint'
+import { base64ToBytes } from '@/lib/crypto/base64'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const GROUP = 'g0000000-0000-4000-8000-000000000009'
@@ -964,6 +967,9 @@ describe('runRotation', () => {
         status: 'blocked',
         blocked: [],
         unadmitted: [fake.id],
+        // Not in the removal history, so Re-admit is offered. The fingerprint
+        // the admin must confirm is what stops a server-invented account.
+        readmittable: [fake.id],
         rewrapped: 1,
       })
       expect(f.cryptoRecipients.flat()).toEqual([real.id])
@@ -1685,8 +1691,10 @@ describe('runRotation', () => {
       expect(only?.kind).toBe('error')
       expect(only?.text).toContain('<x> is listed as a member')
       expect(only?.text).toContain('backs them')
-      expect(only?.text).toContain('remove them and invite them again')
       expect(only?.text).toContain('invitation')
+      // Nothing says Re-admit unless the removal history cleared the member.
+      expect(only?.text).not.toContain('Re-admit')
+      expect(only?.text).toContain('can only come back through a fresh invitation')
       expect(only?.text).not.toContain("don't match")
       expect(only?.text).toContain('NOT given the new group key')
 
@@ -1751,6 +1759,454 @@ describe('runRotation', () => {
       f.add(person(), 'member', 1)
       expect(await runRotation(f.deps(), GROUP)).toEqual({ status: 'none' })
       expect(f.rewrapBatches).toEqual([])
+    })
+  })
+})
+
+// Re-admitting a member (#178 part 5b). The fake server accepts a re-admission
+// only if its signature covers the keys it serves for the member, as the real
+// one does, and stores it as the member's admission, so a rotation run after
+// it proves the new record actually verifies.
+describe('re-admitting a member', () => {
+  const TODAY = '2026-03-20'
+  const now = () => Date.parse(`${TODAY}T10:00:00Z`)
+  const INVITE = 'b0000000-0000-4000-8000-0000000000aa'
+
+  interface Calls {
+    signed: Parameters<ReadmitDeps['signReadmission']>[0][]
+    posted: { userId: string; body: Parameters<ReadmitDeps['readmitMember']>[2] }[]
+    order: string[]
+  }
+
+  function readmitDeps(
+    f: Fake,
+    o: {
+      role?: GroupDetail['role']
+      grantRef?: string
+      postError?: Error
+      signError?: Error
+    } = {},
+  ): { deps: ReadmitDeps; calls: Calls } {
+    const calls: Calls = { signed: [], posted: [], order: [] }
+    const base = f.deps()
+    const deps: ReadmitDeps = {
+      ...base,
+      getGroup: async (g) => ({
+        ...(await base.getGroup(g)),
+        role: o.role ?? 'admin',
+        myGrantSortKey: o.grantRef ?? ROOT_REF,
+      }),
+      pinKeys: async (...args) => {
+        calls.order.push('pin')
+        await base.pinKeys(...args)
+      },
+      signReadmission: async (req) => {
+        calls.order.push('sign')
+        calls.signed.push(req)
+        if (o.signError) throw o.signError
+        const payload = admissionPayload(
+          req.groupId,
+          req.userId,
+          req.subjectUserId,
+          base64ToBytes(req.subjectEd25519PublicKey),
+          base64ToBytes(req.subjectX25519PublicKey),
+          req.inviteId,
+          req.inviterGrantRef,
+          req.day,
+          req.generation,
+        )
+        return {
+          inviterGrantRef: req.inviterGrantRef,
+          day: req.day,
+          signature: b64(sign(me, SigningContext.Admission, payload)),
+        }
+      },
+      readmitMember: async (_g, userId, body) => {
+        calls.order.push('post')
+        calls.posted.push({ userId, body })
+        if (o.postError) throw o.postError
+        // Like the server: the record is stored over the keys IT holds.
+        const m = f.members.get(userId)!.person
+        f.admissions.set(userId, {
+          inviteeUserId: userId,
+          inviterUserId: ME,
+          inviteId: body.inviteId,
+          inviteeEd25519PublicKey: b64(m.signing.publicKey),
+          inviteeX25519PublicKey: b64(m.wrapping),
+          inviterGrantRef: body.inviterGrantRef,
+          day: body.day,
+          generation: body.generation,
+          signature: body.signature,
+        })
+      },
+      newInviteId: () => INVITE,
+      now,
+    }
+    return { deps, calls }
+  }
+
+  /** A member whose stored admission was signed by a key nobody can match: it never verifies. */
+  function unadmitted(f: Fake, pin: PinRecord | null | 'auto' = 'auto'): Person {
+    const x = person()
+    f.add(x, 'member', 0, pin, admissionOf(x, { key: generateSigningKey() }))
+    return x
+  }
+
+  const printOf = (p: Person) => fingerprint(p.signing.publicKey, p.wrapping)
+
+  it('offers Re-admit for an unadmitted member, signs over their served keys, and the rotation then finishes', async () => {
+    const f = new Fake()
+    const x = unadmitted(f)
+    const first = await runRotation(f.deps(), GROUP)
+    expect(first).toMatchObject({ status: 'blocked', unadmitted: [x.id], readmittable: [x.id] })
+
+    const { deps, calls } = readmitDeps(f)
+    const prepared = await prepareReadmit(deps, GROUP, x.id)
+    expect(prepared).toEqual({ ok: true, fingerprint: printOf(x) })
+    expect(calls.signed).toEqual([]) // showing a fingerprint signs nothing
+
+    expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true })
+    expect(calls.signed).toEqual([
+      {
+        userId: ME,
+        groupId: GROUP,
+        subjectUserId: x.id,
+        subjectEd25519PublicKey: b64(x.signing.publicKey),
+        subjectX25519PublicKey: b64(x.wrapping),
+        inviteId: INVITE,
+        inviterGrantRef: ROOT_REF,
+        day: TODAY,
+        generation: 1,
+      },
+    ])
+    expect(calls.posted).toHaveLength(1)
+    expect(calls.posted[0]!.userId).toBe(x.id)
+
+    expect(await runRotation(f.deps(), GROUP)).toEqual({ status: 'completed', rewrapped: 1 })
+    expect(f.cryptoRecipients.flat()).toEqual([x.id])
+  })
+
+  it('works for an ambassador too', async () => {
+    const f = new Fake()
+    const x = unadmitted(f)
+    const { deps, calls } = readmitDeps(f, { role: 'ambassador' })
+    expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true })
+    expect(calls.posted).toHaveLength(1)
+  })
+
+  describe('removal history', () => {
+    // The signed removal at generation 1 (link 0) names `x`, who the server
+    // re-lists with the admission they held before.
+    function removedAndRelisted(f: Fake): Person {
+      const x = person()
+      f.add(x, 'member', 0, 'auto', admissionOf(x, { generation: 0 }))
+      f.links = [removalLink(0, { removed: x.id })]
+      return x
+    }
+
+    it('never names a removed member as re-admittable', async () => {
+      const f = new Fake()
+      const x = removedAndRelisted(f)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [x.id] })
+      expect(out).not.toHaveProperty('readmittable')
+    })
+
+    it('refuses to prepare or sign for a removed member, and sends nothing', async () => {
+      const f = new Fake()
+      const x = removedAndRelisted(f)
+      const { deps, calls } = readmitDeps(f)
+      expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'removed' })
+      // Even a caller who somehow holds the right fingerprint.
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'removed',
+      })
+      expect(calls.signed).toEqual([])
+      expect(calls.posted).toEqual([])
+      expect(f.pinned).toEqual([])
+    })
+
+    it('splits a mixed set: only the one the history does not name is readmittable', async () => {
+      const f = new Fake()
+      const removed = removedAndRelisted(f)
+      const lost = unadmitted(f)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked' })
+      if (out.status !== 'blocked') throw new Error('unreachable')
+      expect([...(out.unadmitted ?? [])].sort()).toEqual([removed.id, lost.id].sort())
+      expect(out.readmittable).toEqual([lost.id])
+    })
+
+    it('judges the removal history fresh, not by what the roster showed', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps, calls } = readmitDeps(f)
+      expect(await prepareReadmit(deps, GROUP, x.id)).toMatchObject({ ok: true })
+      // A removal of x lands between the fingerprint and the confirmation.
+      f.links = [removalLink(0, { removed: x.id })]
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'removed',
+      })
+      expect(calls.signed).toEqual([])
+    })
+  })
+
+  it('declines to replace an admission that still verifies', async () => {
+    const f = new Fake()
+    const x = f.add(person()) // admitted by ME, valid
+    const { deps, calls } = readmitDeps(f)
+    expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'alreadyAdmitted' })
+    expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+      ok: false,
+      kind: 'alreadyAdmitted',
+    })
+    expect(calls.signed).toEqual([])
+    expect(calls.posted).toEqual([])
+  })
+
+  describe('pins and the fingerprint', () => {
+    it('blocks on a pin mismatch, before showing a fingerprint or signing', async () => {
+      const f = new Fake()
+      const x = unadmitted(f, pinFor({ ...person(), id: 'ignored' } as Person))
+      // A valid pin of a different key set for x.
+      f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251)))
+      const { deps, calls } = readmitDeps(f)
+      expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'pinMismatch' })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'pinMismatch',
+      })
+      expect(calls.signed).toEqual([])
+      expect(calls.posted).toEqual([])
+    })
+
+    it('signs nothing for a fingerprint other than the one their keys give', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const other = person()
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, x.id, printOf(other))).toEqual({
+        ok: false,
+        kind: 'keysChanged',
+      })
+      expect(await runReadmit(deps, GROUP, x.id, '')).toEqual({ ok: false, kind: 'keysChanged' })
+      expect(calls.signed).toEqual([])
+      expect(f.pinned).toEqual([])
+    })
+
+    it('signs nothing when their keys changed after the fingerprint was shown', async () => {
+      const f = new Fake()
+      const x = unadmitted(f, null)
+      const { deps, calls } = readmitDeps(f)
+      const prepared = await prepareReadmit(deps, GROUP, x.id)
+      expect(prepared).toEqual({ ok: true, fingerprint: printOf(x) })
+      // The server now serves a different wrapping key for x.
+      f.members.set(x.id, {
+        person: { ...x, wrapping: new Uint8Array(32).fill(250) },
+        role: 'member',
+        generation: 0,
+      })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'keysChanged',
+      })
+      expect(calls.signed).toEqual([])
+      expect(f.pinned).toEqual([])
+    })
+
+    it('pins a first-sight member before signing, so the confirmed keys are the saved ones', async () => {
+      const f = new Fake()
+      const x = unadmitted(f, null)
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true })
+      expect(f.pinned).toEqual([x.id])
+      expect(calls.order).toEqual(['pin', 'sign', 'post'])
+    })
+
+    it('does not pin again when they are already pinned', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true })
+      expect(f.pinned).toEqual([])
+      expect(calls.order).toEqual(['sign', 'post'])
+    })
+
+    it('signs nothing if their keys cannot be saved', async () => {
+      const f = new Fake()
+      const x = unadmitted(f, null)
+      f.pinKeysError = new Error('offline')
+      const { deps, calls } = readmitDeps(f)
+      const out = await runReadmit(deps, GROUP, x.id, printOf(x))
+      expect(out).toMatchObject({ ok: false, kind: 'unchecked' })
+      expect(calls.signed).toEqual([])
+    })
+  })
+
+  describe('fails closed', () => {
+    it('signs nothing when the admission history cannot be read', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      f.listAdmissionsError = new Error('offline')
+      const { deps, calls } = readmitDeps(f)
+      expect(await prepareReadmit(deps, GROUP, x.id)).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+      expect(calls.signed).toEqual([])
+    })
+
+    it('signs nothing when the removal history cannot be read', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      f.keychainError = new Error('offline')
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+      expect(calls.signed).toEqual([])
+    })
+
+    it('signs nothing when your pins cannot be read', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      f.listPinsError = new Error('offline')
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+      expect(calls.signed).toEqual([])
+    })
+  })
+
+  describe('who and what', () => {
+    it('refuses a plain member', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps, calls } = readmitDeps(f, { role: 'member' })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'forbidden',
+      })
+      expect(calls.signed).toEqual([])
+    })
+
+    it('refuses without a grant of your own on record', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps, calls } = readmitDeps(f, { grantRef: '' })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'grantMissing',
+      })
+      expect(calls.signed).toEqual([])
+    })
+
+    it('refuses to re-admit yourself', async () => {
+      const f = new Fake()
+      const { deps, calls } = readmitDeps(f)
+      expect(await runReadmit(deps, GROUP, ME, 'x')).toMatchObject({ ok: false, kind: 'rejected' })
+      expect(calls.signed).toEqual([])
+    })
+
+    it('reports a cold worker as needing a login, and sends nothing', async () => {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps, calls } = readmitDeps(f, {
+        signError: new Error('worker: no live keys cached -- log in again'),
+      })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'coldKeys',
+      })
+      expect(calls.posted).toEqual([])
+    })
+  })
+
+  describe('the server says no', () => {
+    async function withPostError(err: Error) {
+      const f = new Fake()
+      const x = unadmitted(f)
+      const { deps } = readmitDeps(f, { postError: err })
+      return runReadmit(deps, GROUP, x.id, printOf(x))
+    }
+
+    it('maps a stale grant or role to "reload"', async () => {
+      for (const code of ['grantor_ref_stale', 'grantor_changed', 'conflict_retry']) {
+        expect(await withPostError(new ApiError(409, 'stale', code))).toEqual({
+          ok: false,
+          kind: 'stale',
+        })
+      }
+    })
+
+    it('passes through the same-day-grants refusal with the server message', async () => {
+      const out = await withPostError(
+        new ApiError(409, 'your role changed on the same day', 'grantor_role_changed_same_day'),
+      )
+      expect(out).toEqual({
+        ok: false,
+        kind: 'rejected',
+        message: 'your role changed on the same day',
+      })
+      expect(readmitFailureMessage(out as never)).toBe('your role changed on the same day')
+    })
+
+    it('treats bad_signature as changed keys, a deleted subject as deleted', async () => {
+      expect(await withPostError(new ApiError(400, 'bad', 'bad_signature'))).toEqual({
+        ok: false,
+        kind: 'keysChanged',
+      })
+      expect(await withPostError(new ApiError(410, 'gone', 'subject_deleted'))).toEqual({
+        ok: false,
+        kind: 'deleted',
+      })
+    })
+
+    it('calls a 5xx or a network error ambiguous', async () => {
+      expect(await withPostError(new ApiError(500, 'boom'))).toEqual({
+        ok: false,
+        kind: 'ambiguous',
+      })
+      expect(await withPostError(new TypeError('network'))).toEqual({
+        ok: false,
+        kind: 'ambiguous',
+      })
+    })
+  })
+
+  describe('the rotation message', () => {
+    const label = (id: string) => `<${id}>`
+
+    it('points at Re-admit for a readmittable member and not for a removed one', () => {
+      const both = describeRotation(
+        {
+          status: 'blocked',
+          blocked: [],
+          unadmitted: ['a', 'r'],
+          readmittable: ['a'],
+          rewrapped: 0,
+        },
+        label,
+      )
+      expect(both?.text).toContain('use Re-admit next to their name')
+      expect(both?.text).toContain('can only come back through a fresh invitation')
+      expect(both?.text).not.toContain('remove them and invite them again')
+
+      const onlyReadmittable = describeRotation(
+        { status: 'blocked', blocked: [], unadmitted: ['a'], readmittable: ['a'], rewrapped: 0 },
+        label,
+      )
+      expect(onlyReadmittable?.text).toContain('Re-admit')
+      expect(onlyReadmittable?.text).not.toContain('fresh invitation')
     })
   })
 })

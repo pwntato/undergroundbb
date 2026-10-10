@@ -663,6 +663,43 @@ export async function completeInvite(
   }
 }
 
+/**
+ * #178 part 5b: signs a fresh admission of a member who is already in the
+ * group (a re-admission). The same AdmissionPayload completeInvite signs, over
+ * the member's CURRENT keys, with a caller-chosen UUID in the invite slot:
+ * there is no invite, and nothing looks it up. No MAC applies, because there is
+ * no invite link; the caller is responsible for having confirmed the keys
+ * (pin and fingerprint) before this signs anything.
+ */
+export function signReadmission(
+  keys: LiveKeys,
+  groupId: string,
+  subjectUserId: string,
+  subjectEd25519PublicKey: Uint8Array,
+  subjectX25519PublicKey: Uint8Array,
+  inviteId: string,
+  inviterGrantRef: string,
+  day: string,
+  generation: number,
+): { inviterGrantRef: string; day: string; signature: string } {
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.Admission,
+    admissionPayload(
+      groupId,
+      keys.userId,
+      subjectUserId,
+      subjectEd25519PublicKey,
+      subjectX25519PublicKey,
+      inviteId,
+      inviterGrantRef,
+      day,
+      generation,
+    ),
+  )
+  return { inviterGrantRef, day, signature: bytesToBase64(signature) }
+}
+
 /** A Wrapped, base64-encoded for the wire (and for postMessage). */
 export interface WireWrapped {
   ephemeralPub: string

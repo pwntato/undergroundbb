@@ -26,6 +26,7 @@ import {
   signInviteAcceptance,
   signInviteCreation,
   signPin,
+  signReadmission,
   signRoleGrant,
   signSuccessorClaim,
   signSuccessorDesignation,
@@ -924,6 +925,55 @@ describe('invite handshake round trip', () => {
   // cannot catch this -- the keys and the signature are mutually
   // consistent, which is all that check proves. completeInvite's own
   // inviteMAC check is what must catch it instead.
+  it('signs a re-admission that verifies as an admission of exactly the keys given', async () => {
+    const admin = await realUserKeys(INVITER_ID, 'inviter-password')
+    const member = await realUserKeys(INVITEE_ID, 'invitee-password')
+    const groupId = 'group-uuid-test-readmit'
+    const inviteId = '44444444-4444-4444-8444-444444444444'
+
+    const result = await signReadmission(
+      admin,
+      groupId,
+      INVITEE_ID,
+      member.signingKey.publicKey,
+      member.wrappingKey.publicKey,
+      inviteId,
+      ADMISSION_GRANT_REF,
+      ADMISSION_DAY,
+      3,
+    )
+    expect(result.inviterGrantRef).toBe(ADMISSION_GRANT_REF)
+    expect(result.day).toBe(ADMISSION_DAY)
+
+    const payloadFor = (wrap: Uint8Array, generation: number) =>
+      admissionPayload(
+        groupId,
+        INVITER_ID,
+        INVITEE_ID,
+        member.signingKey.publicKey,
+        wrap,
+        inviteId,
+        ADMISSION_GRANT_REF,
+        ADMISSION_DAY,
+        generation,
+      )
+    const sig = base64ToBytes(result.signature)
+    const verifies = (payload: Uint8Array) =>
+      ed25519.verify(admin.signingKey.publicKey, ed25519.SigningContext.Admission, payload, sig)
+    expect(verifies(payloadFor(member.wrappingKey.publicKey, 3))).toBe(true)
+    // Bound to the keys, the generation and the Admission context.
+    expect(verifies(payloadFor(admin.wrappingKey.publicKey, 3))).toBe(false)
+    expect(verifies(payloadFor(member.wrappingKey.publicKey, 2))).toBe(false)
+    expect(
+      ed25519.verify(
+        admin.signingKey.publicKey,
+        ed25519.SigningContext.RoleGrant,
+        payloadFor(member.wrappingKey.publicKey, 3),
+        sig,
+      ),
+    ).toBe(false)
+  })
+
   it('refuses to complete when inviteMAC does not verify (a malicious server substituting its own keypair)', async () => {
     const inviter = await realUserKeys(INVITER_ID, 'inviter-password-3')
     const groupId = 'group-uuid-test-5'

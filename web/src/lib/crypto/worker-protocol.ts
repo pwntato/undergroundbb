@@ -455,6 +455,40 @@ export interface CompleteInviteResponse {
 }
 
 /**
+ * #178 part 5b: signs a re-admission of an existing member (credential-material's
+ * signReadmission) with the worker's liveKeys. Key fields are base64.
+ */
+export interface SignReadmissionRequest {
+  readonly kind: 'signReadmission'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly subjectUserId: string
+  readonly subjectEd25519PublicKey: string
+  readonly subjectX25519PublicKey: string
+  /** A fresh UUID for the invite slot. */
+  readonly inviteId: string
+  /** The caller's own current grant address. */
+  readonly inviterGrantRef: string
+  /** UTC date (YYYY-MM-DD) the admission is signed for. */
+  readonly day: string
+  /** The group-key generation the caller holds. */
+  readonly generation: number
+}
+
+export interface SignReadmissionResult {
+  readonly inviterGrantRef: string
+  readonly day: string
+  readonly signature: string
+}
+
+export interface SignReadmissionResponse {
+  readonly kind: 'signReadmissionDone'
+  readonly id: string
+  readonly result: SignReadmissionResult
+}
+
+/**
  * #58: mints a Rotating-group removal's next group key. Carries only the
  * caller's own MEMBER# entry (the old key, wrapped to them); the new key is
  * generated inside the worker and never returned. See
@@ -678,6 +712,7 @@ export type WorkerRequest =
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
+  | SignReadmissionRequest
   | StartGroupRotationRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
@@ -700,6 +735,7 @@ export type WorkerResponse =
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
+  | SignReadmissionResponse
   | StartGroupRotationResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse

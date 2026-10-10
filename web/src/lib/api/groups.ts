@@ -554,6 +554,41 @@ export function removeMember(
   )
 }
 
+/** The body of POST /api/groups/{id}/members/{uid}/readmit (#178 part 5). */
+export interface ReadmitMemberRequest {
+  /** A fresh client-chosen UUID, signed into the invite slot. There is no invite. */
+  readonly inviteId: string
+  /** The caller's own entry-point generation. */
+  readonly generation: number
+  /** The caller's own current grant address. */
+  readonly inviterGrantRef: string
+  /** UTC date, YYYY-MM-DD. */
+  readonly day: string
+  readonly signature: string
+}
+
+/**
+ * POST /api/groups/{id}/members/{uid}/readmit -- #178 part 5. A current admin
+ * or ambassador replaces a member's admission with a fresh one signed over the
+ * member's current keys. 409 codes: grantor_ref_stale / grantor_changed /
+ * conflict_retry (reload and sign again), grantor_role_changed_same_day (the
+ * caller has two grants on one day, so nothing they sign can verify; show the
+ * message, reloading does not help), grantor_grant_missing, subject_deleted.
+ * 400 `bad_signature` means the signature did not cover the keys the server
+ * holds for the member (they changed since the fingerprint was shown).
+ */
+export function readmitMember(
+  groupId: string,
+  userId: string,
+  req: ReadmitMemberRequest,
+): Promise<void> {
+  return sendNoContent(
+    'POST',
+    `/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}/readmit`,
+    req,
+  )
+}
+
 /** One member's entry point wrapped for the rotation's generation. */
 export interface RewrapEntry {
   readonly userId: string

@@ -32,6 +32,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  signReadmission as signReadmissionPure,
   signRoleGrant as signRoleGrantPure,
   signSuccessorClaim as signSuccessorClaimPure,
   signSuccessorDesignation as signSuccessorDesignationPure,
@@ -57,6 +58,7 @@ import type {
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
   SignPinRequest,
+  SignReadmissionRequest,
   SignRoleGrantRequest,
   SignSuccessorClaimRequest,
   SignSuccessorDesignationRequest,
@@ -143,6 +145,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'completeInvite':
       await completeInvite(req)
+      return
+    case 'signReadmission':
+      signReadmission(req)
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
@@ -294,6 +299,23 @@ function signPin(req: SignPinRequest): void {
     base64ToBytes(req.wrappingPublicKey),
   )
   post({ kind: 'signPinDone', id: req.id, result })
+}
+
+/** Signs a re-admission of an existing member -- #178 part 5b. */
+function signReadmission(req: SignReadmissionRequest): void {
+  const keys = requireLiveKeys(req.userId, 're-admit a member')
+  const result = signReadmissionPure(
+    keys,
+    req.groupId,
+    req.subjectUserId,
+    base64ToBytes(req.subjectEd25519PublicKey),
+    base64ToBytes(req.subjectX25519PublicKey),
+    req.inviteId,
+    req.inviterGrantRef,
+    req.day,
+    req.generation,
+  )
+  post({ kind: 'signReadmissionDone', id: req.id, result })
 }
 
 /** Reports the caller's own current signing public key -- issue #63. */
