@@ -1170,7 +1170,9 @@ ambassador replace the record with a fresh one: the same `AdmissionPayload`, sig
 **current** keys, with a client-chosen UUID in the invite slot (there is no invite; nothing looks it up).
 The server checks what it can read: the caller holds the role, generation and grant they signed (the
 transaction re-checks all three), the signature verifies over the keys the server stores for the member and
-under the caller's current key, the day is held to a grant's clock tolerance, the member still exists with
+under the caller's current key, the day is held to a grant's clock tolerance and is not before the caller's own grant day (the client
+verifier rejects a record dated before its inviter's grant, and this endpoint overwrites a working record;
+`completeInvite` has the same check), the member still exists with
 an account that is not deleted, and the caller is not re-admitting themselves. A running rotation does
 **not** block it, because a rotation paused on an unadmitted member is exactly when it is needed. The
 server cannot tell *who* is safe to re-admit: a member a removal named looks the same as one whose inviter
@@ -1198,8 +1200,11 @@ current served wrapping key. Once user key rotation exists, every member who rot
 unadmitted in every group until re-invited, so #62 must bring a signed continuity link this check can
 follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or whose grants changed on the admission's own day, leaves their invitees unadmitted until an
-admin re-admits them. There is no re-admission flow yet; the workaround is to remove the member and
-invite them again (the rejoin writes a fresh record, and the rotation message says so). Tracked in #178.
+admin re-admits them. The server endpoint exists (above); the web flow is part 5b of #178, and until it
+lands the workaround is to remove the member and invite them again. The server cannot check the verifier's
+other day rule (a record is rejected when the inviter has another grant dated between the ref grant's day
+and the admission day), because it does not read the caller's grant rows; a client must refuse to sign a
+re-admission when the caller's role changed earlier on the same UTC day.
 (7) **A stalled leave rotation.** A leave's rotation is taken over and finished by an admin at the
 leaver's generation, on their next load. If none returns, the group's new posts stay on the old generation
 and the other members stay behind until one does, the same stall a removal has when its remover
