@@ -1172,7 +1172,7 @@ ambassador replace the record with a fresh one: the same `AdmissionPayload`, sig
 **current** keys, with a client-chosen UUID in the invite slot (there is no invite; nothing looks it up).
 The server checks what it can read: the caller holds the role, generation and grant they signed (the
 transaction re-checks all three), the signature verifies over the keys the server stores for the member and
-under the caller's current key, the day is held to a grant's clock tolerance and follows the caller's own grant day, and no other grant to the caller
+under the caller's current key, the day is held to a grant's clock tolerance and is not before the caller's own grant day, and no other grant to the caller
 is dated from the ref grant's day through the admission's day (`grantor_role_changed_same_day`). Both are
 the verifier's rules, and a record that fails them would replace a working one with one no client accepts;
 `completeInvite` applies the same two checks, through one helper), the member still exists with
