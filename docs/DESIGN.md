@@ -1198,11 +1198,12 @@ every time, with no remembered answer: it is the control that stops an admin vou
 server invented, which also has no invitation behind it and so is also `readmittable`. On confirmation
 everything is checked again, the signature is made only if freshly served keys still give the confirmed
 fingerprint, a first-sight member's keys are pinned first (so the rotation that follows checks the same keys
-the signature covers), the record is sent, and the paused rotation is re-run under the same lock. Limits:
-the member must be able to show their fingerprint, and today a member sees their own only when they
-create an invite (there is no profile screen yet), so until one exists the check rests on a member who can
-read theirs out; and only an admin runs the rotation that names whom to offer, so an ambassador would need
-a check of their own before the button could appear for them.
+the signature covers), the record is sent, and the paused rotation is re-run under the same lock. Any member can read their own
+fingerprint under "Your key fingerprint" on the Members page (computed from their live keys in the worker,
+not from anything the server serves), which is what the admin compares against, so the check does not
+depend on the member being able to create an invite. Limits: the member must be logged in with live keys
+to see it (after a page reload they log in again); and only an admin runs the rotation that names whom to
+offer, so an ambassador would need a check of their own before the button could appear for them.
 
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
 started a rotation (an Open group has none, so there is no key to withhold and no chain link to

@@ -210,8 +210,9 @@ export function GroupMembersPanel({
                     <span className="text-xs text-muted-foreground">
                       No valid invitation backs {memberLabel(m.userId, usernames)}. Re-admitting
                       signs that the keys below are theirs, so first check this fingerprint with
-                      them in person or on a call you know is them. Do not take it from the group or
-                      from a message.
+                      them in person or on a call you know is them. They can read theirs under "Your
+                      key fingerprint" on this page. Do not take it from the group or from a
+                      message.
                     </span>
                     <span className="font-mono text-xs break-all">{readmitPrompt.fingerprint}</span>
                     <span className="flex flex-wrap gap-2">

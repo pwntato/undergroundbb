@@ -105,7 +105,11 @@ async function inspect(
   try {
     detail = await deps.getGroup(groupId)
   } catch (err) {
-    return failureOf(err)
+    // A read: nothing has been signed or sent, so it is never ambiguous.
+    const failure = failureOf(err)
+    return failure.kind === 'ambiguous'
+      ? { ok: false, kind: 'unchecked', reason: `could not load the group: ${describe(err)}` }
+      : failure
   }
   if (detail.role !== 'admin' && detail.role !== 'ambassador') {
     return { ok: false, kind: 'forbidden' }
@@ -259,6 +263,11 @@ export async function runReadmit(
       // The server holds different keys for them than the ones signed over.
       return { ok: false, kind: 'keysChanged' }
     }
+    // A generation mismatch (another admin's rotation reached the caller between
+    // getGroup and this POST) comes back as an uncoded 400, so it surfaces as
+    // 'rejected' with the server's text and no reload. The window is small and
+    // the user retries from a fresh read, so it is accepted rather than adding
+    // a server code for it.
     return failureOf(err)
   }
 }

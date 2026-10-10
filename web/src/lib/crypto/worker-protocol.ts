@@ -333,6 +333,23 @@ export interface GetOwnSigningKeyResponse {
 }
 
 /**
+ * The caller's own key fingerprint (fingerprint.ts) over the live signing and
+ * wrapping public keys, so any member can read it out to an admin who is about
+ * to re-admit them (#178). Same cached-keys guards as getOwnSigningKey.
+ */
+export interface GetOwnFingerprintRequest {
+  readonly kind: 'getOwnFingerprint'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface GetOwnFingerprintResponse {
+  readonly kind: 'getOwnFingerprintDone'
+  readonly id: string
+  readonly fingerprint: string
+}
+
+/**
  * Signs step 1 of the invite handshake (issue #38) -- the inviter's own
  * Ed25519 signature over the invite's creation payload. Like
  * SignGroupCreationRequest, relies entirely on the worker's own liveKeys
@@ -707,6 +724,7 @@ export type WorkerRequest =
   | SignSuccessorClaimRequest
   | SignPinRequest
   | GetOwnSigningKeyRequest
+  | GetOwnFingerprintRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SignInviteCreationRequest
@@ -730,6 +748,7 @@ export type WorkerResponse =
   | SignSuccessorClaimResponse
   | SignPinResponse
   | GetOwnSigningKeyResponse
+  | GetOwnFingerprintResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SignInviteCreationResponse

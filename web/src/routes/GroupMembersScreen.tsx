@@ -21,6 +21,7 @@ import {
 } from '@/lib/api/groups'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import {
+  getOwnFingerprint,
   getOwnSigningKey,
   signLeaveRotationStart,
   signRoleGrant,
@@ -36,6 +37,7 @@ import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
+import { OwnFingerprintPanel, type OwnFingerprintState } from './OwnFingerprintPanel'
 import { makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
 import {
   catchUpRotation,
@@ -99,6 +101,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   // whose fingerprint is awaiting the admin's confirmation. Re-admit is offered
   // from the first; runReadmit re-checks everything before it signs.
   const [readmittable, setReadmittable] = useState<ReadonlySet<string>>(new Set())
+  const [ownFingerprint, setOwnFingerprint] = useState<OwnFingerprintState>({ status: 'loading' })
   const [readmitPrompt, setReadmitPrompt] = useState<{
     readonly userId: string
     readonly fingerprint: string
@@ -172,6 +175,25 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
 
   // Re-run whenever the roster (re)loads, since a role change appends a grant.
   const loadedView = load.status === 'ready' ? load.view : null
+  // Any member can read their own fingerprint out to an admin re-admitting them.
+  useEffect(() => {
+    if (userId === null) {
+      return
+    }
+    let cancelled = false
+    void getOwnFingerprint(userId).then(
+      (fingerprint) => {
+        if (!cancelled) setOwnFingerprint({ status: 'ready', fingerprint })
+      },
+      () => {
+        if (!cancelled) setOwnFingerprint({ status: 'unavailable' })
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
   useEffect(() => {
     if (loadedView === null || userId === null) {
       return
@@ -509,6 +531,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           check={checkForView(grantCheck, load.view)}
         />
       )}
+      {load.status === 'ready' && userId !== null && <OwnFingerprintPanel state={ownFingerprint} />}
       {load.status === 'ready' && userId !== null && (
         <LeaveGroupPanel
           plan={leavePlan(load.view, userId, usernames)}

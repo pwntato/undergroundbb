@@ -2189,6 +2189,32 @@ describe('re-admitting a member', () => {
     })
   })
 
+  describe('getGroup fails before anything is signed', () => {
+    it('is unchecked, not ambiguous, for a network error or a 5xx', async () => {
+      for (const err of [new TypeError('network'), new ApiError(503, 'down')]) {
+        const f = new Fake()
+        const x = unadmitted(f)
+        const { deps, calls } = readmitDeps(f)
+        const failing: ReadmitDeps = {
+          ...deps,
+          getGroup: async () => {
+            throw err
+          },
+        }
+        expect(await prepareReadmit(failing, GROUP, x.id)).toMatchObject({
+          ok: false,
+          kind: 'unchecked',
+        })
+        expect(await runReadmit(failing, GROUP, x.id, printOf(x))).toMatchObject({
+          ok: false,
+          kind: 'unchecked',
+        })
+        expect(calls.signed).toEqual([])
+        expect(calls.posted).toEqual([])
+      }
+    })
+  })
+
   describe('which members the screen offers', () => {
     const prev = new Set(['p'])
     it('takes the readmittable members of a blocked run, never the removed ones', () => {

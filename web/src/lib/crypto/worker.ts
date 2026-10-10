@@ -39,6 +39,7 @@ import {
   type LiveKeys,
 } from './credential-material.js'
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
+import { fingerprint } from './fingerprint.js'
 import type {
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
@@ -49,6 +50,7 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   GenerateSignupMaterialRequest,
+  GetOwnFingerprintRequest,
   GetOwnSigningKeyRequest,
   RecoveryMaterial,
   RewrapGroupKeyRequest,
@@ -130,6 +132,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'getOwnSigningKey':
       getOwnSigningKey(req)
+      return
+    case 'getOwnFingerprint':
+      getOwnFingerprint(req)
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
@@ -325,6 +330,15 @@ function getOwnSigningKey(req: GetOwnSigningKeyRequest): void {
     kind: 'getOwnSigningKeyDone',
     id: req.id,
     signingPublicKey: bytesToBase64(keys.signingKey.publicKey),
+  })
+}
+
+function getOwnFingerprint(req: GetOwnFingerprintRequest): void {
+  const keys = requireLiveKeys(req.userId, 'show your fingerprint')
+  post({
+    kind: 'getOwnFingerprintDone',
+    id: req.id,
+    fingerprint: fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey),
   })
 }
 
