@@ -161,6 +161,35 @@ func TestReadmitRefusesSameDayGrants(t *testing.T) {
 	}
 }
 
+// Grants outside [ref day, admission day] do not break an admission, and a
+// sibling whose key cannot be parsed does, as it does in the verifier.
+func TestReadmitSiblingGrantBounds(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, _, _, _, _, _, _ := rotatingGroupWith(t, h)
+	amb, ambCookie := loggedInUser(t, h)
+	addMember(t, gid, amb, "ambassador")
+	dave, _ := loggedInUser(t, h)
+	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, dave.userID)
+	ref := testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, -3))
+	setGrantSortKey(t, gid, amb.userID, ref)
+	earlier := testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, -10))
+	later := testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, 1))
+	putRaw(t, gid, earlier, nil)
+	putRaw(t, gid, later, nil)
+	garbled := "GRANT#" + amb.userID + "#not-a-day"
+	putRaw(t, gid, garbled, nil)
+
+	path := "/api/groups/" + gid + "/members/" + dave.userID + "/readmit"
+	if rec := doJSON(t, h, http.MethodPost, path, ambCookie, readmitBody(t, h, amb, gid, dave, 0)); rec.Code != http.StatusConflict {
+		t.Fatalf("an unparseable sibling grant: %d %s", rec.Code, rec.Body.String())
+	}
+	deleteRaw(t, gid, garbled)
+	if rec := doJSON(t, h, http.MethodPost, path, ambCookie, readmitBody(t, h, amb, gid, dave, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("grants dated before the ref day and after the admission day: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReadmitEndpointAmbassadorAndRunningRotation(t *testing.T) {
 	f := leftRotating(t) // a rotation is running: carol left, owner and bob are admins
 	amb, ambCookie := loggedInUser(t, f.h)
