@@ -28,7 +28,13 @@ import {
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import { describeRotation, runRotation, type RotationDeps } from './runRotation'
-import { prepareReadmit, readmitFailureMessage, runReadmit, type ReadmitDeps } from './runReadmit'
+import {
+  prepareReadmit,
+  readmitFailureMessage,
+  readmittableAfter,
+  runReadmit,
+  type ReadmitDeps,
+} from './runReadmit'
 import { fingerprint } from '@/lib/crypto/fingerprint'
 import { base64ToBytes } from '@/lib/crypto/base64'
 
@@ -2180,6 +2186,36 @@ describe('re-admitting a member', () => {
         ok: false,
         kind: 'ambiguous',
       })
+    })
+  })
+
+  describe('which members the screen offers', () => {
+    const prev = new Set(['p'])
+    it('takes the readmittable members of a blocked run, never the removed ones', () => {
+      const out = readmittableAfter(
+        {
+          status: 'blocked',
+          blocked: [],
+          unadmitted: ['a', 'r'],
+          readmittable: ['a'],
+          rewrapped: 0,
+        },
+        prev,
+      )
+      expect([...out]).toEqual(['a'])
+    })
+    it('clears the set when a run finishes, catches up, or has nothing to do', () => {
+      for (const status of ['none', 'completed', 'caught-up'] as const) {
+        const outcome = status === 'none' ? { status } : ({ status, rewrapped: 1 } as const)
+        expect(readmittableAfter(outcome, prev).size).toBe(0)
+      }
+    })
+    it('keeps the last answer when a run stopped early or has no one to run it', () => {
+      expect(readmittableAfter({ status: 'incomplete', reason: 'x', rewrapped: 0 }, prev)).toBe(
+        prev,
+      )
+      expect(readmittableAfter({ status: 'cannot-resume', reason: 'x' }, prev)).toBe(prev)
+      expect(readmittableAfter(undefined, prev)).toBe(prev)
     })
   })
 

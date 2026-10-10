@@ -1183,7 +1183,26 @@ an account that is not deleted, and the caller is not re-admitting themselves. A
 server cannot tell *who* is safe to re-admit: a member a removal named looks the same as one whose inviter
 was lost, and re-admitting a removed member at the current generation would satisfy the generation rule and
 re-list them. So that decision is the client's, which holds the verified removal history and never offers a
-re-admission for anyone in it; those return only through a fresh invitation (see the web flow).
+re-admission for anyone in it; those return only through a fresh invitation.
+
+*The re-admission flow in the web app.* The Members page offers **Re-admit** on a member a rotation run
+named `unadmitted` and the verified removal history does not name (the run reports these separately, as
+`readmittable`). Offering is a convenience; every step re-reads and re-checks, so a stale roster decides
+nothing. Starting it checks: the caller's role and grant; the member's served keys against the caller's
+pin (a mismatch blocks; a pin that cannot be read stops it); the admission and removal history (one that
+cannot be read or verified stops it, because carrying on would take the server's word that nobody was
+removed); that the member is **not** in the removal history; and that their admission does not already
+verify, because the server's overwrite is unconditional and a working record is never replaced. Only then
+does it show the fingerprint of the keys the server serves for them now. The confirmation is required
+every time, with no remembered answer: it is the control that stops an admin vouching for an account the
+server invented, which also has no invitation behind it and so is also `readmittable`. On confirmation
+everything is checked again, the signature is made only if freshly served keys still give the confirmed
+fingerprint, a first-sight member's keys are pinned first (so the rotation that follows checks the same keys
+the signature covers), the record is sent, and the paused rotation is re-run under the same lock. Limits:
+the member must be able to show their fingerprint, and today a member sees their own only when they
+create an invite (there is no profile screen yet), so until one exists the check rests on a member who can
+read theirs out; and only an admin runs the rotation that names whom to offer, so an ambassador would need
+a check of their own before the button could appear for them.
 
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
 started a rotation (an Open group has none, so there is no key to withhold and no chain link to
@@ -1207,10 +1226,9 @@ follow. (6) **Liveness.** An inviter whose keys can no longer be
 read, or who has another grant dated from the ref grant's day through an admission's day (their role changed
 later on that admission's own day, or their current grant shares a day with an earlier one), leaves their
 invitees unadmitted until an
-admin re-admits them. The server endpoint exists (above); the web flow is part 5b of #178, and until it
-lands the workaround is to remove the member and invite them again. The server refuses to store an
-admission its own caller's grants would make unverifiable, so an admin or ambassador in that state cannot
-re-admit anyone until their role changes again; another admin can.
+admin re-admits them (above). The server refuses to store an admission its own caller's grants would make
+unverifiable, so an admin or ambassador in that state cannot re-admit anyone until their role changes again;
+another admin can. A member removed earlier is not repaired this way and needs a fresh invitation.
 (7) **A stalled leave rotation.** A leave's rotation is taken over and finished by an admin at the
 leaver's generation, on their next load. If none returns, the group's new posts stay on the old generation
 and the other members stay behind until one does, the same stall a removal has when its remover

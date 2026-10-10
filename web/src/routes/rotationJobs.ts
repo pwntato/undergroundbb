@@ -19,6 +19,7 @@ import {
   type RotationNeed,
   rotationNeededAfter,
 } from './runRemoveMember'
+import { runReadmit, type ReadmitDeps, type ReadmitResult } from './runReadmit'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 
 /** Single-flight lock. Release only works for the holder, and only once. */
@@ -145,6 +146,49 @@ export async function removeAndRotate(
       return { busy: false, removal, rotation, need }
     }
     return { busy: false, removal, need }
+  } finally {
+    release()
+  }
+}
+
+export type ReadmitAndRotateResult =
+  /** Another rotation job is running; nothing was read, signed or sent. */
+  | { readonly busy: true }
+  | {
+      readonly busy: false
+      readonly readmit: ReadmitResult
+      /**
+       * Present when the rotation the member was holding up was run again. The
+       * re-admission is what a paused rotation was waiting for, and its outcome
+       * is what the admin needs to read next.
+       */
+      readonly rotation?: RotationOutcome
+    }
+
+/**
+ * Re-admits a member (#178 part 5b) and then re-runs the rotation that paused
+ * on them, holding the guard for both: the re-admission changes who a rotation
+ * will wrap to, so it must not overlap one. An ambiguous outcome runs it too,
+ * since the record may have been stored; runRotation checks the real state and
+ * says 'none' when there is nothing to do (it always does for an ambassador,
+ * who is not an admin).
+ */
+export async function readmitAndRotate(
+  deps: { readonly guard: RotationGuard; readonly readmit: ReadmitDeps },
+  groupId: string,
+  subjectUserId: string,
+  confirmedFingerprint: string,
+): Promise<ReadmitAndRotateResult> {
+  const release = deps.guard.tryAcquire()
+  if (release === null) {
+    return { busy: true }
+  }
+  try {
+    const readmit = await runReadmit(deps.readmit, groupId, subjectUserId, confirmedFingerprint)
+    if (readmit.ok || readmit.kind === 'ambiguous') {
+      return { busy: false, readmit, rotation: await runRotation(deps.readmit, groupId) }
+    }
+    return { busy: false, readmit }
   } finally {
     release()
   }

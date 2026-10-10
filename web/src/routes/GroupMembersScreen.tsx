@@ -36,8 +36,19 @@ import { LeaveGroupPanel } from './LeaveGroupPanel'
 import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
-import { makePinKeys, makeRotationDeps } from './rotationDeps'
-import { catchUpRotation, removeAndRotate, rotationGuardFor } from './rotationJobs'
+import { makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
+import {
+  catchUpRotation,
+  readmitAndRotate,
+  removeAndRotate,
+  rotationGuardFor,
+} from './rotationJobs'
+import {
+  prepareReadmit,
+  readmitFailureMessage,
+  readmittableAfter,
+  shouldReloadAfterReadmit,
+} from './runReadmit'
 import { describeRotation, type RotationOutcome } from './runRotation'
 import { removeFailureMessage, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
@@ -83,6 +94,15 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
+  // Members the last rotation job paused on because no valid invitation backs
+  // them and the removal history does not name them (#178 part 5b), and the one
+  // whose fingerprint is awaiting the admin's confirmation. Re-admit is offered
+  // from the first; runReadmit re-checks everything before it signs.
+  const [readmittable, setReadmittable] = useState<ReadonlySet<string>>(new Set())
+  const [readmitPrompt, setReadmitPrompt] = useState<{
+    readonly userId: string
+    readonly fingerprint: string
+  } | null>(null)
   // How this tab's most recent rotation job (on-load catch-up or a removal's)
   // ended; null until one has. The stale-rotation banner's advice depends on it
   // (see rotationNotice).
@@ -197,6 +217,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (result.busy) {
         return
       }
+      setReadmittable((prev) => readmittableAfter(result.outcome, prev))
       const current = loadRef.current
       const effects = catchUpResult(
         result.outcome,
@@ -291,6 +312,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       // on-load attempt; the banner's advice follows the latest job.
       if (rotation !== undefined) {
         setCatchUpStatus(rotation.status)
+        setReadmittable((prev) => readmittableAfter(rotation, prev))
       }
       const note =
         rotation === undefined
@@ -305,6 +327,88 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         setError(note.text)
       }
       if (shouldReloadAfterRemove(removal)) {
+        await reload(() => false)
+      }
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleStartReadmit = (subjectUserId: string) => {
+    if (load.status !== 'ready' || userId === null || busyUserId !== null || guard.held) {
+      return
+    }
+    const { groupId: gid } = load.view
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const prepared = await prepareReadmit(makeReadmitDeps(userId), gid, subjectUserId)
+      if (prepared.ok) {
+        setReadmitPrompt({ userId: subjectUserId, fingerprint: prepared.fingerprint })
+      } else {
+        setReadmitPrompt(null)
+        setError(readmitFailureMessage(prepared))
+        if (prepared.kind === 'removed' || prepared.kind === 'alreadyAdmitted') {
+          // Not a candidate after all: stop offering it.
+          setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
+        }
+      }
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleConfirmReadmit = (subjectUserId: string) => {
+    if (
+      load.status !== 'ready' ||
+      userId === null ||
+      busyUserId !== null ||
+      guard.held ||
+      readmitPrompt?.userId !== subjectUserId
+    ) {
+      return
+    }
+    const { groupId: gid } = load.view
+    const confirmed = readmitPrompt.fingerprint
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const result = await readmitAndRotate(
+        { guard, readmit: makeReadmitDeps(userId) },
+        gid,
+        subjectUserId,
+        confirmed,
+      )
+      setReadmitPrompt(null)
+      if (result.busy) {
+        setError('A key rotation is still running. Wait for it to finish, then try again.')
+        setBusyUserId(null)
+        return
+      }
+      const { readmit, rotation } = result
+      if (rotation !== undefined) {
+        setCatchUpStatus(rotation.status)
+        setReadmittable((prev) => readmittableAfter(rotation, prev))
+      }
+      const note =
+        rotation === undefined
+          ? null
+          : describeRotation(rotation, (id) => memberLabel(id, usernamesRef.current))
+      if (readmit.ok) {
+        setMessage(`${label} was re-admitted.${note?.kind === 'info' ? ` ${note.text}` : ''}`)
+        // They are admitted now whatever the rotation says next.
+        setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
+      } else {
+        setError(readmitFailureMessage(readmit))
+        if (readmit.kind === 'removed' || readmit.kind === 'alreadyAdmitted') {
+          setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
+        }
+      }
+      if (note?.kind === 'error') {
+        setError(readmit.ok ? note.text : `${readmitFailureMessage(readmit)} ${note.text}`)
+      }
+      if (shouldReloadAfterReadmit(readmit)) {
         await reload(() => false)
       }
       setBusyUserId(null)
@@ -395,6 +499,13 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             setConfirmRemoveUserId(null)
           }}
           onConfirmRemove={handleRemove}
+          readmittableIds={readmittable}
+          readmitPrompt={readmitPrompt}
+          onStartReadmit={handleStartReadmit}
+          onCancelReadmit={() => {
+            setReadmitPrompt(null)
+          }}
+          onConfirmReadmit={handleConfirmReadmit}
           check={checkForView(grantCheck, load.view)}
         />
       )}

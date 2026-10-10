@@ -29,7 +29,7 @@ import { fingerprint } from '@/lib/crypto/fingerprint'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type { SignReadmissionRequest, SignReadmissionResult } from '@/lib/crypto/worker-protocol'
 import { isLiveKeysError } from './runListGroups'
-import { isAdmitted, loadAdmissions, type RotationDeps } from './runRotation'
+import { isAdmitted, loadAdmissions, type RotationDeps, type RotationOutcome } from './runRotation'
 
 export interface ReadmitDeps extends RotationDeps {
   readonly signReadmission: (
@@ -314,4 +314,29 @@ export function shouldReloadAfterReadmit(outcome: ReadmitResult): boolean {
     outcome.kind === 'ambiguous' ||
     outcome.kind === 'alreadyAdmitted'
   )
+}
+
+/**
+ * Whom the screen may offer Re-admit for, after a rotation job ended with
+ * `outcome`. A blocked run names them (never anyone the removal history names);
+ * a run that finished or found nothing to do clears the set; a run that stopped
+ * early learned nothing new, so the last answer stands. Offering is only a
+ * convenience: prepareReadmit and runReadmit re-check everything themselves.
+ */
+export function readmittableAfter(
+  outcome: RotationOutcome | undefined,
+  previous: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (outcome === undefined) return previous
+  switch (outcome.status) {
+    case 'blocked':
+      return new Set(outcome.readmittable ?? [])
+    case 'incomplete':
+    case 'cannot-resume':
+      return previous
+    case 'none':
+    case 'completed':
+    case 'caught-up':
+      return new Set()
+  }
 }

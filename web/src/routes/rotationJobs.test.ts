@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   catchUpRotation,
+  readmitAndRotate,
   createRotationGuard,
   removeAndRotate,
   rotationGuardFor,
 } from './rotationJobs'
+import { runReadmit, type ReadmitDeps } from './runReadmit'
 import { rotationNeededAfter, runRemoveMember, type RemoveResult } from './runRemoveMember'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 import type { RemoveDeps } from './runRemoveMember'
@@ -13,6 +15,10 @@ vi.mock('./runRemoveMember', async (orig) => ({
   ...(await orig<typeof import('./runRemoveMember')>()),
   runRemoveMember: vi.fn(),
 }))
+vi.mock('./runReadmit', async (orig) => ({
+  ...(await orig<typeof import('./runReadmit')>()),
+  runReadmit: vi.fn(),
+}))
 vi.mock('./runRotation', async (orig) => ({
   ...(await orig<typeof import('./runRotation')>()),
   runRotation: vi.fn(),
@@ -20,6 +26,8 @@ vi.mock('./runRotation', async (orig) => ({
 
 const remove = vi.mocked(runRemoveMember)
 const rotate = vi.mocked(runRotation)
+const readmit = vi.mocked(runReadmit)
+const readmitDeps = {} as ReadmitDeps
 
 const GROUP = 'g1'
 const SUBJECT = 'u-subject'
@@ -38,6 +46,7 @@ const deferred = <T>() => {
 beforeEach(() => {
   remove.mockReset()
   rotate.mockReset()
+  readmit.mockReset()
 })
 
 describe('createRotationGuard', () => {
@@ -251,5 +260,76 @@ describe('rotationNeededAfter', () => {
       run: true,
       exclude: new Set(),
     })
+  })
+})
+
+describe('readmitAndRotate', () => {
+  it('re-runs the paused rotation after a re-admission, holding the guard throughout', async () => {
+    const guard = createRotationGuard()
+    const during: boolean[] = []
+    readmit.mockImplementation(async () => {
+      during.push(guard.held)
+      return { ok: true }
+    })
+    rotate.mockImplementation(async () => {
+      during.push(guard.held)
+      return DONE
+    })
+    const out = await readmitAndRotate({ guard, readmit: readmitDeps }, GROUP, SUBJECT, 'print')
+    expect(out).toEqual({ busy: false, readmit: { ok: true }, rotation: DONE })
+    expect(readmit).toHaveBeenCalledWith(readmitDeps, GROUP, SUBJECT, 'print')
+    expect(rotate).toHaveBeenCalledWith(readmitDeps, GROUP)
+    expect(during).toEqual([true, true])
+    expect(guard.held).toBe(false)
+  })
+
+  it('runs the rotation after an ambiguous re-admission, since it may have been stored', async () => {
+    readmit.mockResolvedValue({ ok: false, kind: 'ambiguous' })
+    rotate.mockResolvedValue(DONE)
+    const out = await readmitAndRotate(
+      { guard: createRotationGuard(), readmit: readmitDeps },
+      GROUP,
+      SUBJECT,
+      'print',
+    )
+    expect(out).toEqual({
+      busy: false,
+      readmit: { ok: false, kind: 'ambiguous' },
+      rotation: DONE,
+    })
+  })
+
+  it.each([
+    { kind: 'removed' },
+    { kind: 'pinMismatch' },
+    { kind: 'keysChanged' },
+    { kind: 'stale' },
+    { kind: 'rejected', message: 'no' },
+  ] as const)('does not run a rotation when the re-admission was refused ($kind)', async (f) => {
+    readmit.mockResolvedValue({ ok: false, ...f })
+    const guard = createRotationGuard()
+    const out = await readmitAndRotate({ guard, readmit: readmitDeps }, GROUP, SUBJECT, 'print')
+    expect(out).toEqual({ busy: false, readmit: { ok: false, ...f } })
+    expect(rotate).not.toHaveBeenCalled()
+    expect(guard.held).toBe(false)
+  })
+
+  it('does nothing while another job holds the guard', async () => {
+    const guard = createRotationGuard()
+    const release = guard.tryAcquire()
+    const out = await readmitAndRotate({ guard, readmit: readmitDeps }, GROUP, SUBJECT, 'print')
+    expect(out).toEqual({ busy: true })
+    expect(readmit).not.toHaveBeenCalled()
+    expect(rotate).not.toHaveBeenCalled()
+    release?.()
+  })
+
+  it('releases the guard when the re-admission throws', async () => {
+    readmit.mockRejectedValue(new Error('boom'))
+    const guard = createRotationGuard()
+    await expect(
+      readmitAndRotate({ guard, readmit: readmitDeps }, GROUP, SUBJECT, 'print'),
+    ).rejects.toThrow('boom')
+    expect(guard.held).toBe(false)
   })
 })

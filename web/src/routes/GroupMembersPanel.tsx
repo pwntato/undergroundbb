@@ -37,6 +37,11 @@ export function GroupMembersPanel({
   onStartRemove,
   onCancelRemove,
   onConfirmRemove,
+  readmittableIds,
+  readmitPrompt = null,
+  onStartReadmit,
+  onCancelReadmit,
+  onConfirmReadmit,
   usernames,
   check,
 }: {
@@ -53,6 +58,17 @@ export function GroupMembersPanel({
   readonly onStartRemove: (subjectUserId: string) => void
   readonly onCancelRemove: () => void
   readonly onConfirmRemove: (subjectUserId: string) => void
+  /**
+   * Members the last key rotation paused on because no valid invitation backs
+   * them and the signed removal history does not name them: the only ones
+   * Re-admit is offered for. Absent or empty shows no Re-admit at all.
+   */
+  readonly readmittableIds?: ReadonlySet<string> | undefined
+  /** The member whose fingerprint is awaiting confirmation, with the fingerprint to compare. */
+  readonly readmitPrompt?: { readonly userId: string; readonly fingerprint: string } | null
+  readonly onStartReadmit?: (subjectUserId: string) => void
+  readonly onCancelReadmit?: () => void
+  readonly onConfirmReadmit?: (subjectUserId: string) => void
   /** userId to username; anything missing renders as a short id. */
   readonly usernames?: ReadonlyMap<string, string> | undefined
   /**
@@ -66,6 +82,12 @@ export function GroupMembersPanel({
   // Without our own grant on record a change can't be signed, so the buttons
   // would only fail; the note below the list says why they are absent.
   const canChangeRoles = isAdmin && view.myGrantSortKey !== undefined && view.myGrantSortKey !== ''
+  // An ambassador can re-admit too, but only an admin runs the rotation that
+  // names who needs it, so in practice the buttons are an admin's.
+  const canReadmit =
+    (isAdmin || view.myRole === 'ambassador') &&
+    view.myGrantSortKey !== undefined &&
+    view.myGrantSortKey !== ''
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
@@ -102,7 +124,7 @@ export function GroupMembersPanel({
           return (
             <li
               key={m.userId}
-              className="flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
             >
               <span className="flex items-baseline gap-2">
                 <span
@@ -180,6 +202,56 @@ export function GroupMembersPanel({
                   </Button>
                 </span>
               )}
+              {canReadmit &&
+                !isSelf &&
+                readmittableIds?.has(m.userId) === true &&
+                (readmitPrompt?.userId === m.userId ? (
+                  <span className="flex w-full flex-col gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      No valid invitation backs {memberLabel(m.userId, usernames)}. Re-admitting
+                      signs that the keys below are theirs, so first check this fingerprint with
+                      them in person or on a call you know is them. Do not take it from the group or
+                      from a message.
+                    </span>
+                    <span className="font-mono text-xs break-all">{readmitPrompt.fingerprint}</span>
+                    <span className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onConfirmReadmit?.(m.userId)
+                        }}
+                      >
+                        {busyUserId === m.userId ? 'Re-admitting…' : 'It matches, re-admit'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onCancelReadmit?.()
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </span>
+                  </span>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    title="Their invitation record no longer verifies, so key rotation is paused on them."
+                    disabled={busyUserId !== null || locked}
+                    onClick={() => {
+                      onStartReadmit?.(m.userId)
+                    }}
+                  >
+                    {busyUserId === m.userId ? 'Checking…' : 'Re-admit'}
+                  </Button>
+                ))}
             </li>
           )
         })}
