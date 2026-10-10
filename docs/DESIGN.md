@@ -1163,6 +1163,21 @@ The creator is exempt only while nobody has removed them. The removers' keys com
 are checked against the caller's pin like the marker's starter; a first sighting is accepted because a
 forged record can only exclude someone.
 
+*Re-admitting a member.* An admission can stop verifying through no fault of the member: the inviter's
+keys can no longer be read, or the inviter's grants changed on the admission's own day. Every rotation then
+pauses on that member (`unadmitted`). `POST /api/groups/{gid}/members/{uid}/readmit` lets a current admin or
+ambassador replace the record with a fresh one: the same `AdmissionPayload`, signed over the member's
+**current** keys, with a client-chosen UUID in the invite slot (there is no invite; nothing looks it up).
+The server checks what it can read: the caller holds the role, generation and grant they signed (the
+transaction re-checks all three), the signature verifies over the keys the server stores for the member and
+under the caller's current key, the day is held to a grant's clock tolerance, the member still exists with
+an account that is not deleted, and the caller is not re-admitting themselves. A running rotation does
+**not** block it, because a rotation paused on an unadmitted member is exactly when it is needed. The
+server cannot tell *who* is safe to re-admit: a member a removal named looks the same as one whose inviter
+was lost, and re-admitting a removed member at the current generation would satisfy the generation rule and
+re-list them. So that decision is the client's, which holds the verified removal history and never offers a
+re-admission for anyone in it; those return only through a fresh invitation (see the web flow).
+
 *What stays open.* (1) **Omission.** The server can withhold the marker, or a removal that never
 started a rotation (an Open group has none, so there is no key to withhold and no chain link to
 carry a record), and nothing binds the set of signed records, the same gap the grant history and
