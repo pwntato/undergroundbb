@@ -18,8 +18,14 @@ import (
 
 func readmitBody(t *testing.T, h *Handler, signer registeredUser, gid string, subject registeredUser, gen int64) readmitRequest {
 	t.Helper()
-	inviteID := newUUID(t)
-	day := time.Now().UTC().Format("2006-01-02")
+	return readmitBodyWith(t, h, signer, gid, subject, newUUID(t), time.Now().UTC().Format("2006-01-02"), gen)
+}
+
+// readmitBodyWith signs over the invite id, day and generation it is given, so
+// a refusal test is judged by the check it targets and not by a signature that
+// no longer matches an edited field.
+func readmitBodyWith(t *testing.T, h *Handler, signer registeredUser, gid string, subject registeredUser, inviteID, day string, gen int64) readmitRequest {
+	t.Helper()
 	adm := signedAdmissionAt(t, h, signer, gid, inviteID, subject, "", day, gen)
 	return readmitRequest{InviteID: inviteID, Generation: gen, InviterGrantRef: adm.InviterGrantRef, Day: day, Signature: adm.Signature}
 }
@@ -46,12 +52,10 @@ func TestReadmitEndpoint(t *testing.T) {
 	ok := readmitBody(t, h, owner, gid, dave, 0)
 	wrongGen := readmitBody(t, h, owner, gid, dave, 1)
 	wrongGen.Generation = 1 // signed for 1, but the owner is at 0
-	badID := ok
-	badID.InviteID = "not-a-uuid"
+	badID := readmitBodyWith(t, h, owner, gid, dave, "not-a-uuid", time.Now().UTC().Format("2006-01-02"), 0)
 	staleRef := ok
 	staleRef.InviterGrantRef = "GRANT#" + owner.userID + "#2020-01-01#0000000000000001"
-	badDay := ok
-	badDay.Day = time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02")
+	badDay := readmitBodyWith(t, h, owner, gid, dave, newUUID(t), time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02"), 0)
 	bySomeoneElse := readmitBody(t, h, bob, gid, dave, 0) // signed by bob, sent by the owner
 	bySomeoneElse.InviterGrantRef = ok.InviterGrantRef
 	forOtherKeys := readmitBody(t, h, owner, gid, carol, 0) // signed over carol's keys, sent for dave
@@ -64,7 +68,7 @@ func TestReadmitEndpoint(t *testing.T) {
 	}{
 		"unauthenticated":              {nil, dave.userID, ok, http.StatusUnauthorized},
 		"plain member":                 {carolCookie, dave.userID, ok, http.StatusForbidden},
-		"yourself":                     {ownerCookie, owner.userID, ok, http.StatusBadRequest},
+		"yourself":                     {ownerCookie, owner.userID, readmitBody(t, h, owner, gid, owner, 0), http.StatusBadRequest},
 		"not a member":                 {ownerCookie, newUUID(t), ok, http.StatusNotFound},
 		"malformed member id":          {ownerCookie, "nope", ok, http.StatusNotFound},
 		"bad invite id":                {ownerCookie, dave.userID, badID, http.StatusBadRequest},
