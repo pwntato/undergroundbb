@@ -122,6 +122,12 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "day: not within tolerance of the current UTC day")
 		return
 	}
+	// verifyAdmission rejects a record dated before its inviter's own grant,
+	// and this endpoint overwrites a working record, so refuse it here.
+	if grantDay, ok := idgen.ValidGrantSortKey(currentRef, userID); !ok || grantDay.After(admissionDay) {
+		WriteError(w, http.StatusBadRequest, "day: before your own grant's day")
+		return
+	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "signature: "+err.Error())

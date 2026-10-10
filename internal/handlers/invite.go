@@ -765,6 +765,10 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "admission.inviterGrantRef is not your current grant; reload and re-sign", "grantor_ref_stale")
 		return
 	}
+	if grantDay, ok := idgen.ValidGrantSortKey(currentRef, userID); !ok || grantDay.After(admissionDay) {
+		WriteError(w, http.StatusBadRequest, "admission.day: before your own grant's day")
+		return
+	}
 	// The signature is checked here as well as by every rotating client, so
 	// a record that could never verify is refused up front instead of
 	// stranding the new member at the next rotation.

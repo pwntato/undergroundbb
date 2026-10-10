@@ -96,19 +96,47 @@ func TestReadmitEndpoint(t *testing.T) {
 	}
 }
 
-func TestReadmitEndpointAmbassadorAndRunningRotation(t *testing.T) {
-	f := leftRotating(t) // a rotation is running: carol left, owner and bob are admins
-	amb, ambCookie := loggedInUser(t, f.h)
-	addMember(t, f.gid, amb, "ambassador")
-	const ref = "GRANT#00000000-0000-4000-8000-000000000001#2026-01-01#0000000000000001"
+func setGrantSortKey(t *testing.T, gid, userID, ref string) {
+	t.Helper()
 	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(testTableName()),
-		Key:                       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + f.gid}, "SK": &types.AttributeValueMemberS{Value: "MEMBER#" + amb.userID}},
+		Key:                       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid}, "SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID}},
 		UpdateExpression:          aws.String("SET GrantSortKey = :r"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{":r": &types.AttributeValueMemberS{Value: ref}},
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A grant dated after the admission would store a record verifyAdmission
+// rejects, replacing a working one. The body is signed over the grant it names
+// and today's day, so only the grant-day check can refuse it.
+func TestReadmitRefusesDayBeforeOwnGrant(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, _, _, _, _, _, _ := rotatingGroupWith(t, h)
+	amb, ambCookie := loggedInUser(t, h)
+	addMember(t, gid, amb, "ambassador")
+	dave, _ := loggedInUser(t, h)
+	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, dave.userID)
+	before := strAttr(admissionRow(t, gid, dave.userID), "InviterUserID")
+
+	setGrantSortKey(t, gid, amb.userID, testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, 1)))
+	body := readmitBody(t, h, amb, gid, dave, 0)
+	if got := doReadmit(t, h, ambCookie, gid, dave.userID, body); got != http.StatusBadRequest {
+		t.Fatalf("grant dated tomorrow, admission today: %d, want 400", got)
+	}
+	if strAttr(admissionRow(t, gid, dave.userID), "InviterUserID") != before {
+		t.Fatal("a refused re-admission replaced the admission")
+	}
+}
+
+func TestReadmitEndpointAmbassadorAndRunningRotation(t *testing.T) {
+	f := leftRotating(t) // a rotation is running: carol left, owner and bob are admins
+	amb, ambCookie := loggedInUser(t, f.h)
+	addMember(t, f.gid, amb, "ambassador")
+	ref := testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, -3))
+	setGrantSortKey(t, f.gid, amb.userID, ref)
 	putAdmissionRow(t, f.gid, f.dave.userID)
 	if getRow(t, "GROUP#"+f.gid, "ROTATION") == nil {
 		t.Fatal("fixture: no rotation is running")
