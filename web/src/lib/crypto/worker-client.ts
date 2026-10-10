@@ -42,8 +42,13 @@ import type {
   SignGroupCreationResponse,
   SignGroupCreationResult,
   SignPinRequest,
+  SignReadmissionRequest,
+  SignReadmissionResponse,
+  SignReadmissionResult,
   SignPinResponse,
   SignPinResult,
+  GetOwnFingerprintRequest,
+  GetOwnFingerprintResponse,
   GetOwnSigningKeyRequest,
   GetOwnSigningKeyResponse,
   SignRoleGrantRequest,
@@ -465,6 +470,37 @@ export function signPin(req: Omit<SignPinRequest, 'kind' | 'id'>): Promise<SignP
   })
 }
 
+/** Signs a re-admission of an existing member -- #178 part 5b. */
+export function signReadmission(
+  req: Omit<SignReadmissionRequest, 'kind' | 'id'>,
+): Promise<SignReadmissionResult> {
+  const id = nextRequestID()
+  const fullReq: SignReadmissionRequest = { kind: 'signReadmission', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signReadmissionDone') {
+        resolve((msg as SignReadmissionResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signReadmission`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
 /** The caller's own current signing public key (base64) from the worker's liveKeys -- issue #63. */
 export function getOwnSigningKey(userId: string): Promise<string> {
   const id = nextRequestID()
@@ -751,4 +787,33 @@ export function encryptGroupText(req: Omit<EncryptGroupTextRequest, 'kind' | 'id
 export function clearLiveKeys(): void {
   const req: ClearLiveKeysRequest = { kind: 'clearLiveKeys', id: nextRequestID() }
   getWorker().postMessage(req)
+}
+
+/** The caller's own key fingerprint from the worker's liveKeys, for a member to read out to an admin re-admitting them (#178). */
+export function getOwnFingerprint(userId: string): Promise<string> {
+  const id = nextRequestID()
+  const fullReq: GetOwnFingerprintRequest = { kind: 'getOwnFingerprint', id, userId }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'getOwnFingerprintDone') {
+        resolve((msg as GetOwnFingerprintResponse).fingerprint)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for getOwnFingerprint`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
 }

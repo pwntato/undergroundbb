@@ -12,6 +12,7 @@ import {
   listDesignations,
   listGrants,
   listMembers,
+  readmitMember,
   takeOverRotation,
   rewrapMembers,
 } from '@/lib/api/groups'
@@ -20,11 +21,13 @@ import {
   getOwnSigningKey,
   rewrapGroupKey,
   signPin,
+  signReadmission,
   startGroupRotation,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
+import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
 
 /** Signs a pin of someone's served keys with the caller's key and stores it. */
@@ -55,5 +58,15 @@ export function makeRotationDeps(userId: string): RotationDeps {
     completeRotation,
     takeOverCrypto: startGroupRotation,
     takeOverRotation,
+  }
+}
+
+/** The rotation wiring plus what a re-admission needs to sign and send (#178 part 5b). */
+export function makeReadmitDeps(userId: string): ReadmitDeps {
+  return {
+    ...makeRotationDeps(userId),
+    signReadmission,
+    readmitMember,
+    newInviteId: () => crypto.randomUUID(),
   }
 }

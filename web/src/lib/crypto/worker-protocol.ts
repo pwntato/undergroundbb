@@ -333,6 +333,23 @@ export interface GetOwnSigningKeyResponse {
 }
 
 /**
+ * The caller's own key fingerprint (fingerprint.ts) over the live signing and
+ * wrapping public keys, so any member can read it out to an admin who is about
+ * to re-admit them (#178). Same cached-keys guards as getOwnSigningKey.
+ */
+export interface GetOwnFingerprintRequest {
+  readonly kind: 'getOwnFingerprint'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface GetOwnFingerprintResponse {
+  readonly kind: 'getOwnFingerprintDone'
+  readonly id: string
+  readonly fingerprint: string
+}
+
+/**
  * Signs step 1 of the invite handshake (issue #38) -- the inviter's own
  * Ed25519 signature over the invite's creation payload. Like
  * SignGroupCreationRequest, relies entirely on the worker's own liveKeys
@@ -452,6 +469,40 @@ export interface CompleteInviteResponse {
   readonly kind: 'completeInviteDone'
   readonly id: string
   readonly result: CompleteInviteResult
+}
+
+/**
+ * #178 part 5b: signs a re-admission of an existing member (credential-material's
+ * signReadmission) with the worker's liveKeys. Key fields are base64.
+ */
+export interface SignReadmissionRequest {
+  readonly kind: 'signReadmission'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly subjectUserId: string
+  readonly subjectEd25519PublicKey: string
+  readonly subjectX25519PublicKey: string
+  /** A fresh UUID for the invite slot. */
+  readonly inviteId: string
+  /** The caller's own current grant address. */
+  readonly inviterGrantRef: string
+  /** UTC date (YYYY-MM-DD) the admission is signed for. */
+  readonly day: string
+  /** The group-key generation the caller holds. */
+  readonly generation: number
+}
+
+export interface SignReadmissionResult {
+  readonly inviterGrantRef: string
+  readonly day: string
+  readonly signature: string
+}
+
+export interface SignReadmissionResponse {
+  readonly kind: 'signReadmissionDone'
+  readonly id: string
+  readonly result: SignReadmissionResult
 }
 
 /**
@@ -673,11 +724,13 @@ export type WorkerRequest =
   | SignSuccessorClaimRequest
   | SignPinRequest
   | GetOwnSigningKeyRequest
+  | GetOwnFingerprintRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
+  | SignReadmissionRequest
   | StartGroupRotationRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
@@ -695,11 +748,13 @@ export type WorkerResponse =
   | SignSuccessorClaimResponse
   | SignPinResponse
   | GetOwnSigningKeyResponse
+  | GetOwnFingerprintResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
+  | SignReadmissionResponse
   | StartGroupRotationResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse

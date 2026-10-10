@@ -25,6 +25,7 @@ import {
   decryptGroupNames as decryptGroupNamesPure,
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
+  ownFingerprint,
   rewrapGroupKey as rewrapGroupKeyPure,
   signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
@@ -32,6 +33,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  signReadmission as signReadmissionPure,
   signRoleGrant as signRoleGrantPure,
   signSuccessorClaim as signSuccessorClaimPure,
   signSuccessorDesignation as signSuccessorDesignationPure,
@@ -48,6 +50,7 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   GenerateSignupMaterialRequest,
+  GetOwnFingerprintRequest,
   GetOwnSigningKeyRequest,
   RecoveryMaterial,
   RewrapGroupKeyRequest,
@@ -57,6 +60,7 @@ import type {
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
   SignPinRequest,
+  SignReadmissionRequest,
   SignRoleGrantRequest,
   SignSuccessorClaimRequest,
   SignSuccessorDesignationRequest,
@@ -129,6 +133,9 @@ async function handle(req: WorkerRequest): Promise<void> {
     case 'getOwnSigningKey':
       getOwnSigningKey(req)
       return
+    case 'getOwnFingerprint':
+      getOwnFingerprint(req)
+      return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
       return
@@ -143,6 +150,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'completeInvite':
       await completeInvite(req)
+      return
+    case 'signReadmission':
+      signReadmission(req)
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
@@ -296,6 +306,23 @@ function signPin(req: SignPinRequest): void {
   post({ kind: 'signPinDone', id: req.id, result })
 }
 
+/** Signs a re-admission of an existing member -- #178 part 5b. */
+function signReadmission(req: SignReadmissionRequest): void {
+  const keys = requireLiveKeys(req.userId, 're-admit a member')
+  const result = signReadmissionPure(
+    keys,
+    req.groupId,
+    req.subjectUserId,
+    base64ToBytes(req.subjectEd25519PublicKey),
+    base64ToBytes(req.subjectX25519PublicKey),
+    req.inviteId,
+    req.inviterGrantRef,
+    req.day,
+    req.generation,
+  )
+  post({ kind: 'signReadmissionDone', id: req.id, result })
+}
+
 /** Reports the caller's own current signing public key -- issue #63. */
 function getOwnSigningKey(req: GetOwnSigningKeyRequest): void {
   const keys = requireLiveKeys(req.userId, 'check keys')
@@ -303,6 +330,15 @@ function getOwnSigningKey(req: GetOwnSigningKeyRequest): void {
     kind: 'getOwnSigningKeyDone',
     id: req.id,
     signingPublicKey: bytesToBase64(keys.signingKey.publicKey),
+  })
+}
+
+function getOwnFingerprint(req: GetOwnFingerprintRequest): void {
+  const keys = requireLiveKeys(req.userId, 'show your fingerprint')
+  post({
+    kind: 'getOwnFingerprintDone',
+    id: req.id,
+    fingerprint: ownFingerprint(keys),
   })
 }
 

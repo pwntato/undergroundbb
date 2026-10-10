@@ -25,6 +25,8 @@ function render(
     usernames?: ReadonlyMap<string, string>
     confirmRemoveUserId?: string | null
     locked?: boolean
+    readmittableIds?: ReadonlySet<string>
+    readmitPrompt?: { userId: string; fingerprint: string } | null
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -46,6 +48,11 @@ function render(
       onStartRemove: () => undefined,
       onCancelRemove: () => undefined,
       onConfirmRemove: () => undefined,
+      onStartReadmit: () => undefined,
+      onCancelReadmit: () => undefined,
+      onConfirmReadmit: () => undefined,
+      ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
+      ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       ...(extra.usernames !== undefined && { usernames: extra.usernames }),
     }),
   )
@@ -333,6 +340,55 @@ describe('GroupMembersPanel grant check marks', () => {
     expect(html).not.toContain('remember')
     expect(html).not.toContain('trust anchor is different')
     expect(html).not.toContain('role="alert"')
+  })
+})
+
+describe('GroupMembersPanel re-admit (#178)', () => {
+  const PRINT = '12345-67890-12345-67890-12345-67890-12345-67890-12345-67890-12345-67890'
+  const two = { members: [member(ME, 'admin'), member(BOB, 'member')] }
+
+  it('shows Re-admit only on members named readmittable', () => {
+    expect(render(two, { readmittableIds: new Set([BOB]) })).toContain('>Re-admit<')
+    expect(render(two)).not.toContain('Re-admit')
+    expect(render(two, { readmittableIds: new Set() })).not.toContain('Re-admit')
+    // Someone the rotation did not name gets none, whatever else is in the set.
+    expect(
+      render(two, { readmittableIds: new Set(['cccccccc-3333-4333-8333-333333333333']) }),
+    ).not.toContain('Re-admit')
+  })
+
+  it('never offers it on your own row', () => {
+    expect(render(two, { readmittableIds: new Set([ME]) })).not.toContain('Re-admit')
+  })
+
+  it('offers it to an ambassador with a grant, and to nobody who cannot sign', () => {
+    const ids = { readmittableIds: new Set([BOB]) }
+    expect(render({ ...two, myRole: 'ambassador' }, ids)).toContain('>Re-admit<')
+    expect(render({ ...two, myRole: 'member' }, ids)).not.toContain('Re-admit')
+    expect(render({ ...two, myGrantSortKey: '' }, ids)).not.toContain('Re-admit')
+  })
+
+  it('shows the fingerprint and an explicit confirm, not a bare button, once started', () => {
+    const html = render(two, {
+      readmittableIds: new Set([BOB]),
+      readmitPrompt: { userId: BOB, fingerprint: PRINT },
+    })
+    expect(html).toContain(PRINT)
+    expect(html).toContain('It matches, re-admit')
+    expect(html).toContain('Cancel')
+    expect(html).toContain('in person or on a call')
+    expect(html).not.toContain('>Re-admit<')
+  })
+
+  it('ignores a prompt for someone who is not readmittable', () => {
+    const html = render(two, { readmitPrompt: { userId: BOB, fingerprint: PRINT } })
+    expect(html).not.toContain(PRINT)
+    expect(html).not.toContain('It matches')
+  })
+
+  it('locks the buttons while another job runs', () => {
+    const html = render(two, { readmittableIds: new Set([BOB]), locked: true })
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Re-admit</)
   })
 })
 

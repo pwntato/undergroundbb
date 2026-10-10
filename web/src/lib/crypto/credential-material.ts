@@ -457,6 +457,16 @@ export function signPin(
 }
 
 /**
+ * The user's own key fingerprint (fingerprint.ts) over their two current public
+ * keys, in the same argument order the invite path and an admin's view of the
+ * served keys use, so a member reading this out matches what an admin compares
+ * (#178).
+ */
+export function ownFingerprint(keys: LiveKeys): string {
+  return fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
+}
+
+/**
  * #38: signs step 1 of the invite handshake -- the inviter's own
  * Ed25519 signature over crypto.InviteCreationPayload (Go)/
  * inviteCreationPayload (TS), binding the invite id, group id, the
@@ -499,7 +509,7 @@ export async function signInviteCreation(
 ): Promise<{ creationSignature: string; inviterFingerprint: string; inviteMACKey: string }> {
   const payload = inviteCreationPayload(inviteId, groupId, keys.signingKey.publicKey, expiresAt)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Invite, payload)
-  const inviterFingerprint = fingerprint(keys.signingKey.publicKey, keys.wrappingKey.publicKey)
+  const inviterFingerprint = ownFingerprint(keys)
   const macKey = deriveInviteMACKey(keys.signingKey.seed, inviteId)
   return {
     creationSignature: bytesToBase64(signature),
@@ -661,6 +671,43 @@ export async function completeInvite(
     generation: ownGeneration,
     admission: { inviterGrantRef, day, signature: bytesToBase64(admissionSignature) },
   }
+}
+
+/**
+ * #178 part 5b: signs a fresh admission of a member who is already in the
+ * group (a re-admission). The same AdmissionPayload completeInvite signs, over
+ * the member's CURRENT keys, with a caller-chosen UUID in the invite slot:
+ * there is no invite, and nothing looks it up. No MAC applies, because there is
+ * no invite link; the caller is responsible for having confirmed the keys
+ * (pin and fingerprint) before this signs anything.
+ */
+export function signReadmission(
+  keys: LiveKeys,
+  groupId: string,
+  subjectUserId: string,
+  subjectEd25519PublicKey: Uint8Array,
+  subjectX25519PublicKey: Uint8Array,
+  inviteId: string,
+  inviterGrantRef: string,
+  day: string,
+  generation: number,
+): { inviterGrantRef: string; day: string; signature: string } {
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.Admission,
+    admissionPayload(
+      groupId,
+      keys.userId,
+      subjectUserId,
+      subjectEd25519PublicKey,
+      subjectX25519PublicKey,
+      inviteId,
+      inviterGrantRef,
+      day,
+      generation,
+    ),
+  )
+  return { inviterGrantRef, day, signature: bytesToBase64(signature) }
 }
 
 /** A Wrapped, base64-encoded for the wire (and for postMessage). */

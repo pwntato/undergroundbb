@@ -139,6 +139,14 @@ export type RotationOutcome =
        * wrapped to. Absent when there are none.
        */
       readonly unadmitted?: readonly string[]
+      /**
+       * The subset of `unadmitted` the verified removal history does NOT name
+       * (#178 part 5b): the only ones Re-admit may be offered for. Someone
+       * removed earlier returns only through a fresh invitation, because a
+       * colluding server could re-list them and a re-admission at the current
+       * generation would admit them. Absent when there are none.
+       */
+      readonly readmittable?: readonly string[]
       readonly rewrapped: number
     }
   /** The caller is an admin but not at the rotation's generation: another admin who is must resume. */
@@ -185,9 +193,18 @@ export function describeRotation(
           `${unadmitted.map(label).join(', ')} ${unadmitted.length === 1 ? 'is' : 'are'} listed as ${unadmitted.length === 1 ? 'a member' : 'members'} but no admin or ambassador's signed invitation backs them (for someone removed earlier, one made after the removal).`,
         )
       }
+      const readmittable = outcome.readmittable ?? []
+      const needInvite = unadmitted.length > readmittable.length
+      const clear =
+        (readmittable.length > 0
+          ? ' To clear a member whose invitation record no longer verifies, use Re-admit next to their name, after checking their fingerprint with them.'
+          : '') +
+        (needInvite
+          ? ' Someone removed earlier can only come back through a fresh invitation.'
+          : '')
       return {
         kind: 'error',
-        text: `Key rotation is paused. ${parts.join(' ')} They were NOT given the new group key. Check with them another way before relying on this group.${unadmitted.length > 0 ? ' To clear an unadmitted member, an admin can remove them and invite them again.' : ''}`,
+        text: `Key rotation is paused. ${parts.join(' ')} They were NOT given the new group key. Check with them another way before relying on this group.${clear}`,
       }
     }
     case 'cannot-resume':
@@ -314,6 +331,8 @@ async function runOnce(
   const blocked = new Set<string>()
   // Members no valid admission backs (#178): skipped like a pin mismatch.
   const unadmitted = new Set<string>()
+  // The unadmitted the removal history does not name: the ones Re-admit applies to.
+  const readmittable = new Set<string>()
   let rewrapped = carried
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
@@ -357,6 +376,7 @@ async function runOnce(
           status: 'blocked',
           blocked: [...blocked],
           ...(unadmitted.size > 0 && { unadmitted: [...unadmitted] }),
+          ...(readmittable.size > 0 && { readmittable: [...readmittable] }),
           rewrapped,
         }
       }
@@ -406,6 +426,7 @@ async function runOnce(
           }
           if (!isAdmitted(admissions, groupId, m.userId, servedForM)) {
             unadmitted.add(m.userId)
+            if (!admissions.removedAt.has(m.userId)) readmittable.add(m.userId)
             continue
           }
         }
@@ -619,7 +640,7 @@ async function checkLeaverKey(
 }
 
 /** The records and the verified chain a pass checks recipients against. */
-interface AdmissionContext {
+export interface AdmissionContext {
   readonly chain: VerifiedChain
   readonly byInvitee: ReadonlyMap<string, AdmissionRecord>
   /** Whom the signed removal history says was removed, and at which generation (#178). */
@@ -629,7 +650,7 @@ interface AdmissionContext {
 // A list this deep means the server is not honoring nextCursor; stop.
 const MAX_ADMISSION_PAGES = 100
 
-async function loadAdmissions(
+export async function loadAdmissions(
   deps: RotationDeps,
   own: Uint8Array,
   groupId: string,
@@ -695,7 +716,7 @@ async function loadAdmissions(
  * otherwise indistinguishable from a rejoin (#178). That includes the creator,
  * who is exempt only while nobody removed them.
  */
-function isAdmitted(
+export function isAdmitted(
   ctx: AdmissionContext,
   groupId: string,
   userId: string,
