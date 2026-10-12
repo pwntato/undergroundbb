@@ -135,6 +135,8 @@ export function GroupSettingsScreen() {
         onDone={() => {
           setNeedsReauth(false)
           setError(null)
+          // Names loaded cold stay cold until reloaded; the worker is warm now.
+          void reload(() => false)
         }}
         onCancel={() => {
           setNeedsReauth(false)
@@ -166,6 +168,9 @@ export function GroupSettingsScreen() {
           key={load.view.detail.version}
           view={load.view}
           onSave={handleSave}
+          onReauthenticate={() => {
+            setNeedsReauth(true)
+          }}
           saving={saving}
           message={message}
           error={error}

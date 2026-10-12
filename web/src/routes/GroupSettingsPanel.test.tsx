@@ -30,6 +30,7 @@ function render(view: SettingsView): string {
     createElement(GroupSettingsPanel, {
       view,
       onSave: () => undefined,
+      onReauthenticate: () => undefined,
       saving: false,
       message: null,
       error: null,
@@ -71,7 +72,7 @@ describe('GroupSettingsPanel', () => {
     expect(render(publicView(detail({ role: '' })))).not.toContain('Edit settings')
   })
 
-  it('shows "never expire" and a login hint for a cold-keys private admin, with no form', () => {
+  it('shows "never expire" and a way to re-enter the password for a cold-keys private admin, with no form', () => {
     const html = render({
       detail: detail({ visibility: 'private', role: 'admin', expirationDays: 0 }),
       name: null,
@@ -79,8 +80,21 @@ describe('GroupSettingsPanel', () => {
       nameStatus: 'coldKeys',
     })
     expect(html).toContain('Messages never expire.')
-    expect(html).toContain('Log in again')
+    expect(html).toContain('needs your password again')
+    expect(html).toContain('Enter your password')
+    // /login bounces a signed-in user, so the notice must not point there (#217).
+    expect(html).not.toContain('Log in again')
     expect(html).not.toContain('Edit settings')
+  })
+
+  it('offers the password button only for the cold-keys notice', () => {
+    const base = detail({ visibility: 'private', role: 'admin' })
+    expect(
+      render({ detail: base, name: null, description: null, nameStatus: 'unreadable' }),
+    ).not.toContain('Enter your password')
+    expect(
+      render({ detail: base, name: 'Book Club', description: '', nameStatus: 'decrypted' }),
+    ).not.toContain('Enter your password')
   })
 
   it('contains no em dashes in its copy', () => {

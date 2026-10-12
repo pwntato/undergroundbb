@@ -97,7 +97,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [error, setError] = useState<string | null>(null)
   // An action found the worker's keys cold (reload, new tab, deploy). /login
   // would bounce a signed-in user, so ask for the password in place (#217).
-  const [needsReauth, setNeedsReauth] = useState(false)
+  const [reauthAction, setReauthAction] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
   // Members the last rotation job paused on because no valid invitation backs
@@ -293,7 +293,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       } else {
         setError(outcome.kind === 'rejected' ? outcome.message : CHANGE_ERRORS[outcome.kind])
         if (outcome.kind === 'coldKeys') {
-          setNeedsReauth(true)
+          setReauthAction('change roles')
         }
       }
       // Reload so the roster and the grant this view signs on are current
@@ -352,7 +352,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       } else {
         setError(removeFailureMessage(removal))
         if (removal.kind === 'coldKeys') {
-          setNeedsReauth(true)
+          setReauthAction('remove members')
         }
       }
       if (note?.kind === 'error') {
@@ -381,7 +381,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         setReadmitPrompt(null)
         setError(readmitFailureMessage(prepared))
         if (prepared.kind === 'coldKeys') {
-          setNeedsReauth(true)
+          setReauthAction('re-admit members')
         }
         if (prepared.kind === 'removed' || prepared.kind === 'alreadyAdmitted') {
           // Not a candidate after all: stop offering it.
@@ -437,7 +437,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       } else {
         setError(readmitFailureMessage(readmit))
         if (readmit.kind === 'coldKeys') {
-          setNeedsReauth(true)
+          setReauthAction('re-admit members')
         }
         if (readmit.kind === 'removed' || readmit.kind === 'alreadyAdmitted') {
           setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
@@ -473,7 +473,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         if (!promoted.ok) {
           setError(promoted.kind === 'rejected' ? promoted.message : CHANGE_ERRORS[promoted.kind])
           if (promoted.kind === 'coldKeys') {
-            setNeedsReauth(true)
+            setReauthAction('sign your leaving')
           }
           if (shouldReloadAfter(promoted)) {
             await reload(() => false)
@@ -505,7 +505,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )
       setConfirmingLeave(false)
       if (outcome.kind === 'coldKeys') {
-        setNeedsReauth(true)
+        setReauthAction('sign your leaving')
       }
       if (outcome.kind === 'lastAdmin' || outcome.kind === 'stale') {
         await reload(() => false)
@@ -514,17 +514,19 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
-  if (needsReauth && userId !== null) {
+  if (reauthAction !== null && userId !== null) {
     return (
       <ReauthenticateStep
         sessionUserId={userId}
-        action="manage members"
+        action={reauthAction}
         onDone={() => {
-          setNeedsReauth(false)
+          setReauthAction(null)
           setError(null)
+          // Re-runs the roster's grant check now that the worker is warm.
+          void reload(() => false)
         }}
         onCancel={() => {
-          setNeedsReauth(false)
+          setReauthAction(null)
         }}
       />
     )
