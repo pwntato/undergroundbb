@@ -15,9 +15,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { groupTextLengthError } from './groupTextLimits'
 
-const MAX_NAME_LENGTH = 200
-const MAX_DESCRIPTION_LENGTH = 2000
 const DEFAULT_EXPIRATION_DAYS = 30
 
 export interface GroupFormValues {
@@ -71,14 +70,9 @@ export function CreateGroupFormStep({
       setValidationError('Group name is required.')
       return
     }
-    if (name.length > MAX_NAME_LENGTH) {
-      setValidationError(`Group name must be ${String(MAX_NAME_LENGTH)} characters or fewer.`)
-      return
-    }
-    if (description.length > MAX_DESCRIPTION_LENGTH) {
-      setValidationError(
-        `Description must be ${String(MAX_DESCRIPTION_LENGTH)} characters or fewer.`,
-      )
+    const textError = groupTextLengthError(name, description)
+    if (textError !== null) {
+      setValidationError(textError)
       return
     }
     setValidationError(null)
