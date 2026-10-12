@@ -493,6 +493,7 @@ func (h *Handler) buildLeaveDemotion(
 	}
 	self, err := h.db.GetUserByID(ctx, userID)
 	if err != nil {
+		log.Printf("build leave demotion: load user %s: %v", userID, err)
 		return nil, http.StatusInternalServerError, "", "could not leave group"
 	}
 	payload := crypto.RoleGrantPayload(groupID, userID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
@@ -962,6 +963,7 @@ func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, s
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
+		log.Printf("verify rotation start: load remover %s: %v", removerID, err)
 		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not start the rotation"
 	}
 	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, currentGeneration+1)
@@ -1033,6 +1035,7 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
+		log.Printf("build remove demotion: load remover %s: %v", removerID, err)
 		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
 	}
 	payload := crypto.RoleGrantPayload(groupID, subjectID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
