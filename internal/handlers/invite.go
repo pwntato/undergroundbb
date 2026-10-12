@@ -104,7 +104,7 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 
 	membership, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not create invite")
+		WriteInternalError(w, r, err, "could not create invite")
 		return
 	}
 	if membership == nil || (membership.Role != models.RoleAdmin && membership.Role != models.RoleAmbassador) {
@@ -167,7 +167,7 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	// doc comment for the identical reasoning applied to a group's creator.
 	inviter, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not create invite")
+		WriteInternalError(w, r, err, "could not create invite")
 		return
 	}
 
@@ -198,7 +198,7 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "inviteId is taken", "invite_id_taken")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not create invite")
+		WriteInternalError(w, r, err, "could not create invite")
 		return
 	}
 
@@ -261,7 +261,7 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.db.GetInvite(r.Context(), inviteID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not fetch invite")
+		WriteInternalError(w, r, err, "could not fetch invite")
 		return
 	}
 	if invite == nil {
@@ -271,7 +271,7 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 	if invite.InvitedUserID == "" {
 		expiresAt, err := time.Parse(time.RFC3339, invite.ExpiresAt)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not fetch invite")
+			WriteInternalError(w, r, err, "could not fetch invite")
 			return
 		}
 		if time.Now().After(expiresAt) {
@@ -290,7 +290,7 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 	// 500 below rather than serving a response with a silently empty key.
 	inviter, err := h.db.GetUserByID(r.Context(), invite.InviterUserID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not fetch invite")
+		WriteInternalError(w, r, err, "could not fetch invite")
 		return
 	}
 
@@ -334,7 +334,7 @@ func (h *Handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.db.GetInvite(r.Context(), inviteID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not revoke invite")
+		WriteInternalError(w, r, err, "could not revoke invite")
 		return
 	}
 	if invite == nil {
@@ -364,7 +364,7 @@ func (h *Handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "this invite has already been accepted and can no longer be revoked", "invite_already_accepted")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not revoke invite")
+		WriteInternalError(w, r, err, "could not revoke invite")
 		return
 	}
 
@@ -450,7 +450,7 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.db.GetInvite(r.Context(), inviteID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		WriteInternalError(w, r, err, "could not accept invite")
 		return
 	}
 	if invite == nil {
@@ -468,7 +468,7 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt, err := time.Parse(time.RFC3339, invite.ExpiresAt)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		WriteInternalError(w, r, err, "could not accept invite")
 		return
 	}
 	if time.Now().After(expiresAt) {
@@ -478,7 +478,7 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	invitee, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		WriteInternalError(w, r, err, "could not accept invite")
 		return
 	}
 
@@ -499,7 +499,7 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	// at step 3, after this invite has already been consumed at step 2.
 	existingMembership, err := h.db.GetMembership(r.Context(), invite.GroupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		WriteInternalError(w, r, err, "could not accept invite")
 		return
 	}
 	if existingMembership != nil {
@@ -527,7 +527,7 @@ func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusNotFound, "invite not found or expired")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not accept invite")
+		WriteInternalError(w, r, err, "could not accept invite")
 		return
 	}
 
@@ -573,7 +573,7 @@ func (h *Handler) pendingInviteCompletions(w http.ResponseWriter, r *http.Reques
 
 	pending, err := h.db.PendingInviteCompletions(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list pending invite completions")
+		WriteInternalError(w, r, err, "could not list pending invite completions")
 		return
 	}
 
@@ -698,7 +698,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	// no such field on completeInviteRequest.
 	pending, err := h.db.PendingInviteCompletions(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		WriteInternalError(w, r, err, "could not complete invite")
 		return
 	}
 	var match *models.SentInvite
@@ -726,7 +726,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	// GetItem."
 	inviterMembership, err := h.db.GetMembership(r.Context(), match.GroupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		WriteInternalError(w, r, err, "could not complete invite")
 		return
 	}
 	if inviterMembership == nil ||
@@ -753,7 +753,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	// that can never verify.
 	group, err := h.db.GetGroup(r.Context(), match.GroupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		WriteInternalError(w, r, err, "could not complete invite")
 		return
 	}
 	if group == nil {
@@ -773,7 +773,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	// stranding the new member at the next rotation.
 	inviter, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil || inviter == nil {
-		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		WriteInternalError(w, r, err, "could not complete invite")
 		return
 	}
 	admissionPayload := crypto.AdmissionPayload(match.GroupID, userID, match.InvitedUserID,
@@ -822,7 +822,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// first); clear the two invite rows so a racing invite does not
 			// linger in pending-completions.
 			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
-				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				WriteInternalError(w, r, cleanupErr, "could not complete invite")
 				return
 			}
 			WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
@@ -833,7 +833,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// invite can never complete, so clear its rows as the group-gone
 			// branch does.
 			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
-				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				WriteInternalError(w, r, cleanupErr, "could not complete invite")
 				return
 			}
 			WriteErrorWithCode(w, http.StatusGone, "the invited account no longer exists", "invitee_deleted")
@@ -855,13 +855,13 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 			// never an error), so any error it does return here is a
 			// genuine infra failure, not "already cleaned up."
 			if cleanupErr := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, userID); cleanupErr != nil {
-				WriteError(w, http.StatusInternalServerError, "could not complete invite")
+				WriteInternalError(w, r, cleanupErr, "could not complete invite")
 				return
 			}
 			WriteErrorWithCode(w, http.StatusConflict, "invitee is already a member of this group", "already_member")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not complete invite")
+		WriteInternalError(w, r, err, "could not complete invite")
 		return
 	}
 
@@ -903,7 +903,7 @@ func (h *Handler) sentInvites(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	views, err := h.db.ListSentInvites(r.Context(), userID, now)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list sent invites")
+		WriteInternalError(w, r, err, "could not list sent invites")
 		return
 	}
 
@@ -958,7 +958,7 @@ func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	invites, err := h.db.ListReceivedInvites(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list received invites")
+		WriteInternalError(w, r, err, "could not list received invites")
 		return
 	}
 

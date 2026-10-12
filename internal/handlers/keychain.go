@@ -72,7 +72,7 @@ func (h *Handler) keychain(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not read the key chain")
+		WriteInternalError(w, r, err, "could not read the key chain")
 		return
 	}
 	if m == nil {
@@ -81,14 +81,14 @@ func (h *Handler) keychain(w http.ResponseWriter, r *http.Request) {
 	}
 	links, next, err := h.db.ListGenerationKeys(r.Context(), groupID, from, to, maxKeychainPage)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not read the key chain")
+		WriteInternalError(w, r, err, "could not read the key chain")
 		return
 	}
 	resp := keychainResponse{Links: make([]keychainLink, 0, len(links))}
 	for _, l := range links {
 		gen, err := db.ParseGenKeySortKey(l.SK)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not read the key chain")
+			WriteInternalError(w, r, err, "could not read the key chain")
 			return
 		}
 		link := keychainLink{

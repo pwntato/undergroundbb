@@ -135,6 +135,15 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg})
 }
 
+// WriteInternalError logs err with the request's method and path, then writes
+// the 500 response. Use it instead of WriteError(w, 500, ...) so the cause
+// reaches CloudWatch; the client still only sees msg. Never put request
+// bodies or key material in err.
+func WriteInternalError(w http.ResponseWriter, r *http.Request, err error, msg string) {
+	log.Printf("%s %s: %s: %v", r.Method, r.URL.Path, msg, err)
+	WriteError(w, http.StatusInternalServerError, msg)
+}
+
 // WriteErrorWithCode writes a JSON error response carrying a stable,
 // machine-readable code alongside the free-text message WriteError already
 // sends. Most callers should still use WriteError -- this project has no

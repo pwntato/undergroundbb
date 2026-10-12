@@ -76,7 +76,7 @@ func (h *Handler) rewrapMembers(w http.ResponseWriter, r *http.Request) {
 
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-wrap members")
+		WriteInternalError(w, r, err, "could not re-wrap members")
 		return
 	}
 	if caller == nil {
@@ -88,7 +88,7 @@ func (h *Handler) rewrapMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.writeRotationErr(w, h.db.RewrapMembers(r.Context(), in), "could not re-wrap members") {
+	if !h.writeRotationErr(w, r, h.db.RewrapMembers(r.Context(), in), "could not re-wrap members") {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -120,7 +120,7 @@ func (h *Handler) completeRotation(w http.ResponseWriter, r *http.Request) {
 	}
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not complete rotation")
+		WriteInternalError(w, r, err, "could not complete rotation")
 		return
 	}
 	if caller == nil {
@@ -131,7 +131,7 @@ func (h *Handler) completeRotation(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "only a group admin can complete a rotation")
 		return
 	}
-	if !h.writeRotationErr(w, h.db.CompleteRotation(r.Context(), groupID, userID, req.Generation), "could not complete rotation") {
+	if !h.writeRotationErr(w, r, h.db.CompleteRotation(r.Context(), groupID, userID, req.Generation), "could not complete rotation") {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -171,7 +171,7 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 	}
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
+		WriteInternalError(w, r, err, "could not take over the rotation")
 		return
 	}
 	if caller == nil {
@@ -184,11 +184,11 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 	}
 	marker, err := h.db.GetRotation(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not take over the rotation")
+		WriteInternalError(w, r, err, "could not take over the rotation")
 		return
 	}
 	if marker == nil || marker.RemovedUserID == "" || marker.StartedBy != marker.RemovedUserID || marker.Generation != caller.Generation+1 {
-		h.writeRotationErr(w, db.ErrRotationNotActive, "could not take over the rotation")
+		h.writeRotationErr(w, r, db.ErrRotationNotActive, "could not take over the rotation")
 		return
 	}
 	if req.Generation != caller.Generation+1 {
@@ -223,14 +223,14 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		CallerWrappedKey:  wrapped,
 		StartSignature:    sig,
 	}
-	if !h.writeRotationErr(w, h.db.TakeOverLeaveRotation(r.Context(), in), "could not take over the rotation") {
+	if !h.writeRotationErr(w, r, h.db.TakeOverLeaveRotation(r.Context(), in), "could not take over the rotation") {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // writeRotationErr maps the shared rotation errors; it reports whether it
 // wrote a response (true for any non-nil err).
-func (h *Handler) writeRotationErr(w http.ResponseWriter, err error, fallback string) bool {
+func (h *Handler) writeRotationErr(w http.ResponseWriter, r *http.Request, err error, fallback string) bool {
 	switch {
 	case err == nil:
 		return false
@@ -245,7 +245,7 @@ func (h *Handler) writeRotationErr(w http.ResponseWriter, err error, fallback st
 	case errors.Is(err, db.ErrRoleChangeConflict):
 		WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
 	default:
-		WriteError(w, http.StatusInternalServerError, fallback)
+		WriteInternalError(w, r, err, fallback)
 	}
 	return true
 }

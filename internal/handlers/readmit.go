@@ -63,12 +63,12 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 	// Same rule as changeMemberRole: every read happens before any 404 branch.
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 		return
 	}
 	if caller == nil || group == nil {
@@ -89,7 +89,7 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, err := h.db.GetMembership(r.Context(), groupID, subjectID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 		return
 	}
 	if subject == nil {
@@ -135,12 +135,12 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 	// caller's current key.
 	signer, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil || signer == nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 		return
 	}
 	member, err := h.db.GetUserByID(r.Context(), subjectID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 		return
 	}
 	if member == nil {
@@ -180,7 +180,7 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, db.ErrRoleChangeConflict):
 		WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
 	default:
-		WriteError(w, http.StatusInternalServerError, "could not re-admit")
+		WriteInternalError(w, r, err, "could not re-admit")
 	}
 }
 
@@ -197,7 +197,7 @@ func (h *Handler) admissionGrantDaysOK(w http.ResponseWriter, r *http.Request, g
 	}
 	grants, err := h.db.ListGrantsTo(r.Context(), groupID, inviterID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, failMsg)
+		WriteInternalError(w, r, err, failMsg)
 		return false
 	}
 	for _, g := range grants {

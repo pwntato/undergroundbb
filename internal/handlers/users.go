@@ -57,7 +57,7 @@ func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not read user")
+		WriteInternalError(w, r, err, "could not read user")
 		return
 	}
 	WriteJSON(w, http.StatusOK, projectUser(id, user))
@@ -138,7 +138,7 @@ func (h *Handler) batchUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not read users")
+		WriteInternalError(w, r, err, "could not read users")
 		return
 	}
 	for _, id := range valid {

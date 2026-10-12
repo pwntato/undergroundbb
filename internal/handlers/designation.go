@@ -67,12 +67,12 @@ func (h *Handler) putDesignation(w http.ResponseWriter, r *http.Request) {
 	// Same rule as getGroup: every read happens before any 404 branch.
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save designation")
+		WriteInternalError(w, r, err, "could not save designation")
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save designation")
+		WriteInternalError(w, r, err, "could not save designation")
 		return
 	}
 	if caller == nil || group == nil {
@@ -138,7 +138,7 @@ func (h *Handler) putDesignation(w http.ResponseWriter, r *http.Request) {
 	// the request (see createGroup).
 	admin, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save designation")
+		WriteInternalError(w, r, err, "could not save designation")
 		return
 	}
 	payload := crypto.SuccessorDesignationPayload(groupID, userID, req.SuccessorUserID, req.PeriodDays, req.DesignationSortKey, req.AdminGrantRef)
@@ -151,7 +151,7 @@ func (h *Handler) putDesignation(w http.ResponseWriter, r *http.Request) {
 	// one day is refused; they designate again tomorrow.
 	taken, err := h.db.HasDesignationOnDay(r.Context(), groupID, userID, day.UTC().Format("2006-01-02"))
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save designation")
+		WriteInternalError(w, r, err, "could not save designation")
 		return
 	}
 	if taken {
@@ -182,7 +182,7 @@ func (h *Handler) putDesignation(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, db.ErrDesignationConflict):
 			WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
 		default:
-			WriteError(w, http.StatusInternalServerError, "could not save designation")
+			WriteInternalError(w, r, err, "could not save designation")
 		}
 		return
 	}
@@ -248,7 +248,7 @@ func (h *Handler) listDesignations(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list designations")
+		WriteInternalError(w, r, err, "could not list designations")
 		return
 	}
 	if m == nil {
@@ -257,7 +257,7 @@ func (h *Handler) listDesignations(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, next, err := h.db.ListDesignations(r.Context(), groupID, cursor, limit)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list designations")
+		WriteInternalError(w, r, err, "could not list designations")
 		return
 	}
 	enc := base64.StdEncoding.EncodeToString

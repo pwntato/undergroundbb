@@ -231,7 +231,7 @@ func (h *Handler) recoveryCodeRelease(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not process recovery")
+		WriteInternalError(w, r, err, "could not process recovery")
 		return
 	}
 
@@ -330,7 +330,7 @@ func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 	userID, _, err := h.resolveRecovery(r.Context(), usernameLower, req.RecoveryCode)
 	if err != nil {
 		if !errors.Is(err, errInvalidRecoveryAttempt) {
-			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			WriteInternalError(w, r, err, "could not process recovery")
 			return
 		}
 		// The uniform failure resolveRecovery returns for every cause --
@@ -349,7 +349,7 @@ func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 				WriteError(w, http.StatusUnauthorized, errRecoveryCodeInvalid)
 				return
 			}
-			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			WriteInternalError(w, r, err, "could not process recovery")
 			return
 		}
 		retryUserID := user.PK[len("USER#"):]
@@ -363,7 +363,7 @@ func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 			RecoveryVerifier:       decoded.RecoveryVerifier,
 		})
 		if checkErr != nil {
-			WriteError(w, http.StatusInternalServerError, "could not process recovery")
+			WriteInternalError(w, r, checkErr, "could not process recovery")
 			return
 		}
 		if !isRetry {
@@ -401,7 +401,7 @@ func (h *Handler) recoveryCodeReset(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusConflict, errCredentialVersionStale)
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not reset credentials")
+		WriteInternalError(w, r, err, "could not reset credentials")
 		return
 	}
 

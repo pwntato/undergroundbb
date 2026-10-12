@@ -41,7 +41,7 @@ func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "leave every group before deleting your account", "still_member")
 		return
 	default:
-		WriteError(w, http.StatusInternalServerError, "could not delete account")
+		WriteInternalError(w, r, err, "could not delete account")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
