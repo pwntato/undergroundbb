@@ -58,11 +58,10 @@ const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
  * liveKeys is cold -- e.g. this tab was reloaded since login, which resets
  * worker.ts's module-scope cache along with everything else, while the
  * session cookie stays valid. See CreateGroupScreen's own isLiveKeysError
- * for the identical reasoning; this screen shows a plain message pointing
- * at logging in again rather than an inline re-auth step, matching
- * CreateInviteScreen's own choice for the identical failure -- losing
- * nothing more than this button press costs far less than
- * CreateGroupScreen losing a half-typed form.
+ * for the identical reasoning. A cold cache is normally met before the card
+ * shows (useLiveKeys, #143, then ReauthenticateStep); this catches one that
+ * is still cold when Accept is pressed (the step was cancelled, or it went cold
+ * after the check) and brings the step back.
  */
 function isLiveKeysError(error: unknown): boolean {
   return (
@@ -72,10 +71,10 @@ function isLiveKeysError(error: unknown): boolean {
   )
 }
 
-function acceptErrorMessageFor(kind: AcceptInviteErrorKind, error: unknown): string {
+function acceptErrorMessageFor(kind: AcceptInviteErrorKind): string {
   switch (kind) {
     case 'definitelyUncommitted':
-      return isLiveKeysError(error) ? AUTH_REQUIRED_ERROR : "Couldn't reach the server. Try again."
+      return "Couldn't reach the server. Try again."
     case 'ambiguous':
       return "We couldn't confirm whether your acceptance went through. Try again -- resubmitting is safe."
     case 'authRequired':
@@ -253,13 +252,23 @@ export function AcceptInviteScreen() {
       )
       setAccepting(false)
       if (!result.ok) {
-        setAcceptError(acceptErrorMessageFor(result.kind, result.error))
+        if (result.kind === 'definitelyUncommitted' && isLiveKeysError(result.error)) {
+          liveKeys.markCold()
+          return
+        }
+        setAcceptError(acceptErrorMessageFor(result.kind))
         return
       }
       setAccepted(true)
     })()
   }
 
+  // After the load-state returns above, so a bad or expired link still shows
+  // its message without waiting on the check; here it keeps the Accept card
+  // from flashing before the password step on a reload.
+  if (session.userId !== null && liveKeys.status === 'checking') {
+    return null
+  }
   if (session.userId !== null && liveKeys.status === 'cold') {
     // The invite lives in the URL, so nothing is lost by asking first.
     return (

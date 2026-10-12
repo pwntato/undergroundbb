@@ -55,8 +55,9 @@ function errorMessageFor(kind: CreateInviteErrorKind): string {
  * Reports whether err is worker.ts's signInviteCreation throwing because
  * liveKeys is cold -- see CreateGroupScreen's own isLiveKeysError for the
  * identical reasoning. A cold cache is normally met before the form shows
- * (useLiveKeys, #143, then ReauthenticateStep); this is the fallback for one
- * that goes cold after that check, and asks the admin to log in again.
+ * (useLiveKeys, #143, then ReauthenticateStep); this catches one that is still
+ * cold at submit (the step was cancelled, or it went cold after the check) and
+ * brings the step back.
  */
 function isLiveKeysError(error: unknown): boolean {
   return (
@@ -152,7 +153,8 @@ export function CreateInviteScreen() {
       setSubmitting(false)
       if (!outcome.ok) {
         if (outcome.kind === 'definitelyUncommitted' && isLiveKeysError(outcome.error)) {
-          setError(AUTH_REQUIRED_ERROR)
+          // Cold after all (e.g. the step was cancelled): ask again.
+          liveKeys.markCold()
           return
         }
         if (outcome.kind === 'forbidden') {

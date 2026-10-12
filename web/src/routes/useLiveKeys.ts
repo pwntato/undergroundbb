@@ -27,12 +27,15 @@ export async function checkLiveKeys(
 
 /**
  * The cache's state for userId (null while there is no session: stays
- * 'checking'), and markWarm for once ReauthenticateStep has refilled it or the
- * user chose to carry on without.
+ * 'checking'), markWarm for once ReauthenticateStep has refilled it or the
+ * user chose to carry on without, and markCold for a signing call that found
+ * the cache cold after all (e.g. the user cancelled the step), which brings
+ * the step back instead of a message that points at a login that cannot help.
  */
 export function useLiveKeys(userId: string | null): {
   readonly status: LiveKeysStatus
   readonly markWarm: () => void
+  readonly markCold: () => void
 } {
   const [status, setStatus] = useState<LiveKeysStatus>('checking')
   useEffect(() => {
@@ -51,6 +54,9 @@ export function useLiveKeys(userId: string | null): {
     status,
     markWarm: () => {
       setStatus('warm')
+    },
+    markCold: () => {
+      setStatus('cold')
     },
   }
 }
