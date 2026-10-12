@@ -97,14 +97,21 @@ export function GroupSettingsPanel({
       </div>
 
       {notice !== null && (
-        <Alert>
-          <AlertDescription>{notice}</AlertDescription>
+        <div className="flex flex-col gap-2">
+          <Alert>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
           {view.nameStatus === 'coldKeys' && (
-            <Button type="button" variant="outline" onClick={onReauthenticate}>
+            <Button
+              type="button"
+              variant="outline"
+              className="self-start"
+              onClick={onReauthenticate}
+            >
               Enter your password
             </Button>
           )}
-        </Alert>
+        </div>
       )}
 
       <section aria-labelledby="revocation-heading" className="flex flex-col gap-1">

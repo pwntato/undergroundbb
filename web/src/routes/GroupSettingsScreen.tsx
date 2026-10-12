@@ -164,8 +164,9 @@ export function GroupSettingsScreen() {
       {load.status === 'ready' && (
         <GroupSettingsPanel
           // Re-mount on a new version so the form fields reset to what the
-          // server now holds (after a save or a conflict).
-          key={load.view.detail.version}
+          // server now holds (after a save or a conflict), and when the name
+          // goes from cold to decrypted so the fields seed from it (#217).
+          key={`${String(load.view.detail.version)}:${load.view.nameStatus}`}
           view={load.view}
           onSave={handleSave}
           onReauthenticate={() => {
