@@ -39,6 +39,10 @@ data "aws_iam_policy_document" "lambda_policy" {
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
+      # Transactions are authorized per item action, so a ConditionCheck inside
+      # TransactWriteItems needs this. DynamoDB Local does not enforce IAM, so
+      # only prod showed the AccessDenied.
+      "dynamodb:ConditionCheckItem",
       "dynamodb:Query",
       "dynamodb:BatchGetItem",
       "dynamodb:BatchWriteItem",
