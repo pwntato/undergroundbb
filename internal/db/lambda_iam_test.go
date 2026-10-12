@@ -15,16 +15,17 @@ import (
 // sites, every such transaction 500ed). This statically maps each action the
 // non-test code in this package needs onto the actions granted in
 // terraform/lambda.tf. Transactions are authorized per item action, so each
-// types.Put/Update/Delete/ConditionCheck literal needs its own action as well
+// types.Put/Update/Delete/ConditionCheck/Get literal needs its own action as well
 // as TransactWriteItems.
 var (
 	ddbCallRe = regexp.MustCompile(`\.ddb\.([A-Z][A-Za-z]+)\(`)
-	txItemRe  = regexp.MustCompile(`types\.(Put|Update|Delete|ConditionCheck)\{`)
+	txItemRe  = regexp.MustCompile(`types\.(Put|Update|Delete|ConditionCheck|Get)\{`)
 	grantRe   = regexp.MustCompile(`"dynamodb:([A-Za-z]+)"`)
 )
 
 var txItemAction = map[string]string{
 	"Put":            "PutItem",
+	"Get":            "GetItem",
 	"Update":         "UpdateItem",
 	"Delete":         "DeleteItem",
 	"ConditionCheck": "ConditionCheckItem",
