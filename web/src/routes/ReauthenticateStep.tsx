@@ -62,10 +62,13 @@ function isCredentialFailure(err: unknown): boolean {
  */
 export function ReauthenticateStep({
   sessionUserId,
+  action = 'create a group',
   onDone,
   onCancel,
 }: {
   readonly sessionUserId: string
+  /** What the user is about to do, completing "This tab needs your password again before it can ...". */
+  readonly action?: string
   readonly onDone: () => void
   readonly onCancel: () => void
 }) {
@@ -125,7 +128,7 @@ export function ReauthenticateStep({
       <div className="flex flex-col gap-1 text-center">
         <h1 className="text-xl font-semibold">Confirm your password</h1>
         <p className="text-sm text-muted-foreground">
-          This tab needs your password again before it can create a group.
+          This tab needs your password again before it can {action}.
         </p>
       </div>
       {error && (

@@ -25,6 +25,7 @@ import {
   decryptGroupNames as decryptGroupNamesPure,
   encryptGroupText as encryptGroupTextPure,
   generateSignupMaterial as generateSignupMaterialPure,
+  liveKeysWarmFor,
   ownFingerprint,
   rewrapGroupKey as rewrapGroupKeyPure,
   signLeaveRotationStart as signLeaveRotationStartPure,
@@ -52,6 +53,7 @@ import type {
   GenerateSignupMaterialRequest,
   GetOwnFingerprintRequest,
   GetOwnSigningKeyRequest,
+  HasLiveKeysRequest,
   RecoveryMaterial,
   RewrapGroupKeyRequest,
   SignLeaveRotationStartRequest,
@@ -135,6 +137,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'getOwnFingerprint':
       getOwnFingerprint(req)
+      return
+    case 'hasLiveKeys':
+      hasLiveKeys(req)
       return
     case 'decryptGroupNames':
       await decryptGroupNames(req)
@@ -331,6 +336,10 @@ function getOwnSigningKey(req: GetOwnSigningKeyRequest): void {
     id: req.id,
     signingPublicKey: bytesToBase64(keys.signingKey.publicKey),
   })
+}
+
+function hasLiveKeys(req: HasLiveKeysRequest): void {
+  post({ kind: 'hasLiveKeysDone', id: req.id, warm: liveKeysWarmFor(liveKeys, req.userId) })
 }
 
 function getOwnFingerprint(req: GetOwnFingerprintRequest): void {

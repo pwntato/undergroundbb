@@ -25,6 +25,7 @@ import {
   rewrapGroupKey,
   signGroupCreation,
   signInviteAcceptance,
+  liveKeysWarmFor,
   ownFingerprint,
   signInviteCreation,
   signPin,
@@ -700,6 +701,13 @@ describe('invite handshake round trip', () => {
     })
     return keys
   }
+
+  it('liveKeysWarmFor is true only for present keys of the same account', async () => {
+    const keys = await realUserKeys(INVITER_ID, 'inviter-password')
+    expect(liveKeysWarmFor(keys, INVITER_ID)).toBe(true)
+    expect(liveKeysWarmFor(keys, 'someone-else')).toBe(false)
+    expect(liveKeysWarmFor(null, INVITER_ID)).toBe(false)
+  })
 
   it('ownFingerprint is fingerprint(signing, wrapping), in that order', async () => {
     const keys = await realUserKeys(INVITER_ID, 'inviter-password')

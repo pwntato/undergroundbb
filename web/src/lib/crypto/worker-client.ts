@@ -50,6 +50,8 @@ import type {
   GetOwnFingerprintRequest,
   GetOwnFingerprintResponse,
   GetOwnSigningKeyRequest,
+  HasLiveKeysRequest,
+  HasLiveKeysResponse,
   GetOwnSigningKeyResponse,
   SignRoleGrantRequest,
   SignRoleGrantResponse,
@@ -811,6 +813,35 @@ export function getOwnFingerprint(userId: string): Promise<string> {
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for getOwnFingerprint`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Whether the worker's liveKeys cache is warm for this account, so a signing screen can prompt for a re-login before the user fills anything in (#143). */
+export function hasLiveKeys(userId: string): Promise<boolean> {
+  const id = nextRequestID()
+  const fullReq: HasLiveKeysRequest = { kind: 'hasLiveKeys', id, userId }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'hasLiveKeysDone') {
+        resolve((msg as HasLiveKeysResponse).warm)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for hasLiveKeys`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

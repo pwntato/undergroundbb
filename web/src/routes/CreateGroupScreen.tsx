@@ -29,6 +29,7 @@ import { signGroupCreation } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { ReauthenticateStep } from './ReauthenticateStep'
+import { useLiveKeys } from './useLiveKeys'
 import {
   runCreateGroup,
   type CreateGroupErrorKind,
@@ -99,6 +100,9 @@ export function CreateGroupScreen() {
   const [needsReauth, setNeedsReauth] = useState<GroupFormValues | undefined>(undefined)
   const navigate = useNavigate()
   const session = useSession()
+  // Ask up front whether the worker's keys are warm (#143), so a cold cache
+  // is met before the form is filled in, not after it is submitted.
+  const liveKeys = useLiveKeys(session.userId)
 
   const handleSubmit = (values: GroupFormValues) => {
     if (session.userId === null) {
@@ -164,6 +168,21 @@ export function CreateGroupScreen() {
         state: { [NEW_GROUP_STATE_KEY]: buildGroupListEntry(groupId, form, result) },
       })
     })()
+  }
+
+  if (session.userId !== null && liveKeys.status === 'checking') {
+    return null
+  }
+  if (session.userId !== null && liveKeys.status === 'cold') {
+    // Cancelling carries on to the form: a submit that finds the cache still
+    // cold gets the same step below.
+    return (
+      <ReauthenticateStep
+        sessionUserId={session.userId}
+        onDone={liveKeys.markWarm}
+        onCancel={liveKeys.markWarm}
+      />
+    )
   }
 
   if (needsReauth !== undefined && session.userId !== null) {

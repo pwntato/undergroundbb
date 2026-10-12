@@ -20,6 +20,8 @@ import { createInvite } from '@/lib/api/invites'
 import { generateUUID } from '@/lib/crypto/uuid'
 import { signInviteCreation } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
+import { ReauthenticateStep } from './ReauthenticateStep'
+import { useLiveKeys } from './useLiveKeys'
 import {
   runCreateInvite,
   type CreateInviteErrorKind,
@@ -52,11 +54,10 @@ function errorMessageFor(kind: CreateInviteErrorKind): string {
 /**
  * Reports whether err is worker.ts's signInviteCreation throwing because
  * liveKeys is cold -- see CreateGroupScreen's own isLiveKeysError for the
- * identical reasoning. This screen does not offer an inline re-auth step
- * the way CreateGroupScreen does (ReauthenticateStep) -- a plain error
- * asking the admin to log in again is enough here, since losing a
- * half-typed invite form (just an expiry choice) costs far less than
- * CreateGroupScreen losing a name/description the user typed.
+ * identical reasoning. A cold cache is normally met before the form shows
+ * (useLiveKeys, #143, then ReauthenticateStep); this catches one that is still
+ * cold at submit (the step was cancelled, or it went cold after the check) and
+ * brings the step back.
  */
 function isLiveKeysError(error: unknown): boolean {
   return (
@@ -114,6 +115,8 @@ export function CreateInviteScreen() {
     undefined,
   )
   const session = useSession()
+  // Ask up front whether the worker's keys are warm (#143).
+  const liveKeys = useLiveKeys(session.userId)
 
   if (groupId === undefined) {
     // Unreachable via App.tsx's own route param, guarded anyway.
@@ -150,7 +153,8 @@ export function CreateInviteScreen() {
       setSubmitting(false)
       if (!outcome.ok) {
         if (outcome.kind === 'definitelyUncommitted' && isLiveKeysError(outcome.error)) {
-          setError(AUTH_REQUIRED_ERROR)
+          // Cold after all (e.g. the step was cancelled): ask again.
+          liveKeys.markCold()
           return
         }
         if (outcome.kind === 'forbidden') {
@@ -168,6 +172,20 @@ export function CreateInviteScreen() {
       setPending(undefined)
       setResult(outcome)
     })()
+  }
+
+  if (session.userId !== null && liveKeys.status === 'checking') {
+    return null
+  }
+  if (session.userId !== null && liveKeys.status === 'cold') {
+    return (
+      <ReauthenticateStep
+        sessionUserId={session.userId}
+        action="create an invite"
+        onDone={liveKeys.markWarm}
+        onCancel={liveKeys.markWarm}
+      />
+    )
   }
 
   if (result !== undefined) {
