@@ -25,7 +25,7 @@ import type { SettingsForm, SettingsView } from './runGroupSettings'
 function nameNotice(status: SettingsView['nameStatus']): string | null {
   switch (status) {
     case 'coldKeys':
-      return 'Log in again to see and edit this private group’s name and description.'
+      return 'This tab needs your password again to show this private group’s name and description.'
     case 'unreadable':
       return 'This group’s name and description could not be decrypted.'
     default:
@@ -36,12 +36,15 @@ function nameNotice(status: SettingsView['nameStatus']): string | null {
 export function GroupSettingsPanel({
   view,
   onSave,
+  onReauthenticate,
   saving,
   message,
   error,
 }: {
   readonly view: SettingsView
   readonly onSave: (form: SettingsForm) => void
+  /** Asks for the password so the worker's keys are warm again (the cold-keys notice's way out). */
+  readonly onReauthenticate: () => void
   readonly saving: boolean
   readonly message: string | null
   readonly error: string | null
@@ -94,9 +97,21 @@ export function GroupSettingsPanel({
       </div>
 
       {notice !== null && (
-        <Alert>
-          <AlertDescription>{notice}</AlertDescription>
-        </Alert>
+        <div className="flex flex-col gap-2">
+          <Alert>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+          {view.nameStatus === 'coldKeys' && (
+            <Button
+              type="button"
+              variant="outline"
+              className="self-start"
+              onClick={onReauthenticate}
+            >
+              Enter your password
+            </Button>
+          )}
+        </div>
       )}
 
       <section aria-labelledby="revocation-heading" className="flex flex-col gap-1">

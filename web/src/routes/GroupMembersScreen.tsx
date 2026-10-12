@@ -52,6 +52,7 @@ import {
   shouldReloadAfterReadmit,
 } from './runReadmit'
 import { describeRotation, type RotationOutcome } from './runRotation'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { removeFailureMessage, shouldReloadAfterRemove } from './runRemoveMember'
 import { leaveFailureMessage, leavePlan, runLeave } from './runLeaveGroup'
 import {
@@ -72,7 +73,7 @@ const CHANGE_ERRORS: Record<Exclude<ChangeRoleResult, { ok: true }>['kind'], str
     'The group changed while you were working, so nothing was saved. The latest roster is shown; try again.',
   forbidden: 'Only a group admin can change roles.',
   authRequired: 'Your session has expired. Log in again and retry.',
-  coldKeys: 'Log in again to change roles.',
+  coldKeys: 'This tab needs your password again to change roles.',
   notFound: 'This member or group no longer exists.',
   rejected: 'The server rejected this change.',
   ambiguous:
@@ -94,6 +95,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const [busyUserId, setBusyUserId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // An action found the worker's keys cold (reload, new tab, deploy). /login
+  // would bounce a signed-in user, so ask for the password in place (#217).
+  const [reauthAction, setReauthAction] = useState<string | null>(null)
   const [confirmingLeave, setConfirmingLeave] = useState(false)
   const [confirmRemoveUserId, setConfirmRemoveUserId] = useState<string | null>(null)
   // Members the last rotation job paused on because no valid invitation backs
@@ -288,6 +292,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         setMessage(`${memberLabel(subjectUserId, usernames)} is now ${role}.`)
       } else {
         setError(outcome.kind === 'rejected' ? outcome.message : CHANGE_ERRORS[outcome.kind])
+        if (outcome.kind === 'coldKeys') {
+          setReauthAction('change roles')
+        }
       }
       // Reload so the roster and the grant this view signs on are current
       // (see shouldReloadAfter for the outcomes that skip it).
@@ -344,6 +351,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         setMessage(`${label} was removed.${note?.kind === 'info' ? ` ${note.text}` : ''}`)
       } else {
         setError(removeFailureMessage(removal))
+        if (removal.kind === 'coldKeys') {
+          setReauthAction('remove members')
+        }
       }
       if (note?.kind === 'error') {
         setError(note.text)
@@ -370,6 +380,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       } else {
         setReadmitPrompt(null)
         setError(readmitFailureMessage(prepared))
+        if (prepared.kind === 'coldKeys') {
+          setReauthAction('re-admit members')
+        }
         if (prepared.kind === 'removed' || prepared.kind === 'alreadyAdmitted') {
           // Not a candidate after all: stop offering it.
           setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
@@ -423,6 +436,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
       } else {
         setError(readmitFailureMessage(readmit))
+        if (readmit.kind === 'coldKeys') {
+          setReauthAction('re-admit members')
+        }
         if (readmit.kind === 'removed' || readmit.kind === 'alreadyAdmitted') {
           setReadmittable((prev) => new Set([...prev].filter((id) => id !== subjectUserId)))
         }
@@ -456,6 +472,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         )
         if (!promoted.ok) {
           setError(promoted.kind === 'rejected' ? promoted.message : CHANGE_ERRORS[promoted.kind])
+          if (promoted.kind === 'coldKeys') {
+            setReauthAction('sign your leaving')
+          }
           if (shouldReloadAfter(promoted)) {
             await reload(() => false)
           }
@@ -485,11 +504,32 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         ),
       )
       setConfirmingLeave(false)
+      if (outcome.kind === 'coldKeys') {
+        setReauthAction('sign your leaving')
+      }
       if (outcome.kind === 'lastAdmin' || outcome.kind === 'stale') {
         await reload(() => false)
       }
       setBusyUserId(null)
     })()
+  }
+
+  if (reauthAction !== null && userId !== null) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={userId}
+        action={reauthAction}
+        onDone={() => {
+          setReauthAction(null)
+          setError(null)
+          // Re-runs the roster's grant check now that the worker is warm.
+          void reload(() => false)
+        }}
+        onCancel={() => {
+          setReauthAction(null)
+        }}
+      />
+    )
   }
 
   return (

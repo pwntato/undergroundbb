@@ -15,6 +15,7 @@ import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCa
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import {
   loadGroupSettings,
   saveGroupSettings,
@@ -33,7 +34,7 @@ const SAVE_ERRORS: Record<Exclude<SaveSettingsResult, { ok: true }>['kind'], str
     'Someone else changed this group while you were editing. The latest settings are shown; reapply your changes.',
   forbidden: 'Only a group admin can edit these settings.',
   authRequired: 'Your session has expired. Log in again and retry.',
-  coldKeys: 'Log in again to edit this private group.',
+  coldKeys: 'This tab needs your password again to edit this private group.',
   notFound: 'This group no longer exists, or you are no longer a member.',
   rejected: 'The server rejected these changes.',
   ambiguous:
@@ -48,6 +49,9 @@ export function GroupSettingsScreen() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // A save found the worker's keys cold (reload, new tab, deploy). /login would
+  // bounce a signed-in user, so ask for the password in place (#217).
+  const [needsReauth, setNeedsReauth] = useState(false)
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -110,6 +114,9 @@ export function GroupSettingsScreen() {
         setMessage('Saved.')
       } else {
         setError(outcome.kind === 'rejected' ? outcome.message : SAVE_ERRORS[outcome.kind])
+        if (outcome.kind === 'coldKeys') {
+          setNeedsReauth(true)
+        }
       }
       // Reload after a success (to pick up the new version) and after a
       // conflict (to show the other admin's values). Not after an
@@ -118,6 +125,24 @@ export function GroupSettingsScreen() {
         await reload(() => false)
       }
     })()
+  }
+
+  if (needsReauth && userId !== null) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={userId}
+        action="edit this group"
+        onDone={() => {
+          setNeedsReauth(false)
+          setError(null)
+          // Names loaded cold stay cold until reloaded; the worker is warm now.
+          void reload(() => false)
+        }}
+        onCancel={() => {
+          setNeedsReauth(false)
+        }}
+      />
+    )
   }
 
   return (
@@ -139,10 +164,14 @@ export function GroupSettingsScreen() {
       {load.status === 'ready' && (
         <GroupSettingsPanel
           // Re-mount on a new version so the form fields reset to what the
-          // server now holds (after a save or a conflict).
-          key={load.view.detail.version}
+          // server now holds (after a save or a conflict), and when the name
+          // goes from cold to decrypted so the fields seed from it (#217).
+          key={`${String(load.view.detail.version)}:${load.view.nameStatus}`}
           view={load.view}
           onSave={handleSave}
+          onReauthenticate={() => {
+            setNeedsReauth(true)
+          }}
           saving={saving}
           message={message}
           error={error}

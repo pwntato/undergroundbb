@@ -299,7 +299,7 @@ const FAILURE_MESSAGES: Record<
   authRequired: 'Your session has expired. Log in again and retry.',
   notFound: 'This member or group no longer exists.',
   deleted: "That member's account was deleted.",
-  coldKeys: 'Log in again to re-admit members.',
+  coldKeys: 'This tab needs your password again to re-admit members.',
   grantMissing: "Your own grant isn't on record, so a re-admission can't be signed from here yet.",
   stale:
     'The group changed while you were working, so nothing was saved. The latest roster is shown; try again.',

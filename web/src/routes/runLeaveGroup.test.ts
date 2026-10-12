@@ -238,7 +238,7 @@ describe('leaveFailureMessage', () => {
   })
 
   it('has a message for every failure kind, none claiming a leave that did not happen', () => {
-    expect(leaveFailureMessage('coldKeys')).toContain('Log in again')
+    expect(leaveFailureMessage('coldKeys')).toContain('needs your password again')
     expect(leaveFailureMessage('grantMissing')).toContain('Nothing was changed')
   })
 

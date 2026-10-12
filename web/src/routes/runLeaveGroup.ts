@@ -244,7 +244,7 @@ const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> =
     'You are the last admin, so you cannot leave yet. The latest roster is shown; choose a successor.',
   stale: 'The group changed while you were working, so nothing was saved. Try again.',
   authRequired: 'Your session has expired. Log in again and retry.',
-  coldKeys: 'Log in again so this browser can sign your leaving, then retry. Nothing was changed.',
+  coldKeys: 'This tab needs your password again to sign your leaving. Nothing was changed.',
   grantMissing:
     "Your own role isn't on record for this group, so you can't leave from here yet. Nothing was changed.",
   rotationInProgress:
