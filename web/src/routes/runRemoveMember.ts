@@ -253,7 +253,7 @@ const FAILURE_MESSAGES: Record<
   authRequired: 'Your session has expired. Log in again and retry.',
   forbidden: 'Only a group admin can remove members.',
   notFound: 'This member or group no longer exists.',
-  coldKeys: 'Log in again to remove members.',
+  coldKeys: 'This tab needs your password again to remove members.',
   grantMissing: "Your own admin grant isn't on record, so a removal can't be signed from here yet.",
   noGroupKey: "This browser doesn't hold the group's key, so it can't start the key rotation.",
   ambiguous:
