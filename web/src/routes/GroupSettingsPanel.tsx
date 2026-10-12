@@ -25,7 +25,7 @@ import type { SettingsForm, SettingsView } from './runGroupSettings'
 function nameNotice(status: SettingsView['nameStatus']): string | null {
   switch (status) {
     case 'coldKeys':
-      return 'This tab needs your password again to see and edit this private group’s name and description.'
+      return 'This tab needs your password again to show this private group’s name and description.'
     case 'unreadable':
       return 'This group’s name and description could not be decrypted.'
     default:
