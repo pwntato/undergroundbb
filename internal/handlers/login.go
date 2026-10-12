@@ -97,7 +97,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 
 	nonce := make([]byte, challengeNonceSize)
 	if _, err := rand.Read(nonce); err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not generate challenge")
+		WriteInternalError(w, r, err, "could not generate challenge")
 		return
 	}
 	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
@@ -105,7 +105,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 	user, err := h.db.LookupUserByUsername(r.Context(), strings.ToLower(req.Username))
 	if err != nil {
 		if !errors.Is(err, db.ErrUserNotFound) {
-			WriteError(w, http.StatusInternalServerError, "could not process challenge")
+			WriteInternalError(w, r, err, "could not process challenge")
 			return
 		}
 		// Unknown username -- see doc comment above. minArgon2* are register.go's
@@ -123,7 +123,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 		_, _ = rand.Read(fakeCiphertext)
 		decoyUserID, err := idgen.UUID()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not generate challenge")
+			WriteInternalError(w, r, err, "could not generate challenge")
 			return
 		}
 		WriteJSON(w, http.StatusOK, challengeResponse{
@@ -141,7 +141,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 	userID := user.PK[len("USER#"):]
 
 	if err := h.db.PutChallenge(r.Context(), userID, nonce, challengeTTL); err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not issue challenge")
+		WriteInternalError(w, r, err, "could not issue challenge")
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusUnauthorized, verifyErrorChallengeInvalid)
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not process verification")
+		WriteInternalError(w, r, err, "could not process verification")
 		return
 	}
 	userID := user.PK[len("USER#"):]
@@ -237,7 +237,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusUnauthorized, verifyErrorChallengeInvalid)
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not process verification")
+		WriteInternalError(w, r, err, "could not process verification")
 		return
 	}
 
@@ -263,7 +263,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 
 	if !crypto.Verify(user.SigningPublicKey, crypto.ContextLoginChallenge, nonce, sig) {
 		if err := h.db.RecordFailedVerify(r.Context(), userID, lockThreshold, lockDuration); err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not process verification")
+			WriteInternalError(w, r, err, "could not process verification")
 			return
 		}
 		WriteError(w, http.StatusUnauthorized, "signature verification failed")
@@ -271,7 +271,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.ClearFailedVerify(r.Context(), userID); err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not process verification")
+		WriteInternalError(w, r, err, "could not process verification")
 		return
 	}
 
@@ -279,7 +279,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	// inactivity from (#161). It fails the login rather than being skipped: a
 	// missed stamp would make an active admin look inactive.
 	if err := h.db.RecordLogin(r.Context(), userID, time.Now().UTC().Format("2006-01-02")); err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not process verification")
+		WriteInternalError(w, r, err, "could not process verification")
 		return
 	}
 

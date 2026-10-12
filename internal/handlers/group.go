@@ -256,7 +256,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	// uuid alone would still let the server choose."
 	creator, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not create group")
+		WriteInternalError(w, r, err, "could not create group")
 		return
 	}
 
@@ -344,7 +344,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "groupId is taken", "group_id_taken")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not create group")
+		WriteInternalError(w, r, err, "could not create group")
 		return
 	}
 
@@ -534,7 +534,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 
 	memberships, groups, err := h.db.ListGroups(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list groups")
+		WriteInternalError(w, r, err, "could not list groups")
 		return
 	}
 
@@ -682,12 +682,12 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 	// or latency alone would reveal which group ids exist.
 	g, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not load group")
+		WriteInternalError(w, r, err, "could not load group")
 		return
 	}
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not load group")
+		WriteInternalError(w, r, err, "could not load group")
 		return
 	}
 	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
@@ -730,7 +730,7 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		resp.MyGrantSortKey, _ = currentGrantRef(m, g, userID)
 		rot, err := h.db.GetRotation(r.Context(), groupID)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not load group")
+			WriteInternalError(w, r, err, "could not load group")
 			return
 		}
 		if rot != nil {
@@ -795,12 +795,12 @@ func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
 	// Both reads before either 404 branch -- see getGroup.
 	g, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not update group")
+		WriteInternalError(w, r, err, "could not update group")
 		return
 	}
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not update group")
+		WriteInternalError(w, r, err, "could not update group")
 		return
 	}
 	if g == nil || (m == nil && g.Visibility != models.VisibilityPublic) {
@@ -882,7 +882,7 @@ func (h *Handler) updateGroup(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, db.ErrRotationInProgress):
 			WriteErrorWithCode(w, http.StatusConflict, "a key rotation is in progress; edit the group once it finishes", "rotation_in_progress")
 		default:
-			WriteError(w, http.StatusInternalServerError, "could not update group")
+			WriteInternalError(w, r, err, "could not update group")
 		}
 		return
 	}

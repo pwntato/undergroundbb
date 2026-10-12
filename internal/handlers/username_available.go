@@ -59,7 +59,7 @@ func (h *Handler) usernameAvailable(w http.ResponseWriter, r *http.Request) {
 
 	available, err := h.db.UsernameAvailable(r.Context(), strings.ToLower(u))
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not check username availability")
+		WriteInternalError(w, r, err, "could not check username availability")
 		return
 	}
 	WriteJSON(w, http.StatusOK, usernameAvailableResponse{Available: available})

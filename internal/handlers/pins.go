@@ -113,7 +113,7 @@ func (h *Handler) putPin(w http.ResponseWriter, r *http.Request) {
 	// Every read happens before any 404 branch, as elsewhere.
 	pinner, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save pin")
+		WriteInternalError(w, r, err, "could not save pin")
 		return
 	}
 	_, pinnedErr := h.db.GetUserByID(r.Context(), pinnedID)
@@ -122,7 +122,7 @@ func (h *Handler) putPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pinnedErr != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save pin")
+		WriteInternalError(w, r, pinnedErr, "could not save pin")
 		return
 	}
 
@@ -136,7 +136,7 @@ func (h *Handler) putPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.db.PutPin(r.Context(), userID, pinnedID, keys, wrapping, signer, sig); err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not save pin")
+		WriteInternalError(w, r, err, "could not save pin")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -167,7 +167,7 @@ func (h *Handler) listPins(w http.ResponseWriter, r *http.Request) {
 	}
 	pins, next, err := h.db.ListPins(r.Context(), userID, cursor, limit)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list pins")
+		WriteInternalError(w, r, err, "could not list pins")
 		return
 	}
 	enc := base64.StdEncoding.EncodeToString

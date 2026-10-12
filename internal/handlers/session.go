@@ -83,7 +83,7 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	userID, err := h.verifySessionCookie(r)
 	if err != nil {
 		if !errors.Is(err, errNoSessionCookie) && !errors.Is(err, session.ErrInvalid) {
-			WriteError(w, http.StatusInternalServerError, "could not check session")
+			WriteInternalError(w, r, err, "could not check session")
 			return
 		}
 		WriteJSON(w, http.StatusOK, sessionResponse{Authenticated: false})

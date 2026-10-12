@@ -329,7 +329,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusConflict, "userId is taken", "user_id_taken")
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not create account")
+		WriteInternalError(w, r, err, "could not create account")
 		return
 	}
 

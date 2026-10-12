@@ -111,7 +111,7 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusConflict, errCredentialVersionStale)
 			return
 		}
-		WriteError(w, http.StatusInternalServerError, "could not change password")
+		WriteInternalError(w, r, err, "could not change password")
 		return
 	}
 
@@ -156,7 +156,7 @@ func (h *Handler) getAccountCredentials(w http.ResponseWriter, r *http.Request) 
 
 	user, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not read account credentials")
+		WriteInternalError(w, r, err, "could not read account credentials")
 		return
 	}
 

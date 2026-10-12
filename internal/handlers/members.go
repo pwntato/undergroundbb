@@ -74,7 +74,7 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list members")
+		WriteInternalError(w, r, err, "could not list members")
 		return
 	}
 	if m == nil {
@@ -84,7 +84,7 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, next, err := h.db.ListMembers(r.Context(), groupID, cursor, limit)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list members")
+		WriteInternalError(w, r, err, "could not list members")
 		return
 	}
 	entries := make([]memberEntry, 0, len(members))
@@ -153,12 +153,12 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 	// Same rule as getGroup: every read happens before any 404 branch.
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not change role")
+		WriteInternalError(w, r, err, "could not change role")
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not change role")
+		WriteInternalError(w, r, err, "could not change role")
 		return
 	}
 	if caller == nil || group == nil {
@@ -184,7 +184,7 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, err := h.db.GetMembership(r.Context(), groupID, subjectID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not change role")
+		WriteInternalError(w, r, err, "could not change role")
 		return
 	}
 	if subject == nil {
@@ -240,7 +240,7 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 	// from the request (see createGroup).
 	grantor, err := h.db.GetUserByID(r.Context(), userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not change role")
+		WriteInternalError(w, r, err, "could not change role")
 		return
 	}
 	payload := crypto.RoleGrantPayload(groupID, subjectID, req.Role, req.GrantSortKey, req.GrantorGrantRef)
@@ -274,7 +274,7 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, db.ErrGrantKeyTaken):
 			WriteErrorWithCode(w, http.StatusConflict, "grantSortKey is taken; generate a new one and re-sign", "grant_key_taken")
 		default:
-			WriteError(w, http.StatusInternalServerError, "could not change role")
+			WriteInternalError(w, r, err, "could not change role")
 		}
 		return
 	}
@@ -359,12 +359,12 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not leave group")
+		WriteInternalError(w, r, err, "could not leave group")
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not leave group")
+		WriteInternalError(w, r, err, "could not leave group")
 		return
 	}
 	if caller == nil || group == nil {
@@ -442,7 +442,7 @@ func (h *Handler) leaveGroup(w http.ResponseWriter, r *http.Request) {
 		log.Printf("leave group %s: %v", groupID, err)
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	case err != nil:
-		WriteError(w, http.StatusInternalServerError, "could not leave group")
+		WriteInternalError(w, r, err, "could not leave group")
 	default:
 		WriteJSON(w, http.StatusOK, leaveGroupResponse{GroupDeleted: deleted})
 	}
@@ -493,6 +493,7 @@ func (h *Handler) buildLeaveDemotion(
 	}
 	self, err := h.db.GetUserByID(ctx, userID)
 	if err != nil {
+		log.Printf("build leave demotion: load user %s: %v", userID, err)
 		return nil, http.StatusInternalServerError, "", "could not leave group"
 	}
 	payload := crypto.RoleGrantPayload(groupID, userID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
@@ -602,7 +603,7 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		WriteInternalError(w, r, err, "could not list grants")
 		return
 	}
 	if m == nil {
@@ -611,7 +612,7 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		WriteInternalError(w, r, err, "could not list grants")
 		return
 	}
 	if group == nil {
@@ -621,7 +622,7 @@ func (h *Handler) listGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	grants, next, err := h.db.ListGrants(r.Context(), groupID, cursor, limit)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list grants")
+		WriteInternalError(w, r, err, "could not list grants")
 		return
 	}
 	enc := base64.StdEncoding.EncodeToString
@@ -705,7 +706,7 @@ func (h *Handler) listAdmissions(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list admissions")
+		WriteInternalError(w, r, err, "could not list admissions")
 		return
 	}
 	if m == nil {
@@ -714,7 +715,7 @@ func (h *Handler) listAdmissions(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, next, err := h.db.ListAdmissions(r.Context(), groupID, cursor, limit)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not list admissions")
+		WriteInternalError(w, r, err, "could not list admissions")
 		return
 	}
 	enc := base64.StdEncoding.EncodeToString
@@ -803,12 +804,12 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	// Same rule as getGroup: every read happens before any 404 branch.
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		WriteInternalError(w, r, err, "could not remove member")
 		return
 	}
 	group, err := h.db.GetGroup(r.Context(), groupID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		WriteInternalError(w, r, err, "could not remove member")
 		return
 	}
 	if caller == nil || group == nil {
@@ -833,7 +834,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, err := h.db.GetMembership(r.Context(), groupID, subjectID)
 	if err != nil {
-		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		WriteInternalError(w, r, err, "could not remove member")
 		return
 	}
 	if subject == nil {
@@ -918,7 +919,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		log.Printf("remove member %s from %s: %v", subjectID, groupID, err)
 		w.WriteHeader(http.StatusNoContent)
 	case err != nil:
-		WriteError(w, http.StatusInternalServerError, "could not remove member")
+		WriteInternalError(w, r, err, "could not remove member")
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -962,6 +963,7 @@ func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, s
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
+		log.Printf("verify rotation start: load remover %s: %v", removerID, err)
 		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not start the rotation"
 	}
 	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, currentGeneration+1)
@@ -1033,6 +1035,7 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
+		log.Printf("build remove demotion: load remover %s: %v", removerID, err)
 		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not remove member"
 	}
 	payload := crypto.RoleGrantPayload(groupID, subjectID, models.RoleMember, req.GrantSortKey, req.GrantorGrantRef)
