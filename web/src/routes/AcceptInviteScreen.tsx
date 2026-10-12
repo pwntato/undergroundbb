@@ -26,6 +26,8 @@ import { Link, useParams } from 'react-router'
 import { acceptInvite, getInvite, type GetInviteResponse } from '@/lib/api/invites'
 import { signInviteAcceptance } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
+import { ReauthenticateStep } from './ReauthenticateStep'
+import { useLiveKeys } from './useLiveKeys'
 import {
   runAcceptInvite,
   verifyInvite,
@@ -125,6 +127,8 @@ type LoadState =
 export function AcceptInviteScreen() {
   const { inviteId } = useParams<{ inviteId: string }>()
   const session = useSession()
+  // Ask up front whether the worker's keys are warm (#143).
+  const liveKeys = useLiveKeys(session.userId)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [accepting, setAccepting] = useState(false)
   const [acceptError, setAcceptError] = useState<string | null>(null)
@@ -254,6 +258,17 @@ export function AcceptInviteScreen() {
       }
       setAccepted(true)
     })()
+  }
+
+  if (session.userId !== null && liveKeys.status === 'cold') {
+    // The invite lives in the URL, so nothing is lost by asking first.
+    return (
+      <ReauthenticateStep
+        sessionUserId={session.userId}
+        onDone={liveKeys.markWarm}
+        onCancel={liveKeys.markWarm}
+      />
+    )
   }
 
   return (

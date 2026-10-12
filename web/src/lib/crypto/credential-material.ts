@@ -457,6 +457,16 @@ export function signPin(
 }
 
 /**
+ * Whether the worker's cached keys are warm for this account: present, and
+ * the same user's. The pre-check a signing screen runs before the user fills
+ * anything in, mirroring the two cold cases requireLiveKeys (worker.ts)
+ * throws on at signing time (#143).
+ */
+export function liveKeysWarmFor(keys: LiveKeys | null, userId: string): boolean {
+  return keys !== null && keys.userId === userId
+}
+
+/**
  * The user's own key fingerprint (fingerprint.ts) over their two current public
  * keys, in the same argument order the invite path and an admin's view of the
  * served keys use, so a member reading this out matches what an admin compares

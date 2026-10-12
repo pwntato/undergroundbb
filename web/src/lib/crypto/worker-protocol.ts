@@ -333,6 +333,23 @@ export interface GetOwnSigningKeyResponse {
 }
 
 /**
+ * Whether the worker's liveKeys cache is warm for this account, so a signing
+ * screen can ask for a re-login before the user fills in a form rather than
+ * after they submit it (#143). Never throws on a cold cache: that is the answer.
+ */
+export interface HasLiveKeysRequest {
+  readonly kind: 'hasLiveKeys'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface HasLiveKeysResponse {
+  readonly kind: 'hasLiveKeysDone'
+  readonly id: string
+  readonly warm: boolean
+}
+
+/**
  * The caller's own key fingerprint (fingerprint.ts) over the live signing and
  * wrapping public keys, so any member can read it out to an admin who is about
  * to re-admit them (#178). Same cached-keys guards as getOwnSigningKey.
@@ -725,6 +742,7 @@ export type WorkerRequest =
   | SignPinRequest
   | GetOwnSigningKeyRequest
   | GetOwnFingerprintRequest
+  | HasLiveKeysRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SignInviteCreationRequest
@@ -749,6 +767,7 @@ export type WorkerResponse =
   | SignPinResponse
   | GetOwnSigningKeyResponse
   | GetOwnFingerprintResponse
+  | HasLiveKeysResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SignInviteCreationResponse
