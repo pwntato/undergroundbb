@@ -3,12 +3,13 @@ package handlers
 import (
 	"bytes"
 	"errors"
-	"github.com/pwntato/undergroundbb/internal/config"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pwntato/undergroundbb/internal/config"
 )
 
 func TestWriteInternalErrorLogsCauseButNotToClient(t *testing.T) {
