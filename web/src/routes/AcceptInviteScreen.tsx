@@ -265,6 +265,7 @@ export function AcceptInviteScreen() {
     return (
       <ReauthenticateStep
         sessionUserId={session.userId}
+        action="accept this invite"
         onDone={liveKeys.markWarm}
         onCancel={liveKeys.markWarm}
       />

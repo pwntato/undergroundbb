@@ -179,6 +179,7 @@ export function CreateInviteScreen() {
     return (
       <ReauthenticateStep
         sessionUserId={session.userId}
+        action="create an invite"
         onDone={liveKeys.markWarm}
         onCancel={liveKeys.markWarm}
       />
