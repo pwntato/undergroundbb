@@ -112,3 +112,54 @@ func TestRequireSessionBlocksUnauthenticated(t *testing.T) {
 		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }
+
+func doLogout(t *testing.T, h *Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func assertSessionCookieCleared(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	c := sessionCookieFrom(rec)
+	if c == nil {
+		t.Fatal("no Set-Cookie for the session cookie")
+	}
+	if c.Value != "" || c.MaxAge >= 0 {
+		t.Errorf("cookie not expired: value=%q maxAge=%d", c.Value, c.MaxAge)
+	}
+	if c.Path != "/" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("clearing cookie attributes differ from the issued cookie: %+v", c)
+	}
+}
+
+func TestLogoutClearsSessionCookie(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	cookie := sessionCookieFrom(completeLogin(t, h, user))
+	if cookie == nil {
+		t.Fatal("no session cookie set by login")
+	}
+
+	rec := doLogout(t, h, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	assertSessionCookieCleared(t, rec)
+}
+
+func TestLogoutWithoutSessionStillSucceeds(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	rec := doLogout(t, h, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	assertSessionCookieCleared(t, rec)
+}
