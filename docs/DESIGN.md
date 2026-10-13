@@ -186,13 +186,22 @@ convincingly: every post carries an Ed25519 signature the cookie cannot produce,
 from a stolen session fails verification in every reader's client. Session theft here is a genuinely
 smaller event than in an ordinary application.
 
-The cost of statelessness is the other half, and it is a real one: **a stateless session cannot be
-revoked.** A stolen cookie stays valid until it expires. Neither a password change nor the
-five-minute lockout ends a live session — which matters most for the user the password-change flow
-is designed for, someone who believes they are compromised and reasonably expects that changing
-their password logs the attacker out. It does not. Keeping sessions short is the only control here,
-and it is a bounded one; a revocation list is the standard fix and is deferred rather than
-dismissed, since it reintroduces exactly the server-side state this architecture does without.
+**Logout revokes the session (#224); nothing else does yet.** The token carries the user's session
+generation, a counter on the PROFILE item, and every authenticated request (and
+`GET /api/auth/session`) compares it with the stored value in one strongly consistent read. Logout
+bumps the counter, so a cookie copied before it stops working immediately rather than at expiry, and
+every other session of that user ends with it ("log out everywhere"; there is no per-device
+logout). The bump is conditional on the generation the logging-out token carries, so replaying an
+already-revoked token cannot sign out a newer login. The server still keeps no record of individual
+tokens and no session table: one integer on an item that already exists. If that read fails, the
+request is a 500, never a 401, so a store outage does not look like a logout to the web client.
+Tokens issued before this change have no generation and do not verify, so the deploy logs everyone out once.
+
+What does **not** revoke a session is the rest: a password change and the five-minute lockout leave a
+live session valid until it expires, which matters most for the user the password-change flow is
+designed for, someone who believes they are compromised and expects changing their password to log the
+attacker out. It does not; bumping the same counter there is the obvious next step and is not done
+yet. Keeping sessions short remains the control for everything else.
 
 **This means the server cannot count wrong passwords.** A mistyped password fails at step 3, inside
 the browser, and never reaches the server at all. What the server can count is **failed signature
@@ -904,7 +913,7 @@ hand the group to a tombstone; demoting one is allowed, and the web client offer
 only Make member and Remove, and never as a successor). A deleted admin does not count as another
 admin when an admin leaves: the server looks up the other admins' PROFILE rows, picks a live one, and
 conditions the leave on that account still being live, otherwise `last_admin`; and a
-session cookie issued earlier stays valid until it expires (there is no session store). It cannot
+session cookie issued earlier stays valid until it expires or its user logs out, (the handlers that check refuse it with 410 `account_deleted`). It cannot
 create a membership, because `CreateGroup` and `CompleteInvite`, the only writers of a `MEMBER#`
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.
