@@ -60,7 +60,7 @@ func TestMemberHelperInternalErrorsAreLogged(t *testing.T) {
 		bob := registerTestUser(t, h)
 		addMember(t, gid, bob, "admin")
 		req := removalGrant(t, owner, gid, bob.userID, backdatedRef(t, gid, owner))
-		deleteRow(t, "USER#"+owner.userID, "PROFILE")
+		corruptProfile(t, owner.userID)
 		buf := captureLog(t)
 		rec := doRemove(t, h, ownerCookie, gid, bob.userID, &req)
 		if rec.Code != http.StatusInternalServerError {
@@ -77,7 +77,7 @@ func TestMemberHelperInternalErrorsAreLogged(t *testing.T) {
 		bob := registerTestUser(t, h)
 		addMember(t, gid, bob, "member")
 		body := &removeMemberRequest{Rotation: rotationBody(t, owner, gid, bob.userID, 1)}
-		deleteRow(t, "USER#"+owner.userID, "PROFILE")
+		corruptProfile(t, owner.userID)
 		buf := captureLog(t)
 		rec := doRemove(t, h, ownerCookie, gid, bob.userID, body)
 		if rec.Code != http.StatusInternalServerError {
@@ -90,7 +90,7 @@ func TestMemberHelperInternalErrorsAreLogged(t *testing.T) {
 	t.Run("leave demotion", func(t *testing.T) {
 		h, gid, owner, _, ownerCookie, _ := setupTwoAdmins(t)
 		leave := signedLeave(t, owner, gid, backdatedRef(t, gid, owner))
-		deleteRow(t, "USER#"+owner.userID, "PROFILE")
+		corruptProfile(t, owner.userID)
 		buf := captureLog(t)
 		rec := doLeaveWith(t, h, ownerCookie, gid, &leave)
 		if rec.Code != http.StatusInternalServerError {

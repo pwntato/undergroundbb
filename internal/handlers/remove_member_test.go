@@ -711,6 +711,25 @@ func deleteRow(t *testing.T, pk, sk string) {
 	}
 }
 
+// corruptProfile makes userID's full PROFILE read fail (SigningPublicKey is no
+// longer bytes) while the session-generation projection still succeeds, so a
+// request passes requireSession and then hits the failing read. Deleting the
+// row would stop the request at requireSession instead (#224).
+func corruptProfile(t *testing.T, userID string) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression:          aws.String("SET SigningPublicKey = :bad"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":bad": &types.AttributeValueMemberBOOL{Value: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func setMemberGeneration(t *testing.T, gid, userID string, gen int) {
 	t.Helper()
 	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
