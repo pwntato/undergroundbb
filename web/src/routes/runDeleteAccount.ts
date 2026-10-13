@@ -294,7 +294,7 @@ const LEAVE_REASONS: Record<
   lastAdmin: 'is one you are the last admin of, so promote a successor there first',
   stale: 'changed while this was running',
   authRequired: 'could not be left because your session expired',
-  coldKeys: 'needs this browser to sign your leaving, so log in again first',
+  coldKeys: 'needs this browser to sign your leaving, so enter your password and confirm again',
   grantMissing: "doesn't have your own role on record, so it can't be left from here",
   rotationInProgress: 'has a key rotation still running, so wait for it to finish and try again',
   cannotCheck: "couldn't be checked: the group could not be read",

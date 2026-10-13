@@ -21,6 +21,7 @@ import { useSession } from '@/lib/session/useSession'
 import { GroupList, type LoadState } from './GroupList'
 import { readNewGroupState } from './newGroupNavigationState'
 import { runListGroups } from './runListGroups'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { runLogout } from './runLogout'
 
 export function Home() {
@@ -31,6 +32,9 @@ export function Home() {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [logoutError, setLogoutError] = useState<string | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
+  // Private group names need the worker's keys, which a reload drops (#221).
+  const [reauthenticating, setReauthenticating] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
 
   useEffect(() => {
     if (!session.userId) {
@@ -107,7 +111,7 @@ export function Home() {
     // today, so neither actually changes across renders in practice; the
     // state:null replace above keeps the same pathname, so it does not
     // itself re-trigger this effect a second time.
-  }, [session.userId, locationState, location.pathname, navigate])
+  }, [session.userId, locationState, location.pathname, navigate, reloadTick])
 
   // Renders nothing rather than the logged-out view while the #32 bootstrap
   // is still checking -- otherwise an authenticated visitor reloading this
@@ -134,6 +138,23 @@ export function Home() {
     )
   }
 
+  if (reauthenticating) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={session.userId}
+        action="show private group names"
+        onDone={() => {
+          setReauthenticating(false)
+          setLoad({ status: 'loading' })
+          setReloadTick((n) => n + 1)
+        }}
+        onCancel={() => {
+          setReauthenticating(false)
+        }}
+      />
+    )
+  }
+
   async function onLogout() {
     setLogoutError(null)
     setLoggingOut(true)
@@ -150,7 +171,12 @@ export function Home() {
     <div className="flex w-full max-w-md flex-col items-center gap-4 text-center">
       <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">UndergroundBB</h1>
 
-      <GroupList load={load} />
+      <GroupList
+        load={load}
+        onReauthenticate={() => {
+          setReauthenticating(true)
+        }}
+      />
 
       <div className="flex gap-2">
         <Button asChild>

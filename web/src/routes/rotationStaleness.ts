@@ -7,6 +7,7 @@
 // where the remedy lives.
 
 import type { MembersView } from './runGroupMembers'
+import { isLiveKeysMessage } from './runListGroups'
 import { describeRotation, type RotationOutcome } from './runRotation'
 
 /**
@@ -106,6 +107,8 @@ export interface CatchUpEffects {
   readonly message: string | null
   /** A finished rotation cleared the marker, so the view needs a refresh. */
   readonly reload: boolean
+  /** The rotation stopped only because this tab's keys are cold; a password resumes it. */
+  readonly needsPassword: boolean
 }
 
 /**
@@ -119,6 +122,15 @@ export function catchUpResult(
   loadedAtMs: number,
   label: (userId: string) => string,
 ): CatchUpEffects {
+  if (outcome.status === 'incomplete' && isLiveKeysMessage(outcome.reason)) {
+    return {
+      status: outcome.status,
+      error: null,
+      message: null,
+      reload: false,
+      needsPassword: true,
+    }
+  }
   const note = describeRotation(outcome, label)
   const bannerCovers =
     outcome.status === 'cannot-resume' &&
@@ -129,5 +141,6 @@ export function catchUpResult(
     error: note?.kind === 'error' ? note.text : null,
     message: note !== null && note.kind !== 'error' && !bannerCovers ? note.text : null,
     reload: outcome.status === 'completed',
+    needsPassword: false,
   }
 }

@@ -118,10 +118,14 @@ export interface ListGroupsDeps {
  * doc comment).
  */
 export function isLiveKeysError(error: unknown): boolean {
+  return error instanceof Error && isLiveKeysMessage(error.message)
+}
+
+/** isLiveKeysError for a message already flattened to text (e.g. a rotation outcome's reason). */
+export function isLiveKeysMessage(message: string): boolean {
   return (
-    error instanceof Error &&
-    (error.message.includes('no live keys cached') ||
-      error.message.includes('cached keys belong to a different account'))
+    message.includes('no live keys cached') ||
+    message.includes('cached keys belong to a different account')
   )
 }
 

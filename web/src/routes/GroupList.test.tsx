@@ -15,7 +15,13 @@ import { groupLabel } from './groupLabel'
 import type { DisplayGroup } from './runListGroups'
 
 function render(load: LoadState): string {
-  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(GroupList, { load })))
+  return renderToStaticMarkup(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(GroupList, { load, onReauthenticate: () => {} }),
+    ),
+  )
 }
 
 function displayGroup(overrides: Partial<DisplayGroup> = {}): DisplayGroup {
@@ -121,18 +127,20 @@ describe('GroupList', () => {
     expect(html).not.toContain('/groups/g-member/invite')
   })
 
-  it('shows the "log in again" hint only when at least one group is coldKeys', () => {
+  it('shows the enter-your-password hint only when at least one group is coldKeys', () => {
     const withoutColdKeys = render({
       status: 'ready',
       groups: [displayGroup({ nameStatus: 'plaintext' })],
     })
-    expect(withoutColdKeys).not.toContain('Log in again')
+    expect(withoutColdKeys).not.toContain('Enter your password')
 
     const withColdKeys = render({
       status: 'ready',
       groups: [displayGroup({ visibility: 'private', displayName: null, nameStatus: 'coldKeys' })],
     })
-    expect(withColdKeys).toContain('Log in again to see private group names')
+    expect(withColdKeys).toContain('needs your password to show private group names')
+    expect(withColdKeys).toContain('Enter your password')
+    expect(withColdKeys).not.toContain('Log in again')
   })
 
   it('links every group to its settings screen, whatever the role', () => {

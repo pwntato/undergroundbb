@@ -386,7 +386,7 @@ describe('deleteFailureMessage', () => {
         { ok: false, kind: 'leaveFailed', groupId: 'g-x', reason: 'coldKeys', left: 0 },
         label,
       ),
-    ).toContain('log in again')
+    ).toContain('enter your password')
   })
 })
 

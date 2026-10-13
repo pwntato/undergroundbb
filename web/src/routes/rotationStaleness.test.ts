@@ -89,6 +89,24 @@ describe('catchUpResult', () => {
   const label = (id: string): string => id
   const stale = view({ myGeneration: 1 })
 
+  it('asks for the password, with no error text, when the rotation stopped on cold keys', () => {
+    const cold = catchUpResult(
+      { status: 'incomplete', reason: 'worker: no live keys cached -- log in again', rewrapped: 0 },
+      view(),
+      NOW,
+      label,
+    )
+    expect(cold).toMatchObject({ needsPassword: true, error: null, message: null })
+    const other = catchUpResult(
+      { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped: 0 },
+      view(),
+      NOW,
+      label,
+    )
+    expect(other.needsPassword).toBe(false)
+    expect(other.error).toContain('Key rotation stopped')
+  })
+
   it('records the status and reloads only after a completed rotation', () => {
     expect(catchUpResult({ status: 'completed', rewrapped: 2 }, view(), NOW, label)).toMatchObject({
       status: 'completed',

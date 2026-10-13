@@ -4,12 +4,21 @@
 // control against a server-invented account needs this to be reachable by a
 // plain member. Prop-driven so it is tested with renderToStaticMarkup.
 
+import { Button } from '@/components/ui/button'
+
 export type OwnFingerprintState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly fingerprint: string }
   | { readonly status: 'unavailable' }
 
-export function OwnFingerprintPanel({ state }: { readonly state: OwnFingerprintState }) {
+export function OwnFingerprintPanel({
+  state,
+  onReauthenticate,
+}: {
+  readonly state: OwnFingerprintState
+  /** Opens the in-place password step; the fingerprint needs this tab's keys. */
+  readonly onReauthenticate: () => void
+}) {
   return (
     <div className="flex w-full max-w-md flex-col gap-1">
       <p className="text-sm font-medium">Your key fingerprint</p>
@@ -18,7 +27,14 @@ export function OwnFingerprintPanel({ state }: { readonly state: OwnFingerprintS
         <p className="font-mono text-xs break-all">{state.fingerprint}</p>
       )}
       {state.status === 'unavailable' && (
-        <p className="text-xs text-muted-foreground">Log in again to see your fingerprint.</p>
+        <div className="flex flex-col items-start gap-1">
+          <p className="text-xs text-muted-foreground">
+            This tab needs your password to show your fingerprint.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={onReauthenticate}>
+            Enter your password
+          </Button>
+        </div>
       )}
       <p className="text-xs text-muted-foreground">
         If an admin asks to re-admit you, read this out to them in person or on a call they know is
