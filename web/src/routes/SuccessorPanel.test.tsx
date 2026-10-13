@@ -81,6 +81,20 @@ describe('SuccessorPanel, admin', () => {
     expect(html).not.toContain('Revoke')
   })
 
+  it('warns about being the last admin only when no other live admin exists (#203)', () => {
+    const sole = render(view('admin'), ADMIN, '2026-09-01')
+    expect(sole).toContain('you are the last admin')
+
+    const base = view('admin')
+    const withAdminBob: SuccessorView = {
+      ...base,
+      members: base.members.map((m) => (m.userId === BOB ? { ...m, role: 'admin' as const } : m)),
+    }
+    const shared = render(withAdminBob, ADMIN, '2026-09-01')
+    expect(shared).toContain('You have not named a successor')
+    expect(shared).not.toContain('last admin')
+  })
+
   it('lists other live members as candidates, not yourself or a deleted account', () => {
     const html = render(view('admin'), ADMIN, '2026-09-01')
     expect(html).toContain('bob_member')
