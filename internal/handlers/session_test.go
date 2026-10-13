@@ -2,13 +2,20 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
+	"github.com/pwntato/undergroundbb/internal/db"
 )
 
 func doGetSession(t *testing.T, h *Handler, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -321,5 +328,82 @@ func TestSessionStoreFailureIsA500NotALogout(t *testing.T) {
 	}
 	if rec := doGetAccountCredentials(t, good, cookie); rec.Code != http.StatusOK {
 		t.Errorf("session after failed logout: status = %d, want 200", rec.Code)
+	}
+}
+
+// staleReadsDB returns a db.Client in front of DynamoDB Local that answers
+// every GetItem not asking for ConsistentRead with a session generation of 0,
+// as a lagging replica would after a logout. DynamoDB Local is always
+// consistent, so without this the eventual-consistency race cannot be seen.
+func staleReadsDB(t *testing.T) *db.Client {
+	t.Helper()
+	target, err := url.Parse(testEndpoint(t))
+	if err != nil {
+		t.Fatalf("parsing DYNAMODB_ENDPOINT: %v", err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		director(r)
+		r.Header.Del("Accept-Encoding") // keep the response body readable
+	}
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if !strings.HasSuffix(resp.Request.Header.Get("X-Amz-Target"), ".GetItem") {
+			return nil
+		}
+		if resp.Request.Header.Get("X-Test-Consistent") == "1" {
+			return nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		var out map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			return err
+		}
+		if item, ok := out["Item"].(map[string]any); ok {
+			item["SessionGeneration"] = map[string]any{"N": "0"}
+		}
+		body, err = json.Marshal(out)
+		if err != nil {
+			return err
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		return nil
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading proxied request: %v", err)
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		if strings.Contains(string(raw), `"ConsistentRead":true`) {
+			r.Header.Set("X-Test-Consistent", "1")
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := db.New(context.Background(), testTableName(), srv.URL)
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	return c
+}
+
+// A login right after a logout must get a session that works even when the
+// profile lookup login does is served by a replica that has not seen the
+// logout yet (review of #227).
+func TestLoginRightAfterLogoutIsNotDeadOnArrival(t *testing.T) {
+	good := New(config.FromEnv(), testDB(t))
+	lagging := New(config.FromEnv(), staleReadsDB(t))
+	user := registerTestUser(t, good)
+	doLogout(t, good, loggedInCookie(t, good, user))
+
+	fresh := loggedInCookie(t, lagging, user)
+	if rec := doGetAccountCredentials(t, good, fresh); rec.Code != http.StatusOK {
+		t.Errorf("session from a login served by a lagging replica: status = %d, want 200, body: %s", rec.Code, rec.Body.String())
 	}
 }

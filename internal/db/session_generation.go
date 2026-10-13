@@ -14,9 +14,10 @@ import (
 
 // GetSessionGeneration returns userID's current session generation (#224).
 // The read is strongly consistent: a logout must end the session on the very
-// next request, not after replication catches up. A missing PROFILE and a
-// PROFILE answers ErrUserNotFound. A deleted account's tombstone still reads:
-// the handlers answer it with 410 account_deleted, which the web client needs.
+// next request, not after replication catches up, and a login must be issued
+// the generation a following request will compare against. A missing PROFILE
+// answers ErrUserNotFound. A deleted account's tombstone still reads: the
+// handlers answer it with 410 account_deleted, which the web client needs.
 func (c *Client) GetSessionGeneration(ctx context.Context, userID string) (int64, error) {
 	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),

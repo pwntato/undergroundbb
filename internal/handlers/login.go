@@ -283,7 +283,15 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := h.sessions.Issue(userID, user.SessionGeneration, h.cfg.SessionTTL)
+	// Read the generation strongly consistently, not from user (an eventually
+	// consistent lookup): a login right after a logout could otherwise be
+	// issued the old generation and be rejected on its first request (#224).
+	gen, err := h.db.GetSessionGeneration(r.Context(), userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not process verification")
+		return
+	}
+	token := h.sessions.Issue(userID, gen, h.cfg.SessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,

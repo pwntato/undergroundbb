@@ -913,7 +913,7 @@ hand the group to a tombstone; demoting one is allowed, and the web client offer
 only Make member and Remove, and never as a successor). A deleted admin does not count as another
 admin when an admin leaves: the server looks up the other admins' PROFILE rows, picks a live one, and
 conditions the leave on that account still being live, otherwise `last_admin`; and a
-session cookie issued earlier stays valid until it expires or its user logs out, (the handlers that check refuse it with 410 `account_deleted`). It cannot
+session cookie issued earlier stays valid until it expires or its user logs out, though the handlers that check refuse it with 410 `account_deleted`. It cannot
 create a membership, because `CreateGroup` and `CompleteInvite`, the only writers of a `MEMBER#`
 row, both refuse a deleted account, and a password change from it fails because `RECOVERY` is gone;
 anything else it writes, such as pins, lands on a partition nobody can sign in to. Content other members already decrypted cannot be recalled.

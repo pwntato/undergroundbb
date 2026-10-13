@@ -46,10 +46,11 @@ func (h *Handler) requireSession(next http.HandlerFunc) http.HandlerFunc {
 // the user id it names. Besides the signature and expiry it compares the
 // token's session generation with the one stored on the user (#224), so a
 // token from before a logout is session.ErrInvalid; a store failure is a
-// different error, which callers answer as a 500, never as "logged out". Factored out of requireSession so getSession can
-// share the identical check without duplicating cookie-reading logic, even
-// though the two handlers respond differently on failure (401 vs. a 200
-// carrying authenticated: false -- see getSession's own doc comment).
+// different error, which callers answer as a 500, never as "logged out".
+// Factored out of requireSession so getSession can share the identical check
+// without duplicating cookie-reading logic, even though the two handlers
+// respond differently on failure (401 vs. a 200 carrying authenticated: false
+// -- see getSession's own doc comment).
 func (h *Handler) verifySessionCookie(r *http.Request) (string, error) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
