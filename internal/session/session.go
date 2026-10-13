@@ -115,9 +115,9 @@ func (s *Signer) sign(userID string, gen, expiresAt int64) string {
 	return userID + "." + genStr + "." + expiresAtStr + "." + base64.RawURLEncoding.EncodeToString(mac)
 }
 
-// mac computes HMAC-SHA256 over the context, the user id, the generation, and the expiry,
-// each length-delimited by a NUL separator so no field can migrate into
-// another -- the same construction crypto.contextualize uses for signed
+// mac computes HMAC-SHA256 over the context, the user id, the generation, and
+// the expiry, each length-delimited by a NUL separator so no field can migrate
+// into another -- the same construction crypto.contextualize uses for signed
 // payloads, applied here since a userID is not fixed-width the way a public
 // key is and a bare concatenation would be ambiguous.
 func (s *Signer) mac(userID string, gen, expiresAt int64) []byte {

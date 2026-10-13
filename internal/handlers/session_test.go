@@ -341,12 +341,10 @@ func staleReadsDB(t *testing.T) *db.Client {
 	if err != nil {
 		t.Fatalf("parsing DYNAMODB_ENDPOINT: %v", err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	director := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		director(r)
-		r.Header.Del("Accept-Encoding") // keep the response body readable
-	}
+	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Header.Del("Accept-Encoding") // keep the response body readable
+	}}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if !strings.HasSuffix(resp.Request.Header.Get("X-Amz-Target"), ".GetItem") {
 			return nil
