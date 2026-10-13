@@ -140,8 +140,18 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 // the 500 response. Use it instead of WriteError(w, 500, ...) so the cause
 // reaches CloudWatch; the client still only sees msg. Never put request
 // bodies or key material in err.
+//
+// A DynamoDB TransactionConflict (a concurrent transaction on the same item)
+// is not a server fault: nothing was written and the same request will
+// succeed on retry, so it answers 409 conflict_retry instead (#150). Doing it
+// here covers every transactional write whose caller did not map it to its
+// own, more specific conflict first.
 func WriteInternalError(w http.ResponseWriter, r *http.Request, err error, msg string) {
 	log.Printf("%s %s: %s: %v", r.Method, r.URL.Path, msg, err)
+	if db.IsTransactionConflict(err) {
+		WriteErrorWithCode(w, http.StatusConflict, "another change was in progress; retry", "conflict_retry")
+		return
+	}
 	WriteError(w, http.StatusInternalServerError, msg)
 }
 
