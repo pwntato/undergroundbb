@@ -697,6 +697,10 @@ func TestIsTransactionConflict(t *testing.T) {
 	if !isTransactionConflict(conflict) {
 		t.Error("TransactionConflict cancellation not recognized")
 	}
+	// A plain write that hits an item mid-transaction fails with its own type.
+	if !isTransactionConflict(&types.TransactionConflictException{}) {
+		t.Error("TransactionConflictException not recognized")
+	}
 	if isTransactionConflict(condFail) || isTransactionConflict(errors.New("other")) || isTransactionConflict(nil) {
 		t.Error("non-conflict error recognized as TransactionConflict")
 	}

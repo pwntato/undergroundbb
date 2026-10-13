@@ -173,6 +173,18 @@ describe('runRecovery', () => {
     expect(result).toEqual({ ok: false, kind: 'staleVersion', error: expect.any(ApiError) })
   })
 
+  it('classifies a 409 conflict_retry at reset() as resetResponseLost with a resume (#150), not staleVersion', async () => {
+    const deps = makeDeps({
+      reset: vi.fn().mockRejectedValue(new ApiError(409, 'busy', 'conflict_retry')),
+    })
+    const result = await runRecovery(deps, 'alice', 'code', 'new-password')
+    expect(result).toMatchObject({
+      ok: false,
+      kind: 'resetResponseLost',
+      resume: { username: 'alice', idempotencyToken: TEST_TOKEN },
+    })
+  })
+
   it('classifies a provably-uncommitted 4xx at reset() as unreachable, not resetResponseLost', async () => {
     const deps = makeDeps({ reset: vi.fn().mockRejectedValue(new ApiError(400, 'bad request')) })
     const result = await runRecovery(deps, 'alice', 'code', 'new-password')

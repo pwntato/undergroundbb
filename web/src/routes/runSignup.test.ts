@@ -94,6 +94,7 @@ describe('isDefinitelyUncommitted', () => {
     { err: new ApiError(403, 'registration is closed'), uncommitted: true },
     { err: new ApiError(409, 'username is taken'), uncommitted: true },
     { err: new ApiError(409, 'userId is taken'), uncommitted: true },
+    { err: new ApiError(409, 'busy', 'conflict_retry'), uncommitted: false },
     { err: new ApiError(500, 'internal'), uncommitted: false },
     { err: new ApiError(503, 'unavailable'), uncommitted: false },
     { err: new TypeError('Failed to fetch'), uncommitted: false },
@@ -150,6 +151,20 @@ describe('runSignup (no resume / fresh attempt)', () => {
 
     expect(result).toEqual({ ok: true, material: MATERIAL, loggedIn: false })
     expect(onLogin).not.toHaveBeenCalled()
+  })
+
+  it('a 409 conflict_retry is ambiguous and keeps the resume (#150): the conflict may be its own earlier attempt', async () => {
+    const deps = makeDeps({
+      register: vi.fn().mockRejectedValue(new ApiError(409, 'busy', 'conflict_retry')),
+    })
+    const result = await runSignup(deps, 'alice', 'password123')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('unreachable')
+    }
+    expect(result.kind).not.toBe('definitelyUncommitted')
+    expect(result.resume).toBeDefined()
   })
 
   it('a definite 4xx register() failure reports no resume -- nothing to retry', async () => {

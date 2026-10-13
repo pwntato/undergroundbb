@@ -328,6 +328,12 @@ func isTransactionConflict(err error) bool {
 // package: the handlers' catch-all error writer uses it so a conflict on any
 // transactional write is a retryable 409 rather than a 500 (#150).
 func IsTransactionConflict(err error) bool {
+	// A plain PutItem/UpdateItem that lands on an item while a transaction on
+	// it is in flight fails with this type instead; same meaning, nothing written.
+	var conflictErr *types.TransactionConflictException
+	if errors.As(err, &conflictErr) {
+		return true
+	}
 	var txErr *types.TransactionCanceledException
 	if !errors.As(err, &txErr) {
 		return false

@@ -64,7 +64,12 @@ import type { SignupMaterial, SignupProgressEvent } from '@/lib/crypto/worker-pr
  * actually created.
  */
 export function isDefinitelyUncommitted(err: unknown): boolean {
-  return err instanceof ApiError && err.status < 500
+  // A 409 conflict_retry (#150) says only that THIS request wrote nothing: the
+  // conflicting transaction can be this client's own earlier, lost-response
+  // attempt still in flight. Treating it as uncommitted would drop `resume`
+  // and the original commits under material whose recovery code was never
+  // shown, so it stays ambiguous like a 5xx.
+  return err instanceof ApiError && err.status < 500 && err.code !== 'conflict_retry'
 }
 
 export interface PendingSignup {
