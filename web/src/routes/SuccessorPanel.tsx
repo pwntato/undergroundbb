@@ -66,11 +66,14 @@ export function SuccessorPanel({
     const candidates = view.members.filter(
       (m) => m.userId !== userId && m.role !== 'admin' && !isDeletedUser(m.userId, usernames),
     )
+    const soleAdmin = !view.members.some(
+      (m) => m.userId !== userId && m.role === 'admin' && !isDeletedUser(m.userId, usernames),
+    )
     return (
       <div className="flex w-full max-w-md flex-col gap-4">
         <h2 className="text-lg font-semibold">Successor</h2>
         <p className={`text-sm ${status.kind === 'active' ? '' : 'text-destructive'}`}>
-          {adminStatusText(status, usernames)}
+          {adminStatusText(status, usernames, soleAdmin)}
         </p>
         {candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">

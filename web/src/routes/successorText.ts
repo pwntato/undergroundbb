@@ -4,15 +4,22 @@
 import { formatDay, type AdminSuccessorStatus, type SuccessorOffer } from '@/lib/groups/designation'
 import { memberLabel } from './memberLabel'
 
-/** The sentence an admin reads about their standing designation, or the lack of one. */
+/**
+ * The sentence an admin reads about their standing designation, or the lack of
+ * one. The "last admin" warning only applies when they are the sole admin
+ * (#203); `soleAdmin` is that fact, true unless another live admin exists.
+ */
 export function adminStatusText(
   status: AdminSuccessorStatus,
   usernames?: ReadonlyMap<string, string>,
+  soleAdmin = true,
 ): string {
   const name = (id: string) => memberLabel(id, usernames)
   switch (status.kind) {
     case 'none':
-      return 'You have not named a successor. If you stop logging in and you are the last admin, nobody will be able to govern this group.'
+      return soleAdmin
+        ? 'You have not named a successor. If you stop logging in and you are the last admin, nobody will be able to govern this group.'
+        : 'You have not named a successor.'
     case 'revoked':
       return `You revoked your successor on ${formatDay(status.day)}. You have no successor now.`
     case 'cancelled':
