@@ -93,6 +93,14 @@ describe('SuccessorPanel, admin', () => {
     const shared = render(withAdminBob, ADMIN, '2026-09-01')
     expect(shared).toContain('You have not named a successor')
     expect(shared).not.toContain('last admin')
+
+    // A deleted account that still holds the admin role cannot govern, so it
+    // does not count as another admin.
+    const withDeletedAdmin: SuccessorView = {
+      ...base,
+      members: base.members.map((m) => (m.userId === CAT ? { ...m, role: 'admin' as const } : m)),
+    }
+    expect(render(withDeletedAdmin, ADMIN, '2026-09-01')).toContain('you are the last admin')
   })
 
   it('lists other live members as candidates, not yourself or a deleted account', () => {
