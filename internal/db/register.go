@@ -321,6 +321,19 @@ func isConditionalCheckFailure(err error, itemIndex int) bool {
 // Local usually raises ConditionalCheckFailed. Unlike a condition failure it
 // says nothing about the data, only that the attempt should be retried.
 func isTransactionConflict(err error) bool {
+	return IsTransactionConflict(err)
+}
+
+// IsTransactionConflict is isTransactionConflict for callers outside the db
+// package: the handlers' catch-all error writer uses it so a conflict on any
+// transactional write is a retryable 409 rather than a 500 (#150).
+func IsTransactionConflict(err error) bool {
+	// A plain PutItem/UpdateItem that lands on an item while a transaction on
+	// it is in flight fails with this type instead; same meaning, nothing written.
+	var conflictErr *types.TransactionConflictException
+	if errors.As(err, &conflictErr) {
+		return true
+	}
 	var txErr *types.TransactionCanceledException
 	if !errors.As(err, &txErr) {
 		return false

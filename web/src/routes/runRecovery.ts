@@ -57,7 +57,9 @@ export function isCredentialFailure(err: unknown): boolean {
 
 /** reset()'s stale-credential-version conflict (password.go's errCredentialVersionStale). */
 export function isStaleVersionConflict(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 409
+  // Not conflict_retry (#150): that one is a concurrent transaction, possibly
+  // this client's own earlier attempt, so it must stay ambiguous and keep `resume`.
+  return err instanceof ApiError && err.status === 409 && err.code !== 'conflict_retry'
 }
 
 /**
@@ -78,7 +80,7 @@ export function isStaleVersionConflict(err: unknown): boolean {
  * change.
  */
 export function isDefinitelyUncommitted(err: unknown): boolean {
-  return err instanceof ApiError && err.status < 500
+  return err instanceof ApiError && err.status < 500 && err.code !== 'conflict_retry'
 }
 
 export type RecoveryErrorKind =

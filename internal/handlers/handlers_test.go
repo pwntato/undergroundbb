@@ -3,10 +3,15 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -131,5 +136,49 @@ func TestWriteError(t *testing.T) {
 	}
 	if body["error"] != "no such group" {
 		t.Errorf("error = %q", body["error"])
+	}
+}
+
+func txCanceled(codes ...string) error {
+	reasons := make([]types.CancellationReason, len(codes))
+	for i, c := range codes {
+		reasons[i] = types.CancellationReason{Code: aws.String(c)}
+	}
+	return &types.TransactionCanceledException{CancellationReasons: reasons}
+}
+
+// #150: a TransactionConflict on any transactional write is a retryable 409,
+// not a 500, even when the db layer wrapped it.
+func TestWriteInternalErrorMapsTransactionConflictToRetryable409(t *testing.T) {
+	for name, err := range map[string]error{
+		"bare":    txCanceled("None", "TransactionConflict"),
+		"wrapped": fmt.Errorf("db: create group: %w", txCanceled("TransactionConflict")),
+	} {
+		rec := httptest.NewRecorder()
+		WriteInternalError(rec, httptest.NewRequest(http.MethodPost, "/api/groups", nil), err, "could not create group")
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s: status = %d, want 409", name, rec.Code)
+		}
+		var body map[string]string
+		if e := json.Unmarshal(rec.Body.Bytes(), &body); e != nil {
+			t.Fatalf("%s: decoding body: %v", name, e)
+		}
+		if body["code"] != "conflict_retry" {
+			t.Errorf("%s: code = %q, want conflict_retry", name, body["code"])
+		}
+	}
+}
+
+func TestWriteInternalErrorKeepsOtherFailuresAs500(t *testing.T) {
+	for name, err := range map[string]error{
+		"condition failed": txCanceled("ConditionalCheckFailed"),
+		"throttled":        txCanceled("ThrottlingError"),
+		"plain":            errors.New("boom"),
+	} {
+		rec := httptest.NewRecorder()
+		WriteInternalError(rec, httptest.NewRequest(http.MethodPost, "/api/groups", nil), err, "could not create group")
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("%s: status = %d, want 500", name, rec.Code)
+		}
 	}
 }
