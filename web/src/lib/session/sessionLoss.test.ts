@@ -8,7 +8,10 @@ describe('isSessionLoss', () => {
     for (const path of [
       '/api/groups',
       '/api/invites',
+      // next to the excluded /api/account/recovery-code, and still session routes
       '/api/account/credentials',
+      '/api/account/password',
+      '/api/account',
       '/api/users:batch',
     ]) {
       expect(isSessionLoss(path, 401, ORIGIN), path).toBe(true)
@@ -20,12 +23,16 @@ describe('isSessionLoss', () => {
     expect(isSessionLoss(new Request(`${ORIGIN}/api/groups`), 401, ORIGIN)).toBe(true)
   })
 
-  it('ignores the auth endpoints, whose 401 is not a lost session', () => {
+  it('ignores the routes whose 401 is not a lost session', () => {
     for (const path of [
+      // login (internal/handlers/login.go)
       '/api/auth/verify',
       '/api/auth/challenge',
-      '/api/auth/recovery/release',
       '/api/auth/session',
+      // wrong recovery code (internal/handlers/recovery.go), reachable from the
+      // unguarded /recovery screen while logged in
+      '/api/account/recovery-code/release',
+      '/api/account/recovery-code',
     ]) {
       expect(isSessionLoss(path, 401, ORIGIN), path).toBe(false)
     }
@@ -61,6 +68,7 @@ describe('watchSessionLoss', () => {
     const onLost = vi.fn()
     await watchSessionLoss(stubFetch(500), ORIGIN, onLost)('/api/groups')
     await watchSessionLoss(stubFetch(401), ORIGIN, onLost)('/api/auth/verify')
+    await watchSessionLoss(stubFetch(401), ORIGIN, onLost)('/api/account/recovery-code/release')
     expect(onLost).not.toHaveBeenCalled()
   })
 
