@@ -14,6 +14,7 @@ import {
   signLeaveRotationStart,
 } from '@/lib/crypto/worker-client'
 import { makeRotationDeps } from './rotationDeps'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
@@ -84,6 +85,9 @@ export function DeleteAccountScreen() {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Leaving a group needs the worker's keys, which a reload drops; ask in place (#221).
+  const [reauthenticating, setReauthenticating] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const reload = useCallback(
     async (isCancelled: boolean | (() => boolean), afterRun = false) => {
@@ -140,12 +144,32 @@ export function DeleteAccountScreen() {
     state = load
   }
 
+  if (reauthenticating) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={userId}
+        action="leave your groups"
+        onDone={() => {
+          setReauthenticating(false)
+          setError(null)
+          setNotice(
+            'Password accepted. Your account has not been deleted yet. Confirm again to finish.',
+          )
+        }}
+        onCancel={() => {
+          setReauthenticating(false)
+        }}
+      />
+    )
+  }
+
   const handleConfirm = async () => {
     if (load.status !== 'ready') {
       return
     }
     setBusy(true)
     setError(null)
+    setNotice(null)
     // The labels of the plan the run is made against, which can differ from
     // the ones on screen if the groups changed since this page loaded.
     let freshLoaded: Loaded | null = null
@@ -181,6 +205,9 @@ export function DeleteAccountScreen() {
       return
     }
     setError(deleteFailureMessage(result, labelFor))
+    if (result.kind === 'leaveFailed' && result.reason === 'coldKeys') {
+      setReauthenticating(true)
+    }
     // Some groups may already be left; show what remains.
     await reload(false, true)
     setBusy(false)
@@ -192,6 +219,11 @@ export function DeleteAccountScreen() {
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {notice !== null && (
+        <Alert>
+          <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}
       <DeleteAccountPanel

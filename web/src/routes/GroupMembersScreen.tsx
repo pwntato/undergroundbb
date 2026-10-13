@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import {
   changeMemberRole,
   getGroup,
@@ -106,6 +107,10 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   // from the first; runReadmit re-checks everything before it signs.
   const [readmittable, setReadmittable] = useState<ReadonlySet<string>>(new Set())
   const [ownFingerprint, setOwnFingerprint] = useState<OwnFingerprintState>({ status: 'loading' })
+  // Bumped after a re-auth so the fingerprint and the on-load rotation catch-up run again (#221).
+  const [warmTick, setWarmTick] = useState(0)
+  // The on-load rotation stopped only because this tab's keys were cold.
+  const [rotationNeedsPassword, setRotationNeedsPassword] = useState(false)
   const [readmitPrompt, setReadmitPrompt] = useState<{
     readonly userId: string
     readonly fingerprint: string
@@ -196,7 +201,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     return () => {
       cancelled = true
     }
-  }, [userId])
+  }, [userId, warmTick])
 
   useEffect(() => {
     if (loadedView === null || userId === null) {
@@ -252,6 +257,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         (id) => memberLabel(id, usernamesRef.current),
       )
       setCatchUpStatus(effects.status)
+      setRotationNeedsPassword(effects.needsPassword)
       if (effects.error !== null) {
         setError(effects.error)
       } else if (effects.message !== null) {
@@ -263,7 +269,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         await reload(() => false)
       }
     })()
-  }, [rotationGroupId, userId, guard, reload])
+  }, [rotationGroupId, userId, guard, reload, warmTick])
 
   if (groupId === undefined) {
     return (
@@ -514,6 +520,13 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
+  // The red banner already says an overdue rotation is unfinished; the neutral
+  // password notice below would only contradict it, so it yields to the banner.
+  const staleRotationNotice =
+    load.status === 'ready'
+      ? rotationNotice(load.view, load.loadedAtMs, catchUpStatus, rotationNeedsPassword)
+      : null
+
   if (reauthAction !== null && userId !== null) {
     return (
       <ReauthenticateStep
@@ -522,6 +535,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         onDone={() => {
           setReauthAction(null)
           setError(null)
+          setOwnFingerprint({ status: 'loading' })
+          setRotationNeedsPassword(false)
+          setWarmTick((n) => n + 1)
           // Re-runs the roster's grant check now that the worker is warm.
           void reload(() => false)
         }}
@@ -571,7 +587,14 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           check={checkForView(grantCheck, load.view)}
         />
       )}
-      {load.status === 'ready' && userId !== null && <OwnFingerprintPanel state={ownFingerprint} />}
+      {load.status === 'ready' && userId !== null && (
+        <OwnFingerprintPanel
+          state={ownFingerprint}
+          onReauthenticate={() => {
+            setReauthAction('show your fingerprint')
+          }}
+        />
+      )}
       {load.status === 'ready' && userId !== null && (
         <LeaveGroupPanel
           plan={leavePlan(load.view, userId, usernames)}
@@ -589,11 +612,33 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )}
       {load.status === 'ready' && !rotationBusy && (
         <RotationBanner
-          notice={rotationNotice(load.view, load.loadedAtMs, catchUpStatus)}
+          notice={staleRotationNotice}
           startedByLabel={memberLabel(load.view.rotation?.startedBy ?? '', usernames)}
         />
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />
+      {rotationNeedsPassword && (
+        <div className="flex w-full max-w-md flex-col gap-2">
+          {staleRotationNotice === null && (
+            <Alert>
+              <AlertDescription>
+                This tab needs your password to check whether this group has a key rotation to
+                finish.
+              </AlertDescription>
+            </Alert>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            className="self-start"
+            onClick={() => {
+              setReauthAction('check for a key rotation')
+            }}
+          >
+            Enter your password
+          </Button>
+        </div>
+      )}
       {load.status === 'ready' && (
         <Link
           to={`/groups/${encodeURIComponent(load.view.groupId)}/successor`}

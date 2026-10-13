@@ -11,7 +11,7 @@ import type { DisplayGroup } from './runListGroups'
  * not blank the whole list" requirement): 'unreadable' shows a fallback
  * rather than an empty string, and 'coldKeys' shows a placeholder distinct
  * from a genuinely unreadable group, since re-authenticating is what fixes
- * this one (GroupList's own "log in again" hint covers the how) -- see
+ * this one (GroupList's own enter-your-password hint covers the how) -- see
  * #143 (hasLiveKeys pre-check), which would let this distinguish "cold"
  * from "corrupt" even before a decrypt is attempted.
  */

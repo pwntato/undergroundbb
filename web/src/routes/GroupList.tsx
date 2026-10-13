@@ -7,6 +7,7 @@
 // plain LoadState; this file owns nothing but rendering it.
 
 import { Link } from 'react-router'
+import { Button } from '@/components/ui/button'
 import type { DisplayGroup } from './runListGroups'
 import { groupLabel } from './groupLabel'
 
@@ -15,7 +16,14 @@ export type LoadState =
   | { readonly status: 'ready'; readonly groups: readonly DisplayGroup[] }
   | { readonly status: 'error' }
 
-export function GroupList({ load }: { readonly load: LoadState }) {
+export function GroupList({
+  load,
+  onReauthenticate,
+}: {
+  readonly load: LoadState
+  /** Opens the in-place password step; private group names need this tab's keys. */
+  readonly onReauthenticate: () => void
+}) {
   return (
     <>
       {load.status === 'loading' && (
@@ -72,7 +80,14 @@ export function GroupList({ load }: { readonly load: LoadState }) {
       )}
 
       {load.status === 'ready' && load.groups.some((g) => g.nameStatus === 'coldKeys') && (
-        <p className="text-xs text-muted-foreground">Log in again to see private group names.</p>
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-xs text-muted-foreground">
+            This tab needs your password to show private group names.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={onReauthenticate}>
+            Enter your password
+          </Button>
+        </div>
       )}
     </>
   )

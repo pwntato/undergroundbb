@@ -56,6 +56,19 @@ describe('rotationNotice', () => {
     expect(rotationNotice(view(), NOW, outcome)).toMatchObject({ kind, startedBy: 'u1' })
   })
 
+  it('tells a stale cold-keys stop to enter the password, not to reopen the group', () => {
+    expect(rotationNotice(view(), NOW, 'incomplete', true)).toMatchObject({
+      kind: 'needs-password',
+      startedBy: 'u1',
+    })
+    expect(rotationNotice(view(), NOW, 'incomplete', false)).toMatchObject({ kind: 'stopped' })
+    // A fresh marker still shows nothing, cold or not.
+    const fresh = view({
+      rotation: { ...view().rotation!, startedAt: new Date(NOW).toISOString() },
+    })
+    expect(rotationNotice(fresh, NOW, 'incomplete', true)).toBeNull()
+  })
+
   it('does not send an admin whose key is ahead of the marker to another admin', () => {
     expect(rotationNotice(view({ myGeneration: 3 }), NOW, 'cannot-resume')).toMatchObject({
       kind: 'ahead',
@@ -88,6 +101,24 @@ describe('describeAge', () => {
 describe('catchUpResult', () => {
   const label = (id: string): string => id
   const stale = view({ myGeneration: 1 })
+
+  it('asks for the password, with no error text, when the rotation stopped on cold keys', () => {
+    const cold = catchUpResult(
+      { status: 'incomplete', reason: 'worker: no live keys cached -- log in again', rewrapped: 0 },
+      view(),
+      NOW,
+      label,
+    )
+    expect(cold).toMatchObject({ needsPassword: true, error: null, message: null })
+    const other = catchUpResult(
+      { status: 'incomplete', reason: 'the group kept changing; run again', rewrapped: 0 },
+      view(),
+      NOW,
+      label,
+    )
+    expect(other.needsPassword).toBe(false)
+    expect(other.error).toContain('Key rotation stopped')
+  })
 
   it('records the status and reloads only after a completed rotation', () => {
     expect(catchUpResult({ status: 'completed', rewrapped: 2 }, view(), NOW, label)).toMatchObject({

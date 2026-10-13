@@ -32,6 +32,7 @@ import {
   type SuccessorActionResult,
   type SuccessorView,
 } from './runSuccessor'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { useUsernames } from './useUsernames'
 
 type LoadState =
@@ -55,8 +56,8 @@ function failureText(outcome: Failure, doing: 'designate' | 'claim'): string {
       return 'Your session has expired. Log in again and retry.'
     case 'coldKeys':
       return doing === 'designate'
-        ? 'Log in again to designate a successor.'
-        : 'Log in again to claim the admin role.'
+        ? 'This tab needs your password again to designate a successor.'
+        : 'This tab needs your password again to claim the admin role.'
     case 'notFound':
       return 'This group no longer exists, or you are no longer a member.'
     case 'rejected':
@@ -84,6 +85,8 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
     periodDays: String(SUGGESTED_PERIOD_DAYS),
   })
   const [confirmingClaim, setConfirmingClaim] = useState<string | null>(null)
+  // An action found the worker's keys cold (reload, new tab, deploy); ask for the password in place (#221).
+  const [reauthAction, setReauthAction] = useState<string | null>(null)
 
   const reload = useCallback(
     async (isCancelled: () => boolean) => {
@@ -141,6 +144,9 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
         onSuccess?.()
       } else {
         setError(failureText(outcome, doing))
+        if (outcome.kind === 'coldKeys') {
+          setReauthAction(doing === 'designate' ? 'designate a successor' : 'claim the admin role')
+        }
       }
       if (shouldReloadAfterSuccessor(outcome)) await reload(() => false)
       setBusy(false)
@@ -185,6 +191,23 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
           designationSortKey,
         ),
       'You are now an admin of this group. You can grant roles from tomorrow (UTC); the server refuses role changes until then.',
+    )
+  }
+
+  if (reauthAction !== null && userId !== null) {
+    return (
+      <ReauthenticateStep
+        sessionUserId={userId}
+        action={reauthAction}
+        onDone={() => {
+          setReauthAction(null)
+          setError(null)
+          void reload(() => false)
+        }}
+        onCancel={() => {
+          setReauthAction(null)
+        }}
+      />
     )
   }
 
