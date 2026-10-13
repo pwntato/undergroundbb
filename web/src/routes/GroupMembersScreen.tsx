@@ -611,11 +611,10 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />
       {rotationNeedsPassword && (
-        <div className="flex w-full flex-col gap-2">
+        <div className="flex w-full max-w-md flex-col gap-2">
           <Alert>
             <AlertDescription>
-              A key rotation is waiting on this group, and this tab needs your password to finish
-              it.
+              This tab needs your password to check whether this group has a key rotation to finish.
             </AlertDescription>
           </Alert>
           <Button
@@ -623,7 +622,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             variant="outline"
             className="self-start"
             onClick={() => {
-              setReauthAction('finish the key rotation')
+              setReauthAction('check for a key rotation')
             }}
           >
             Enter your password
