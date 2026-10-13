@@ -298,3 +298,12 @@ export async function deleteAccount(): Promise<void> {
   const res = await fetch('/api/account', { method: 'DELETE', credentials: 'same-origin' })
   await handleJSON<unknown>(res)
 }
+
+/**
+ * POST /api/auth/logout -- issue #222. The server clears the session cookie;
+ * it needs no valid session, so this succeeds for an already-expired one too.
+ */
+export async function logoutRequest(): Promise<void> {
+  const res = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+  await handleJSON<unknown>(res)
+}

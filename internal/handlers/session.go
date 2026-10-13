@@ -91,3 +91,34 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	WriteJSON(w, http.StatusOK, sessionResponse{Authenticated: true, UserID: userID})
 }
+
+// clearSessionCookie expires the session cookie with the same attributes it
+// was issued under, which browsers require to match for the clear to apply.
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+// logout is POST /api/auth/logout (#222). It needs no valid session: a
+// visitor whose cookie already expired still gets a clean 200 and a cleared
+// cookie. Sessions are stateless signed tokens, so there is no server-side
+// record to revoke; logout drops the browser's copy, and a token copied
+// elsewhere stays valid until its expiry.
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	// A cross-site form POST must not be able to log the visitor out. Browsers
+	// always send Sec-Fetch-Site; a client that omits it is not a browser
+	// being driven by another site, so it is let through.
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+		WriteError(w, http.StatusForbidden, "cross-site logout refused")
+		return
+	}
+	clearSessionCookie(w)
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}

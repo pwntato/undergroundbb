@@ -44,14 +44,6 @@ func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not delete account")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	clearSessionCookie(w)
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

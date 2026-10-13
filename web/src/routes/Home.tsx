@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
+import { logoutRequest } from '@/lib/api/auth'
 import { getKeychain, listGroups } from '@/lib/api/groups'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
@@ -20,6 +21,7 @@ import { useSession } from '@/lib/session/useSession'
 import { GroupList, type LoadState } from './GroupList'
 import { readNewGroupState } from './newGroupNavigationState'
 import { runListGroups } from './runListGroups'
+import { runLogout } from './runLogout'
 
 export function Home() {
   const session = useSession()
@@ -27,6 +29,8 @@ export function Home() {
   const navigate = useNavigate()
   const locationState = location.state as unknown
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
+  const [logoutError, setLogoutError] = useState<string | null>(null)
+  const [loggingOut, setLoggingOut] = useState(false)
 
   useEffect(() => {
     if (!session.userId) {
@@ -130,6 +134,18 @@ export function Home() {
     )
   }
 
+  async function onLogout() {
+    setLogoutError(null)
+    setLoggingOut(true)
+    const outcome = await runLogout({ logoutRequest, clearLocalSession: session.logout })
+    setLoggingOut(false)
+    if (outcome.ok) {
+      navigate('/', { replace: true })
+    } else {
+      setLogoutError(outcome.message)
+    }
+  }
+
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-4 text-center">
       <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">UndergroundBB</h1>
@@ -149,7 +165,11 @@ export function Home() {
         <Button asChild variant="outline">
           <Link to="/account/delete">Delete account</Link>
         </Button>
+        <Button variant="outline" disabled={loggingOut} onClick={() => void onLogout()}>
+          Log out
+        </Button>
       </div>
+      {logoutError !== null && <p className="text-sm text-destructive">{logoutError}</p>}
     </div>
   )
 }
