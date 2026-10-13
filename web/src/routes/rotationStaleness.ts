@@ -29,6 +29,8 @@ export type RotationNotice =
   | { readonly kind: 'ahead'; readonly startedBy: string; readonly ageMs: number | null }
   /** This admin's own attempt stopped; nothing resumes until the group is reopened. */
   | { readonly kind: 'stopped'; readonly startedBy: string; readonly ageMs: number | null }
+  /** This admin's attempt stopped only because this tab's keys are cold; a password resumes it. */
+  | { readonly kind: 'needs-password'; readonly startedBy: string; readonly ageMs: number | null }
   /** This admin's attempt is paused because a member's keys no longer match the saved copy. */
   | { readonly kind: 'blocked'; readonly startedBy: string; readonly ageMs: number | null }
 
@@ -44,6 +46,9 @@ export type RotationNotice =
  * already speak), and what to tell the admin after it stops is a different
  * thing from what the view alone can say.
  *
+ * `needsPassword` is catchUpResult's flag for an `incomplete` outcome that stopped only
+ * because the keys are cold: reopening the group would not help, entering the password does.
+ *
  * `nowMs` is the time the view was loaded, so a page left open while a fresh
  * marker crosses the deadline shows nothing until something reloads it. That
  * is a choice: the admin would have to sit on one group's page while a
@@ -53,6 +58,7 @@ export function rotationNotice(
   view: MembersView,
   nowMs: number,
   outcome: RotationOutcome['status'] | null,
+  needsPassword = false,
 ): RotationNotice | null {
   const marker = view.rotation
   if (marker === undefined || view.myRole !== 'admin' || outcome === null) {
@@ -73,7 +79,11 @@ export function rotationNotice(
         ageMs,
       }
     case 'incomplete':
-      return { kind: 'stopped', startedBy: marker.startedBy, ageMs }
+      return {
+        kind: needsPassword ? 'needs-password' : 'stopped',
+        startedBy: marker.startedBy,
+        ageMs,
+      }
     case 'blocked':
       return { kind: 'blocked', startedBy: marker.startedBy, ageMs }
     case 'none':

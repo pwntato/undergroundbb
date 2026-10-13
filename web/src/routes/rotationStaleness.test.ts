@@ -56,6 +56,19 @@ describe('rotationNotice', () => {
     expect(rotationNotice(view(), NOW, outcome)).toMatchObject({ kind, startedBy: 'u1' })
   })
 
+  it('tells a stale cold-keys stop to enter the password, not to reopen the group', () => {
+    expect(rotationNotice(view(), NOW, 'incomplete', true)).toMatchObject({
+      kind: 'needs-password',
+      startedBy: 'u1',
+    })
+    expect(rotationNotice(view(), NOW, 'incomplete', false)).toMatchObject({ kind: 'stopped' })
+    // A fresh marker still shows nothing, cold or not.
+    const fresh = view({
+      rotation: { ...view().rotation!, startedAt: new Date(NOW).toISOString() },
+    })
+    expect(rotationNotice(fresh, NOW, 'incomplete', true)).toBeNull()
+  })
+
   it('does not send an admin whose key is ahead of the marker to another admin', () => {
     expect(rotationNotice(view({ myGeneration: 3 }), NOW, 'cannot-resume')).toMatchObject({
       kind: 'ahead',

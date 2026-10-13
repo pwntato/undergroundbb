@@ -520,6 +520,13 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
+  // The red banner already says an overdue rotation is unfinished; the neutral
+  // password notice below would only contradict it, so it yields to the banner.
+  const staleRotationNotice =
+    load.status === 'ready'
+      ? rotationNotice(load.view, load.loadedAtMs, catchUpStatus, rotationNeedsPassword)
+      : null
+
   if (reauthAction !== null && userId !== null) {
     return (
       <ReauthenticateStep
@@ -605,18 +612,21 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       )}
       {load.status === 'ready' && !rotationBusy && (
         <RotationBanner
-          notice={rotationNotice(load.view, load.loadedAtMs, catchUpStatus)}
+          notice={staleRotationNotice}
           startedByLabel={memberLabel(load.view.rotation?.startedBy ?? '', usernames)}
         />
       )}
       <MembersFeedback message={message} error={error} rotating={rotationBusy} />
       {rotationNeedsPassword && (
         <div className="flex w-full max-w-md flex-col gap-2">
-          <Alert>
-            <AlertDescription>
-              This tab needs your password to check whether this group has a key rotation to finish.
-            </AlertDescription>
-          </Alert>
+          {staleRotationNotice === null && (
+            <Alert>
+              <AlertDescription>
+                This tab needs your password to check whether this group has a key rotation to
+                finish.
+              </AlertDescription>
+            </Alert>
+          )}
           <Button
             type="button"
             variant="outline"

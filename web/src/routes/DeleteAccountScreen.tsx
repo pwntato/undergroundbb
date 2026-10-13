@@ -87,6 +87,7 @@ export function DeleteAccountScreen() {
   const [error, setError] = useState<string | null>(null)
   // Leaving a group needs the worker's keys, which a reload drops; ask in place (#221).
   const [reauthenticating, setReauthenticating] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const reload = useCallback(
     async (isCancelled: boolean | (() => boolean), afterRun = false) => {
@@ -151,6 +152,9 @@ export function DeleteAccountScreen() {
         onDone={() => {
           setReauthenticating(false)
           setError(null)
+          setNotice(
+            'Password accepted. Your account has not been deleted yet. Confirm again to finish.',
+          )
         }}
         onCancel={() => {
           setReauthenticating(false)
@@ -165,6 +169,7 @@ export function DeleteAccountScreen() {
     }
     setBusy(true)
     setError(null)
+    setNotice(null)
     // The labels of the plan the run is made against, which can differ from
     // the ones on screen if the groups changed since this page loaded.
     let freshLoaded: Loaded | null = null
@@ -214,6 +219,11 @@ export function DeleteAccountScreen() {
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {notice !== null && (
+        <Alert>
+          <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}
       <DeleteAccountPanel

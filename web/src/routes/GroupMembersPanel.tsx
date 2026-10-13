@@ -389,6 +389,7 @@ export function RotationBanner({
       'Only an admin who already holds the new key can finish it. Ask one to open this group.',
     ahead: 'Your view is out of date. Reload the page.',
     stopped: 'Reopening this group tries again.',
+    'needs-password': 'This tab needs your password to finish it. Enter it below.',
     blocked:
       "It is paused because a member's keys no longer match the copy you saved earlier. Check with them another way before relying on this group.",
   }
