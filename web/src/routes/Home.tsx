@@ -30,6 +30,7 @@ export function Home() {
   const locationState = location.state as unknown
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [logoutError, setLogoutError] = useState<string | null>(null)
+  const [loggingOut, setLoggingOut] = useState(false)
 
   useEffect(() => {
     if (!session.userId) {
@@ -135,7 +136,9 @@ export function Home() {
 
   async function onLogout() {
     setLogoutError(null)
+    setLoggingOut(true)
     const outcome = await runLogout({ logoutRequest, clearLocalSession: session.logout })
+    setLoggingOut(false)
     if (outcome.ok) {
       navigate('/', { replace: true })
     } else {
@@ -162,7 +165,7 @@ export function Home() {
         <Button asChild variant="outline">
           <Link to="/account/delete">Delete account</Link>
         </Button>
-        <Button variant="outline" onClick={() => void onLogout()}>
+        <Button variant="outline" disabled={loggingOut} onClick={() => void onLogout()}>
           Log out
         </Button>
       </div>

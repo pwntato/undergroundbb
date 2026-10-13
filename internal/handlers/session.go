@@ -112,6 +112,13 @@ func clearSessionCookie(w http.ResponseWriter) {
 // record to revoke; logout drops the browser's copy, and a token copied
 // elsewhere stays valid until its expiry.
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	// A cross-site form POST must not be able to log the visitor out. Browsers
+	// always send Sec-Fetch-Site; a client that omits it is not a browser
+	// being driven by another site, so it is let through.
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+		WriteError(w, http.StatusForbidden, "cross-site logout refused")
+		return
+	}
 	clearSessionCookie(w)
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }

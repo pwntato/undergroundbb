@@ -163,3 +163,28 @@ func TestLogoutWithoutSessionStillSucceeds(t *testing.T) {
 	}
 	assertSessionCookieCleared(t, rec)
 }
+
+func TestLogoutRefusesCrossSiteRequests(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	for _, site := range []string{"cross-site", "same-site", "none"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		req.Header.Set("Sec-Fetch-Site", site)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("Sec-Fetch-Site %q: status = %d, want 403", site, rec.Code)
+		}
+		if sessionCookieFrom(rec) != nil {
+			t.Errorf("Sec-Fetch-Site %q: refused request still set a cookie", site)
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("same-origin: status = %d, want 200", rec.Code)
+	}
+}
