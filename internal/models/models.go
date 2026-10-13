@@ -103,6 +103,10 @@ type User struct {
 	// existed. It is a server attestation: only the server's claim check reads it.
 	// Account deletion removes it with the rest of what a tombstone does not need.
 	LastLoginDay string `dynamodbav:"LastLoginDay,omitempty"`
+	// SessionGeneration is the counter session tokens carry (#224). Logout
+	// increments it, which makes every token issued at a lower value invalid.
+	// Absent (0) on a row from before it existed.
+	SessionGeneration int64 `dynamodbav:"SessionGeneration,omitempty"`
 }
 
 // SupersededKey is a prior Ed25519 public key and the interval it was

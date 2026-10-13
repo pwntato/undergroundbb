@@ -151,7 +151,7 @@ func TestLoginHappyPath(t *testing.T) {
 		t.Errorf("session cookie SameSite = %v, want Lax", sessionCookie.SameSite)
 	}
 
-	userID, err := h.sessions.Verify(sessionCookie.Value)
+	userID, _, err := h.sessions.Verify(sessionCookie.Value)
 	if err != nil {
 		t.Fatalf("session token does not verify: %v", err)
 	}

@@ -283,7 +283,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := h.sessions.Issue(userID, h.cfg.SessionTTL)
+	token := h.sessions.Issue(userID, user.SessionGeneration, h.cfg.SessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,

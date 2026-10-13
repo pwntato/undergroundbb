@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 )
@@ -186,5 +187,139 @@ func TestLogoutRefusesCrossSiteRequests(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("same-origin: status = %d, want 200", rec.Code)
+	}
+}
+
+// #224: logout must end the session server-side, not only drop the browser's
+// copy. A token copied before logout is the attacker's stand-in here.
+func loggedInCookie(t *testing.T, h *Handler, user registeredUser) *http.Cookie {
+	t.Helper()
+	cookie := sessionCookieFrom(completeLogin(t, h, user))
+	if cookie == nil {
+		t.Fatal("no session cookie set by login")
+	}
+	return cookie
+}
+
+func TestLogoutRevokesACopiedToken(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	cookie := loggedInCookie(t, h, user)
+	copied := &http.Cookie{Name: cookie.Name, Value: cookie.Value}
+
+	if rec := doGetAccountCredentials(t, h, copied); rec.Code != http.StatusOK {
+		t.Fatalf("before logout: credentials status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	if rec := doLogout(t, h, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want 200", rec.Code)
+	}
+
+	if rec := doGetAccountCredentials(t, h, copied); rec.Code != http.StatusUnauthorized {
+		t.Errorf("after logout: protected route status = %d, want 401, body: %s", rec.Code, rec.Body.String())
+	}
+	var body sessionResponse
+	rec := doGetSession(t, h, copied)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if rec.Code != http.StatusOK || body.Authenticated {
+		t.Errorf("after logout: GET session = %d authenticated=%v, want 200 false", rec.Code, body.Authenticated)
+	}
+}
+
+func TestLogoutEndsEveryTokenOfTheUser(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	laptop := loggedInCookie(t, h, user)
+	phone := loggedInCookie(t, h, user)
+
+	doLogout(t, h, laptop)
+
+	if rec := doGetAccountCredentials(t, h, phone); rec.Code != http.StatusUnauthorized {
+		t.Errorf("other session after logout: status = %d, want 401", rec.Code)
+	}
+}
+
+func TestLoginAfterLogoutGetsAWorkingSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	doLogout(t, h, loggedInCookie(t, h, user))
+
+	fresh := loggedInCookie(t, h, user)
+	if rec := doGetAccountCredentials(t, h, fresh); rec.Code != http.StatusOK {
+		t.Errorf("fresh login after logout: status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A revoked token replayed to logout must not bump the counter past the newer
+// login, or whoever holds an old token could sign the user out at will.
+func TestRevokedTokenCannotLogOutANewerSession(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	old := loggedInCookie(t, h, user)
+	doLogout(t, h, old)
+	fresh := loggedInCookie(t, h, user)
+
+	if rec := doLogout(t, h, &http.Cookie{Name: old.Name, Value: old.Value}); rec.Code != http.StatusOK {
+		t.Fatalf("replayed logout status = %d, want 200", rec.Code)
+	}
+	if rec := doGetAccountCredentials(t, h, fresh); rec.Code != http.StatusOK {
+		t.Errorf("newer session after replayed logout: status = %d, want 200", rec.Code)
+	}
+}
+
+// A token with a valid signature for a generation the user never had is not
+// a session either, in both directions.
+func TestSessionWithWrongGenerationIsRejected(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+	for _, gen := range []int64{1, 5} {
+		token := h.sessions.Issue(user.userID, gen, time.Hour)
+		cookie := &http.Cookie{Name: sessionCookieName, Value: token}
+		if rec := doGetAccountCredentials(t, h, cookie); rec.Code != http.StatusUnauthorized {
+			t.Errorf("generation %d: status = %d, want 401", gen, rec.Code)
+		}
+	}
+	token := h.sessions.Issue(user.userID, 0, time.Hour)
+	if rec := doGetAccountCredentials(t, h, &http.Cookie{Name: sessionCookieName, Value: token}); rec.Code != http.StatusOK {
+		t.Errorf("generation 0: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestSessionOfAnUnknownUserIsRejected(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	token := h.sessions.Issue("no-such-user-"+randomUsername(t), 0, time.Hour)
+	if rec := doGetAccountCredentials(t, h, &http.Cookie{Name: sessionCookieName, Value: token}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}
+
+// A store failure must never read as "not logged in" (the web client would
+// drop a live session) and logout must not claim success it did not have.
+func TestSessionStoreFailureIsA500NotALogout(t *testing.T) {
+	good := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, good)
+	cookie := loggedInCookie(t, good, user)
+	failing := New(config.FromEnv(), conflictingDBOn(t, "GetItem", "ValidationException",
+		`{"__type":"com.amazon.coral.validate#ValidationException","message":"injected"}`))
+
+	if rec := doGetAccountCredentials(t, failing, cookie); rec.Code != http.StatusInternalServerError {
+		t.Errorf("protected route: status = %d, want 500", rec.Code)
+	}
+	if rec := doGetSession(t, failing, cookie); rec.Code != http.StatusInternalServerError {
+		t.Errorf("GET session: status = %d, want 500", rec.Code)
+	}
+
+	failingWrite := New(config.FromEnv(), conflictingDBOn(t, "UpdateItem", "ValidationException",
+		`{"__type":"com.amazon.coral.validate#ValidationException","message":"injected"}`))
+	rec := doLogout(t, failingWrite, cookie)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("logout with failing revoke: status = %d, want 500", rec.Code)
+	}
+	if sessionCookieFrom(rec) != nil {
+		t.Error("failed logout still cleared the cookie")
+	}
+	if rec := doGetAccountCredentials(t, good, cookie); rec.Code != http.StatusOK {
+		t.Errorf("session after failed logout: status = %d, want 200", rec.Code)
 	}
 }
