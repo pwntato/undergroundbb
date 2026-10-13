@@ -17,13 +17,14 @@
 // case, an authenticated visitor sees a login prompt and re-establishes the
 // session that already exists).
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { getSession } from '@/lib/api/auth'
 import { clearLiveKeys, getOwnSigningKey } from '@/lib/crypto/worker-client'
 import { cacheOwnSigningKey, clearCachedOwnSigningKey } from './ownSigningKey'
 import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
+import { installSessionLossWatcher } from './sessionLoss'
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionState['status']>('loading')
@@ -46,6 +47,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // update userId directly rather than re-triggering this effect, the
     // same distinction the previous version of this file's own comment drew
     // between "believes it has a session" and re-checking the server.
+  }, [])
+
+  // Always the latest logout, so the fetch watcher below (installed once) never
+  // calls a stale closure over an old userId.
+  const logoutRef = useRef<() => void>(() => undefined)
+
+  // #228: a 401 from a protected route means the cookie is no longer honored.
+  // Drop the client's session state so RequireAuth redirects to /login instead
+  // of each screen showing its own expired message over a "logged in" Home.
+  useEffect(() => {
+    return installSessionLossWatcher(window, window.location.origin, () => {
+      logoutRef.current()
+    })
   }, [])
 
   const value = useMemo<SessionState>(
@@ -84,5 +98,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }),
     [status, userId],
   )
+  useEffect(() => {
+    logoutRef.current = userId === null ? () => undefined : value.logout
+  }, [userId, value])
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
 }
