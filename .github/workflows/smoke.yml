@@ -22,8 +22,12 @@ concurrency:
 
 jobs:
   smoke:
-    # A failed deploy has nothing new to check.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # A failed deploy has nothing new to check. A manual run must be dispatched
+    # from main: any other ref builds assets prod never serves, so the wait step
+    # below would time out and read like a deploy problem.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     env:
       E2E_BASE_URL: https://undergroundbb.com

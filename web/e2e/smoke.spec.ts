@@ -69,5 +69,6 @@ test('logs out, logs back in, and still has the group', async () => {
 
   await logIn(page, user)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
+  await expect(page.getByText(groupName)).toBeVisible()
   await expect(page.getByText('admin', { exact: true })).toBeVisible()
 })
