@@ -24,8 +24,8 @@ type PurgeOptions struct {
 	// MinAge is how old an account must be before it is eligible, so a test
 	// still running is never deleted under itself.
 	MinAge time.Duration
-	// MaxAccounts caps accounts examined per run (skipped ones count);
-	// zero means DefaultPurgeMaxAccounts.
+	// MaxAccounts caps accounts examined per run (skipped and waiting ones
+	// count); zero means DefaultPurgeMaxAccounts.
 	MaxAccounts int
 	// DryRun plans and reports but deletes nothing.
 	DryRun bool
@@ -35,6 +35,9 @@ type PurgeOptions struct {
 	// onlyUsers restricts a run to these ids. Tests share one DynamoDB Local
 	// with other packages' test accounts, so they must not purge each other.
 	onlyUsers map[string]bool
+	// beforeMemberRow, if set, runs after a group's other rows are deleted and
+	// before the account's own MEMBER# row is. Tests use it to stop a run there.
+	beforeMemberRow func(groupID string) error
 }
 
 // PurgeSkip records an account the purge examined and left alone.
@@ -46,15 +49,16 @@ type PurgeSkip struct {
 // PurgeReport says what a run did, or with DryRun what it would do.
 type PurgeReport struct {
 	DryRun bool `json:"dryRun"`
-	// Examined counts accounts looked at. Purged are removed outright;
-	// Tombstoned are removed except for a tombstone PROFILE, because they are
-	// still members of a group with real members (KeptGroups counts those
-	// groups, which are left alone). Groups counts the test-only groups deleted
-	// whole, and Rows every item deleted (or that would be). All counts are
-	// what would happen under DryRun.
+	// Examined counts accounts looked at. Purged are finished: everything they
+	// owned is gone except a tombstone PROFILE. Waiting are tombstoned but still
+	// members of a group with a real member (KeptGroups counts those groups,
+	// which are left alone), so they are looked at again every run until that
+	// group goes. Groups counts test-only groups deleted whole and Rows every
+	// item deleted. All counts are what would happen under DryRun, with a group
+	// or row shared by two accounts counted once, as a real run does.
 	Examined   int         `json:"examined"`
 	Purged     int         `json:"purged"`
-	Tombstoned int         `json:"tombstoned"`
+	Waiting    int         `json:"waiting"`
 	Groups     int         `json:"groups"`
 	KeptGroups int         `json:"keptGroups"`
 	Rows       int         `json:"rows"`
@@ -66,11 +70,17 @@ type PurgeReport struct {
 // It deletes by removing items, never through the leave protocol: leaving
 // needs the user's own signature and the server holds no user keys. So a group
 // is deleted whole only when every member is a test account. A group with any
-// real member is never touched: the test account stays a member of it, and its
-// PROFILE is tombstoned (as DeleteAccount does) instead of deleted, because the
-// real members' clients still need its public keys to verify grants it signed.
-// An admin removes the leftover member with the ordinary removal flow
-// (docs/DESIGN.md, "Test accounts are a reserved, opt-in namespace").
+// real member is never touched: the test account stays a member of it. Either
+// way PROFILE is never deleted, only tombstoned as DeleteAccount does: the
+// grant chain verifies a grantor's signatures with the key GET /api/users/{id}
+// serves from PROFILE, so a grant the account signed in a real group, even one
+// it has since left, stops verifying if PROFILE goes; and user ids are
+// client-chosen, so a deleted PROFILE would let anyone re-register the id and
+// inherit its history (docs/DESIGN.md, the AAD table). A tombstone is one small
+// item per test account. A test account left as a member of a real group is the
+// documented "member whose profile is deleted" state, which an admin clears
+// with the ordinary removal flow (docs/DESIGN.md, "Test accounts are a
+// reserved, opt-in namespace").
 //
 // An account counts as a test account only when its PROFILE carries
 // TestAccount (written solely by a registration that also used the reserved
@@ -78,13 +88,17 @@ type PurgeReport struct {
 // A deleted account's username is gone, so the flag alone identifies it.
 // Candidates come from the GSI1 "TESTACCOUNT" partition, so nothing scans.
 //
-// Order within an account: test-only groups, then the user's other rows and
-// invites, then the username claim, then PROFILE last (deleted, or tombstoned
-// with its index keys removed). PROFILE is what the candidate query finds, so a
-// run that dies partway is finished by the next. Unlike DeleteAccount, an
-// account in no group with real members has its PROFILE removed outright: its
-// uuid was minted fresh for a test and nothing else refers to it once its
-// groups are gone.
+// A tombstoned account keeps its index keys while it is still a member of a
+// group with real members, so every run looks at it again and deletes that
+// group once the last real member has left. Once nothing is left to wait on,
+// the keys are removed and it is never examined again. Waiting accounts count
+// against MaxAccounts; a great many of them would crowd out new work.
+//
+// Order: for each test-only group, its other rows first and the account's own
+// MEMBER# row last, because that row is how the next run finds the group; then
+// the user's other rows and invites, then the username claim, then PROFILE.
+// PROFILE is what the candidate query finds, so a run that dies partway is
+// finished by the next.
 //
 // Group membership is read from GSI1, which is eventually consistent, so a
 // membership written moments before the run could be missed. MinAge makes that
@@ -107,6 +121,8 @@ func (c *Client) PurgeTestAccounts(ctx context.Context, opts PurgeOptions) (Purg
 	}
 
 	isTest := map[string]bool{}
+	plannedGroups := map[string]bool{}
+	plannedRows := map[string]bool{}
 	for _, uid := range candidates {
 		report.Examined++
 		plan, skip, err := c.planPurge(ctx, uid, isTest)
@@ -117,34 +133,73 @@ func (c *Client) PurgeTestAccounts(ctx context.Context, opts PurgeOptions) (Purg
 			report.Skipped = append(report.Skipped, PurgeSkip{UserID: uid, Reason: skip})
 			continue
 		}
-		if !opts.DryRun {
-			if err := c.executePurge(ctx, plan); err != nil {
-				return report, fmt.Errorf("db: purge %s: %w", uid, err)
+		// In a dry run nothing is deleted, so a group or row two accounts share
+		// would be planned twice; a real run's second account no longer sees it.
+		var groups []groupPlan
+		for _, g := range plan.groups {
+			if !plannedGroups[g.id] {
+				plannedGroups[g.id] = true
+				groups = append(groups, g)
+				report.Groups++
+				report.Rows += len(g.rows) + 1 // + the member row
+				for _, k := range g.rows {
+					plannedRows[keyID(k)] = true
+				}
+				plannedRows[keyID(g.memberKey)] = true
 			}
 		}
-		report.Groups += len(plan.groups)
-		report.KeptGroups += len(plan.keptGroups)
-		report.Rows += len(plan.keys)
+		plan.groups = groups
+		var keys []map[string]types.AttributeValue
+		for _, k := range plan.keys {
+			if !plannedRows[keyID(k)] {
+				plannedRows[keyID(k)] = true
+				keys = append(keys, k)
+			}
+		}
+		plan.keys = keys
+		report.Rows += len(keys)
 		if plan.claimLower != "" {
 			report.Rows++
 		}
+		report.KeptGroups += len(plan.keptGroups)
 		if len(plan.keptGroups) > 0 {
-			report.Tombstoned++
+			report.Waiting++
 		} else {
 			report.Purged++
-			report.Rows++ // PROFILE
+		}
+		if !opts.DryRun {
+			if err := c.executePurge(ctx, plan, now, opts); err != nil {
+				return report, fmt.Errorf("db: purge %s: %w", uid, err)
+			}
 		}
 	}
 	return report, nil
 }
 
+func keyID(k map[string]types.AttributeValue) string {
+	pk, _ := k["PK"].(*types.AttributeValueMemberS)
+	sk, _ := k["SK"].(*types.AttributeValueMemberS)
+	if pk == nil || sk == nil {
+		return ""
+	}
+	return pk.Value + "\x00" + sk.Value
+}
+
+// groupPlan is one test-only group: every row but the account's own MEMBER#
+// row, which is deleted last.
+type groupPlan struct {
+	id        string
+	rows      []map[string]types.AttributeValue
+	memberKey map[string]types.AttributeValue
+}
+
 type purgePlan struct {
 	userID     string
 	claimLower string
-	groups     []string                          // test-only groups, deleted whole
+	groups     []groupPlan                       // test-only groups, deleted whole
 	keptGroups map[string]bool                   // groups with a real member, left alone
 	wasDeleted bool                              // PROFILE is already a tombstone
-	keys       []map[string]types.AttributeValue // everything except PROFILE
+	keys       []map[string]types.AttributeValue // the user's other rows, never PROFILE
 }
 
 func (c *Client) testAccountCandidates(ctx context.Context, cutoff string, limit int, only map[string]bool) ([]string, error) {
@@ -246,8 +301,18 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 		if err != nil {
 			return plan, "", err
 		}
-		plan.groups = append(plan.groups, gid)
-		plan.keys = append(plan.keys, keys...)
+		own := "MEMBER#" + userID
+		g := groupPlan{id: gid, memberKey: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: own},
+		}}
+		for _, k := range keys {
+			if sk, _ := k["SK"].(*types.AttributeValueMemberS); sk != nil && sk.Value == own {
+				continue
+			}
+			g.rows = append(g.rows, k)
+		}
+		plan.groups = append(plan.groups, g)
 	}
 
 	userKeys, err := c.partitionKeys(ctx, "USER#"+userID)
@@ -268,8 +333,9 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 		}
 	}
 	// Rows other partitions hold about this user: invites addressed to them and
-	// join requests they made. Memberships come back too; those in groups being
-	// deleted are already planned, and those in kept groups must stay.
+	// join requests they made. Memberships come back too and are skipped below:
+	// those in kept groups must stay, and those in planned groups are deleted by
+	// the group plan, last.
 	var start map[string]types.AttributeValue
 	for {
 		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
@@ -291,7 +357,9 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 			if pk == nil || sk == nil {
 				continue
 			}
-			if plan.keptGroups[strings.TrimPrefix(pk.Value, "GROUP#")] && strings.HasPrefix(sk.Value, "MEMBER#") {
+			if strings.HasPrefix(sk.Value, "MEMBER#") {
+				// Every membership is either in a kept group (must stay) or a
+				// planned group (its member row is deleted last, by groupPlan).
 				continue
 			}
 			plan.keys = append(plan.keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
@@ -305,7 +373,20 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 	return plan, "", nil
 }
 
-func (c *Client) executePurge(ctx context.Context, plan purgePlan) error {
+func (c *Client) executePurge(ctx context.Context, plan purgePlan, now time.Time, opts PurgeOptions) error {
+	for _, g := range plan.groups {
+		if err := c.batchDelete(ctx, dedupeKeys(g.rows)); err != nil {
+			return err
+		}
+		if opts.beforeMemberRow != nil {
+			if err := opts.beforeMemberRow(g.id); err != nil {
+				return err
+			}
+		}
+		if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(c.table), Key: g.memberKey}); err != nil {
+			return err
+		}
+	}
 	if err := c.batchDelete(ctx, plan.keys); err != nil {
 		return err
 	}
@@ -326,33 +407,46 @@ func (c *Client) executePurge(ctx context.Context, plan purgePlan) error {
 			return err
 		}
 	}
-	profileKey := map[string]types.AttributeValue{
-		"PK": &types.AttributeValueMemberS{Value: "USER#" + plan.userID},
-		"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+
+	// PROFILE becomes (or stays) the same tombstone DeleteAccount leaves: public
+	// keys stay so grants it signed still verify and the uuid stays taken. The
+	// index keys stay too while it is waiting on a kept group, so later runs
+	// revisit it, and go once there is nothing left to wait on.
+	waiting := len(plan.keptGroups) > 0
+	var sets, removes []string
+	values := map[string]types.AttributeValue{}
+	if !plan.wasDeleted {
+		sets = append(sets, "DeletedAt = :now", "Username = :empty")
+		removes = append(removes, "Salt", "Argon2Params", "WrappedPrivateKeys", "PreferencesBlob", "FailedVerifyCount", "LockUntil", "LastLoginDay")
+		values[":now"] = &types.AttributeValueMemberS{Value: now.UTC().Format(time.RFC3339)}
+		values[":empty"] = &types.AttributeValueMemberS{Value: ""}
 	}
-	if len(plan.keptGroups) == 0 {
-		_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(c.table), Key: profileKey})
-		return err
+	if !waiting {
+		removes = append(removes, "GSI1PK", "GSI1SK")
 	}
-	// Still a member of a group with real members: keep PROFILE as the same
-	// tombstone DeleteAccount leaves (public keys stay so grants it signed still
-	// verify), and drop the TESTACCOUNT index keys so later runs do not revisit.
-	expr := "SET DeletedAt = :now, Username = :empty " +
-		"REMOVE Salt, Argon2Params, WrappedPrivateKeys, PreferencesBlob, FailedVerifyCount, LockUntil, LastLoginDay, GSI1PK, GSI1SK"
-	values := map[string]types.AttributeValue{
-		":now":   &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
-		":empty": &types.AttributeValueMemberS{Value: ""},
+	if len(sets) == 0 && len(removes) == 0 {
+		return nil
 	}
-	if plan.wasDeleted {
-		expr, values = "REMOVE GSI1PK, GSI1SK", nil
+	expr := ""
+	if len(sets) > 0 {
+		expr += "SET " + strings.Join(sets, ", ")
 	}
-	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 aws.String(c.table),
-		Key:                       profileKey,
-		UpdateExpression:          aws.String(expr),
-		ConditionExpression:       aws.String("attribute_exists(PK)"),
-		ExpressionAttributeValues: values,
-	})
+	if len(removes) > 0 {
+		expr += " REMOVE " + strings.Join(removes, ", ")
+	}
+	in := &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + plan.userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression:    aws.String(strings.TrimSpace(expr)),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	}
+	if len(values) > 0 {
+		in.ExpressionAttributeValues = values
+	}
+	_, err := c.ddb.UpdateItem(ctx, in)
 	return err
 }
 
