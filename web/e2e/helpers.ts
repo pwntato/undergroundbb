@@ -36,6 +36,17 @@ export async function signUp(page: Page, user: TestUser): Promise<string> {
   return recoveryCode
 }
 
+/**
+ * Logs out from Home and waits until the app shows the signed-out state. Navigating away before
+ * the logout request finishes aborts it, leaves the session alive, and makes /login bounce back
+ * to Home, so every logout has to be waited out.
+ */
+export async function logOut(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('link', { name: 'Log in' })).toBeVisible()
+}
+
 export async function logIn(page: Page, user: TestUser): Promise<void> {
   await page.goto('/login')
   await page.getByLabel('Username').fill(user.username)
