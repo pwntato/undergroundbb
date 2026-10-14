@@ -2366,13 +2366,40 @@ header is refused on any other name, so the prefix and the `TestAccount` flag on
 agree. The header is not a secret: it only keeps a real user from landing in a scheduled test-data
 purge by accident, and a person who opts in has asked for the deletion. Test accounts get no other
 treatment (no rate-limit exemption, no relaxed validation), so the flag is worth nothing to an
-attacker. The purge itself is separate work and must require both the prefix and the flag.
+attacker. The purge requires both the prefix and the flag.
+
+Test accounts are findable without a scan: registration also writes `GSI1PK = TESTACCOUNT`,
+`GSI1SK = <CreatedAt>#<uuid>` on their `PROFILE` (and only theirs), so `PurgeTestAccounts`
+(`internal/db/purge.go`, run by `cmd/purge`) is one GSI1 `Query` for accounts older than a cutoff.
+It defaults to a dry run and caps accounts per run. A test in `internal/db` fails if a new partition
+kind appears in the data layer that the purge has not been taught about.
+
+**The purge tombstones `PROFILE`; it never deletes it.** The grant chain checks a grantor's signature
+with the key `GET /api/users/{id}` serves from `PROFILE` and ignores the key stored on the grant row,
+and grants are append-only, so a grant a test account signed in a real group, even one it has since
+left, stops verifying for every member if `PROFILE` goes. User ids are also client-chosen, so a deleted
+`PROFILE` would let anyone re-register the id and inherit its key history (see the AAD table). One small
+tombstone per test account is the price.
 
 Because anyone can mint a test account, a test account can create groups, become a group's last admin,
-or sit in a group real users belong to. The purge therefore must not raw-delete items. It removes a
-test account only when every group that account belongs to has test accounts as its only members
-(those groups are deleted whole); an account in any group with a real member is skipped and logged,
-since leaving needs the user's own signature and a server-side delete would strand the real members.
+or sit in a group real users belong to. The purge therefore never touches a group that has a real
+member, and never raw-deletes a membership (leaving needs the user's own signature, which the server
+cannot produce). A group whose members are all test accounts is deleted whole. A test account that is
+also in a group with a real member is still removed, but that one membership row stays: the "member
+whose profile is deleted" state described under account deletion, which an admin clears with the
+ordinary removal flow. A test account cannot be given a role in a real group without a real admin's
+signature, so this should be rare. Such a tombstone keeps its index keys, so every run looks at it
+again and deletes that group once the last real member has left; with nothing left to wait on, the keys
+are removed and it is never examined again. Waiting accounts count against the per-run cap. A test
+account younger than the cutoff counts like a real member for this purpose, so an old account never
+deletes a group a still-running test is using; it waits until the younger one is old enough too.
+
+Deletion order: for each test-only group, its other rows first and the account's own `MEMBER#` row last
+(that row is how the next run finds the group, so a run that dies partway leaves no unreachable
+orphans, including a public group's directory entry); then the user's other rows and invites, then
+the username claim, then `PROFILE`, which is what the candidate query finds. Membership is read from
+GSI1, which is eventually consistent, so the minimum-age cutoff (default 2 hours) is what keeps a
+just-written membership from being missed.
 
 ## Testing
 

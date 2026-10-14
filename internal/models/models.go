@@ -122,6 +122,11 @@ type User struct {
 // always agree. Usernames are case-insensitive, so compare lowercased.
 const TestUsernamePrefix = "zz-delete-test-"
 
+// TestAccountGSI1PK is the GSI1 partition every test account's PROFILE is
+// indexed under (GSI1SK is "<CreatedAt>#<uuid>"), which is how the purge finds
+// them with a Query rather than a Scan.
+const TestAccountGSI1PK = "TESTACCOUNT"
+
 // TestAccountHeader is the request header that opts a registration in to being
 // a test account. It is not a secret: it only keeps real users from landing in
 // the purge by accident. Test accounts get no special treatment anywhere else.
