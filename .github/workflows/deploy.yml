@@ -55,6 +55,11 @@ jobs:
         run: |
           GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
           zip lambda.zip bootstrap
+          # The scheduled test-account purge is a second Lambda; its zip must
+          # exist before terraform plan reads its hash.
+          GOOS=linux GOARCH=arm64 go build -o purge-bootstrap ./cmd/purge
+          mkdir purge-pkg && mv purge-bootstrap purge-pkg/bootstrap
+          (cd purge-pkg && zip ../purge.zip bootstrap)
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:

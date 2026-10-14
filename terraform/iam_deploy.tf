@@ -540,6 +540,85 @@ resource "aws_iam_role_policy" "deploy_waf_managed_rule_sets" {
   policy = data.aws_iam_policy_document.deploy_waf_managed_rule_sets.json
 }
 
+# Grants for the test-account purge Lambda (purge.tf): its role, function,
+# log group and EventBridge schedule. A SEPARATE policy resource from
+# deploy_policy, for the self-grant ordering reason documented on
+# deploy_waf_managed_rule_sets above: every purge.tf resource depends_on this
+# policy, so the deploy role holds these permissions before the apply first
+# needs them. That also means this document must not reference any purge.tf
+# resource (their ARNs are built from local.purge_name instead): a reference
+# would make the policy depend on a resource that depends on the policy.
+# IAM changes also take a few seconds to propagate, so the first apply can
+# still fail once on AccessDenied right after this policy is created; a retry
+# passes.
+data "aws_iam_policy_document" "deploy_purge" {
+  statement {
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.purge_name}"]
+  }
+
+  statement {
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.purge_name}"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["lambda.amazonaws.com"]
+    }
+  }
+
+  # Same action list as the web Lambda's statement in deploy_policy, scoped to
+  # the purge function. No function URL actions: the purge has none.
+  statement {
+    actions = [
+      "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetPolicy",
+      "lambda:ListVersionsByFunction",
+      "lambda:CreateFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:DeleteFunction",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+    ]
+    resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.purge_name}"]
+  }
+
+  # EventBridge rule and target for the schedule. These support resource-level
+  # scoping to the rule. The rule lives on the default bus.
+  statement {
+    actions = [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:ListTargetsByRule",
+      "events:ListTagsForResource",
+      "events:TagResource",
+      "events:UntagResource",
+    ]
+    resources = ["arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/${local.purge_name}"]
+  }
+}
+
+resource "aws_iam_role_policy" "deploy_purge" {
+  name   = "undergroundbb-deploy-purge"
+  role   = aws_iam_role.deploy.id
+  policy = data.aws_iam_policy_document.deploy_purge.json
+}
+
 output "deploy_role_arn" {
   value       = aws_iam_role.deploy.arn
   description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub Actions environment secret (production)."

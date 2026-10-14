@@ -256,6 +256,22 @@ GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
 zip lambda.zip bootstrap
 ```
 
+**The test-account purge** is a second Lambda (`cmd/purge`, `terraform/purge.tf`) that deletes accounts
+created by automated smoke tests (reserved `zz-delete-test-` username prefix) and everything they
+own. It has its own minimal execution role and an EventBridge schedule (`var.purge_schedule`,
+hourly by default), and `terraform apply` reads its `purge.zip` the same way:
+
+```sh
+GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/purge
+zip purge.zip bootstrap
+```
+
+It deploys in dry-run mode (`var.purge_dry_run`, default `true`): each run only logs what it would
+delete to CloudWatch (`/aws/lambda/undergroundbb-purge-<workspace>`), as a `purge report:` JSON
+line. Read a dry-run report before setting `purge_dry_run = false`. An invocation payload can force
+a dry run (`{"dryRun": true}`) but can never turn deletion on. Accounts created before the
+`TESTACCOUNT` GSI1 entry existed are invisible to it and need a one-off backfill.
+
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
 (#8) is the intended access-control boundary, matching `docs/DESIGN.md`'s infrastructure diagram.
 
