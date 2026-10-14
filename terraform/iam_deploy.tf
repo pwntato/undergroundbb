@@ -591,9 +591,11 @@ data "aws_iam_policy_document" "deploy_purge" {
       "lambda:UntagResource",
       "lambda:AddPermission",
       "lambda:RemovePermission",
-      # reserved_concurrent_executions on the purge function (purge.tf).
-      "lambda:PutFunctionConcurrency",
-      "lambda:DeleteFunctionConcurrency",
+      # aws_lambda_function_event_invoke_config on the purge function (purge.tf).
+      "lambda:PutFunctionEventInvokeConfig",
+      "lambda:GetFunctionEventInvokeConfig",
+      "lambda:UpdateFunctionEventInvokeConfig",
+      "lambda:DeleteFunctionEventInvokeConfig",
     ]
     resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.purge_name}"]
   }

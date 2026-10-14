@@ -74,11 +74,6 @@ resource "aws_lambda_function" "purge" {
   timeout     = 60
   memory_size = 256
 
-  # One run at a time. EventBridge invokes asynchronously and Lambda retries a
-  # failed run, so a retry could otherwise overlap the next scheduled run and
-  # two purges would plan and delete the same accounts at once.
-  reserved_concurrent_executions = 1
-
   # cmd/purge fails safe: anything other than the exact string "false" is a dry
   # run, and an invocation payload can force a dry run but never turn deletion
   # on. tostring(true) is "true", so deletion needs var.purge_dry_run = false.
@@ -94,6 +89,28 @@ resource "aws_lambda_function" "purge" {
     aws_iam_role_policy.purge,
     aws_iam_role_policy.deploy_purge,
   ]
+}
+
+# Makes overlapping runs unlikely, without reserving concurrency (this
+# account's unreserved pool is already at AWS's floor of 10, so reserving any
+# is rejected). EventBridge invokes asynchronously and Lambda would retry a
+# failed run, which could land on top of the next scheduled run.
+# maximum_retry_attempts = 0 stops retries after a function error;
+# maximum_event_age_in_seconds = 60 (the minimum) drops an invoke that was
+# throttled or hit a Lambda system error instead of re-queueing it for the
+# default 6 hours. A failed or dropped run just waits for the next schedule.
+# Async delivery is still at-least-once, so this reduces overlap rather than
+# ruling it out.
+resource "aws_lambda_function_event_invoke_config" "purge" {
+  function_name                = aws_lambda_function.purge.function_name
+  maximum_retry_attempts       = 0
+  maximum_event_age_in_seconds = 60
+
+  # Stated directly, like the other purge resources, rather than relying on
+  # the transitive edge through the function: this apply adds the
+  # event-invoke-config actions to deploy_purge and creates this resource
+  # together, and only a direct dependency orders them.
+  depends_on = [aws_iam_role_policy.deploy_purge]
 }
 
 resource "aws_cloudwatch_event_rule" "purge" {
