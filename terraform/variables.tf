@@ -85,3 +85,15 @@ variable "session_ttl_hours" {
     error_message = "session_ttl_hours must be a positive whole number of hours, at most 168 (7 days): the inactivity rule for a pre-signed successor measures activity by login day (docs/DESIGN.md, \"Inactivity\"), so sessions must stay far shorter than its 30-day minimum period (internal/config.MaxSessionTTL)."
   }
 }
+
+variable "purge_dry_run" {
+  type        = bool
+  default     = true
+  description = "Whether the scheduled test-account purge (cmd/purge) only reports what it would delete. Stays true until a dry-run report has been read; set to false to let it delete."
+}
+
+variable "purge_schedule" {
+  type        = string
+  default     = "rate(1 hour)"
+  description = "EventBridge schedule expression for the test-account purge."
+}
