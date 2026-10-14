@@ -140,3 +140,80 @@ output "purge_function_name" {
   value       = aws_lambda_function.purge.function_name
   description = "The test-account purge Lambda, for a manual dry-run invocation."
 }
+
+# Alarms, so a purge that is failing, dropped, or not running at all is noticed
+# instead of only visible in CloudWatch. The schedule is hourly.
+#   errors:      runs that threw (cmd/purge returns an error from a failed plan
+#                or delete; timeouts count too).
+#   dropped:     scheduled invokes Lambda gave up on: throttled past
+#                maximum_event_age_in_seconds, or, because retries are off,
+#                any function error. So one failed run trips both errors and
+#                dropped and sends two notifications; that is accepted.
+#   not_running: fewer than one invocation in three hours. Silence is the
+#                failure here, so missing data is breaching; the alarm can
+#                fire once right after the first deploy, until the first
+#                scheduled run. Catches a disabled rule or a broken
+#                lambda_permission, which produce no Errors at all.
+# For the first two a one-hour period with a threshold of 1 fires on the first
+# bad run, and missing data is "not breaching": no invocation is normal
+# between schedules.
+resource "aws_sns_topic" "purge_alarms" {
+  name = "${local.purge_name}-alarms"
+
+  depends_on = [aws_iam_role_policy.deploy_purge]
+}
+
+# The address comes from the ALARM_EMAIL secret (deploy.yml), not a local
+# tfvars: every push to main applies, and would destroy a subscription that only
+# a local apply created. A secret and a sensitive variable because the repo is
+# public: logs and plan output show it masked.
+resource "aws_sns_topic_subscription" "purge_alarms_email" {
+  count     = var.alarm_email == "" ? 0 : 1
+  topic_arn = aws_sns_topic.purge_alarms.arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
+resource "aws_cloudwatch_metric_alarm" "purge" {
+  for_each = {
+    errors = {
+      metric     = "Errors"
+      statistic  = "Sum"
+      period     = 3600
+      comparison = "GreaterThanOrEqualToThreshold"
+      threshold  = 1
+      missing    = "notBreaching"
+    }
+    dropped = {
+      metric     = "AsyncEventsDropped"
+      statistic  = "Sum"
+      period     = 3600
+      comparison = "GreaterThanOrEqualToThreshold"
+      threshold  = 1
+      missing    = "notBreaching"
+    }
+    not_running = {
+      metric     = "Invocations"
+      statistic  = "Sum"
+      period     = 10800
+      comparison = "LessThanThreshold"
+      threshold  = 1
+      missing    = "breaching"
+    }
+  }
+
+  alarm_name          = "${local.purge_name}-${each.key}"
+  alarm_description   = "Test-account purge: ${each.value.metric} on ${local.purge_name} (${each.key})."
+  namespace           = "AWS/Lambda"
+  metric_name         = each.value.metric
+  dimensions          = { FunctionName = aws_lambda_function.purge.function_name }
+  statistic           = each.value.statistic
+  period              = each.value.period
+  evaluation_periods  = 1
+  threshold           = each.value.threshold
+  comparison_operator = each.value.comparison
+  treat_missing_data  = each.value.missing
+  alarm_actions       = [aws_sns_topic.purge_alarms.arn]
+
+  depends_on = [aws_iam_role_policy.deploy_purge]
+}

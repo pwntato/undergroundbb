@@ -88,8 +88,15 @@ variable "session_ttl_hours" {
 
 variable "purge_dry_run" {
   type        = bool
-  default     = true
-  description = "Whether the scheduled test-account purge (cmd/purge) only reports what it would delete. Stays true until a dry-run report has been read; set to false to let it delete."
+  default     = false
+  description = "Whether the scheduled test-account purge (cmd/purge) only reports what it would delete. Deletion is on by default (set to true for a report-only run): only accounts flagged as test accounts, with the reserved zz-delete-test- prefix, are eligible, and the prod table holds no real data yet."
+}
+
+variable "alarm_email" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Email address subscribed to the purge alarm topic; CI sets it from the ALARM_EMAIL secret (deploy.yml). Empty creates the topic and alarms with no subscriber (the alarms are then only visible in the CloudWatch console). The subscription must be confirmed from the email AWS sends."
 }
 
 variable "purge_schedule" {

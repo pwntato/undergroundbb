@@ -616,6 +616,48 @@ data "aws_iam_policy_document" "deploy_purge" {
     ]
     resources = ["arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/${local.purge_name}"]
   }
+
+  # The purge's alarms and their notification topic (purge.tf). The alarm and
+  # topic ARNs are built from local.purge_name, like the rest of this document.
+  # DescribeAlarms has no resource-level permissions.
+  statement {
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:TagResource",
+      "cloudwatch:UntagResource",
+    ]
+    resources = ["arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm:${local.purge_name}-*"]
+  }
+
+  statement {
+    actions = [
+      "sns:CreateTopic",
+      "sns:DeleteTopic",
+      "sns:GetTopicAttributes",
+      "sns:SetTopicAttributes",
+      "sns:ListTagsForResource",
+      "sns:TagResource",
+      "sns:UntagResource",
+      "sns:Subscribe",
+      "sns:Unsubscribe",
+      "sns:GetSubscriptionAttributes",
+      "sns:SetSubscriptionAttributes",
+      "sns:ListSubscriptionsByTopic",
+    ]
+    # Subscription actions are authorized against the subscription ARN, which
+    # is the topic ARN plus ":<id>".
+    resources = [
+      "arn:aws:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.purge_name}-alarms",
+      "arn:aws:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.purge_name}-alarms:*",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "deploy_purge" {
