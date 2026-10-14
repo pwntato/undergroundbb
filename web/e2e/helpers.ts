@@ -42,3 +42,15 @@ export async function logIn(page: Page, user: TestUser): Promise<void> {
   await page.getByLabel('Password').fill(user.password)
   await page.getByRole('button', { name: 'Log in' }).click()
 }
+
+/**
+ * Navigates inside the running app without a page load. A full load (page.goto) drops the
+ * in-memory keys, and an invite link's fragment carries the key that authenticates it, so the
+ * invite screens must be reached this way once signed in.
+ */
+export async function spaNavigate(page: Page, pathAndHash: string): Promise<void> {
+  await page.evaluate((target) => {
+    history.pushState(null, '', target)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, pathAndHash)
+}
