@@ -70,7 +70,7 @@ export function GroupMembersPanel({
   readonly onCancelReadmit?: () => void
   readonly onConfirmReadmit?: (subjectUserId: string) => void
   /** userId to username; anything missing renders as a short id. */
-  readonly usernames?: ReadonlyMap<string, string> | undefined
+  readonly usernames: ReadonlyMap<string, string>
   /**
    * The signed-grant-history check, once it has run. Absent while it loads
    * and 'unavailable' when it could not run; either way no marks are shown.
