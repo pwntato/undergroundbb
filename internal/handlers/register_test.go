@@ -244,7 +244,9 @@ func TestRegisterTestAccountNeedsPrefixAndHeader(t *testing.T) {
 
 	t.Run("a refused registration leaves no claim behind", func(t *testing.T) {
 		name := models.TestUsernamePrefix + suffix + "d"
-		doRegisterAs(t, h, validRegisterRequest(name), "")
+		if first := doRegisterAs(t, h, validRegisterRequest(name), ""); first.Code != http.StatusBadRequest || errorCode(t, first) != "reserved_username" {
+			t.Fatalf("precondition: first status = %d code = %q, want 400 reserved_username", first.Code, errorCode(t, first))
+		}
 		// The same name must still be free for an opted-in registration.
 		rec := doRegisterAs(t, h, validRegisterRequest(name), "1")
 		if rec.Code != http.StatusCreated {
