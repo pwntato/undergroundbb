@@ -74,11 +74,6 @@ resource "aws_lambda_function" "purge" {
   timeout     = 60
   memory_size = 256
 
-  # One run at a time. EventBridge invokes asynchronously and Lambda retries a
-  # failed run, so a retry could otherwise overlap the next scheduled run and
-  # two purges would plan and delete the same accounts at once.
-  reserved_concurrent_executions = 1
-
   # cmd/purge fails safe: anything other than the exact string "false" is a dry
   # run, and an invocation payload can force a dry run but never turn deletion
   # on. tostring(true) is "true", so deletion needs var.purge_dry_run = false.
@@ -94,6 +89,22 @@ resource "aws_lambda_function" "purge" {
     aws_iam_role_policy.purge,
     aws_iam_role_policy.deploy_purge,
   ]
+}
+
+# One run at a time, without reserving concurrency (this account's unreserved
+# pool is already at AWS's floor of 10, so reserving any is rejected).
+# EventBridge invokes asynchronously and Lambda would retry a failed run, which
+# could overlap the next scheduled run and have two purges plan and delete the
+# same accounts at once. With no retries a failed run simply waits for the next
+# schedule, and a run is far shorter than the schedule interval.
+resource "aws_lambda_function_event_invoke_config" "purge" {
+  function_name          = aws_lambda_function.purge.function_name
+  maximum_retry_attempts = 0
+
+  # Explicit, not just via the function: the function already exists, so this
+  # apply updates deploy_purge (adding the event-invoke-config actions) and
+  # creates this resource together, and only a direct dependency orders them.
+  depends_on = [aws_iam_role_policy.deploy_purge]
 }
 
 resource "aws_cloudwatch_event_rule" "purge" {
