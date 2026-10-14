@@ -144,26 +144,95 @@ func TestPurgeRemovesTestAccountsAndTheirTestOnlyGroups(t *testing.T) {
 	}
 }
 
-func TestPurgeLeavesAccountsInGroupsWithRealMembers(t *testing.T) {
+func TestPurgeTombstonesAnAccountInAGroupWithRealMembersAndLeavesTheGroup(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
-	testUser, realUser := registerAccount(t, c, true), registerAccount(t, c, false)
-	gid := putGroup(t, c, testUser.UserID, realUser.UserID)
+	testUser, realUser, otherTest := registerAccount(t, c, true), registerAccount(t, c, false), registerAccount(t, c, true)
+	mixed := putGroup(t, c, testUser.UserID, realUser.UserID)
+	onlyTest := putGroup(t, c, testUser.UserID, otherTest.UserID)
+	if err := c.PutChallenge(ctx, testUser.UserID, []byte("nonce"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
 
 	rep, err := c.PurgeTestAccounts(ctx, purgeOnly(testUser.UserID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Purged != 0 || len(rep.Skipped) != 1 || rep.Skipped[0].UserID != testUser.UserID || !strings.Contains(rep.Skipped[0].Reason, gid) {
-		t.Fatalf("report = %+v, want the test account skipped naming group %s", rep, gid)
+	if rep.Purged != 0 || rep.Tombstoned != 1 || rep.Groups != 1 || rep.KeptGroups != 1 || len(rep.Skipped) != 0 {
+		t.Fatalf("report = %+v, want 1 tombstoned, 1 group deleted, 1 kept", rep)
 	}
+
+	// The mixed group and the real user are untouched, including the test
+	// user's membership row (removing it needs a signature the server lacks).
 	for _, k := range [][2]string{
-		{"GROUP#" + gid, "META"}, {"GROUP#" + gid, "MEMBER#" + testUser.UserID}, {"GROUP#" + gid, "MEMBER#" + realUser.UserID},
-		{"USER#" + testUser.UserID, "PROFILE"}, {"USER#" + realUser.UserID, "PROFILE"}, {"USERNAME#" + testUser.UsernameLower, "CLAIM"},
+		{"GROUP#" + mixed, "META"}, {"GROUP#" + mixed, "GRANT#root#2026-01-01#aa"},
+		{"GROUP#" + mixed, "MEMBER#" + testUser.UserID}, {"GROUP#" + mixed, "MEMBER#" + realUser.UserID},
+		{"USER#" + realUser.UserID, "PROFILE"}, {"USERNAME#" + realUser.UsernameLower, "CLAIM"},
 	} {
 		if !itemExists(t, c, k[0], k[1]) {
 			t.Errorf("%s / %s was deleted", k[0], k[1])
 		}
+	}
+	// The all-test group is gone, taking the other test member's membership with it.
+	for _, k := range [][2]string{{"GROUP#" + onlyTest, "META"}, {"GROUP#" + onlyTest, "MEMBER#" + otherTest.UserID}} {
+		if itemExists(t, c, k[0], k[1]) {
+			t.Errorf("%s / %s still exists", k[0], k[1])
+		}
+	}
+	// The account itself is gone except for a tombstone that keeps its public key.
+	for _, k := range [][2]string{{"USER#" + testUser.UserID, "RECOVERY"}, {"USER#" + testUser.UserID, "CHALLENGE"}, {"USERNAME#" + testUser.UsernameLower, "CLAIM"}} {
+		if itemExists(t, c, k[0], k[1]) {
+			t.Errorf("%s / %s still exists", k[0], k[1])
+		}
+	}
+	if ok, err := c.UsernameAvailable(ctx, testUser.UsernameLower); err != nil || !ok {
+		t.Errorf("username should be free: available=%v err=%v", ok, err)
+	}
+	tomb, err := c.GetUserByID(ctx, testUser.UserID)
+	if err != nil {
+		t.Fatalf("tombstone must remain: %v", err)
+	}
+	if tomb.DeletedAt == "" || tomb.Username != "" || len(tomb.Salt) != 0 || len(tomb.WrappedPrivateKeys.Ciphertext) != 0 {
+		t.Errorf("PROFILE is not a clean tombstone: %+v", tomb)
+	}
+	if string(tomb.SigningPublicKey) != string(testUser.SigningPublicKey) {
+		t.Error("tombstone must keep the public signing key so grants it signed still verify")
+	}
+	if tomb.GSI1PK != "" || tomb.GSI1SK != "" {
+		t.Errorf("tombstone still carries index keys %q %q, so every run would revisit it", tomb.GSI1PK, tomb.GSI1SK)
+	}
+	if !tomb.TestAccount {
+		t.Error("tombstone lost the TestAccount flag")
+	}
+
+	// A second run has nothing left to do for it.
+	again, err := c.PurgeTestAccounts(ctx, purgeOnly(testUser.UserID))
+	if err != nil || again.Examined != 0 {
+		t.Errorf("second run = %+v err = %v, want the tombstoned account not revisited", again, err)
+	}
+}
+
+func TestPurgeTombstonesAnAlreadyDeletedAccountThatIsStillAMember(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	testUser, realUser := registerAccount(t, c, true), registerAccount(t, c, false)
+	gid := putGroup(t, c, realUser.UserID)
+	// The documented race: a membership that survived DeleteAccount.
+	if err := c.DeleteAccount(ctx, testUser.UserID); err != nil {
+		t.Fatal(err)
+	}
+	putTestMember(t, c, gid, testUser.UserID, "member")
+
+	rep, err := c.PurgeTestAccounts(ctx, purgeOnly(testUser.UserID))
+	if err != nil || rep.Tombstoned != 1 {
+		t.Fatalf("report = %+v err = %v, want it tombstoned", rep, err)
+	}
+	tomb, err := c.GetUserByID(ctx, testUser.UserID)
+	if err != nil || tomb.GSI1PK != "" || tomb.DeletedAt == "" {
+		t.Fatalf("PROFILE = %+v err = %v, want a tombstone with the index removed", tomb, err)
+	}
+	if !itemExists(t, c, "GROUP#"+gid, "MEMBER#"+testUser.UserID) {
+		t.Error("the leftover membership was deleted")
 	}
 }
 
