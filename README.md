@@ -266,10 +266,13 @@ GOOS=linux GOARCH=arm64 go build -o purge-pkg/bootstrap ./cmd/purge
 (cd purge-pkg && zip ../purge.zip bootstrap)
 ```
 
-It deploys in dry-run mode (`var.purge_dry_run`, default `true`): each run only logs what it would
-delete to CloudWatch (`/aws/lambda/undergroundbb-purge-<workspace>`), as a `purge report:` JSON
-line. Read a dry-run report before setting `purge_dry_run = false`. An invocation payload can force
-a dry run (`{"dryRun": true}`) but can never turn deletion on. Accounts created before the
+Deletion is on (`var.purge_dry_run` defaults to `false`; set it to `true` for a report-only run, and
+every run logs a `purge report:` JSON line to CloudWatch, `/aws/lambda/undergroundbb-purge-<workspace>`).
+Only accounts flagged as test accounts that also carry the reserved prefix are eligible. An invocation
+payload can force a dry run (`{"dryRun": true}`) but can never turn deletion on. Two CloudWatch alarms
+(`Errors` and `AsyncEventsDropped`) publish to an SNS topic; set `var.alarm_email` to subscribe an
+address, and confirm the subscription from the email AWS sends. Async retries are off, so a failed run
+waits for the next schedule. Accounts created before the
 `TESTACCOUNT` GSI1 entry existed are invisible to it and need a one-off backfill.
 
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront

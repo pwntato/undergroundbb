@@ -140,3 +140,46 @@ output "purge_function_name" {
   value       = aws_lambda_function.purge.function_name
   description = "The test-account purge Lambda, for a manual dry-run invocation."
 }
+
+# Alarms, so a purge that is failing or being dropped is noticed instead of
+# only visible in CloudWatch. Errors counts runs that threw (cmd/purge returns
+# an error from a failed delete); AsyncEventsDropped counts scheduled invokes
+# Lambda gave up on (throttled past maximum_event_age_in_seconds, see the
+# invoke config above), which with retries off is the other way a run is lost.
+# The schedule is hourly, so a one-hour period with a threshold of 1 fires on
+# the first bad run. Missing data is "not breaching": no invocation is normal
+# between schedules.
+resource "aws_sns_topic" "purge_alarms" {
+  name = "${local.purge_name}-alarms"
+
+  depends_on = [aws_iam_role_policy.deploy_purge]
+}
+
+resource "aws_sns_topic_subscription" "purge_alarms_email" {
+  count     = var.alarm_email == "" ? 0 : 1
+  topic_arn = aws_sns_topic.purge_alarms.arn
+  protocol  = "email"
+  endpoint  = var.alarm_email
+}
+
+resource "aws_cloudwatch_metric_alarm" "purge" {
+  for_each = {
+    errors  = "Errors"
+    dropped = "AsyncEventsDropped"
+  }
+
+  alarm_name          = "${local.purge_name}-${each.key}"
+  alarm_description   = "Test-account purge: ${each.value} on ${local.purge_name}."
+  namespace           = "AWS/Lambda"
+  metric_name         = each.value
+  dimensions          = { FunctionName = aws_lambda_function.purge.function_name }
+  statistic           = "Sum"
+  period              = 3600
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.purge_alarms.arn]
+
+  depends_on = [aws_iam_role_policy.deploy_purge]
+}
