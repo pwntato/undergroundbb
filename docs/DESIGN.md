@@ -2373,17 +2373,22 @@ Test accounts are findable without a scan: registration also writes `GSI1PK = TE
 (`internal/db/purge.go`, run by `cmd/purge`) is one GSI1 `Query` for accounts older than a cutoff.
 It defaults to a dry run, caps accounts per run, and deletes in the order test-only groups, the
 user's other rows and invites, the username claim, then `PROFILE` last, so a run that dies partway is
-finished by the next. Unlike account deletion it removes `PROFILE` itself, which is acceptable only
-because a test uuid is minted fresh and nothing else refers to it once its groups are gone. Membership
+finished by the next. An account in no group with real members has its `PROFILE` removed outright,
+which is acceptable only because a test uuid is minted fresh and nothing else refers to it once its
+groups are gone; a tombstoned one also drops its index keys so later runs do not revisit it. Membership
 is read from GSI1, which is eventually consistent, so the minimum-age cutoff (default 2 hours) is what
 keeps a just-written membership from being missed. A test in `internal/db` fails if a new partition
 kind appears in the data layer that the purge has not been taught about.
 
 Because anyone can mint a test account, a test account can create groups, become a group's last admin,
-or sit in a group real users belong to. The purge therefore must not raw-delete items. It removes a
-test account only when every group that account belongs to has test accounts as its only members
-(those groups are deleted whole); an account in any group with a real member is skipped and logged,
-since leaving needs the user's own signature and a server-side delete would strand the real members.
+or sit in a group real users belong to. The purge therefore never touches a group that has a real
+member, and never raw-deletes a membership (leaving needs the user's own signature, which the server
+cannot produce). A group whose members are all test accounts is deleted whole. A test account that is
+also in a group with a real member is still removed, but its `PROFILE` is **tombstoned** as account
+deletion does, not deleted, because the real members' clients still need its public keys to verify the
+grants it signed; its membership row stays in that group, the "member whose profile is deleted" state
+described under account deletion, which an admin clears with the ordinary removal flow. A test
+account cannot be given a role in a real group without a real admin's signature, so this should be rare.
 
 ## Testing
 

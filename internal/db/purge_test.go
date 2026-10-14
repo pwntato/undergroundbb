@@ -222,6 +222,10 @@ func TestPurgeTombstonesAnAlreadyDeletedAccountThatIsStillAMember(t *testing.T) 
 		t.Fatal(err)
 	}
 	putTestMember(t, c, gid, testUser.UserID, "member")
+	before, err := c.GetUserByID(ctx, testUser.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	rep, err := c.PurgeTestAccounts(ctx, purgeOnly(testUser.UserID))
 	if err != nil || rep.Tombstoned != 1 {
@@ -230,6 +234,9 @@ func TestPurgeTombstonesAnAlreadyDeletedAccountThatIsStillAMember(t *testing.T) 
 	tomb, err := c.GetUserByID(ctx, testUser.UserID)
 	if err != nil || tomb.GSI1PK != "" || tomb.DeletedAt == "" {
 		t.Fatalf("PROFILE = %+v err = %v, want a tombstone with the index removed", tomb, err)
+	}
+	if tomb.DeletedAt != before.DeletedAt {
+		t.Errorf("DeletedAt = %q, want the original %q left alone", tomb.DeletedAt, before.DeletedAt)
 	}
 	if !itemExists(t, c, "GROUP#"+gid, "MEMBER#"+testUser.UserID) {
 		t.Error("the leftover membership was deleted")
