@@ -54,12 +54,9 @@ test('the members page asks users:batch for the roster and gets real usernames b
   expect(body.users.map((u) => u.username)).toContain(user.username)
 })
 
-// Known bug (#204): in prod the roster row shows the short id (8e227a44, in monospace) even
-// though the lookup above returned the username. test.fail() keeps the suite green while that is
-// true and turns this red once it is fixed -- remove the marker then.
 test('the members page shows the username, not the short id', async () => {
-  test.fail(true, '#204: roster shows the short id although users:batch resolved the name')
-  await expect(page.getByRole('listitem').getByText(user.username)).toBeVisible({ timeout: 5_000 })
+  // #204: the roster once showed the short id (8e227a44) although users:batch had resolved the name.
+  await expect(page.getByRole('listitem').getByText(user.username)).toBeVisible()
 })
 
 test('logs out, logs back in, and still has the group', async () => {

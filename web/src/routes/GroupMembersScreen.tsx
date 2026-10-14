@@ -585,6 +585,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           }}
           onConfirmReadmit={handleConfirmReadmit}
           check={checkForView(grantCheck, load.view)}
+          usernames={usernames}
         />
       )}
       {load.status === 'ready' && userId !== null && (

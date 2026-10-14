@@ -53,7 +53,7 @@ function render(
       onConfirmReadmit: () => undefined,
       ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
-      ...(extra.usernames !== undefined && { usernames: extra.usernames }),
+      usernames: extra.usernames ?? new Map(),
     }),
   )
 }
@@ -216,6 +216,7 @@ describe('GroupMembersPanel grant check marks', () => {
         onStartRemove: () => undefined,
         onCancelRemove: () => undefined,
         onConfirmRemove: () => undefined,
+        usernames: new Map(),
         check,
       }),
     )
