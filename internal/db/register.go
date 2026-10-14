@@ -101,6 +101,12 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		CredentialVersion:  1,
 		TestAccount:        in.TestAccount,
 	}
+	if in.TestAccount {
+		// Indexed so the purge can find test accounts without a Scan; sorted by
+		// creation time so it can ask only for those older than a cutoff.
+		user.GSI1PK = models.TestAccountGSI1PK
+		user.GSI1SK = now + "#" + in.UserID
+	}
 	recovery := models.Recovery{
 		Record: models.Record{
 			PK:        "USER#" + in.UserID,
