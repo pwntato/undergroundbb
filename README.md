@@ -271,9 +271,9 @@ every run logs a `purge report:` JSON line to CloudWatch, `/aws/lambda/undergrou
 Only accounts flagged as test accounts that also carry the reserved prefix are eligible. An invocation
 payload can force a dry run (`{"dryRun": true}`) but can never turn deletion on. Three CloudWatch alarms
 (`Errors`, `AsyncEventsDropped`, and `not_running` for fewer than one invocation in three hours)
-publish to an SNS topic; set the `ALARM_EMAIL` Actions secret (CI passes it as `var.alarm_email`; a secret because the repo is public) to
-subscribe an address, and confirm the subscription from the email AWS sends. Async retries are off, so a failed run
-waits for the next schedule. Accounts created before the
+publish to an SNS topic. Set the `ALARM_EMAIL` Actions secret (CI passes it as `var.alarm_email`; a secret
+because the repo is public) to subscribe an address, and confirm the subscription from the email AWS
+sends. Async retries are off, so a failed run waits for the next schedule. Accounts created before the
 `TESTACCOUNT` GSI1 entry existed are invisible to it and need a one-off backfill.
 
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
