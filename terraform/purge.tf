@@ -74,6 +74,11 @@ resource "aws_lambda_function" "purge" {
   timeout     = 60
   memory_size = 256
 
+  # One run at a time. EventBridge invokes asynchronously and Lambda retries a
+  # failed run, so a retry could otherwise overlap the next scheduled run and
+  # two purges would plan and delete the same accounts at once.
+  reserved_concurrent_executions = 1
+
   # cmd/purge fails safe: anything other than the exact string "false" is a dry
   # run, and an invocation payload can force a dry run but never turn deletion
   # on. tostring(true) is "true", so deletion needs var.purge_dry_run = false.

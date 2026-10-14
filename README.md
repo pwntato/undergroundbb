@@ -262,8 +262,8 @@ own. It has its own minimal execution role and an EventBridge schedule (`var.pur
 hourly by default), and `terraform apply` reads its `purge.zip` the same way:
 
 ```sh
-GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/purge
-zip purge.zip bootstrap
+GOOS=linux GOARCH=arm64 go build -o purge-pkg/bootstrap ./cmd/purge
+(cd purge-pkg && zip ../purge.zip bootstrap)
 ```
 
 It deploys in dry-run mode (`var.purge_dry_run`, default `true`): each run only logs what it would

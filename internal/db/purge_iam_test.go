@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -12,49 +13,81 @@ import (
 // The purge Lambda runs under its own role (terraform/purge.tf), and DynamoDB
 // Local does not enforce IAM, so a missing grant would only show up in prod
 // and an extra one would never show up at all. This pins the role's
-// dynamodb:* actions to exactly what cmd/purge uses: every action purge.go
-// calls plus BatchWriteItem (batchDelete, in leave.go), and nothing more. In
+// dynamodb:* actions to exactly what cmd/purge uses, following the calls from
+// PurgeTestAccounts into every helper it reaches, and nothing more. In
 // particular no Scan, no PutItem and no Transact*: the purge deletes by key.
 
-// purgeActionsUsed returns the DynamoDB actions purge.go uses directly, plus
-// the one batchDelete uses on its behalf.
-func purgeActionsUsed(t *testing.T) []string {
+var clientCallRe = regexp.MustCompile(`\bc\.([a-z][A-Za-z]*)\(`)
+
+// clientMethods maps each method name on *Client (non-test code) to its body.
+func clientMethods(t *testing.T) map[string]string {
 	t.Helper()
-	src, err := os.ReadFile("purge.go")
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := map[string]bool{}
-	for _, line := range strings.Split(string(src), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+	defRe := regexp.MustCompile(`(?m)^func \(c \*Client\) ([A-Za-z]+)\(`)
+	methods := map[string]string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		for _, m := range ddbCallRe.FindAllStringSubmatch(line, -1) {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(src)
+		locs := defRe.FindAllStringSubmatchIndex(s, -1)
+		for i, loc := range locs {
+			end := len(s)
+			if i+1 < len(locs) {
+				end = locs[i+1][0]
+			}
+			methods[s[loc[2]:loc[3]]] = s[loc[0]:end]
+		}
+	}
+	return methods
+}
+
+// purgeActionsUsed returns the DynamoDB actions the purge needs: those in
+// PurgeTestAccounts and, transitively, in every *Client method it calls, in
+// whichever file that method lives. A helper added later is picked up without
+// editing this test.
+func purgeActionsUsed(t *testing.T) []string {
+	t.Helper()
+	methods := clientMethods(t)
+	if methods["PurgeTestAccounts"] == "" {
+		t.Fatal("PurgeTestAccounts not found; the purge IAM test needs updating")
+	}
+	set := map[string]bool{}
+	seen := map[string]bool{}
+	var visit func(name string)
+	visit = func(name string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		var body strings.Builder
+		for _, line := range strings.Split(methods[name], "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				body.WriteString(line + "\n")
+			}
+		}
+		for _, m := range ddbCallRe.FindAllStringSubmatch(body.String(), -1) {
 			if !ddbCallsIgnored[m[1]] {
 				set[m[1]] = true
 			}
 		}
-		for _, m := range txItemRe.FindAllStringSubmatch(line, -1) {
+		for _, m := range txItemRe.FindAllStringSubmatch(body.String(), -1) {
 			set[txItemAction[m[1]]] = true
 		}
+		for _, m := range clientCallRe.FindAllStringSubmatch(body.String(), -1) {
+			if _, ok := methods[m[1]]; ok {
+				visit(m[1])
+			}
+		}
 	}
-	// batchDelete is shared with leave.go, so it is not scanned from there.
-	leave, err := os.ReadFile("leave.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fn := string(leave)
-	start := strings.Index(fn, "func (c *Client) batchDelete(")
-	if start < 0 {
-		t.Fatal("batchDelete not found in leave.go; the purge IAM test needs updating")
-	}
-	body := fn[start:]
-	if end := strings.Index(body[1:], "\nfunc "); end >= 0 {
-		body = body[:end+1]
-	}
-	for _, m := range ddbCallRe.FindAllStringSubmatch(body, -1) {
-		set[m[1]] = true
-	}
+	visit("PurgeTestAccounts")
 	return sorted(set)
 }
 
