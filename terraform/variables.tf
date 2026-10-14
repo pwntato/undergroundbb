@@ -95,7 +95,8 @@ variable "purge_dry_run" {
 variable "alarm_email" {
   type        = string
   default     = ""
-  description = "Email address subscribed to the purge alarm topic; CI sets it from the ALARM_EMAIL repository variable (deploy.yml). Empty creates the topic and alarms with no subscriber (the alarms are then only visible in the CloudWatch console). The subscription must be confirmed from the email AWS sends."
+  sensitive   = true
+  description = "Email address subscribed to the purge alarm topic; CI sets it from the ALARM_EMAIL secret (deploy.yml). Empty creates the topic and alarms with no subscriber (the alarms are then only visible in the CloudWatch console). The subscription must be confirmed from the email AWS sends."
 }
 
 variable "purge_schedule" {

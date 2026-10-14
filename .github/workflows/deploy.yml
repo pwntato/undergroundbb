@@ -88,11 +88,13 @@ jobs:
         working-directory: terraform
         env:
           TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
-          # The purge alarm subscriber (terraform/purge.tf). CI applies on every
-          # push to main, so a value set only in a local apply would be
-          # destroyed by the next push; an unset repo variable is "" (no
-          # subscription).
-          TF_VAR_alarm_email: ${{ vars.ALARM_EMAIL }}
+          # The purge alarm subscriber (terraform/purge.tf). A secret, not a
+          # repository variable: this repo is public and variables are not
+          # masked in logs, so the address would print in the env header and in
+          # the plan diff. CI applies on every push to main, so a value set
+          # only in a local apply would be destroyed by the next push; an unset
+          # secret is "" (no subscription).
+          TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
 
       - name: terraform apply
         run: terraform apply -auto-approve tfplan

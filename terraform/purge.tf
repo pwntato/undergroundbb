@@ -163,9 +163,10 @@ resource "aws_sns_topic" "purge_alarms" {
   depends_on = [aws_iam_role_policy.deploy_purge]
 }
 
-# The address comes from the ALARM_EMAIL repository variable (deploy.yml), not
-# a local tfvars: every push to main applies, and would destroy a subscription
-# that only a local apply created.
+# The address comes from the ALARM_EMAIL secret (deploy.yml), not a local
+# tfvars: every push to main applies, and would destroy a subscription that only
+# a local apply created. A secret and a sensitive variable because the repo is
+# public: logs and plan output show it masked.
 resource "aws_sns_topic_subscription" "purge_alarms_email" {
   count     = var.alarm_email == "" ? 0 : 1
   topic_arn = aws_sns_topic.purge_alarms.arn
