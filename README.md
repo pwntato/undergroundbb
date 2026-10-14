@@ -330,6 +330,25 @@ needed to express the second on `aws_lambda_permission` didn't exist before prov
 Without it, every request 403s (`AccessDeniedException`) regardless of `AuthType`, which is how this
 was found — confirmed against a real deployment, not just read off the changelog.
 
+## Smoke tests
+
+`web/e2e` is a Playwright suite that drives the real UI against a live deployment: it signs up a fresh
+random `zz-delete-test-` account (sent with the `X-Test-Account` header, so the server treats it as a
+test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, and
+logs out and back in. No credentials are stored anywhere.
+
+```sh
+cd web
+npx playwright install chromium   # once
+npm run e2e                       # against https://undergroundbb.com
+E2E_BASE_URL=http://localhost:5173 npm run e2e
+```
+
+`.github/workflows/smoke.yml` runs it after every successful deploy of `main` (and on demand). It builds
+the deployed commit and waits until the live site serves that build's assets before testing, so a
+CloudFront invalidation that is still propagating does not test the previous release. One run spends
+about 8 requests of the WAF's 30-per-5-minutes limit on `/api/auth/*`, so do not run it in a loop.
+
 ## Contributing
 
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one

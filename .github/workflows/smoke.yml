@@ -1,0 +1,89 @@
+name: smoke
+
+# Runs the Playwright smoke suite (web/e2e) against the live site once a deploy
+# has finished, and on demand. It needs no credentials: each run signs up a
+# fresh random `zz-delete-test-` account through the real UI, with the
+# X-Test-Account header, and leaves it for the scheduled purge (cmd/purge).
+on:
+  workflow_run:
+    workflows: [deploy]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Signups are rate limited per IP by the WAF (30 requests / 5 minutes on
+# /api/auth/*, and one run spends about 8), so never overlap two runs.
+concurrency:
+  group: smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # A failed deploy has nothing new to check. A manual run must be dispatched
+    # from main: any other ref builds assets prod never serves, so the wait step
+    # below would time out and read like a deploy problem.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    env:
+      E2E_BASE_URL: https://undergroundbb.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit that was deployed, not whatever main is by now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: web install
+        run: npm ci
+        working-directory: web
+
+      # The deploy's CloudFront invalidation is still propagating when its
+      # workflow ends, so the site can briefly serve the previous build. Builds
+      # are reproducible (same lockfile, same Node), so build this commit and
+      # wait until the live index.html references exactly the assets it
+      # produced. A site that never converges fails the job rather than
+      # testing the wrong release.
+      - name: build this commit and wait for it to be live
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm run build
+          assets() { grep -o 'assets/[A-Za-z0-9._-]*\.\(js\|css\)' | sort -u; }
+          expected=$(assets < dist/index.html)
+          echo "expecting:"; echo "$expected"
+          for i in $(seq 1 40); do
+            live=$(curl -fsS -H 'Cache-Control: no-cache' "$E2E_BASE_URL/" | assets || true)
+            if [ "$live" = "$expected" ]; then
+              echo "live after $i checks"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "live site never served this build; it has:" >&2
+          echo "$live" >&2
+          exit 1
+
+      - name: install browser
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+
+      - name: smoke tests
+        run: npm run e2e
+        working-directory: web
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: web/test-results
+          if-no-files-found: ignore
