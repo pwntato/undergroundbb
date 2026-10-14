@@ -2366,7 +2366,18 @@ header is refused on any other name, so the prefix and the `TestAccount` flag on
 agree. The header is not a secret: it only keeps a real user from landing in a scheduled test-data
 purge by accident, and a person who opts in has asked for the deletion. Test accounts get no other
 treatment (no rate-limit exemption, no relaxed validation), so the flag is worth nothing to an
-attacker. The purge itself is separate work and must require both the prefix and the flag.
+attacker. The purge requires both the prefix and the flag.
+
+Test accounts are findable without a scan: registration also writes `GSI1PK = TESTACCOUNT`,
+`GSI1SK = <CreatedAt>#<uuid>` on their `PROFILE` (and only theirs), so `PurgeTestAccounts`
+(`internal/db/purge.go`, run by `cmd/purge`) is one GSI1 `Query` for accounts older than a cutoff.
+It defaults to a dry run, caps accounts per run, and deletes in the order test-only groups, the
+user's other rows and invites, the username claim, then `PROFILE` last, so a run that dies partway is
+finished by the next. Unlike account deletion it removes `PROFILE` itself, which is acceptable only
+because a test uuid is minted fresh and nothing else refers to it once its groups are gone. Membership
+is read from GSI1, which is eventually consistent, so the minimum-age cutoff (default 2 hours) is what
+keeps a just-written membership from being missed. A test in `internal/db` fails if a new partition
+kind appears in the data layer that the purge has not been taught about.
 
 Because anyone can mint a test account, a test account can create groups, become a group's last admin,
 or sit in a group real users belong to. The purge therefore must not raw-delete items. It removes a
