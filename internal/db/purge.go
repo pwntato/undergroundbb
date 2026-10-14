@@ -120,12 +120,14 @@ func (c *Client) PurgeTestAccounts(ctx context.Context, opts PurgeOptions) (Purg
 		return report, fmt.Errorf("db: list test accounts: %w", err)
 	}
 
-	isTest := map[string]bool{}
+	// purgeable caches, per user id, whether that account may be deleted in this
+	// run: a test account (flag and prefix) already past the cutoff.
+	purgeable := map[string]bool{}
 	plannedGroups := map[string]bool{}
 	plannedRows := map[string]bool{}
 	for _, uid := range candidates {
 		report.Examined++
-		plan, skip, err := c.planPurge(ctx, uid, isTest)
+		plan, skip, err := c.planPurge(ctx, uid, purgeable, cutoff)
 		if err != nil {
 			return report, fmt.Errorf("db: plan purge of %s: %w", uid, err)
 		}
@@ -243,7 +245,7 @@ func (c *Client) testAccountCandidates(ctx context.Context, cutoff string, limit
 
 // planPurge reads everything that would be deleted for userID without
 // deleting any of it. A non-empty skip means leave the account alone.
-func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string]bool) (plan purgePlan, skip string, err error) {
+func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[string]bool, cutoff string) (plan purgePlan, skip string, err error) {
 	plan.userID = userID
 	if !idgen.ValidUUID(userID) {
 		return plan, "not a valid user id", nil
@@ -255,7 +257,7 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 	if user == nil || !isTestProfile(user) {
 		return plan, "profile is not a test account", nil
 	}
-	isTest[userID] = true
+	purgeable[userID] = true
 	plan.wasDeleted = user.DeletedAt != ""
 	plan.keptGroups = map[string]bool{}
 	if user.DeletedAt == "" {
@@ -279,14 +281,17 @@ func (c *Client) planPurge(ctx context.Context, userID string, isTest map[string
 		}
 		mixed := false
 		for _, other := range members {
-			ok, known := isTest[other]
+			ok, known := purgeable[other]
 			if !known {
 				p, err := c.getProfileConsistent(ctx, other)
 				if err != nil {
 					return plan, "", err
 				}
-				ok = p != nil && isTestProfile(p)
-				isTest[other] = ok
+				// A test account newer than the cutoff counts like a real member
+				// for this run: its test may still be running, so the group stays
+				// and the candidate waits until it too is old enough.
+				ok = p != nil && isTestProfile(p) && p.CreatedAt < cutoff
+				purgeable[other] = ok
 			}
 			if !ok {
 				mixed = true

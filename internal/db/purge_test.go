@@ -292,6 +292,52 @@ func TestPurgeKeepsTheTombstoneOfAnAlreadyDeletedAccountThatIsStillAMember(t *te
 	}
 }
 
+func TestPurgeDoesNotDeleteAGroupWhileAYoungTestAccountIsInIt(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	old, young := registerAccount(t, c, true), registerAccount(t, c, true)
+	gid := putGroup(t, c, old.UserID, young.UserID)
+	// Make one account old enough by backdating its profile and index key.
+	if _, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        aws.String(c.table),
+		Key:              map[string]types.AttributeValue{"PK": s("USER#" + old.UserID), "SK": s("PROFILE")},
+		UpdateExpression: aws.String("SET CreatedAt = :t, GSI1SK = :k"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":t": s("2020-01-01T00:00:00Z"), ":k": s("2020-01-01T00:00:00Z#" + old.UserID),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The real clock and a 2h minimum: only `old` is a candidate, but `young`,
+	// whose test may still be running, shares its group.
+	opts := purgeOnly(old.UserID)
+	opts.Now, opts.MinAge = time.Now(), 2*time.Hour
+	rep, err := c.PurgeTestAccounts(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Groups != 0 || rep.Waiting != 1 || rep.KeptGroups != 1 {
+		t.Fatalf("report = %+v, want the old account waiting and the group kept", rep)
+	}
+	for _, k := range [][2]string{{"GROUP#" + gid, "META"}, {"GROUP#" + gid, "MEMBER#" + old.UserID}, {"GROUP#" + gid, "MEMBER#" + young.UserID}, {"USER#" + young.UserID, "PROFILE"}} {
+		if !itemExists(t, c, k[0], k[1]) {
+			t.Errorf("%s / %s was deleted while a young test account was using the group", k[0], k[1])
+		}
+	}
+
+	// Once the young account is old enough too, the group goes.
+	later := purgeOnly(old.UserID, young.UserID)
+	later.Now, later.MinAge = time.Now().Add(3*time.Hour), 2*time.Hour
+	rep, err = c.PurgeTestAccounts(ctx, later)
+	if err != nil || rep.Purged != 2 || rep.Groups != 1 {
+		t.Fatalf("later run = %+v err = %v, want both purged and the group deleted", rep, err)
+	}
+	if itemExists(t, c, "GROUP#"+gid, "META") {
+		t.Error("group still exists once both accounts were old enough")
+	}
+}
+
 func TestPurgeFinishesAfterARunStoppedMidGroup(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
