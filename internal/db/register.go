@@ -60,6 +60,9 @@ type RegisterInput struct {
 	RecoveryVerifierSalt   []byte
 	RecoveryVerifierParams models.Argon2Params
 	RecoveryVerifier       []byte
+
+	// TestAccount sets models.User.TestAccount on the new PROFILE.
+	TestAccount bool
 }
 
 // Register creates a new account: the USER#<uuid>/PROFILE item, the
@@ -96,6 +99,7 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		Argon2Params:       in.Argon2Params,
 		WrappedPrivateKeys: in.WrappedPrivateKeys,
 		CredentialVersion:  1,
+		TestAccount:        in.TestAccount,
 	}
 	recovery := models.Recovery{
 		Record: models.Record{

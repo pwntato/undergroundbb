@@ -6,6 +6,8 @@
 // currently defines only the shape every record shares.
 package models
 
+import "strings"
+
 // Record is the field set common to every item in the table. Concrete record
 // types embed it.
 type Record struct {
@@ -107,6 +109,28 @@ type User struct {
 	// increments it, which makes every token issued at a lower value invalid.
 	// Absent (0) on a row from before it existed.
 	SessionGeneration int64 `dynamodbav:"SessionGeneration,omitempty"`
+	// TestAccount marks an account registered for automated testing: its
+	// username starts with TestUsernamePrefix and the register request sent
+	// TestAccountHeader. The scheduled purge only touches accounts that carry
+	// both this flag and the prefix. Set once at registration, never changed.
+	TestAccount bool `dynamodbav:"TestAccount,omitempty"`
+}
+
+// TestUsernamePrefix is reserved for automated-test accounts. Registration
+// refuses it unless the request opts in with TestAccountHeader, and refuses
+// that header on any other name, so the prefix and models.User.TestAccount
+// always agree. Usernames are case-insensitive, so compare lowercased.
+const TestUsernamePrefix = "zz-delete-test-"
+
+// TestAccountHeader is the request header that opts a registration in to being
+// a test account. It is not a secret: it only keeps real users from landing in
+// the purge by accident. Test accounts get no special treatment anywhere else.
+const TestAccountHeader = "X-Test-Account"
+
+// HasTestUsernamePrefix reports whether username falls in the reserved
+// test-account namespace.
+func HasTestUsernamePrefix(username string) bool {
+	return strings.HasPrefix(strings.ToLower(username), TestUsernamePrefix)
 }
 
 // SupersededKey is a prior Ed25519 public key and the interval it was

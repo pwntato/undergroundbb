@@ -2360,6 +2360,20 @@ registration gate is a different object with no schema item, and it would need a
 role, which the role table — entirely group-scoped — has no concept of. Adding it is a real feature,
 not a config value.
 
+**Test accounts are a reserved, opt-in namespace.** Usernames starting `zz-delete-test-`
+(case-insensitive) are refused at signup unless the request carries `X-Test-Account: 1`, and that
+header is refused on any other name, so the prefix and the `TestAccount` flag on `PROFILE` always
+agree. The header is not a secret: it only keeps a real user from landing in a scheduled test-data
+purge by accident, and a person who opts in has asked for the deletion. Test accounts get no other
+treatment (no rate-limit exemption, no relaxed validation), so the flag is worth nothing to an
+attacker. The purge itself is separate work and must require both the prefix and the flag.
+
+Because anyone can mint a test account, a test account can create groups, become a group's last admin,
+or sit in a group real users belong to. The purge therefore must not raw-delete items. It removes a
+test account only when every group that account belongs to has test accounts as its only members
+(those groups are deleted whole); an account in any group with a real member is skipped and logged,
+since leaving needs the user's own signature and a server-side delete would strand the real members.
+
 ## Testing
 
 Beyond ordinary unit and integration tests, CI verifies the crypto against **fixed test vectors** —

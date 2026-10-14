@@ -209,6 +209,21 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The reserved test prefix and the opt-in header must agree. Either alone
+	// is refused so that models.User.TestAccount implies the prefix and the
+	// prefix implies the flag: an account the purge may delete is one whose
+	// registrant asked for that, and a real user who happens to pick the
+	// prefix is told no instead of being deleted later.
+	testAccount := r.Header.Get(models.TestAccountHeader) == "1"
+	if hasPrefix := models.HasTestUsernamePrefix(req.Username); hasPrefix != testAccount {
+		if hasPrefix {
+			WriteErrorWithCode(w, http.StatusBadRequest, "usernames starting with "+models.TestUsernamePrefix+" are reserved for automated tests", "reserved_username")
+		} else {
+			WriteErrorWithCode(w, http.StatusBadRequest, "test accounts must have a username starting with "+models.TestUsernamePrefix, "test_username_required")
+		}
+		return
+	}
+
 	// See registerRequest's own doc comment for why UserID is client-supplied
 	// rather than server-generated here. idgen.ValidUUID enforces the exact
 	// shape idgen.UUID() itself produces (lowercase, version 4, correct
@@ -304,6 +319,8 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		RecoveryVerifierSalt:   recoveryVerifierSalt,
 		RecoveryVerifierParams: toModelParams(req.RecoveryVerifierParams),
 		RecoveryVerifier:       recoveryVerifier,
+
+		TestAccount: testAccount,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrUsernameTaken) {

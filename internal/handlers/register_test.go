@@ -143,6 +143,118 @@ func TestRegisterSuccess(t *testing.T) {
 	}
 }
 
+// doRegisterAs is doRegister with an optional X-Test-Account header value
+// ("" sends none).
+func doRegisterAs(t *testing.T, h *Handler, req registerRequest, testHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(body))
+	if testHeader != "" {
+		r.Header.Set(models.TestAccountHeader, testHeader)
+	}
+	mux.ServeHTTP(rec, r)
+	return rec
+}
+
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	return body["code"]
+}
+
+func readProfile(t *testing.T, userID string) models.User {
+	t.Helper()
+	out, err := rawDDB(t).GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	var user models.User
+	if err := attributevalue.UnmarshalMap(out.Item, &user); err != nil {
+		t.Fatalf("unmarshal PROFILE: %v", err)
+	}
+	return user
+}
+
+func TestRegisterTestAccountNeedsPrefixAndHeader(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	suffix := randomUsername(t)
+
+	t.Run("prefix and header together register a flagged test account", func(t *testing.T) {
+		req := validRegisterRequest(models.TestUsernamePrefix + suffix)
+		rec := doRegisterAs(t, h, req, "1")
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if !readProfile(t, req.UserID).TestAccount {
+			t.Error("PROFILE TestAccount = false, want true")
+		}
+	})
+
+	t.Run("prefix without the header is refused, in any case", func(t *testing.T) {
+		for _, name := range []string{
+			models.TestUsernamePrefix + suffix + "a",
+			strings.ToUpper(models.TestUsernamePrefix) + suffix + "b",
+		} {
+			rec := doRegisterAs(t, h, validRegisterRequest(name), "")
+			if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "reserved_username" {
+				t.Errorf("%q: status = %d code = %q, want 400 reserved_username, body: %s", name, rec.Code, errorCode(t, rec), rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("a header value other than 1 does not opt in", func(t *testing.T) {
+		rec := doRegisterAs(t, h, validRegisterRequest(models.TestUsernamePrefix+suffix+"c"), "true")
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "reserved_username" {
+			t.Errorf("status = %d code = %q, want 400 reserved_username", rec.Code, errorCode(t, rec))
+		}
+	})
+
+	t.Run("header on an ordinary name is refused", func(t *testing.T) {
+		rec := doRegisterAs(t, h, validRegisterRequest(randomUsername(t)), "1")
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "test_username_required" {
+			t.Errorf("status = %d code = %q, want 400 test_username_required, body: %s", rec.Code, errorCode(t, rec), rec.Body.String())
+		}
+	})
+
+	t.Run("an ordinary registration is not flagged", func(t *testing.T) {
+		req := validRegisterRequest(randomUsername(t))
+		if rec := doRegister(t, h, req); rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if readProfile(t, req.UserID).TestAccount {
+			t.Error("PROFILE TestAccount = true on an ordinary account")
+		}
+	})
+
+	t.Run("a refused registration leaves no claim behind", func(t *testing.T) {
+		name := models.TestUsernamePrefix + suffix + "d"
+		if first := doRegisterAs(t, h, validRegisterRequest(name), ""); first.Code != http.StatusBadRequest || errorCode(t, first) != "reserved_username" {
+			t.Fatalf("precondition: first status = %d code = %q, want 400 reserved_username", first.Code, errorCode(t, first))
+		}
+		// The same name must still be free for an opted-in registration.
+		rec := doRegisterAs(t, h, validRegisterRequest(name), "1")
+		if rec.Code != http.StatusCreated {
+			t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+	})
+}
+
 func TestRegisterClosedPolicy(t *testing.T) {
 	t.Setenv("REGISTRATION_POLICY", "closed")
 	h := New(config.FromEnv(), testDB(t))
