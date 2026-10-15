@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/session"
@@ -109,6 +110,21 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, sessionResponse{Authenticated: true, UserID: userID})
+}
+
+// setSessionCookie issues token as the session cookie. Login and a password
+// change share it so the attributes cannot drift apart: clearSessionCookie
+// only clears a cookie whose attributes match.
+func setSessionCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(ttl.Seconds()),
+	})
 }
 
 // clearSessionCookie expires the session cookie with the same attributes it

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, request, test, type BrowserContext, type Page } from '@playwright/test'
 
 import { BASE_URL, TEST_ACCOUNT_HEADERS } from './env.ts'
 import { logIn, logOut, newTestUser, signUp, spaNavigate, type TestUser } from './helpers.ts'
@@ -72,6 +72,9 @@ test('after a page load the keys are cold: it asks for the password, then create
 })
 
 test('changes the password and is issued a new recovery code', async () => {
+  // A copy of the session cookie, as an attacker holding a stolen session would have it.
+  const stolen = (await context.cookies()).find((c) => c.name === 'ubb_session')
+  expect(stolen).toBeDefined()
   await page.goto('/account/password')
   await page.getByLabel('Current password').fill(original.password)
   await page.getByLabel('New password', { exact: true }).fill(changed.password)
@@ -81,6 +84,22 @@ test('changes the password and is issued a new recovery code', async () => {
   expect(issued).not.toBe(recoveryCode)
   recoveryCode = issued
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
+
+  // The change ended every session that existed before it, so the copy is dead...
+  const attacker = await request.newContext({
+    baseURL: BASE_URL,
+    extraHTTPHeaders: { ...TEST_ACCOUNT_HEADERS, Cookie: `ubb_session=${stolen?.value ?? ''}` },
+  })
+  const copied = (await (await attacker.get('/api/auth/session')).json()) as {
+    authenticated: boolean
+  }
+  expect(copied.authenticated).toBe(false)
+  await attacker.dispose()
+  // ...while the tab that made the change was reissued a working one.
+  const own = (await (await context.request.get('/api/auth/session')).json()) as {
+    authenticated: boolean
+  }
+  expect(own.authenticated).toBe(true)
 })
 
 test('the old password stops working and the new one logs in', async () => {

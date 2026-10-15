@@ -186,7 +186,7 @@ convincingly: every post carries an Ed25519 signature the cookie cannot produce,
 from a stolen session fails verification in every reader's client. Session theft here is a genuinely
 smaller event than in an ordinary application.
 
-**Logout revokes the session (#224); nothing else does yet.** The token carries the user's session
+**Logout, a password change and a recovery reset revoke sessions (#224).** The token carries the user's session
 generation, a counter on the PROFILE item, and every authenticated request (and
 `GET /api/auth/session`) compares it with the stored value in one strongly consistent read. Logout
 bumps the counter, so a cookie copied before it stops working immediately rather than at expiry, and
@@ -197,11 +197,20 @@ tokens and no session table: one integer on an item that already exists. If that
 request is a 500, never a 401, so a store outage does not look like a logout to the web client.
 Tokens issued before this change have no generation and do not verify, so the deploy logs everyone out once.
 
-What does **not** revoke a session is the rest: a password change and the five-minute lockout leave a
-live session valid until it expires, which matters most for the user the password-change flow is
-designed for, someone who believes they are compromised and expects changing their password to log the
-attacker out. It does not; bumping the same counter there is the obvious next step and is not done
-yet. Keeping sessions short remains the control for everything else.
+A password change and a recovery reset bump the same counter, inside the transaction that re-wraps the
+credentials (`db.RewrapCredentials`), so there is no moment when the new password is live and an old
+session still is. That is the point for the user those flows are designed for, someone who believes
+they are compromised and expects changing their password to log the attacker out. The change handler
+reads the new generation back and reissues the caller a token, so the person who changed it stays
+signed in. The session is one cookie in the browser's jar, so the reissued cookie replaces it for every
+tab of that browser, and those tabs stay signed in; every other browser and device, and anyone holding
+a copy of the old cookie, is signed out. If that read fails the change has
+already committed, so the answer is still 200 and the cookie is cleared (a 500 there would tell the
+client its password did not change); the user logs in again with the new password. A recovery reset
+issues no session at all, since the user logs in with the new password afterwards. A change that
+conflicts (a stale credential version) commits nothing and revokes nothing. What still does **not**
+revoke a session is the five-minute lockout, which leaves a live session valid until it expires;
+keeping sessions short remains the control for that.
 
 **This means the server cannot count wrong passwords.** A mistyped password fails at step 3, inside
 the browser, and never reaches the server at all. What the server can count is **failed signature

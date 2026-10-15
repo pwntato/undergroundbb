@@ -291,16 +291,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not process verification")
 		return
 	}
-	token := h.sessions.Issue(userID, gen, h.cfg.SessionTTL)
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(h.cfg.SessionTTL.Seconds()),
-	})
+	setSessionCookie(w, h.sessions.Issue(userID, gen, h.cfg.SessionTTL), h.cfg.SessionTTL)
 	WriteJSON(w, http.StatusOK, verifyResponse{
 		UserID:            userID,
 		CredentialVersion: user.CredentialVersion,
