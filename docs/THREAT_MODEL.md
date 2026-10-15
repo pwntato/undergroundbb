@@ -198,9 +198,10 @@ it. This is unavoidable — a client needs both to attempt a login — but it me
 offline password-cracking attack is available on request.**
 
 This is precisely why Argon2id is used rather than a fast hash: it makes offline guessing expensive
-rather than impossible. Weak passwords remain weak. The endpoint is rate-limited per IP, and
-accounts lock for five minutes after five failed **signature verifications**, but neither prevents a
-determined attacker from collecting blobs.
+rather than impossible. Weak passwords remain weak. The endpoint is rate-limited per IP (100 requests
+per five minutes across `/api/auth/*` and `/api/account/recovery-code*`, about 1,200 an hour from one
+source), and accounts lock for five minutes after five failed **signature verifications**, but neither
+prevents a determined attacker from collecting blobs.
 
 **The lockout in particular does nothing here, by design and not by omission.** It is enforced on
 the verify leg only, so a locked account is still issued challenges and still hands out its salt and
