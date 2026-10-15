@@ -337,6 +337,9 @@ random `zz-delete-test-` account (sent with the `X-Test-Account` header, so the 
 test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, then
 runs the two-user invite flow: a second account, in its own browser context, accepts an invite, the
 inviter logs out and back in (which completes the key handoff), and the invitee sees the group.
+A second spec file walks one more account through the lifecycle: a new tab with cold keys asks for the
+password before creating a group, a password change (the old password stops working), recovery with the
+code the change issued, and account deletion together with the group it alone owned.
 No credentials are stored anywhere.
 
 ```sh
@@ -349,9 +352,9 @@ E2E_BASE_URL=http://localhost:5173 npm run e2e
 `.github/workflows/smoke.yml` runs it after every successful deploy of `main` (and on demand). It builds
 the deployed commit and waits until the live site serves that build's assets before testing, so a
 CloudFront invalidation that is still propagating does not test the previous release. One run spends
-about 18 requests of the WAF's 100-per-5-minutes limit on `/api/auth/*` (every full page load counts, via
-`GET /api/auth/session`), so five runs fit in a window and a sixth can fail at signup with "Could not
-create your account"; wait for the window to clear instead of retrying.
+about 42 requests of the WAF's 100-per-5-minutes limit on `/api/auth/*` and `/api/account/recovery-code*`
+(every full page load counts, via `GET /api/auth/session`), so two runs fit in a window and a third can
+fail at signup with "Could not create your account"; wait for the window to clear instead of retrying.
 
 ## Contributing
 

@@ -174,9 +174,11 @@ resource "aws_wafv2_web_acl" "main" {
   # rule counts, so a single login-and-navigate session spends a large share
   # of 30, and several people behind one NAT or office egress share one
   # bucket. The post-deploy smoke suite (web/e2e, .github/workflows/smoke.yml)
-  # spends about 18 counted requests per run, so two runs inside one window
-  # could not fit. 100 leaves room for that suite plus ordinary use from a
-  # shared IP. The cost, stated plainly: one source can now attempt about
+  # spent about 18 counted requests per run when this value was chosen, so
+  # two runs inside one window could not fit. 100 leaves room for that suite
+  # plus ordinary use from a shared IP (the account-lifecycle specs have since
+  # raised a run to about 42, so two runs fit in a window and a third does
+  # not). The cost, stated plainly: one source can now attempt about
   # 1,200 challenge/login requests an hour (up from about 360), and up to
   # 100 server-side Argon2id recovery checks per window instead of 30. One
   # source can also overwrite a named user's challenge slot about every 3
