@@ -54,9 +54,10 @@ test('signs up', async () => {
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
 })
 
-test('a new tab has no keys, asks for the password, then creates the group', async () => {
-  // The session cookie is shared by every tab of the context, but the keys live in each tab's own
-  // worker, so a second tab is signed in with cold keys.
+test('after a page load the keys are cold: it asks for the password, then creates the group', async () => {
+  // The session cookie outlives a page load but the keys live in the tab's worker and do not, so a
+  // signed-in visitor with cold keys is asked for the password before anything that signs. A fresh
+  // tab of the same context is one way to get there (a reload in the first tab is another).
   const tab = await context.newPage()
   await tab.goto('/groups/new')
   await expect(tab.getByRole('heading', { name: 'Confirm your password' })).toBeVisible()
@@ -109,8 +110,12 @@ test('recovers the account with the recovery code and sets a new password', asyn
 test('deletes the account together with the group it alone owned', async () => {
   // In-app navigation keeps the keys warm; a page load would ask for the password first.
   await spaNavigate(page, '/account/delete')
-  await expect(page.getByText('These groups will be deleted')).toBeVisible()
-  await expect(page.getByText(groupName)).toBeVisible()
+  // The innermost block holding the heading is the panel that lists the groups to be deleted.
+  const deleting = page
+    .locator('div')
+    .filter({ has: page.getByText('These groups will be deleted') })
+    .last()
+  await expect(deleting.getByRole('listitem')).toHaveText(groupName)
   await page.getByRole('button', { name: 'Delete my account' }).click()
   await page.getByRole('button', { name: 'Yes, delete my account' }).click()
   // Signed out lands on Home or, if a request races the logout, on /login; either is signed out.
