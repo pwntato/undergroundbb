@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -115,6 +116,20 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The re-wrap bumped the session generation, which ended every session of
+	// this user, including the one that made this request. Issue this caller a
+	// fresh token so changing the password does not log the person who did it
+	// out of this tab. If the read fails the change is already committed, so
+	// the answer stays 200 (a 500 here would tell the client its password did
+	// not change); the old cookie no longer verifies, so clear it and the
+	// client simply logs in again with the new password.
+	gen, err := h.db.GetSessionGeneration(r.Context(), userID)
+	if err != nil {
+		log.Printf("%s %s: session generation after password change: %v", r.Method, r.URL.Path, err)
+		clearSessionCookie(w)
+	} else {
+		setSessionCookie(w, h.sessions.Issue(userID, gen, h.cfg.SessionTTL), h.cfg.SessionTTL)
+	}
 	WriteJSON(w, http.StatusOK, changePasswordResponse{CredentialVersion: newVersion})
 }
 

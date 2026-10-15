@@ -182,6 +182,14 @@ type RewrapCredentialsInput struct {
 // This does not touch Username, the public keys, or anything else on
 // PROFILE -- see docs/DESIGN.md, "Changing a password does not change
 // keys," which applies equally to a recovery reset.
+//
+// The same PROFILE update also adds one to SessionGeneration, so every
+// session issued before the re-wrap stops verifying in the same atomic write
+// that changes the credentials: someone who changes their password because
+// they think they are compromised gets the attacker logged out, and there is
+// no window in which the new password is live while an old session still is.
+// A caller that wants to keep its own session reads GetSessionGeneration
+// afterwards and issues a fresh token.
 func (c *Client) RewrapCredentials(ctx context.Context, in RewrapCredentialsInput) error {
 	userKey := "USER#" + in.UserID
 
@@ -213,7 +221,8 @@ func (c *Client) RewrapCredentials(ctx context.Context, in RewrapCredentialsInpu
 			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
 		},
 		UpdateExpression: aws.String(
-			"SET Salt = :salt, Argon2Params = :argon2Params, WrappedPrivateKeys = :wrappedPrivateKeys, CredentialVersion = :newVersion",
+			"SET Salt = :salt, Argon2Params = :argon2Params, WrappedPrivateKeys = :wrappedPrivateKeys, CredentialVersion = :newVersion " +
+				"ADD SessionGeneration :one",
 		),
 		ConditionExpression: aws.String("CredentialVersion = :expectedVersion"),
 	}
@@ -260,6 +269,7 @@ func (c *Client) RewrapCredentials(ctx context.Context, in RewrapCredentialsInpu
 		":wrappedPrivateKeys": values[":wrappedPrivateKeys"],
 		":newVersion":         values[":newVersion"],
 		":expectedVersion":    values[":expectedVersion"],
+		":one":                &types.AttributeValueMemberN{Value: "1"},
 	}
 	recoveryValues[":recoverySalt"] = values[":recoverySalt"]
 	recoveryValues[":recoveryArgon2Params"] = values[":recoveryArgon2Params"]
