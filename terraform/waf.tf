@@ -143,9 +143,9 @@ resource "aws_wafv2_web_acl" "main" {
   }
 
   # /api/auth/* and /api/account/recovery-code* specifically: 100 req/5min
-  # per IP (~20/min) is a deliberate choice, not a forced floor -- round 1
-  # review corrected an earlier version of this comment that claimed 100
-  # was WAF's minimum; rate_based_statement.limit's real minimum is 10
+  # per IP (~20/min) is a deliberate choice, not a forced floor --
+  # rate_based_statement.limit's real minimum is 10 (round 1 review
+  # corrected an earlier version of this comment that claimed it was 100)
   # (confirmed live via `aws wafv2 check-capacity`, which accepts Limit=10
   # and rejects Limit=0). Round 2 review picked this value against "a
   # single IP's compute burn," and was corrected: at the time, Argon2id ran
@@ -159,12 +159,13 @@ resource "aws_wafv2_web_acl" "main" {
   # comments on maxArgon2MemoryKiB and CheckRecoveryVerifier for the
   # server-side ceiling that keeps a single such request bounded).
   # docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
-  # same correction. Independent of that history, 100 is sized against this
-  # file's header comment's actual harvesting/hot-partition targets:
+  # same correction. Independent of that history, the value is bounded by
+  # this file's header comment's actual harvesting/hot-partition targets:
   # generous enough for a human retrying a forgotten password a handful of
   # times, while still bounding both per-IP harvesting of
   # challenge/recovery material and the hot-partition write rate against a
-  # single named user's PROFILE/RECOVERY items. See the header comment for
+  # single named user's PROFILE/RECOVERY items. The reason it is 100 and
+  # not 30 is the History paragraph below. See the header comment for
   # why no value here closes the username-keyed challenge-flood threat --
   # that's a property of WAF keying on IP, not of this number.
   #
@@ -177,8 +178,12 @@ resource "aws_wafv2_web_acl" "main" {
   # could not fit. 100 leaves room for that suite plus ordinary use from a
   # shared IP. The cost, stated plainly: one source can now attempt about
   # 1,200 challenge/login requests an hour (up from about 360), and up to
-  # 100 server-side Argon2id recovery checks per window instead of 30. Each
-  # check is still individually bounded by the ceiling in
+  # 100 server-side Argon2id recovery checks per window instead of 30. One
+  # source can also overwrite a named user's challenge slot about every 3
+  # seconds instead of every 10, which makes a single-IP login denial
+  # noticeably more reliable (the distributed version was already
+  # unbounded, and no value here closes either). Each recovery check is
+  # still individually bounded by the ceiling in
   # internal/crypto/recovery.go, the five-attempt account lockout is
   # unchanged, and guessing a password offline is not touched by this rule
   # at all (docs/THREAT_MODEL.md, "Login material"). No CI bypass header was
