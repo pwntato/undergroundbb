@@ -70,15 +70,8 @@ test('the members page shows the username, not the short id', async () => {
   await expect(page.getByRole('listitem').getByText(user.username)).toBeVisible()
 })
 
-test('logs out, logs back in, and still has the group', async () => {
-  await logOut(page)
-  await logIn(page, user)
-  await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
-  await expect(page.getByText(groupName)).toBeVisible()
-  await expect(page.getByText('admin', { exact: true })).toBeVisible()
-})
-
 test('creates an invite link for the group', async () => {
+  await page.getByRole('link', { name: 'Back to your groups' }).click()
   await page.getByRole('link', { name: 'Invite', exact: true }).click()
   await page.getByRole('button', { name: 'Create invite' }).click()
   const link = page.getByLabel('Invite link')
@@ -102,6 +95,9 @@ test('the inviter logs in again and the new member is on the roster', async () =
   await logOut(page)
   await logIn(page, user)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
+  // The session ended and login restored the group, with the admin role.
+  await expect(page.getByText(groupName)).toBeVisible()
+  await expect(page.getByText('admin', { exact: true })).toBeVisible()
   // Login completes pending invites in the background, so the invitee can show up a moment after
   // Home does. Reopen the roster (in-app, so the keys stay warm) until they are on it.
   const row = page.getByRole('listitem').filter({ hasText: invitee.username })
@@ -111,7 +107,7 @@ test('the inviter logs in again and the new member is on the roster', async () =
     }
     await page.getByRole('link', { name: 'Members' }).click()
     await expect(row).toBeVisible({ timeout: 3_000 })
-  }).toPass({ timeout: 90_000 })
+  }).toPass({ timeout: 60_000 })
   await expect(row).toContainText('Member')
 })
 
