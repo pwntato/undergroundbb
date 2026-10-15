@@ -74,8 +74,9 @@ resource "aws_lambda_function" "purge" {
   timeout     = 60
   memory_size = 256
 
-  # One execution at a time: an overlapping run is throttled (and dropped, see
-  # the event invoke config below) instead of running on top of the live one.
+  # One execution at a time: an overlapping run is throttled and waits (up to
+  # 60s, then dropped; see the event invoke config below) instead of running on
+  # top of the live one.
   # Needs the account's unreserved pool to stay at or above AWS's floor of 100,
   # which the 1000 limit allows.
   reserved_concurrent_executions = 1
@@ -145,7 +146,7 @@ resource "aws_lambda_permission" "purge_schedule" {
 
 output "purge_function_name" {
   value       = aws_lambda_function.purge.function_name
-  description = "The test-account purge Lambda, for a manual dry-run invocation."
+  description = "The test-account purge Lambda, for a manual dry-run invocation. Only one execution runs at a time: a synchronous invoke that lands during a scheduled run gets a 429 TooManyRequestsException and does not queue, so retry it."
 }
 
 # Alarms, so a purge that is failing, dropped, or not running at all is noticed
