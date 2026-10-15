@@ -23,8 +23,9 @@ terraform {
       # the newest provider in range. 6.69.0 fails every aws_lambda_function
       # code update with "UpdateFunctionCode, decomposing request:
       # bufio.Scanner: token too long" (deploy run 38675174205, reproduced on
-      # re-run); 6.68.0 applied the same zips fine. Lift the cap once a later
-      # release is shown to apply them.
+      # re-run); 6.68.0 applied the same zips fine. Upstream regression:
+      # hashicorp/terraform-provider-aws#50474. Lift the cap once a release
+      # with that fix ships and a deploy applies cleanly on it.
       version = ">= 6.28.0, < 6.69.0"
     }
     # Generates SESSION_SECRET (lambda.tf) -- a Terraform-local value with no
