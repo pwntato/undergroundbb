@@ -334,9 +334,9 @@ was found — confirmed against a real deployment, not just read off the changel
 
 `web/e2e` is a Playwright suite that drives the real UI against a live deployment: it signs up a fresh
 random `zz-delete-test-` account (sent with the `X-Test-Account` header, so the server treats it as a
-test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, logs out
-and back in, then runs the two-user invite flow: a second account, in its own browser context, accepts an
-invite, the inviter's next login completes the key handoff, and the invitee sees the group. No credentials are stored anywhere.
+test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, then
+runs the two-user invite flow: a second account, in its own browser context, accepts an invite, the
+inviter logs out and back in (which completes the key handoff), and the invitee sees the group. No credentials are stored anywhere.
 
 ```sh
 cd web
