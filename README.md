@@ -334,8 +334,10 @@ was found — confirmed against a real deployment, not just read off the changel
 
 `web/e2e` is a Playwright suite that drives the real UI against a live deployment: it signs up a fresh
 random `zz-delete-test-` account (sent with the `X-Test-Account` header, so the server treats it as a
-test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, and
-logs out and back in. No credentials are stored anywhere.
+test account and the scheduled purge deletes it later), creates a group, checks the roster lookup, then
+runs the two-user invite flow: a second account, in its own browser context, accepts an invite, the
+inviter logs out and back in (which completes the key handoff), and the invitee sees the group.
+No credentials are stored anywhere.
 
 ```sh
 cd web
@@ -347,7 +349,9 @@ E2E_BASE_URL=http://localhost:5173 npm run e2e
 `.github/workflows/smoke.yml` runs it after every successful deploy of `main` (and on demand). It builds
 the deployed commit and waits until the live site serves that build's assets before testing, so a
 CloudFront invalidation that is still propagating does not test the previous release. One run spends
-about 8 requests of the WAF's 30-per-5-minutes limit on `/api/auth/*`, so do not run it in a loop.
+about 18 requests of the WAF's 30-per-5-minutes limit on `/api/auth/*` (every full page load counts, via
+`GET /api/auth/session`), so a second run inside five minutes can fail at signup with "Could not create
+your account"; wait for the window to clear instead of retrying.
 
 ## Contributing
 

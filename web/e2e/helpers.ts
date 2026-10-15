@@ -36,9 +36,32 @@ export async function signUp(page: Page, user: TestUser): Promise<string> {
   return recoveryCode
 }
 
+/**
+ * Logs out from Home and waits until the app shows the signed-out state. Navigating away before
+ * the logout request finishes aborts it, leaves the session alive, and makes /login bounce back
+ * to Home, so every logout has to be waited out.
+ */
+export async function logOut(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('link', { name: 'Log in' })).toBeVisible()
+}
+
 export async function logIn(page: Page, user: TestUser): Promise<void> {
   await page.goto('/login')
   await page.getByLabel('Username').fill(user.username)
   await page.getByLabel('Password').fill(user.password)
   await page.getByRole('button', { name: 'Log in' }).click()
+}
+
+/**
+ * Navigates inside the running app without a page load. A full load (page.goto) drops the
+ * in-memory keys, and an invite link's fragment carries the key that authenticates it, so the
+ * invite screens must be reached this way once signed in.
+ */
+export async function spaNavigate(page: Page, pathAndHash: string): Promise<void> {
+  await page.evaluate((target) => {
+    history.pushState(null, '', target)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, pathAndHash)
 }
