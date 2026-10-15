@@ -15,9 +15,9 @@ permissions:
   contents: read
 
 # Signups are rate limited per IP by the WAF (100 requests / 5 minutes on
-# /api/auth/*). One run spends about 18 (measured against a production build,
-# counting every GET /api/auth/session), so up to five fit in a window; still
-# never overlap runs.
+# /api/auth/*, plus /api/account/recovery-code*). One run spends about 42
+# (measured against a production build, counting every GET /api/auth/session),
+# so two fit in a window and a third can fail at signup; never overlap runs.
 concurrency:
   group: smoke
   cancel-in-progress: false
