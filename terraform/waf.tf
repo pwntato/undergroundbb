@@ -142,8 +142,8 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # /api/auth/* and /api/account/recovery-code* specifically: 30 req/5min
-  # per IP (~6/min) is a deliberate choice, not a forced floor -- round 1
+  # /api/auth/* and /api/account/recovery-code* specifically: 100 req/5min
+  # per IP (~20/min) is a deliberate choice, not a forced floor -- round 1
   # review corrected an earlier version of this comment that claimed 100
   # was WAF's minimum; rate_based_statement.limit's real minimum is 10
   # (confirmed live via `aws wafv2 check-capacity`, which accepts Limit=10
@@ -159,7 +159,7 @@ resource "aws_wafv2_web_acl" "main" {
   # comments on maxArgon2MemoryKiB and CheckRecoveryVerifier for the
   # server-side ceiling that keeps a single such request bounded).
   # docs/DESIGN.md's "burns their own CPU, not the operator's" needed the
-  # same correction. Independent of that history, 30 is sized against this
+  # same correction. Independent of that history, 100 is sized against this
   # file's header comment's actual harvesting/hot-partition targets:
   # generous enough for a human retrying a forgotten password a handful of
   # times, while still bounding both per-IP harvesting of
@@ -167,6 +167,22 @@ resource "aws_wafv2_web_acl" "main" {
   # single named user's PROFILE/RECOVERY items. See the header comment for
   # why no value here closes the username-keyed challenge-flood threat --
   # that's a property of WAF keying on IP, not of this number.
+  #
+  # History of the number: the rule shipped at 30. That proved too low in
+  # practice. Every full page load calls GET /api/auth/session, which this
+  # rule counts, so a single login-and-navigate session spends a large share
+  # of 30, and several people behind one NAT or office egress share one
+  # bucket. The post-deploy smoke suite (web/e2e, .github/workflows/smoke.yml)
+  # spends about 18 counted requests per run, so two runs inside one window
+  # could not fit. 100 leaves room for that suite plus ordinary use from a
+  # shared IP. The cost, stated plainly: one source can now attempt about
+  # 1,200 challenge/login requests an hour (up from about 360), and up to
+  # 100 server-side Argon2id recovery checks per window instead of 30. Each
+  # check is still individually bounded by the ceiling in
+  # internal/crypto/recovery.go, the five-attempt account lockout is
+  # unchanged, and guessing a password offline is not touched by this rule
+  # at all (docs/THREAT_MODEL.md, "Login material"). No CI bypass header was
+  # added: a header that skips this rule would be a public way around it.
   #
   # Issue #31 added POST /api/account/recovery-code/release and PUT
   # /api/account/recovery-code -- both unauthenticated, both resolve a
@@ -186,7 +202,7 @@ resource "aws_wafv2_web_acl" "main" {
   #
   # PR #118 review: this rule is IP-keyed (aggregate_key_type = "IP" above),
   # the same limitation this file's header already names for the
-  # challenge-slot flood -- 30 req/5min bounds one source, not one target
+  # challenge-slot flood -- 100 req/5min bounds one source, not one target
   # account. A distributed guessing attempt against a single named account's
   # recovery code, spread across many source IPs, is not bounded by this
   # rule. For a full-entropy 26-character code (docs/DESIGN.md: 128 bits of
@@ -210,7 +226,7 @@ resource "aws_wafv2_web_acl" "main" {
 
     statement {
       rate_based_statement {
-        limit              = 30
+        limit              = 100
         aggregate_key_type = "IP"
 
         scope_down_statement {
