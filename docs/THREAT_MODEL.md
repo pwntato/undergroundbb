@@ -282,8 +282,10 @@ Three things follow, and none of them is stated anywhere else:
   still exposes the blob, like everything else in the table.
 - **A leaked code is neutralized only by changing the password.** There is no "revoke my recovery
   code" operation, because a password change already reissues the code and re-wraps the copy under
-  the new one, invalidating the old. A user who believes their code has leaked should change their
-  password — an instruction worth putting in front of them, since nothing about it is obvious.
+  the new one, invalidating the old, and it also ends every existing session, so it is the one action
+  that answers both a leaked code and a stolen session. A user who believes their code has leaked
+  should change their password — an instruction worth putting in front of them, since nothing about
+  it is obvious.
 
 The converse of the guarantee in the README — lose both password and code and the data is gone — is
 that holding either one is total account access, indefinitely, until a password change.

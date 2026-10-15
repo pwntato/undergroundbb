@@ -352,7 +352,7 @@ E2E_BASE_URL=http://localhost:5173 npm run e2e
 `.github/workflows/smoke.yml` runs it after every successful deploy of `main` (and on demand). It builds
 the deployed commit and waits until the live site serves that build's assets before testing, so a
 CloudFront invalidation that is still propagating does not test the previous release. One run spends
-about 42 requests of the WAF's 100-per-5-minutes limit on `/api/auth/*` and `/api/account/recovery-code*`
+about 44 requests of the WAF's 100-per-5-minutes limit on `/api/auth/*` and `/api/account/recovery-code*`
 (every full page load counts, via `GET /api/auth/session`), so two runs fit in a window and a third can
 fail at signup with "Could not create your account"; wait for the window to clear instead of retrying.
 

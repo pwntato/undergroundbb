@@ -108,8 +108,11 @@ func TestChangePasswordStaleVersionConflicts(t *testing.T) {
 	}
 
 	// Second call still claims version 1 -- stale, since the first call
-	// already bumped it to 2.
-	second := doChangePassword(t, h, cookie, changePasswordRequest{
+	// already bumped it to 2. It carries the cookie the first call reissued:
+	// a change ends the session it was made with (see
+	// TestChangePasswordEndsOtherSessionsAndKeepsTheCallers), and this test is
+	// about the version conflict, not the revoked token.
+	second := doChangePassword(t, h, sessionCookieFrom(first), changePasswordRequest{
 		ExpectedCredentialVersion: 1,
 		credentialRewrapFields:    validCredentialRewrapFields(),
 	})
@@ -297,7 +300,9 @@ func TestGetAccountCredentialsReflectsChangedVersion(t *testing.T) {
 		t.Fatalf("change status = %d, want %d, body: %s", changeRec.Code, http.StatusOK, changeRec.Body.String())
 	}
 
-	rec := doGetAccountCredentials(t, h, cookie)
+	// The change ended the old session and reissued the caller a new one,
+	// which is the cookie the browser holds when it re-reads.
+	rec := doGetAccountCredentials(t, h, sessionCookieFrom(changeRec))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
