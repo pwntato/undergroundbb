@@ -202,7 +202,9 @@ credentials (`db.RewrapCredentials`), so there is no moment when the new passwor
 session still is. That is the point for the user those flows are designed for, someone who believes
 they are compromised and expects changing their password to log the attacker out. The change handler
 reads the new generation back and reissues the caller a token, so the person who changed it stays
-signed in on that tab; every other tab and device is signed out. If that read fails the change has
+signed in. The session is one cookie in the browser's jar, so the reissued cookie replaces it for every
+tab of that browser, and those tabs stay signed in; every other browser and device, and anyone holding
+a copy of the old cookie, is signed out. If that read fails the change has
 already committed, so the answer is still 200 and the cookie is cleared (a 500 there would tell the
 client its password did not change); the user logs in again with the new password. A recovery reset
 issues no session at all, since the user logs in with the new password afterwards. A change that
