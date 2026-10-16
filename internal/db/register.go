@@ -338,6 +338,11 @@ func isTransactionConflict(err error) bool {
 // package: the handlers' catch-all error writer uses it so a conflict on any
 // transactional write is a retryable 409 rather than a 500 (#150).
 func IsTransactionConflict(err error) bool {
+	// CompleteInvite ran out of attempts against a capped group's JoinSeq:
+	// contention, nothing written, and a retry will succeed.
+	if errors.Is(err, errJoinRaced) {
+		return true
+	}
 	// A plain PutItem/UpdateItem that lands on an item while a transaction on
 	// it is in flight fails with this type instead; same meaning, nothing written.
 	var conflictErr *types.TransactionConflictException

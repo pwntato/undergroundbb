@@ -14,7 +14,7 @@ import type { CreateInviteRequest, CreateInviteResponse } from '@/lib/api/invite
 import type { SignInviteCreationResult } from '@/lib/crypto/worker-protocol'
 
 export type CreateInviteErrorKind =
-  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'forbidden'
+  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'forbidden' | 'groupFull'
 
 export type CreateInviteResult =
   | {
@@ -105,6 +105,11 @@ export async function runCreateInvite(
       // Not an admin or ambassador of this group -- a genuine, definite
       // rejection, distinct from a network failure a retry might resolve.
       return { ok: false, kind: 'forbidden', error: err }
+    }
+    if (err instanceof ApiError && err.status === 409 && err.code === 'group_full') {
+      // A Rotating group at its member cap (#60): a definite rejection that
+      // resubmitting cannot fix, so it must not read as a network error.
+      return { ok: false, kind: 'groupFull', error: err }
     }
     if (isDefinitelyUncommitted(err)) {
       return { ok: false, kind: 'definitelyUncommitted', error: err }

@@ -92,7 +92,7 @@ unauthenticated, from `GET /api/config` — the SPA fetches it on boot.
 | `SESSION_SECRET` | *(required, no default)* | Hex-encoded HMAC key for login session cookies — see [`internal/session`](internal/session). There is no safe default; the process refuses to start without it. Generate one with `openssl rand -hex 32`. |
 | `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number, at most `168` (7 days): a longer value is lowered to 168 with a warning, because the inactivity rule for a pre-signed successor measures activity by login day ([`docs/DESIGN.md`](docs/DESIGN.md), "Inactivity"). |
 
-Setup instructions will land with the first deployable release. All nine are wired into the Lambda's
+Setup instructions will land with the first deployable release. All of these are wired into the Lambda's
 Terraform config (`terraform/lambda.tf`) — `SITE_NAME`, `REGISTRATION_POLICY`,
 `ALLOW_GROUP_EXPIRATION_OFF`, `DEFAULT_EXPIRATION_DAYS`, `MAX_ROTATING_GROUP_MEMBERS`, and `SESSION_TTL_HOURS` as Terraform
 variables (`terraform/variables.tf`, overridable with `-var` or a `.tfvars` file), `DOMAIN` from

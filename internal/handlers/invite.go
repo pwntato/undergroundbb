@@ -645,6 +645,16 @@ type admissionRequest struct {
 	Signature string `json:"signature"`
 }
 
+// memberCap is the most members a group may have: the deployment's Rotating cap
+// (config.MaxRotatingGroupMembers) for a Rotating group, 0 (no cap) for an Open
+// one.
+func (h *Handler) memberCap(g *models.Group) int {
+	if g != nil && g.RevocationMode == models.RevocationRotating {
+		return h.cfg.MaxRotatingGroupMembers
+	}
+	return 0
+}
+
 // completeInvite implements POST /api/invites/{id}/complete -- issue #40,
 // step 3. Authenticated as the INVITER (never the invitee -- the invitee
 // has no part in step 3 at all, per docs/DESIGN.md: "step 3 happens
@@ -661,16 +671,6 @@ type admissionRequest struct {
 // request body might otherwise supply -- the same "second party must never
 // name a row in the inviter's own partition directly" principle #39's
 // design comment establishes for acceptance.
-// memberCap is the most members a group may have: the deployment's Rotating cap
-// (config.MaxRotatingGroupMembers) for a Rotating group, 0 (no cap) for an Open
-// one.
-func (h *Handler) memberCap(g *models.Group) int {
-	if g != nil && g.RevocationMode == models.RevocationRotating {
-		return h.cfg.MaxRotatingGroupMembers
-	}
-	return 0
-}
-
 func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {

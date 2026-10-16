@@ -37,6 +37,8 @@ const AMBIGUOUS_ERROR =
   "We couldn't confirm whether your invite was created. Try again — resubmitting is safe."
 const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
 const FORBIDDEN_ERROR = 'You must be an admin or ambassador of this group to create an invite.'
+const GROUP_FULL_ERROR =
+  'This group is at its member limit. Someone has to leave before you can invite anyone else.'
 
 function errorMessageFor(kind: CreateInviteErrorKind): string {
   switch (kind) {
@@ -48,6 +50,8 @@ function errorMessageFor(kind: CreateInviteErrorKind): string {
       return AUTH_REQUIRED_ERROR
     case 'forbidden':
       return FORBIDDEN_ERROR
+    case 'groupFull':
+      return GROUP_FULL_ERROR
   }
 }
 
@@ -157,7 +161,7 @@ export function CreateInviteScreen() {
           liveKeys.markCold()
           return
         }
-        if (outcome.kind === 'forbidden') {
+        if (outcome.kind === 'forbidden' || outcome.kind === 'groupFull') {
           // Not retriable by resubmitting -- clear any cached attempt so a
           // later, correctly-authorized retry starts fresh.
           setPending(undefined)

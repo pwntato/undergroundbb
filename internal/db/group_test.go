@@ -701,6 +701,11 @@ func TestIsTransactionConflict(t *testing.T) {
 	if !isTransactionConflict(&types.TransactionConflictException{}) {
 		t.Error("TransactionConflictException not recognized")
 	}
+	// CompleteInvite exhausting its attempts against a capped group is contention
+	// too, so the handler answers a retryable 409 rather than a 500.
+	if !IsTransactionConflict(errJoinRaced) || !IsTransactionConflict(errors.Join(errors.New("wrapped"), errJoinRaced)) {
+		t.Error("errJoinRaced not recognized as a transaction conflict")
+	}
 	if isTransactionConflict(condFail) || isTransactionConflict(errors.New("other")) || isTransactionConflict(nil) {
 		t.Error("non-conflict error recognized as TransactionConflict")
 	}

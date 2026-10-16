@@ -90,6 +90,30 @@ describe('runCreateInvite', () => {
     }
   })
 
+  it('a 409 group_full from createInvite is groupFull, not a network error', async () => {
+    const deps = makeDeps({
+      createInvite: vi
+        .fn()
+        .mockRejectedValue(new ApiError(409, 'this group is at its member limit', 'group_full')),
+    })
+    const result = await runCreateInvite(deps, 'invite-1', 'group-1', '2026-10-03T00:00:00Z')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('groupFull')
+    }
+  })
+
+  it('a 409 with another code stays definitelyUncommitted', async () => {
+    const deps = makeDeps({
+      createInvite: vi.fn().mockRejectedValue(new ApiError(409, 'conflict', 'conflict_retry')),
+    })
+    const result = await runCreateInvite(deps, 'invite-1', 'group-1', '2026-10-03T00:00:00Z')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('definitelyUncommitted')
+    }
+  })
+
   it('a network failure from createInvite is ambiguous', async () => {
     const deps = makeDeps({
       createInvite: vi.fn().mockRejectedValue(new TypeError('fetch failed')),
