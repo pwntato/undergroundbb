@@ -331,6 +331,12 @@ type Group struct {
 	// is the one that was current AT CREATION, which may since have been
 	// superseded by a rotation; verifying an old root grant's signature
 	// means checking it against this key, not the creator's current one.
+	// JoinSeq counts the joins made to a Rotating group while a member cap
+	// applies (#60). CompleteInvite reads it, counts the members, and writes
+	// its own join conditioned on JoinSeq being unchanged, so two joins that
+	// both saw room for one more cannot both succeed. Absent means 0.
+	JoinSeq int64 `dynamodbav:"JoinSeq,omitempty"`
+
 	CreatorUserID           string `dynamodbav:"CreatorUserID"`
 	CreatorSigningPublicKey []byte `dynamodbav:"CreatorSigningPublicKey"`
 	// TrustAnchorSignature is the creator's Ed25519 signature (under

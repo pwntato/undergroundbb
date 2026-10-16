@@ -619,6 +619,9 @@ type groupDetailResponse struct {
 	RevocationMode string `json:"revocationMode"`
 	ExpirationDays int64  `json:"expirationDays"`
 	Version        int64  `json:"version"`
+	// MemberCap is the most members this group may have: the deployment's
+	// Rotating cap, or 0 (no cap) for an Open group (#60).
+	MemberCap int `json:"memberCap"`
 	// MyGrantSortKey is the caller's OWN current grant address -- what a role
 	// change must sign as grantorGrantRef (changeRoleRequest). Members only;
 	// empty when the server has no grant on record for the caller.
@@ -725,6 +728,7 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		RevocationMode: g.RevocationMode,
 		ExpirationDays: g.ExpirationDays,
 		Version:        g.Version,
+		MemberCap:      h.memberCap(g),
 	}
 	if m != nil {
 		resp.MyGrantSortKey, _ = currentGrantRef(m, g, userID)
