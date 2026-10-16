@@ -130,7 +130,7 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if n >= capN {
-			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit", "group_full")
+			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit: a Rotating group re-keys whenever a member is removed, and that is what bounds its size", "group_full")
 			return
 		}
 	}
@@ -846,7 +846,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, db.ErrGroupFull) {
 			// The invite is left pending: a member leaving frees a slot, and the
 			// invite's own completion deadline ends it otherwise.
-			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit", "group_full")
+			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit: a Rotating group re-keys whenever a member is removed, and that is what bounds its size", "group_full")
 			return
 		}
 		if errors.Is(err, db.ErrGroupGone) {

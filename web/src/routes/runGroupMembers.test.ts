@@ -26,6 +26,7 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
     generation: 0,
     nameGeneration: 0,
     revocationMode: 'open',
+    memberCap: 0,
     expirationDays: 30,
     version: 1,
     myGrantSortKey: MY_GRANT,

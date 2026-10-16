@@ -60,6 +60,21 @@ variable "allow_group_expiration_off" {
   description = "Whether a group in this deployment may turn off message expiration entirely. See internal/config.DefaultAllowGroupExpirationOff."
 }
 
+variable "max_rotating_group_members" {
+  type        = number
+  default     = 1000
+  description = "The most members a Rotating group may have (#60). Open groups have no cap. Sized against the write burst of a rotation (docs/DESIGN.md), so check that before raising it. See internal/config.DefaultMaxRotatingGroupMembers."
+
+  validation {
+    # The Go side clamps out-of-range values with a warning; catching them here
+    # means a typo fails the plan instead of being quietly corrected at runtime.
+    # A fraction would tostring() to "12.5", which the Go side cannot parse and
+    # would silently replace with the default.
+    condition     = var.max_rotating_group_members >= 2 && var.max_rotating_group_members <= 10000 && floor(var.max_rotating_group_members) == var.max_rotating_group_members
+    error_message = "max_rotating_group_members must be a whole number from 2 to 10000."
+  }
+}
+
 variable "default_expiration_days" {
   type        = number
   default     = 30

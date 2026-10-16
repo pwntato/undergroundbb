@@ -218,6 +218,12 @@ async function completeOne(
     // surfacing per-invite outcomes (none does yet -- #83's own
     // surfacing is the natural home for this) can tell it apart from a
     // plain network hiccup.
+    // The group is at its member limit (#60). Not a fault: the invite stays pending
+    // on the server, so a later login retries it once someone has left, and it
+    // lapses with its own deadline otherwise.
+    if (err instanceof ApiError && err.code === 'group_full') {
+      return { inviteId: invite.inviteId, ok: false, reason: 'group is at its member limit' }
+    }
     if (err instanceof InviteMACError) {
       console.error(
         `runCompleteInvites: invite ${invite.inviteId} failed its MAC check -- either a malicious server substituted its own keys, or the inviter's signing key has rotated since this invite was created`,

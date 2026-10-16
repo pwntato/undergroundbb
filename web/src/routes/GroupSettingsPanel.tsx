@@ -17,7 +17,7 @@ import { Label } from '@/components/ui/label'
 import {
   FALLBACK_EXPIRATION_DAYS,
   MAX_EXPIRATION_DAYS,
-  REVOCATION_TEXT,
+  revocationText,
   validateSettingsForm,
 } from './groupSettingsForm'
 import type { SettingsForm, SettingsView } from './runGroupSettings'
@@ -118,7 +118,9 @@ export function GroupSettingsPanel({
         <h2 id="revocation-heading" className="text-sm font-medium">
           Removing a member
         </h2>
-        <p className="text-sm text-muted-foreground">{REVOCATION_TEXT[detail.revocationMode]}</p>
+        <p className="text-sm text-muted-foreground">
+          {revocationText(detail.revocationMode, detail.memberCap)}
+        </p>
       </section>
 
       <section aria-labelledby="expiration-heading" className="flex flex-col gap-1">

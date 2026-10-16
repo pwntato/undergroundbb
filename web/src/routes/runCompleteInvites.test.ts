@@ -158,6 +158,23 @@ describe('runCompleteInvites', () => {
     expect(outcomes).toEqual([{ inviteId: INVITE_ID, ok: true }])
   })
 
+  // #60: a full group is neither a success nor an alarm. The invite stays pending
+  // on the server, so the outcome is a plain "not completed" with a readable reason.
+  it('reports a full group as not completed, without logging an error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const deps = makeDeps({
+      completeInvite: vi
+        .fn()
+        .mockRejectedValue(new ApiError(409, 'this group is at its member limit', 'group_full')),
+    })
+    const outcomes = await runCompleteInvites(deps)
+    expect(outcomes).toEqual([
+      { inviteId: INVITE_ID, ok: false, reason: 'group is at its member limit' },
+    ])
+    expect(errorSpy).not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
   it('one invite failing does not prevent a second, independent invite from completing', async () => {
     const goodInvite = realPendingInvite()
     const badInvite: PendingInviteCompletion = {

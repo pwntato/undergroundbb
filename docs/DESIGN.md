@@ -1332,6 +1332,17 @@ once and only in that direction**:
   Sender Keys limit; see below for a second, independent reason that number is the right order of
   magnitude). Adding member 1,001 **fails with an explicit error** explaining that the group
   re-keys on removal and that this is what bounds it. It never silently becomes an `Open` group.
+  1,000 is the default of a deployment setting (`MAX_ROTATING_GROUP_MEMBERS`, 2 to 10,000), which the
+  group detail reports to the client so the UI never states a number the server does not enforce.
+  It is enforced when a member joins (`CompleteInvite`): the join counts the group's `MEMBER#` rows
+  with a consistent count, and writes the new membership in a transaction that also bumps a
+  `JoinSeq` attribute on the group's `META` item, conditioned on `JoinSeq` being the value it counted
+  under. A join that committed in between moved `JoinSeq`, so the later write fails and recounts: the
+  cap is exact, with no counter to keep in step across the other paths that delete a `MEMBER#` row
+  (leave, removal, takeover). A departure needs no bump because it only lowers the count. Lowering
+  the setting never removes anyone; it refuses further joins until the group is under it. Creating
+  an invite for a full group is also refused up front, so an invitee does not accept something that
+  cannot complete.
 - **Open** — removal is access control only. No cap, no rotation, and the limitation is stated
   permanently in the group's UI.
 

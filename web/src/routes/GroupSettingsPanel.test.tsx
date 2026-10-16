@@ -6,7 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { GroupDetail } from '@/lib/api/groups'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
-import { REVOCATION_TEXT, validateSettingsForm } from './groupSettingsForm'
+import { revocationText, validateSettingsForm } from './groupSettingsForm'
 import type { SettingsView } from './runGroupSettings'
 
 function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
@@ -19,6 +19,7 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
     namePlaintext: 'Book Club',
     descriptionPlaintext: 'We read books',
     revocationMode: 'rotating',
+    memberCap: 1000,
     expirationDays: 30,
     version: 1,
     ...overrides,
@@ -99,7 +100,24 @@ describe('GroupSettingsPanel', () => {
 
   it('contains no em dashes in its copy', () => {
     expect(render(publicView(detail({ role: 'admin' })))).not.toContain('—')
-    expect(Object.values(REVOCATION_TEXT).join('')).not.toContain('—')
+    expect(revocationText('rotating', 1000) + revocationText('open', 0)).not.toContain('—')
+  })
+})
+
+describe('revocationText', () => {
+  it('states the deployment cap for a Rotating group, not a fixed number', () => {
+    expect(revocationText('rotating', 1000)).toContain('Capped at 1,000 members.')
+    expect(revocationText('rotating', 250)).toContain('Capped at 250 members.')
+    expect(revocationText('rotating', 250)).not.toContain('1,000')
+  })
+
+  it('says nothing about a cap when the server reports none', () => {
+    expect(revocationText('rotating', 0)).not.toContain('Capped')
+  })
+
+  it('says an Open group has no cap, whatever the number', () => {
+    expect(revocationText('open', 0)).toContain('There is no member cap.')
+    expect(revocationText('open', 500)).not.toContain('500')
   })
 })
 
