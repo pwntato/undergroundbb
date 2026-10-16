@@ -10,9 +10,17 @@ test.skip(
   'response headers are added by CloudFront; run against a deployment',
 )
 
-// Both origins: the SPA (S3) and the API (Lambda), plus an asset and a client-side route,
-// which take different CloudFront behaviors.
-const PATHS = ['/', '/assets/*', '/groups/abc', '/api/health']
+// One path per CloudFront behavior that has its own response_headers_policy_id line (the
+// default behavior, /assets/*, /api and /api/*), plus a client-side route, which goes through
+// the SPA rewrite. The status is asserted too, so a path that stops being served cannot pass
+// on an error page that happens to carry the headers. Bare /api has no route: Lambda's 404.
+const PATHS: readonly { path: string; status: number }[] = [
+  { path: '/', status: 200 },
+  { path: '/assets/*', status: 200 },
+  { path: '/groups/abc', status: 200 },
+  { path: '/api/health', status: 200 },
+  { path: '/api', status: 404 },
+]
 
 const EXPECTED: Record<string, string> = {
   'strict-transport-security': 'max-age=31536000; includeSubDomains',
@@ -33,10 +41,11 @@ const CSP_DIRECTIVES = [
   "frame-ancestors 'none'",
 ]
 
-for (const path of PATHS) {
+for (const { path, status } of PATHS) {
   test(`security headers on ${path}`, async ({ request }) => {
     // '/assets/*' stands for the current bundle, whose hashed name is read from the page.
     const res = await request.get(path === '/assets/*' ? await firstAssetPath(request) : path)
+    expect(res.status(), 'status').toBe(status)
     const headers = res.headers()
     for (const [name, want] of Object.entries(EXPECTED)) {
       expect(headers[name], name).toBe(want)
@@ -51,7 +60,7 @@ test('the Lambda Function URL refuses calls that skip CloudFront', async ({ requ
   // URL is not public knowledge, so it is optional: set E2E_FUNCTION_URL to check it.
   const url = process.env['E2E_FUNCTION_URL']
   test.skip(!url, 'E2E_FUNCTION_URL not set')
-  const res = await request.get(`${url}api/health`)
+  const res = await request.get(new URL('api/health', url).href)
   expect(res.status()).toBe(403)
 })
 
