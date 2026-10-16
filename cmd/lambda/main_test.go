@@ -242,3 +242,49 @@ func TestSetCookieNonCanonicalKey(t *testing.T) {
 		t.Errorf("Headers[\"set-cookie\"] present, want cookie collected instead")
 	}
 }
+
+// TestOriginGate pins #103: only a request carrying the exact shared secret
+// reaches the handler, and the secret is not forwarded to it.
+func TestOriginGate(t *testing.T) {
+	const secret = "s3cret-value"
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"correct secret", map[string]string{"x-origin-verify": secret}, http.StatusOK},
+		{"missing header", nil, http.StatusForbidden},
+		{"wrong secret", map[string]string{"x-origin-verify": "other"}, http.StatusForbidden},
+		{"prefix of secret", map[string]string{"x-origin-verify": secret[:5]}, http.StatusForbidden},
+		{"secret with suffix", map[string]string{"x-origin-verify": secret + "x"}, http.StatusForbidden},
+		{"empty value", map[string]string{"x-origin-verify": ""}, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				if v := r.Header.Get(originVerifyHeader); v != "" {
+					t.Errorf("secret forwarded to handler: %q", v)
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+			resp, err := originGate(secret, lambdaHandler)(context.Background(), events.APIGatewayV2HTTPRequest{
+				RawPath: "/api/health",
+				Headers: tc.headers,
+				RequestContext: events.APIGatewayV2HTTPRequestContext{
+					DomainName: "example.invalid",
+					HTTP:       events.APIGatewayV2HTTPRequestContextHTTPDescription{Method: http.MethodGet},
+				},
+			})
+			if err != nil {
+				t.Fatalf("gate: %v", err)
+			}
+			if resp.StatusCode != tc.want {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tc.want)
+			}
+			if called != (tc.want == http.StatusOK) {
+				t.Errorf("handler called = %v, status %d", called, resp.StatusCode)
+			}
+		})
+	}
+}

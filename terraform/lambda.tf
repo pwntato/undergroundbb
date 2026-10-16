@@ -97,6 +97,21 @@ resource "random_id" "session_secret" {
   }
 }
 
+# Shared secret CloudFront sends as X-Origin-Verify and cmd/lambda requires (#103).
+# random_password rather than random_id so it is marked sensitive in plan output.
+# It is in Terraform state and the Lambda environment, the same accepted
+# tradeoff as session_secret above. To rotate, bump keepers.rotation; the apply
+# updates the Lambda and the distribution together, and requests can get a 403
+# until CloudFront finishes deploying the new header (a few minutes).
+resource "random_password" "origin_verify" {
+  length  = 48
+  special = false
+
+  keepers = {
+    rotation = "1"
+  }
+}
+
 resource "aws_lambda_function" "main" {
   function_name    = "undergroundbb-${terraform.workspace}"
   role             = aws_iam_role.lambda.arn
@@ -130,6 +145,7 @@ resource "aws_lambda_function" "main" {
       ALLOW_GROUP_EXPIRATION_OFF = tostring(var.allow_group_expiration_off)
       DEFAULT_EXPIRATION_DAYS    = tostring(var.default_expiration_days)
       SESSION_SECRET             = random_id.session_secret.hex
+      ORIGIN_VERIFY_SECRET       = random_password.origin_verify.result
       SESSION_TTL_HOURS          = tostring(var.session_ttl_hours)
     }
   }
@@ -139,11 +155,9 @@ resource "aws_lambda_function" "main" {
 
 # authorization_type = "NONE" per #6 -- CloudFront (#8) is the intended
 # access control boundary, same split as DESIGN.md's infrastructure diagram
-# (CloudFront + WAF in front, Function URL behind). Not yet enforced, though:
-# #8 landed the distribution, but the Function URL itself remains directly
-# reachable with none of CloudFront's response headers/TLS policy/future WAF
-# applied -- tracked in #103 (shared-secret origin-verify header). Update
-# this comment (or drop it) once #103 actually closes the gap.
+# (CloudFront + WAF in front, Function URL behind). The URL itself is still
+# addressable, so cmd/lambda answers 403 to any request that lacks the
+# X-Origin-Verify secret CloudFront adds (#103).
 resource "aws_lambda_function_url" "main" {
   function_name      = aws_lambda_function.main.function_name
   authorization_type = "NONE"

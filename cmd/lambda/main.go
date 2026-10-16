@@ -9,11 +9,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime/debug"
 	"strings"
 
@@ -50,9 +53,46 @@ func initHandler(ctx context.Context) {
 	handler = mux
 }
 
+// originVerifyHeader carries the shared secret CloudFront adds to every request
+// it sends to this origin (a custom_header on the "api" origin in
+// terraform/cloudfront.tf). The Function URL has no authorizer, so this is what
+// keeps a caller who found the *.lambda-url.* address from reaching any handler
+// without going through the WAF, the response headers policy and the TLS policy.
+// It does not stop the invocations themselves: those are still billed, use
+// concurrency and are not WAF rate limited. See #103.
+const originVerifyHeader = "X-Origin-Verify"
+
 func main() {
+	secret := os.Getenv("ORIGIN_VERIFY_SECRET")
+	if secret == "" {
+		// Fail closed: a deployment without the secret must not serve
+		// requests that anyone can address directly.
+		log.Fatal("ORIGIN_VERIFY_SECRET is required and was not set")
+	}
 	initHandler(context.Background())
-	lambda.Start(lambdaHandler)
+	lambda.Start(originGate(secret, lambdaHandler))
+}
+
+// originGate answers 403 to any request whose X-Origin-Verify header does not
+// match secret, before the request is translated or reaches a handler. Both
+// sides are hashed first so ConstantTimeCompare sees equal lengths and the
+// comparison does not leak the secret's length.
+func originGate(secret string, next func(context.Context, events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error)) func(context.Context, events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	want := sha256.Sum256([]byte(secret))
+	return func(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+		// The v2 payload lower-cases header names.
+		got := sha256.Sum256([]byte(req.Headers[strings.ToLower(originVerifyHeader)]))
+		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+			return events.APIGatewayV2HTTPResponse{
+				StatusCode: http.StatusForbidden,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"forbidden"}`,
+			}, nil
+		}
+		// The secret goes no further than this check.
+		delete(req.Headers, strings.ToLower(originVerifyHeader))
+		return next(ctx, req)
+	}
 }
 
 // lambdaHandler recovers panics itself. net/http's Server does this per

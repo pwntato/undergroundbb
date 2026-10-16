@@ -250,6 +250,13 @@ resource "aws_cloudfront_distribution" "main" {
     domain_name = replace(replace(aws_lambda_function_url.main.function_url, "https://", ""), "/", "")
     origin_id   = "api"
 
+    # Proves to cmd/lambda that the request came through this distribution (and
+    # so through the WAF); see random_password.origin_verify in lambda.tf.
+    custom_header {
+      name  = "X-Origin-Verify"
+      value = random_password.origin_verify.result
+    }
+
     custom_origin_config {
       http_port              = 80
       https_port             = 443
