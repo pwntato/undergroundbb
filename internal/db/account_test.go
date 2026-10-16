@@ -32,6 +32,9 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	if err := c.PutPin(ctx, uid, "other-"+randomSuffix(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64)); err != nil {
 		t.Fatalf("PutPin: %v", err)
 	}
+	if err := c.PutVerification(ctx, uid, "other-"+randomSuffix(t), "00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000", make([]byte, 32), make([]byte, 64)); err != nil {
+		t.Fatalf("PutVerification: %v", err)
+	}
 	if err := c.PutChallenge(ctx, uid, []byte("nonce"), time.Minute); err != nil {
 		t.Fatalf("PutChallenge: %v", err)
 	}
@@ -88,6 +91,17 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	}
 	if len(pins.Items) != 0 {
 		t.Errorf("%d pins remain", len(pins.Items))
+	}
+	verifs, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(c.table),
+		KeyConditionExpression:    aws.String("PK = :pk AND begins_with(SK, :sk)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":pk": s("USER#" + uid), ":sk": s("VERIFIED#")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(verifs.Items) != 0 {
+		t.Errorf("%d verifications remain", len(verifs.Items))
 	}
 
 	// The username is free again and the uuid is not reusable.

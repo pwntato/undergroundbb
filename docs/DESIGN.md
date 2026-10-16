@@ -533,6 +533,37 @@ decimal digits in twelve groups of five.** Each of those choices closes a specif
   distinct safety number per pair. That keeps it displayable on a profile and embeddable in an
   invite link, at the cost of two comparisons instead of one when two people verify each other.
 
+**What "I verified them" is.** A verification is a signed record in the verifier's own partition,
+`USER#<verifier>` / `VERIFIED#<verified uuid>`, signed under the verifier's current Ed25519 key
+(`underground-bb:verification:v1`) over `{verifier uuid, verified uuid, verifier signing key,
+fingerprint}`. **It signs the fingerprint string, not the keys**, for two reasons. The fingerprint is
+exactly what the person compared out of band, so the record says what they actually checked. And it
+already covers both of the other user's current keys, so the record stops applying the moment either
+changes, with no separate staleness rule. The client computes the fingerprint locally from the keys
+the server serves and never takes one from the server. Reading a record back has four outcomes:
+*none* (no record, the normal case), *verified* (the record is valid and the served keys still give
+that fingerprint), *changed* (valid, but the served keys now give a different fingerprint) and
+*bad signature* (the record does not verify under the reader's own current key, or is for another
+pair). **Changed is shown as a warning, never as "not verified"**: a real key change and a
+substituted key are indistinguishable from here, and a substituted key after a verification is
+precisely the case verification exists to catch. This also makes it the one signal that notices a
+deleted pin on a user the reader had verified, because the substituted keys no longer give the
+verified fingerprint. The server checks the signature, and that the fingerprint is the one it would
+compute for the other user's keys right now (a clear 409 `fingerprint_stale` if they changed while
+the person was comparing), as hygiene only: the party that must verify a record is the client that
+reads it. Like a pin, a record can be withheld or deleted, which only costs the reader the
+"verified" mark and never makes anything look verified that was not. Records are swept on account
+deletion, and a key rotation (#62) invalidates a user's records along with their pins, since both
+are signed under the old key.
+
+The roster shows each member's fingerprint on request, four groups to a row so that it is read and
+compared whole, with a "check fingerprint" action that signs and stores a record once the person
+confirms every group matched, a "✓ fingerprint checked by you" mark on verified members, and
+"Keys changed since you checked" on a changed one. The wording is deliberately distinct from the
+roster's role mark, which is about the grant chain. **One-sided for now:** the badge for two users
+having verified each other needs each side to be able to read the other's record, which exposes
+who verified whom, and is tracked separately.
+
 Verification stays **available rather than mandatory**: fingerprints are shown on profiles, there is
 an explicit verify affordance, and a badge appears when two users have verified each other. Invite
 links additionally carry the inviter's fingerprint in the URL fragment, which the browser never

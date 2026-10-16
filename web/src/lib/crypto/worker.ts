@@ -34,6 +34,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  signVerification as signVerificationPure,
   signReadmission as signReadmissionPure,
   signRoleGrant as signRoleGrantPure,
   signSuccessorClaim as signSuccessorClaimPure,
@@ -62,6 +63,7 @@ import type {
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
   SignPinRequest,
+  SignVerificationRequest,
   SignReadmissionRequest,
   SignRoleGrantRequest,
   SignSuccessorClaimRequest,
@@ -131,6 +133,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signPin':
       signPin(req)
+      return
+    case 'signVerification':
+      signVerification(req)
       return
     case 'getOwnSigningKey':
       getOwnSigningKey(req)
@@ -297,6 +302,13 @@ function signSuccessorClaim(req: SignSuccessorClaimRequest): void {
   const keys = requireLiveKeys(req.userId, 'claim the admin role')
   const result = signSuccessorClaimPure(keys, req.groupId, req.designationSortKey)
   post({ kind: 'signSuccessorClaimDone', id: req.id, result })
+}
+
+/** Signs a fingerprint verification -- issue #65. Same liveKeys guards as signPin. */
+function signVerification(req: SignVerificationRequest): void {
+  const keys = requireLiveKeys(req.userId, 'verify a fingerprint')
+  const result = signVerificationPure(keys, req.verifiedUserId, req.fingerprint)
+  post({ kind: 'signVerificationDone', id: req.id, result })
 }
 
 /** Signs a pin -- issue #63. Same liveKeys-unset/wrong-account guards as signRoleGrant. */

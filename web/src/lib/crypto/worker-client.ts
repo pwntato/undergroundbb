@@ -42,11 +42,14 @@ import type {
   SignGroupCreationResponse,
   SignGroupCreationResult,
   SignPinRequest,
+  SignVerificationRequest,
   SignReadmissionRequest,
   SignReadmissionResponse,
   SignReadmissionResult,
   SignPinResponse,
+  SignVerificationResponse,
   SignPinResult,
+  SignVerificationResult,
   GetOwnFingerprintRequest,
   GetOwnFingerprintResponse,
   GetOwnSigningKeyRequest,
@@ -433,6 +436,40 @@ export function signSuccessorClaim(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signSuccessorClaim`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Signs a verification of another user's fingerprint -- issue #65. Relies on
+ * the worker's own cached liveKeys, like signPin.
+ */
+export function signVerification(
+  req: Omit<SignVerificationRequest, 'kind' | 'id'>,
+): Promise<SignVerificationResult> {
+  const id = nextRequestID()
+  const fullReq: SignVerificationRequest = { kind: 'signVerification', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signVerificationDone') {
+        resolve((msg as SignVerificationResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signVerification`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

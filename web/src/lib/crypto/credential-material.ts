@@ -34,6 +34,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
+import { verificationPayload } from './verification.js'
 import {
   deriveRecoveryVerifier,
   deriveRecoveryWrapKey,
@@ -452,6 +453,30 @@ export function signPin(
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Pin, payload)
   return {
     pinnerSigningPublicKey: bytesToBase64(keys.signingKey.publicKey),
+    signature: bytesToBase64(signature),
+  }
+}
+
+/**
+ * Signs a verification of another user's fingerprint (#65) under the caller's
+ * live signing key. The fingerprint is what the person compared, covering the
+ * other user's two current public keys, so the signature goes stale by itself
+ * when either changes.
+ */
+export function signVerification(
+  keys: LiveKeys,
+  verifiedUserId: string,
+  fingerprint: string,
+): { verifierSigningPublicKey: string; signature: string } {
+  const payload = verificationPayload(
+    keys.userId,
+    verifiedUserId,
+    keys.signingKey.publicKey,
+    fingerprint,
+  )
+  const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Verification, payload)
+  return {
+    verifierSigningPublicKey: bytesToBase64(keys.signingKey.publicKey),
     signature: bytesToBase64(signature),
   }
 }

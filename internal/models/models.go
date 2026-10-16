@@ -717,6 +717,25 @@ type Pin struct {
 	Signature              []byte `dynamodbav:"Signature"`
 }
 
+// Verification is the USER#<verifier> / VERIFIED#<verified uuid> item -- issue
+// #65, docs/DESIGN.md "Key pinning and verification". It is the verifier's
+// signed record that they compared the verified user's fingerprint out of band
+// and it matched. The signature covers the fingerprint string, which covers
+// both of the verified user's current public keys, so a record stops applying
+// the moment either key changes. Like a pin, the server checks the signature
+// at write and never again: the reader is the verifier's own client. No
+// CreatedAt, for the same timing reason as Pin (#147).
+type Verification struct {
+	Record
+
+	// Fingerprint is the verified user's fingerprint as the verifier compared it.
+	Fingerprint string `dynamodbav:"Fingerprint"`
+	// VerifierSigningPublicKey is the key Signature was made under. Untrusted
+	// on read: a client verifies only under its own current key.
+	VerifierSigningPublicKey []byte `dynamodbav:"VerifierSigningPublicKey"`
+	Signature                []byte `dynamodbav:"Signature"`
+}
+
 // GenerationKey is one link of a group's key chain: GROUP#<gid> /
 // GENKEY#<nnnnnn> holds generation n's key wrapped under generation n+1's,
 // written once per rotation for the whole group. SK carries n zero-padded to

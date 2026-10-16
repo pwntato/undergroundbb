@@ -39,6 +39,7 @@ import {
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
 import { pinPayload } from './pin.js'
+import { verificationPayload } from './verification.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
 
 const VECTORS_PATH = fileURLToPath(
@@ -217,6 +218,18 @@ interface VectorFile {
     pinned_uuid: string
     wrapping_public_key_hex: string
     signing_keys_hex: string[]
+    payload_hex: string
+    signature_hex: string
+  }[]
+  verification: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    verifier_uuid: string
+    verified_uuid: string
+    verified_signing_public_key_hex: string
+    verified_wrapping_public_key_hex: string
+    fingerprint: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -643,6 +656,35 @@ describe('pin vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.Pin, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins verificationPayload's exact encoding (#65), and that the signed
+// fingerprint is the one fingerprint() computes for the verified user's keys.
+describe('verification vectors', () => {
+  for (const tc of vectors.verification) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      expect(
+        fingerprint(
+          hexToBytes(tc.verified_signing_public_key_hex),
+          hexToBytes(tc.verified_wrapping_public_key_hex),
+        ),
+      ).toBe(tc.fingerprint)
+
+      const payload = verificationPayload(
+        tc.verifier_uuid,
+        tc.verified_uuid,
+        key.publicKey,
+        tc.fingerprint,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.Verification, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

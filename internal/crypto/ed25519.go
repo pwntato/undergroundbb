@@ -27,6 +27,9 @@ const (
 	ContextTrustAnchor SigningContext = "underground-bb:trust-anchor:v1"
 	// ContextPin signs a user's pin of another user's key set.
 	ContextPin SigningContext = "underground-bb:pin:v1"
+	// ContextVerification signs a user's record that they compared another
+	// user's fingerprint out of band and it matched (#65).
+	ContextVerification SigningContext = "underground-bb:verification:v1"
 	// ContextSuccessorDesignation signs an admin's designation of the member
 	// who takes over if they go inactive (#161).
 	ContextSuccessorDesignation SigningContext = "underground-bb:successor-designation:v1"
