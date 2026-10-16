@@ -56,8 +56,10 @@ func initHandler(ctx context.Context) {
 // originVerifyHeader carries the shared secret CloudFront adds to every request
 // it sends to this origin (a custom_header on the "api" origin in
 // terraform/cloudfront.tf). The Function URL has no authorizer, so this is what
-// keeps a caller who found the *.lambda-url.* address from skipping the WAF
-// rate limits, the response headers policy and the TLS policy. See #103.
+// keeps a caller who found the *.lambda-url.* address from reaching any handler
+// without going through the WAF, the response headers policy and the TLS policy.
+// It does not stop the invocations themselves: those are still billed, use
+// concurrency and are not WAF rate limited. See #103.
 const originVerifyHeader = "X-Origin-Verify"
 
 func main() {

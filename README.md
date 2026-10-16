@@ -292,8 +292,12 @@ way it once masked a `Host`-header bug in this project's own origin request poli
 The Function URL is still addressable (it has no authorizer), so it is not the access-control
 boundary by itself: CloudFront adds a shared secret as `X-Origin-Verify` on every request to the `api`
 origin (`random_password.origin_verify`), and `cmd/lambda` answers 403 to any request without it, before
-a handler runs. That keeps a direct caller from skipping the WAF rate limits, the response headers
-policy and the TLS policy (**#103**). Rotate by bumping `keepers.rotation`; requests can get a 403 for
+a handler runs. That keeps a direct caller from reaching any handler, and so from getting around the
+response headers policy and TLS policy (**#103**). It does not stop the invocations themselves, which
+are billed, use Lambda concurrency, and are not WAF rate limited; a flood of direct calls gets fast 403s
+but can still crowd out real traffic. A shared secret was chosen over CloudFront Origin Access Control
+with `AWS_IAM` (which would reject before invocation) because OAC needs clients to send
+`x-amz-content-sha256` on request bodies. Rotate by bumping `keepers.rotation`; requests can get a 403 for
 a few minutes until CloudFront deploys the new header. The secret is in Terraform state and the
 Lambda environment, like `SESSION_SECRET`.
 
