@@ -15,6 +15,11 @@ import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
 import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
+import {
+  MemberVerificationBadge,
+  MemberVerificationControls,
+  type MemberVerificationProps,
+} from './MemberVerificationControls'
 import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
@@ -44,6 +49,7 @@ export function GroupMembersPanel({
   onConfirmReadmit,
   usernames,
   check,
+  verification,
 }: {
   readonly view: MembersView
   /** The signed-in user's own id. */
@@ -76,6 +82,8 @@ export function GroupMembersPanel({
    * and 'unavailable' when it could not run; either way no marks are shown.
    */
   readonly check?: GrantCheck | null | undefined
+  /** Fingerprint verification (#65); absent shows no verification controls. */
+  readonly verification?: MemberVerificationProps | undefined
 }) {
   const checked = check?.state === 'checked' ? check : null
   const isAdmin = view.myRole === 'admin'
@@ -136,6 +144,9 @@ export function GroupMembersPanel({
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
                 <RoleMark status={checked?.statuses.get(m.userId)} verified={isVerified(checked)} />
+                {verification !== undefined && !isSelf && (
+                  <MemberVerificationBadge state={verification.state} userId={m.userId} />
+                )}
               </span>
               {canChangeRoles && !isSelf && confirmRemoveUserId === m.userId && (
                 <span className="flex flex-col gap-2">
@@ -253,6 +264,14 @@ export function GroupMembersPanel({
                     {busyUserId === m.userId ? 'Checking…' : 'Re-admit'}
                   </Button>
                 ))}
+              {verification !== undefined && !isSelf && !isDeletedUser(m.userId, usernames) && (
+                <MemberVerificationControls
+                  props={verification}
+                  userId={m.userId}
+                  label={memberLabel(m.userId, usernames)}
+                  disabled={busyUserId !== null || locked}
+                />
+              )}
             </li>
           )
         })}

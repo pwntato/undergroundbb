@@ -315,6 +315,30 @@ export interface SignPinResponse {
 }
 
 /**
+ * Signs a verification of another user's fingerprint (issue #65) with the
+ * worker's own liveKeys. The fingerprint is the 60-digit string the person
+ * compared out loud.
+ */
+export interface SignVerificationRequest {
+  readonly kind: 'signVerification'
+  readonly id: string
+  readonly userId: string
+  readonly verifiedUserId: string
+  readonly fingerprint: string
+}
+
+export interface SignVerificationResult {
+  readonly verifierSigningPublicKey: string
+  readonly signature: string
+}
+
+export interface SignVerificationResponse {
+  readonly kind: 'signVerificationDone'
+  readonly id: string
+  readonly result: SignVerificationResult
+}
+
+/**
  * The caller's own CURRENT signing public key, from the worker's liveKeys
  * rather than from anything the server serves (issue #63): pins and the
  * caller's own key history are checked against this.
@@ -740,6 +764,7 @@ export type WorkerRequest =
   | SignSuccessorDesignationRequest
   | SignSuccessorClaimRequest
   | SignPinRequest
+  | SignVerificationRequest
   | GetOwnSigningKeyRequest
   | GetOwnFingerprintRequest
   | HasLiveKeysRequest
@@ -765,6 +790,7 @@ export type WorkerResponse =
   | SignSuccessorDesignationResponse
   | SignSuccessorClaimResponse
   | SignPinResponse
+  | SignVerificationResponse
   | GetOwnSigningKeyResponse
   | GetOwnFingerprintResponse
   | HasLiveKeysResponse

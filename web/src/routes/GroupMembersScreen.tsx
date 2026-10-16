@@ -26,11 +26,13 @@ import {
   getOwnSigningKey,
   signLeaveRotationStart,
   signRoleGrant,
+  signVerification,
   startGroupRotation,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUsers } from '@/lib/api/users'
 import { listAllPins } from '@/lib/api/pins'
+import { deleteVerification, listAllVerifications, putVerification } from '@/lib/api/verifications'
 import { useSession } from '@/lib/session/useSession'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
 import { catchUpResult, rotationNotice } from './rotationStaleness'
@@ -39,6 +41,14 @@ import { memberLabel } from './memberLabel'
 import { useUsernames } from './useUsernames'
 import { checkForView, checkGrants, type ViewCheck } from './runGrantCheck'
 import { OwnFingerprintPanel, type OwnFingerprintState } from './OwnFingerprintPanel'
+import type { VerifyPrompt } from './MemberVerificationControls'
+import {
+  loadMemberVerifications,
+  unverifyMember,
+  verifyFailureMessage,
+  verifyMember,
+  type MemberVerifications,
+} from './runMemberVerification'
 import { makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
 import {
   catchUpRotation,
@@ -107,6 +117,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   // from the first; runReadmit re-checks everything before it signs.
   const [readmittable, setReadmittable] = useState<ReadonlySet<string>>(new Set())
   const [ownFingerprint, setOwnFingerprint] = useState<OwnFingerprintState>({ status: 'loading' })
+  // Fingerprint verification (#65): each member's fingerprint and the verdict on
+  // the caller's own signed record, and the one being compared right now.
+  const [memberVerifications, setMemberVerifications] = useState<MemberVerifications | null>(null)
+  const [verifyPrompt, setVerifyPrompt] = useState<VerifyPrompt | null>(null)
+  // Bumped after a verification is saved or withdrawn so the verdicts reload.
+  const [verifyTick, setVerifyTick] = useState(0)
   // Bumped after a re-auth so the fingerprint and the on-load rotation catch-up run again (#221).
   const [warmTick, setWarmTick] = useState(0)
   // The on-load rotation stopped only because this tab's keys were cold.
@@ -232,6 +248,30 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       cancelled = true
     }
   }, [loadedView, userId])
+
+  useEffect(() => {
+    if (loadedView === null || userId === null) {
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const result = await loadMemberVerifications(
+        {
+          getUsers,
+          listVerifications: listAllVerifications,
+          ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+          selfUserId: userId,
+        },
+        loadedView.members.map((m) => m.userId),
+      )
+      if (!cancelled) {
+        setMemberVerifications(result)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [loadedView, userId, verifyTick, warmTick])
 
   // An admin who loads the group finishes any rotation left running (this tab
   // or another admin's closed mid-way) and catches up members left behind.
@@ -459,6 +499,74 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
+  const handleStartVerify = (subjectUserId: string) => {
+    if (busyUserId !== null || guard.held) {
+      return
+    }
+    const entry =
+      memberVerifications?.state === 'ready' ? memberVerifications.byUser.get(subjectUserId) : null
+    if (entry?.fingerprint == null) {
+      return
+    }
+    setMessage(null)
+    setError(null)
+    setVerifyPrompt({ userId: subjectUserId, fingerprint: entry.fingerprint })
+  }
+
+  const handleConfirmVerify = (subjectUserId: string) => {
+    if (
+      userId === null ||
+      busyUserId !== null ||
+      guard.held ||
+      verifyPrompt?.userId !== subjectUserId
+    ) {
+      return
+    }
+    const shown = verifyPrompt.fingerprint
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const result = await verifyMember(
+        { getUsers, signVerification, putVerification, selfUserId: userId },
+        subjectUserId,
+        shown,
+      )
+      setVerifyPrompt(null)
+      if (result.ok) {
+        setMessage(`You checked ${label}'s fingerprint.`)
+      } else {
+        setError(verifyFailureMessage(result.kind))
+        if (result.kind === 'coldKeys') {
+          setReauthAction('verify a fingerprint')
+        }
+      }
+      // A changed fingerprint needs the new value on screen either way.
+      setVerifyTick((t) => t + 1)
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleRemoveVerification = (subjectUserId: string) => {
+    if (busyUserId !== null || guard.held) {
+      return
+    }
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      if (await unverifyMember({ deleteVerification }, subjectUserId)) {
+        setMessage(`Your check of ${label}'s fingerprint was removed.`)
+        setVerifyTick((t) => t + 1)
+      } else {
+        setError("Couldn't remove the check. Try again.")
+      }
+      setBusyUserId(null)
+    })()
+  }
+
   const handleLeave = (successorUserId?: string) => {
     if (load.status !== 'ready' || userId === null || busyUserId !== null) {
       return
@@ -586,6 +694,16 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           onConfirmReadmit={handleConfirmReadmit}
           check={checkForView(grantCheck, load.view)}
           usernames={usernames}
+          verification={{
+            state: memberVerifications,
+            prompt: verifyPrompt,
+            onStart: handleStartVerify,
+            onCancel: () => {
+              setVerifyPrompt(null)
+            },
+            onConfirm: handleConfirmVerify,
+            onRemove: handleRemoveVerification,
+          }}
         />
       )}
       {load.status === 'ready' && userId !== null && (
