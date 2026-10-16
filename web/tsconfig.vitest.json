@@ -35,5 +35,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "vitest.config.ts"]
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "plugins/**/*.test.ts", "vitest.config.ts"]
 }
