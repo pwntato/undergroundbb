@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { expect, test } from '@playwright/test'
 
 import { BASE_URL } from './env.ts'
@@ -70,3 +72,21 @@ async function firstAssetPath(request: import('@playwright/test').APIRequestCont
   expect(match, 'a script under /assets/ in the page').not.toBeNull()
   return match![0]
 }
+
+test('every script and stylesheet in the page carries a matching integrity hash', async ({
+  request,
+}) => {
+  // Subresource integrity (#67, web/plugins/sri.ts). Recompute each hash from the bytes the
+  // site actually serves, so a build that stopped adding them, or hashed something other than
+  // what was uploaded (the browser would then block the app), fails here.
+  const html = await (await request.get('/')).text()
+  const tags = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="(\/assets\/[^"]+)"[^>]*>/g)]
+  expect(tags.length, 'asset tags in the page').toBeGreaterThan(0)
+  for (const [tag, path] of tags) {
+    const claimed = /\sintegrity="(sha384-[^"]+)"/.exec(tag ?? '')?.[1]
+    expect(claimed, `integrity on ${path}`).toBeDefined()
+    const body = await (await request.get(path!)).body()
+    const actual = `sha384-${createHash('sha384').update(body).digest('base64')}`
+    expect(actual, `hash of ${path}`).toBe(claimed)
+  }
+})
