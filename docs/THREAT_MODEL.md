@@ -311,8 +311,8 @@ but do not close it.
 Subresource integrity is built (`web/plugins/sri.ts`): after the build writes `dist/`, every
 `/assets/` script and stylesheet tag in `index.html` gets a SHA-384 `integrity` hash of the file as
 written, and a build that finds no such tag, or a tag with no file behind it, fails. What that buys:
-a tampered or swapped asset in the bucket or on the CDN is refused by the browser while `index.html`
-is intact. What it does not: `index.html` carries the hashes and comes from the same operator, so
+a tampered or swapped main script or stylesheet in the bucket or on the CDN is refused by the
+browser while `index.html` is intact. What it does not: `index.html` carries the hashes and comes from the same operator, so
 whoever can change it can change the hashes, which is the operator case this section is about. The
 crypto worker is loaded at runtime by `new Worker(...)`, which has no integrity option, so it is not
 covered either.

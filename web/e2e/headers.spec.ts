@@ -79,6 +79,8 @@ test('every script and stylesheet in the page carries a matching integrity hash'
   // Subresource integrity (#67, web/plugins/sri.ts). Recompute each hash from the bytes the
   // site actually serves, so a build that stopped adding them, or hashed something other than
   // what was uploaded (the browser would then block the app), fails here.
+  // The tag pattern is deliberately a separate copy of web/plugins/sri.ts's, so this is an
+  // independent check of the plugin's output rather than the plugin agreeing with itself.
   const html = await (await request.get('/')).text()
   const tags = [...html.matchAll(/<(?:script|link)\b[^>]*(?:src|href)="(\/assets\/[^"]+)"[^>]*>/g)]
   expect(tags.length, 'asset tags in the page').toBeGreaterThan(0)
