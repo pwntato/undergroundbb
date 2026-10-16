@@ -403,7 +403,13 @@ base-uri 'none';
 frame-ancestors 'none';
 ```
 
-Four of those are load-bearing in ways worth naming:
+The same response headers policy also sends `Strict-Transport-Security` (one year, `includeSubDomains`,
+no preload), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`
+and a `Permissions-Policy` that disables camera, microphone, geolocation, payment and USB. Because of
+`no-referrer`, browsers send `Origin: null` on same-origin non-GET requests; any CSRF check has to use
+`Sec-Fetch-Site`, not `Origin`.
+
+Four of the CSP directives are load-bearing in ways worth naming:
 
 - **`'wasm-unsafe-eval'`, and specifically not `'unsafe-eval'`.** Argon2id runs in WebAssembly, and
   some instantiation paths need an allowance for it. An implementer who hits a WASM CSP error and
