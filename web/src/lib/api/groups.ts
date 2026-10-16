@@ -166,6 +166,8 @@ export async function createGroup(req: CreateGroupRequest): Promise<CreateGroupR
 export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
   readonly role: GroupListEntry['role'] | ''
   readonly revocationMode: 'rotating' | 'open'
+  /** The most members this group may have; 0 means no cap (an Open group). Set by the deployment. */
+  readonly memberCap: number
   /** 0 means "never expire". */
   readonly expirationDays: number
   readonly version: number

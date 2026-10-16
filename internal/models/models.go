@@ -333,6 +333,12 @@ type Group struct {
 	// means checking it against this key, not the creator's current one.
 	CreatorUserID           string `dynamodbav:"CreatorUserID"`
 	CreatorSigningPublicKey []byte `dynamodbav:"CreatorSigningPublicKey"`
+
+	// JoinSeq counts the joins made to a Rotating group while a member cap
+	// applies (#60). CompleteInvite reads it, counts the members, and writes
+	// its own join conditioned on JoinSeq being unchanged, so two joins that
+	// both saw room for one more cannot both succeed. Absent means 0.
+	JoinSeq int64 `dynamodbav:"JoinSeq,omitempty"`
 	// TrustAnchorSignature is the creator's Ed25519 signature (under
 	// crypto.ContextTrustAnchor) over CreatorUserID + CreatorSigningPublicKey
 	// + the group id -- see DESIGN.md, "The anchor is signed by the creator

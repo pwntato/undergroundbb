@@ -117,6 +117,24 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refuse early, with the same code completion uses, when the group is
+	// already full: otherwise the invitee accepts and then never joins. This is a
+	// courtesy read; CompleteInvite is what enforces the cap.
+	if group, gErr := h.db.GetGroup(r.Context(), groupID); gErr != nil {
+		WriteInternalError(w, r, gErr, "could not create invite")
+		return
+	} else if capN := h.memberCap(group); capN > 0 {
+		n, cErr := h.db.CountMembers(r.Context(), groupID)
+		if cErr != nil {
+			WriteInternalError(w, r, cErr, "could not create invite")
+			return
+		}
+		if n >= capN {
+			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit: a Rotating group re-keys whenever a member is removed, and that is what bounds its size", "group_full")
+			return
+		}
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxInviteBodyBytes)
 	var req createInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -627,6 +645,16 @@ type admissionRequest struct {
 	Signature string `json:"signature"`
 }
 
+// memberCap is the most members a group may have: the deployment's Rotating cap
+// (config.MaxRotatingGroupMembers) for a Rotating group, 0 (no cap) for an Open
+// one.
+func (h *Handler) memberCap(g *models.Group) int {
+	if g != nil && g.RevocationMode == models.RevocationRotating {
+		return h.cfg.MaxRotatingGroupMembers
+	}
+	return 0
+}
+
 // completeInvite implements POST /api/invites/{id}/complete -- issue #40,
 // step 3. Authenticated as the INVITER (never the invitee -- the invitee
 // has no part in step 3 at all, per docs/DESIGN.md: "step 3 happens
@@ -791,6 +819,7 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		Generation:      req.Generation,
 		WrappedGroupKey: wrappedGroupKey,
 		Role:            models.RoleMember,
+		MaxMembers:      h.memberCap(group),
 		Admission: models.Admission{
 			InviterUserID:           userID,
 			InviteID:                inviteID,
@@ -812,6 +841,12 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, db.ErrInviterNotEligible) {
 			h.writeInviterNotEligible(w, r, match.GroupID, userID)
+			return
+		}
+		if errors.Is(err, db.ErrGroupFull) {
+			// The invite is left pending: a member leaving frees a slot, and the
+			// invite's own completion deadline ends it otherwise.
+			WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit: a Rotating group re-keys whenever a member is removed, and that is what bounds its size", "group_full")
 			return
 		}
 		if errors.Is(err, db.ErrGroupGone) {

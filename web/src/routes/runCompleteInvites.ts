@@ -203,6 +203,12 @@ async function completeOne(
     if (err instanceof ApiError && err.code === 'already_member') {
       return { inviteId: invite.inviteId, ok: true }
     }
+    // The group is at its member limit (#60). Not a fault: the invite stays pending
+    // on the server, so a later login retries it once someone has left, and it
+    // lapses with its own deadline otherwise.
+    if (err instanceof ApiError && err.code === 'group_full') {
+      return { inviteId: invite.inviteId, ok: false, reason: 'group is at its member limit' }
+    }
     // InviteMACError means one of two things (PR #146 round-2 review):
     // either the server just attempted the exact key-substitution this
     // MAC exists to block, or -- the legitimate, permanent case -- the

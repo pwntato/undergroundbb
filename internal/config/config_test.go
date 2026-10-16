@@ -267,3 +267,27 @@ func TestSessionTTLIsCapped(t *testing.T) {
 		t.Errorf("MaxSessionTTL = %s is not well below the 30-day minimum inactivity period", MaxSessionTTL)
 	}
 }
+
+func TestRotatingGroupMembersEnvOrDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        int
+	}{
+		{"unset", "", DefaultMaxRotatingGroupMembers},
+		{"set", "250", 250},
+		{"the minimum", "2", MinRotatingGroupMembers},
+		{"below the minimum is clamped up", "1", MinRotatingGroupMembers},
+		{"zero is clamped up", "0", MinRotatingGroupMembers},
+		{"negative is clamped up", "-5", MinRotatingGroupMembers},
+		{"the ceiling", "10000", MaxRotatingGroupMembersCeiling},
+		{"above the ceiling is clamped down", "10001", MaxRotatingGroupMembersCeiling},
+		{"not a number falls back to the default", "lots", DefaultMaxRotatingGroupMembers},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UBB_TEST_MAX_MEMBERS", tc.value)
+			if got := rotatingGroupMembersEnvOrDefault("UBB_TEST_MAX_MEMBERS", DefaultMaxRotatingGroupMembers); got != tc.want {
+				t.Errorf("MAX_ROTATING_GROUP_MEMBERS=%q = %d, want %d", tc.value, got, tc.want)
+			}
+		})
+	}
+}

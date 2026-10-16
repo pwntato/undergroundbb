@@ -8,11 +8,18 @@ import type { SettingsForm } from './runGroupSettings'
 export const MAX_EXPIRATION_DAYS = 3650
 export const FALLBACK_EXPIRATION_DAYS = 30
 
-export const REVOCATION_TEXT = {
-  rotating:
-    "Rotating: removing a member re-keys the group. A removed member keeps what they've already read but can't read new posts. Capped at 1,000 members.",
-  open: 'Open: removing a member only revokes their access. The group is never re-keyed, so a removed member keeps the group key and can still decrypt anything they get hold of. There is no member cap.',
-} as const
+/**
+ * What removing a member does in each mode. `memberCap` is the deployment's limit for this
+ * group (GroupDetail.memberCap), not a fixed number: it is read from the server so the text
+ * cannot disagree with what the server enforces.
+ */
+export function revocationText(mode: 'rotating' | 'open', memberCap: number): string {
+  if (mode === 'open') {
+    return 'Open: removing a member only revokes their access. The group is never re-keyed, so a removed member keeps the group key and can still decrypt anything they get hold of. There is no member cap.'
+  }
+  const cap = memberCap > 0 ? ` Capped at ${memberCap.toLocaleString('en-US')} members.` : ''
+  return `Rotating: removing a member re-keys the group. A removed member keeps what they've already read but can't read new posts.${cap}`
+}
 
 /** Validates the form; returns the error to show, or null if it can be submitted. */
 export function validateSettingsForm(form: SettingsForm): string | null {

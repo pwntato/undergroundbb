@@ -144,6 +144,7 @@ resource "aws_lambda_function" "main" {
       REGISTRATION_POLICY        = var.registration_policy
       ALLOW_GROUP_EXPIRATION_OFF = tostring(var.allow_group_expiration_off)
       DEFAULT_EXPIRATION_DAYS    = tostring(var.default_expiration_days)
+      MAX_ROTATING_GROUP_MEMBERS = tostring(var.max_rotating_group_members)
       SESSION_SECRET             = random_id.session_secret.hex
       ORIGIN_VERIFY_SECRET       = random_password.origin_verify.result
       SESSION_TTL_HOURS          = tostring(var.session_ttl_hours)

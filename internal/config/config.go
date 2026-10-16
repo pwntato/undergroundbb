@@ -47,6 +47,11 @@ type Config struct {
 	// DefaultExpirationDays is the expiration policy assigned to a group that
 	// does not choose one explicitly.
 	DefaultExpirationDays int64
+	// MaxRotatingGroupMembers is the most members a Rotating group may have
+	// (#60). Open groups have no cap. docs/DESIGN.md sizes it against the write
+	// burst of a rotation (one GENKEY link plus one wrap per member), so it is a
+	// tuning knob: raise it only after checking that burst.
+	MaxRotatingGroupMembers int
 
 	// SessionSecret is the HMAC key session.Signer uses to issue and verify
 	// login session cookies -- see internal/session. Treat it as a
@@ -73,6 +78,14 @@ const (
 	DefaultRegistrationPolicy      = RegistrationOpen
 	DefaultAllowGroupExpirationOff = true
 	DefaultExpirationDays          = 30
+	// DefaultMaxRotatingGroupMembers is MaxRotatingGroupMembers's default.
+	DefaultMaxRotatingGroupMembers = 1000
+	// MinRotatingGroupMembers and MaxRotatingGroupMembersCeiling bound the
+	// setting. Below 2 a group could never hold an invitee; above the ceiling
+	// the rotation burst outgrows what a browser can finish, so a larger value
+	// is almost certainly a typo.
+	MinRotatingGroupMembers        = 2
+	MaxRotatingGroupMembersCeiling = 10000
 )
 
 // DefaultSessionTTL is SessionTTL's default: 24 hours. docs/DESIGN.md pins
@@ -115,6 +128,7 @@ func FromEnv() Config {
 		RegistrationPolicy:      registrationPolicyEnvOrDefault("REGISTRATION_POLICY", DefaultRegistrationPolicy),
 		AllowGroupExpirationOff: BoolEnvOrDefault("ALLOW_GROUP_EXPIRATION_OFF", DefaultAllowGroupExpirationOff),
 		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
+		MaxRotatingGroupMembers: rotatingGroupMembersEnvOrDefault("MAX_ROTATING_GROUP_MEMBERS", DefaultMaxRotatingGroupMembers),
 		SessionSecret:           sessionSecretBytes,
 		SessionTTL:              sessionTTLEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
 	}
@@ -204,6 +218,25 @@ func registrationPolicyEnvOrDefault(key, def string) string {
 		return RegistrationClosed
 	}
 	return v
+}
+
+// rotatingGroupMembersEnvOrDefault reads MAX_ROTATING_GROUP_MEMBERS. Unset or
+// unparseable falls back to def. A value outside [MinRotatingGroupMembers,
+// MaxRotatingGroupMembersCeiling] is clamped to the nearest bound with a
+// warning rather than rejected: refusing to start over a tuning knob would take
+// the deployment down, and the nearest bound is the closest thing to what was
+// asked for.
+func rotatingGroupMembersEnvOrDefault(key string, def int) int {
+	n := Int64EnvOrDefault(key, int64(def))
+	switch {
+	case n < MinRotatingGroupMembers:
+		log.Printf("warning: %s=%d is below the minimum of %d, using the minimum", key, n, MinRotatingGroupMembers)
+		return MinRotatingGroupMembers
+	case n > MaxRotatingGroupMembersCeiling:
+		log.Printf("warning: %s=%d exceeds the maximum of %d, using the maximum", key, n, MaxRotatingGroupMembersCeiling)
+		return MaxRotatingGroupMembersCeiling
+	}
+	return int(n)
 }
 
 // expirationDaysEnvOrDefault reads DEFAULT_EXPIRATION_DAYS, falling back to
