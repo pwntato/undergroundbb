@@ -226,6 +226,9 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
 
     # One year, subdomains included, no preload: preload is close to
     # irreversible and is a separate decision from sending the header.
+    # includeSubDomains means every host under the apex must serve HTTPS, and
+    # browsers cache this for a year: do not add a plain-HTTP-only record (a
+    # third-party click-tracking CNAME, say) without checking this first.
     strict_transport_security {
       override                   = true
       access_control_max_age_sec = 31536000
@@ -238,7 +241,9 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
     }
 
     # no-referrer: nothing on this site needs the Referer, and invite and
-    # recovery URLs should never leave it in one.
+    # recovery URLs should never leave it in one. Side effect: per the Fetch
+    # spec, no-referrer makes browsers send "Origin: null" on same-origin
+    # non-GET requests, so a CSRF check must use Sec-Fetch-Site, not Origin.
     referrer_policy {
       override        = true
       referrer_policy = "no-referrer"
