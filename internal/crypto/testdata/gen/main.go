@@ -258,6 +258,22 @@ type pinVector struct {
 	SignatureHex      string   `json:"signature_hex"`
 }
 
+// verificationVector proves VerificationPayload's exact encoding (#65). The
+// fingerprint is the real one Fingerprint returns for the verified user's keys,
+// so the vector also ties the signed string to what a person actually compared.
+type verificationVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	VerifierUUID    string `json:"verifier_uuid"`
+	VerifiedUUID    string `json:"verified_uuid"`
+	VerifiedSignHex string `json:"verified_signing_public_key_hex"`
+	VerifiedWrapHex string `json:"verified_wrapping_public_key_hex"`
+	Fingerprint     string `json:"fingerprint"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
+}
+
 // memberWrapVector proves MemberWrapAAD's exact encoding -- the same
 // reasoning as credentialWrapVector: pinning the AAD string itself, plus
 // the AES-256-GCM ciphertext it produces under a fixed key/nonce/plaintext,
@@ -354,6 +370,7 @@ type vectorFile struct {
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
+	Verification         []verificationVector         `json:"verification"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
@@ -674,6 +691,40 @@ func main() {
 				SigningKeysHex:    hexKeys,
 				PayloadHex:        hex.EncodeToString(payload),
 				SignatureHex:      hex.EncodeToString(sig),
+			})
+		}
+	}
+
+	// --- Verification (#65): two different verified users, so a payload
+	// cannot be mistaken for another user's ---
+	{
+		pub, priv := fixedEd25519Key("verification-key-1")
+		for _, tc := range []struct{ name, seed, verified string }{
+			{"first_user", "verification-target-1", "verified-uuid-1"},
+			{"second_user", "verification-target-2", "verified-uuid-2"},
+		} {
+			targetSign, _ := fixedEd25519Key(tc.seed)
+			targetWrap := sha256.Sum256([]byte(tc.seed + "-wrapping"))
+			fp, err := crypto.Fingerprint(targetSign, targetWrap[:])
+			if err != nil {
+				panic(err)
+			}
+			payload := crypto.VerificationPayload("verifier-uuid-1", tc.verified, pub, fp)
+			sig, err := crypto.Sign(priv, crypto.ContextVerification, payload)
+			if err != nil {
+				panic(err)
+			}
+			out.Verification = append(out.Verification, verificationVector{
+				Name:            tc.name,
+				PrivateHex:      hex.EncodeToString(priv),
+				PublicHex:       hex.EncodeToString(pub),
+				VerifierUUID:    "verifier-uuid-1",
+				VerifiedUUID:    tc.verified,
+				VerifiedSignHex: hex.EncodeToString(targetSign),
+				VerifiedWrapHex: hex.EncodeToString(targetWrap[:]),
+				Fingerprint:     fp,
+				PayloadHex:      hex.EncodeToString(payload),
+				SignatureHex:    hex.EncodeToString(sig),
 			})
 		}
 	}

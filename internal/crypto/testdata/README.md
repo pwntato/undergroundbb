@@ -51,6 +51,12 @@ why.
   root of trust is verified by every future member's client, so this
   encoding must be byte-identical across Go and TypeScript before any real
   group exists under it.
+- `verification`: `(verifier uuid, verified uuid, verifier signing public
+  key, fingerprint) -> payload`, plus the Ed25519 signature over it — pinning
+  `VerificationPayload` (#65), a user's signed record that they compared
+  another user's fingerprint out of band. Two cases for two different
+  verified users, each carrying the real `Fingerprint` of its keys so the
+  signed string is tied to what a person actually reads out.
 - `role_grant`: `(group id, subject uuid, role, grantor grant ref) ->
   payload`, plus the Ed25519 signature over it — pinning `RoleGrantPayload`
   (#34). Two cases: a root grant (empty grantor grant ref, no predecessor to

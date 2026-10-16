@@ -34,6 +34,7 @@ type vectorFile struct {
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
+	Verification         []verificationVector         `json:"verification"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
@@ -229,6 +230,19 @@ type pinVector struct {
 	SigningKeysHex    []string `json:"signing_keys_hex"`
 	PayloadHex        string   `json:"payload_hex"`
 	SignatureHex      string   `json:"signature_hex"`
+}
+
+type verificationVector struct {
+	Name            string `json:"name"`
+	PrivateHex      string `json:"private_key_hex"`
+	PublicHex       string `json:"public_key_hex"`
+	VerifierUUID    string `json:"verifier_uuid"`
+	VerifiedUUID    string `json:"verified_uuid"`
+	VerifiedSignHex string `json:"verified_signing_public_key_hex"`
+	VerifiedWrapHex string `json:"verified_wrapping_public_key_hex"`
+	Fingerprint     string `json:"fingerprint"`
+	PayloadHex      string `json:"payload_hex"`
+	SignatureHex    string `json:"signature_hex"`
 }
 
 type memberWrapVector struct {
@@ -884,6 +898,51 @@ func TestVectorPin(t *testing.T) {
 	}
 	if v.Pin[0].PayloadHex == v.Pin[2].PayloadHex {
 		t.Fatal("a different key set must produce a different payload")
+	}
+}
+
+// TestVectorVerification pins VerificationPayload's exact encoding (#65), and
+// that the signed fingerprint is the one Fingerprint computes for the keys.
+func TestVectorVerification(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.Verification) != 2 {
+		t.Fatalf("want 2 verification vectors, got %d", len(v.Verification))
+	}
+	for _, tc := range v.Verification {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			fp, err := Fingerprint(mustHex(t, tc.VerifiedSignHex), mustHex(t, tc.VerifiedWrapHex))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fp != tc.Fingerprint {
+				t.Fatalf("Fingerprint = %q, want %q", fp, tc.Fingerprint)
+			}
+			gotPayload := VerificationPayload(tc.VerifierUUID, tc.VerifiedUUID, pub, tc.Fingerprint)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("VerificationPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextVerification, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextVerification, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature over VerificationPayload")
+			}
+			if Verify(pub, ContextPin, wantPayload, wantSig) {
+				t.Fatal("a verification signature must not verify under the pin context")
+			}
+		})
+	}
+	if v.Verification[0].PayloadHex == v.Verification[1].PayloadHex {
+		t.Fatal("different verified users must produce different payloads")
 	}
 }
 
