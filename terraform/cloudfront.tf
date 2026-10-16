@@ -223,6 +223,40 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
         "frame-ancestors 'none'",
       ])
     }
+
+    # One year, subdomains included, no preload: preload is close to
+    # irreversible and is a separate decision from sending the header.
+    strict_transport_security {
+      override                   = true
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      preload                    = false
+    }
+
+    content_type_options {
+      override = true
+    }
+
+    # no-referrer: nothing on this site needs the Referer, and invite and
+    # recovery URLs should never leave it in one.
+    referrer_policy {
+      override        = true
+      referrer_policy = "no-referrer"
+    }
+
+    # Fallback for clients that ignore the CSP's frame-ancestors.
+    frame_options {
+      override     = true
+      frame_option = "DENY"
+    }
+  }
+
+  custom_headers_config {
+    items {
+      header   = "Permissions-Policy"
+      override = true
+      value    = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    }
   }
 }
 
