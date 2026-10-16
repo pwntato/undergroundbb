@@ -40,6 +40,7 @@ function props(
     onCancel: () => undefined,
     onConfirm: () => undefined,
     onRemove: () => undefined,
+    onReauthenticate: () => undefined,
   }
 }
 
@@ -90,6 +91,19 @@ describe('MemberVerificationControls', () => {
   it('offers checking again after a change, and removal when verified', () => {
     expect(controls(props(ready('changed')))).toContain('Check fingerprint again')
     expect(controls(props(ready('verified')))).toContain('Remove check')
+  })
+
+  it('lets a changed or failed record be withdrawn without re-checking the person', () => {
+    for (const verdict of ['changed', 'bad-signature'] as const) {
+      const html = controls(props(ready(verdict)))
+      expect(html).toContain('Check fingerprint again')
+      expect(html).toContain('Remove check')
+    }
+    expect(controls(props(ready('none')))).not.toContain('Remove check')
+    // Even with no readable fingerprint, a stale record can still be withdrawn.
+    const noFp = controls(props(ready('changed', null)))
+    expect(noFp).toContain('Remove check')
+    expect(noFp).not.toContain('Check fingerprint')
   })
 
   it('offers nothing while loading, when unavailable, or when the member has no fingerprint', () => {
@@ -169,8 +183,20 @@ describe('GroupMembersPanel verification wiring', () => {
     expect(panel(props(ready('verified')))).toContain('fingerprint checked by you')
   })
 
-  it('offers nothing for a deleted account', () => {
-    const html = panel(props(ready('none')), new Map([[BOB, '']]))
-    expect(html).not.toContain('Check fingerprint')
+  it('offers nothing and warns of nothing for a deleted account, even with a changed record', () => {
+    for (const verdict of ['none', 'changed', 'verified'] as const) {
+      const html = panel(props(ready(verdict)), new Map([[BOB, '']]))
+      expect(html).not.toContain('Check fingerprint')
+      expect(html).not.toContain('Keys changed')
+      expect(html).not.toContain('checked by you')
+    }
+  })
+
+  it('says why no checks are shown when they could not be loaded, and offers the password step', () => {
+    const html = panel(props({ state: 'unavailable' }))
+    expect(html).toContain('Couldn&#x27;t load your fingerprint checks')
+    expect(html).toContain('Enter your password')
+    expect(panel(props(ready('none')))).not.toContain('Enter your password')
+    expect(panel(props(null))).not.toContain('Enter your password')
   })
 })

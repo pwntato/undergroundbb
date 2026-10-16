@@ -29,6 +29,8 @@ export interface MemberVerificationProps {
   readonly onCancel: () => void
   readonly onConfirm: (subjectUserId: string) => void
   readonly onRemove: (subjectUserId: string) => void
+  /** Opens the in-place password step; reading your saved checks needs this tab's keys. */
+  readonly onReauthenticate: () => void
 }
 
 function lookup(state: MemberVerifications | null, userId: string): MemberVerification | undefined {
@@ -146,20 +148,41 @@ export function MemberVerificationControls({
     )
   }
 
-  if (v.fingerprint === null) {
+  // A changed or failed record can be withdrawn without re-checking the person
+  // (say, a real key change for someone you cannot reach right now). Withdrawing
+  // never makes anything look verified.
+  const canWithdraw = v.verdict !== 'none'
+  if (v.fingerprint === null && !canWithdraw) {
     return null
   }
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={disabled}
-      onClick={() => {
-        onStart(userId)
-      }}
-    >
-      {v.verdict === 'none' ? 'Check fingerprint' : 'Check fingerprint again'}
-    </Button>
+    <>
+      {v.fingerprint !== null && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() => {
+            onStart(userId)
+          }}
+        >
+          {v.verdict === 'none' ? 'Check fingerprint' : 'Check fingerprint again'}
+        </Button>
+      )}
+      {canWithdraw && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={() => {
+            onRemove(userId)
+          }}
+        >
+          Remove check
+        </Button>
+      )}
+    </>
   )
 }

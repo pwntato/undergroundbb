@@ -144,7 +144,7 @@ export function GroupMembersPanel({
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
                 <RoleMark status={checked?.statuses.get(m.userId)} verified={isVerified(checked)} />
-                {verification !== undefined && !isSelf && (
+                {verification !== undefined && !isSelf && !isDeletedUser(m.userId, usernames) && (
                   <MemberVerificationBadge state={verification.state} userId={m.userId} />
                 )}
               </span>
@@ -292,6 +292,18 @@ export function GroupMembersPanel({
           {checked.anchor === 'unpinned' &&
             " This browser couldn't remember the group's creator, so a later swap wouldn't be noticed."}
         </p>
+      )}
+      {verification?.state?.state === 'unavailable' && (
+        <div className="flex flex-col items-start gap-1">
+          <p className="text-xs text-muted-foreground">
+            Couldn&apos;t load your fingerprint checks, so none are shown. A member you have checked
+            looks the same as one you have not until this loads. If this tab was reopened, entering
+            your password brings them back.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={verification.onReauthenticate}>
+            Enter your password
+          </Button>
+        </div>
       )}
       {isAdmin && !canChangeRoles && (
         <p className="text-xs text-muted-foreground">

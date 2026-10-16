@@ -703,6 +703,9 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             },
             onConfirm: handleConfirmVerify,
             onRemove: handleRemoveVerification,
+            onReauthenticate: () => {
+              setReauthAction('check fingerprints')
+            },
           }}
         />
       )}

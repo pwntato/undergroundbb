@@ -173,7 +173,7 @@ export async function unverifyMember(
 export function verifyFailureMessage(kind: VerifyFailureKind): string {
   switch (kind) {
     case 'changed':
-      return 'Their keys changed while you were comparing, so nothing was saved. Reload and compare their new fingerprint from the start.'
+      return 'Their keys changed while you were comparing, so nothing was saved. Compare their new fingerprint from the start.'
     case 'coldKeys':
       return 'This tab needs your password to sign a verification.'
     case 'authRequired':
