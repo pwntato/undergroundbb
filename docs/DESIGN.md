@@ -560,19 +560,20 @@ The roster shows each member's fingerprint on request, four groups to a row so t
 compared whole, with a "check fingerprint" action that signs and stores a record once the person
 confirms every group matched, a "✓ fingerprint checked by you" mark on verified members, and
 "Keys changed since you checked" on a changed one. The wording is deliberately distinct from the
-roster's role mark, which is about the grant chain. **One-sided by decision, not for now:** there is
-no "verified each other" badge, because it would need the server to serve each side the other's
-record, which tells a user who has checked them and builds a graph of who verified whom out of what
-is today private to each verifier (#250, declined). The operator is not the audience that argument
-protects: `VERIFIED#<verified uuid>` sits in the verifier's partition in plaintext, like `PIN#`, so
-a database dump already shows who verified whom (docs/THREAT_MODEL.md names this). What
-is withheld is exposure to the *other users*, and the detection value is untouched: a reader learns of
-a substituted key from their own record ("Keys changed since you checked") whether or not the other
-side ever checked them back.
+roster's role mark, which is about the grant chain. **One-sided by decision:** there is no "verified
+each other" badge, because it would need the server to serve each side the other's record, which
+tells a user who has checked them and builds a graph of who verified whom out of what is today
+private to each verifier (#250, declined). The operator is not the audience that argument protects:
+`VERIFIED#<verified uuid>` sits in the verifier's partition in plaintext, like `PIN#`, so a database
+dump already shows who verified whom (docs/THREAT_MODEL.md names this). What is withheld is exposure
+to the *other users*, and the detection value is untouched: a reader learns of a substituted key
+from their own record ("Keys changed since you checked") whether or not the other side ever checked
+them back.
 
 Verification stays **available rather than mandatory**: fingerprints are shown on profiles and there
-is an explicit verify affordance. Invite links additionally carry the inviter's fingerprint in the URL fragment, which the browser never
-transmits, so the invitee's client can check it against a value the server never saw.
+is an explicit verify affordance. Invite links additionally carry the inviter's fingerprint in the
+URL fragment, which the browser never transmits, so the invitee's client can check it against a
+value the server never saw.
 
 ## Groups
 
