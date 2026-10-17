@@ -121,7 +121,7 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 	// beyond THREAT_MODEL's day granularity. The creator's membership keeps
 	// a CreatedAt, truncated to the UTC day, because the successor claim
 	// reads it as the join date (handlers/claim.go) and compares by day.
-	joinedDay := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
+	joinedDay := utcDay(time.Now())
 
 	group := models.Group{
 		Record: models.Record{

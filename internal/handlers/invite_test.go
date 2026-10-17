@@ -344,6 +344,16 @@ func TestCompleteInviteStoresAdmission(t *testing.T) {
 		t.Fatalf("complete status = %d, body: %s", rec.Code, rec.Body.String())
 	}
 
+	// #258: the admission carries no creation time, and the membership only
+	// its UTC day (the successor claim reads it as the join date).
+	if _, has := getRow(t, "GROUP#"+groupID, "ADMISSION#"+invitee.userID)["CreatedAt"]; has {
+		t.Error("admission row carries CreatedAt; see issue #258")
+	}
+	joined, err := time.Parse(time.RFC3339, strAttr(getRow(t, "GROUP#"+groupID, "MEMBER#"+invitee.userID), "CreatedAt"))
+	if err != nil || !joined.Equal(joined.UTC().Truncate(24*time.Hour)) {
+		t.Errorf("invitee MEMBER# CreatedAt = %v (%v), want midnight UTC", joined, err)
+	}
+
 	list := doJSON(t, h, http.MethodGet, "/api/groups/"+groupID+"/admissions", creatorCookie, nil)
 	if list.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body: %s", list.Code, list.Body.String())

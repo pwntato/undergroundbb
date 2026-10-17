@@ -206,13 +206,18 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 
 	rotationIndex := -1
 	if rotating {
+		// CreatedAt is unset on both rows (#258). The marker's StartedAt stays
+		// at full resolution: admin clients compare it to a one-hour staleness
+		// deadline (DESIGN.md, "The rotation marker is the one item with a
+		// liveness requirement"), and the marker is deleted when the rotation
+		// finishes. The GenerationKey link is permanent, so it must not carry
+		// a time.
 		now := time.Now().UTC().Format(time.RFC3339)
 		link, err := attributevalue.MarshalMap(models.GenerationKey{
 			Record: models.Record{
-				PK:        "GROUP#" + in.GroupID,
-				SK:        GenKeySortKey(in.Rotation.CurrentGeneration),
-				Type:      "GenerationKey",
-				CreatedAt: now,
+				PK:   "GROUP#" + in.GroupID,
+				SK:   GenKeySortKey(in.Rotation.CurrentGeneration),
+				Type: "GenerationKey",
 			},
 			Wrapped:        in.Rotation.Link,
 			RemoverUserID:  in.RemoverUserID,
@@ -224,10 +229,9 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 		}
 		marker, err := attributevalue.MarshalMap(models.Rotation{
 			Record: models.Record{
-				PK:        "GROUP#" + in.GroupID,
-				SK:        RotationSortKey,
-				Type:      "Rotation",
-				CreatedAt: now,
+				PK:   "GROUP#" + in.GroupID,
+				SK:   RotationSortKey,
+				Type: "Rotation",
 			},
 			Generation: in.Rotation.CurrentGeneration + 1,
 			StartedAt:  now,

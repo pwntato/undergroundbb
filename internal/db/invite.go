@@ -770,14 +770,17 @@ func (c *Client) CountMembers(ctx context.Context, groupID string) (int, error) 
 // JoinSeq this attempt counted under, and META is updated to the next value
 // only if it still holds that one.
 func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput, seenSeq *int64) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	// The membership keeps only the UTC day (the successor claim reads it as
+	// the join date) and the admission carries no CreatedAt at all: a
+	// full-resolution acceptance time would date it to the second (#258).
+	joinedDay := utcDay(time.Now())
 
 	membership := models.Membership{
 		Record: models.Record{
 			PK:        "GROUP#" + in.GroupID,
 			SK:        "MEMBER#" + in.InvitedUserID,
 			Type:      "Membership",
-			CreatedAt: now,
+			CreatedAt: joinedDay,
 			GSI1PK:    "USER#" + in.InvitedUserID,
 			GSI1SK:    "GROUP#" + in.GroupID,
 		},
@@ -792,10 +795,9 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 
 	admission := in.Admission
 	admission.Record = models.Record{
-		PK:        "GROUP#" + in.GroupID,
-		SK:        "ADMISSION#" + in.InvitedUserID,
-		Type:      "Admission",
-		CreatedAt: now,
+		PK:   "GROUP#" + in.GroupID,
+		SK:   "ADMISSION#" + in.InvitedUserID,
+		Type: "Admission",
 	}
 	admission.InviteeUserID = in.InvitedUserID
 	admissionItem, err := attributevalue.MarshalMap(admission)

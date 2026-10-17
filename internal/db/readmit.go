@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -57,13 +56,12 @@ func (c *Client) ReadmitMember(ctx context.Context, in ReadmitMemberInput) error
 		profileIndex = 2
 		groupIndex   = 3
 	)
-	now := time.Now().UTC().Format(time.RFC3339)
+	// No CreatedAt: a full-resolution time would date the readmission (#258).
 	admission, err := attributevalue.MarshalMap(models.Admission{
 		Record: models.Record{
-			PK:        "GROUP#" + in.GroupID,
-			SK:        "ADMISSION#" + in.SubjectUserID,
-			Type:      "Admission",
-			CreatedAt: now,
+			PK:   "GROUP#" + in.GroupID,
+			SK:   "ADMISSION#" + in.SubjectUserID,
+			Type: "Admission",
 		},
 		InviteeUserID:           in.SubjectUserID,
 		InviterUserID:           in.CallerUserID,

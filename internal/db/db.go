@@ -61,6 +61,16 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// utcDay returns t as midnight UTC in RFC 3339, the coarsest Record.CreatedAt
+// a row may carry (THREAT_MODEL holds creation time to day granularity at
+// most). Only a MEMBER# row keeps one, because the successor claim reads it
+// as the join date (handlers/claim.go); every other row leaves CreatedAt
+// unset (#147, #258), except a test account's PROFILE, whose full-resolution
+// value the purge compares against its cutoff (Register).
+func utcDay(t time.Time) string {
+	return t.UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
+}
+
 // RoundUpToEndOfUTCDay rounds t up to 23:59:59 UTC on its own UTC calendar
 // day -- the global TTL-storage rule from issue #5's round-27 review
 // comment: "round every stored TTL value up to the end of its UTC day," so a
