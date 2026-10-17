@@ -258,6 +258,14 @@ GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
 zip lambda.zip bootstrap
 ```
 
+**The CreatedAt backfill** (`cmd/backfill`, `terraform/backfill.tf`, issue #253) is a one-off Lambda
+that nothing schedules. It coarsens the full-resolution `CreatedAt` on rows written before #147
+(removed on real accounts' PROFILE, RECOVERY, username claims, group META and role grants; MEMBER#
+truncated to its UTC day; test accounts' PROFILE left alone). It is a dry run unless
+`var.backfill_dry_run` is `false`, and an invocation payload (`{"dryRun": true}`) can force a dry run
+but never turn writing on. The report is the response and a `backfill report:` log line. Its zip is
+built like the purge's (`backfill-pkg/bootstrap` into `backfill.zip`). Delete it once the run is done.
+
 **The test-account purge** is a second Lambda (`cmd/purge`, `terraform/purge.tf`) that deletes accounts
 created by automated smoke tests (reserved `zz-delete-test-` username prefix) and everything they
 own. It has its own minimal execution role and an EventBridge schedule (`var.purge_schedule`,
