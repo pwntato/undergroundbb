@@ -134,6 +134,17 @@ that bounds how a conversation interleaved within a day. The ordinals are what m
 a thread in display order, and that structure was judged worth the disclosure; it is named here
 because it is genuinely more than the day-level granularity everything else exposes.
 
+**The rotation marker is the second exception, and it discloses a time.** `ROTATION` carries a plaintext
+`StartedAt` at second resolution, because the one-hour staleness deadline that surfaces an abandoned
+rotation to the remaining admins needs sub-day resolution (DESIGN.md, "The rotation marker is the one
+item with a liveness requirement"). It is deleted when the rotation completes, but it has no TTL and a
+stalled rotation (a closed tab nobody resumes) keeps it indefinitely, so a dump can date the removal or
+leave that started one to the second for as long as it stays stalled. The permanent `GENKEY#` link
+written in the same transaction deliberately carries no time, so a completed rotation leaves none
+behind. No row carries a creation time at finer than day resolution except this marker's `StartedAt` and
+a test account's `PROFILE`, whose `CreatedAt` the purge compares against its cutoff; a real member's
+`MEMBER#` row keeps only its UTC day, because the successor claim reads it as the join date.
+
 **This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` in the *user's* own
 partition. That is a per-user timeline rather than a per-group one, and it spans every group the
 user belongs to, so it is a distinct disclosure from "what day something was posted in this group" —

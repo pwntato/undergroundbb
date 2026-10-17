@@ -65,7 +65,8 @@ func (c *Client) Ping(ctx context.Context) error {
 // a row may carry (THREAT_MODEL holds creation time to day granularity at
 // most). Only a MEMBER# row keeps one, because the successor claim reads it
 // as the join date (handlers/claim.go); every other row leaves CreatedAt
-// unset (#147, #258).
+// unset (#147, #258), except a test account's PROFILE, whose full-resolution
+// value the purge compares against its cutoff (Register).
 func utcDay(t time.Time) string {
 	return t.UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 }
