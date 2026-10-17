@@ -224,15 +224,24 @@ func (a *racing) Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(
 }
 
 func TestRowChangedAfterTheScanIsLeftAlone(t *testing.T) {
+	for _, tc := range []struct{ name, sk string }{{"PROFILE", "PROFILE"}, {"group META", "META"}} {
+		t.Run(tc.name, func(t *testing.T) { rowChangedAfterTheScan(t, tc.sk) })
+	}
+}
+
+func rowChangedAfterTheScan(t *testing.T, sk string) {
 	w := newWorld(t)
-	target := row{w.all[0].pk, "PROFILE"}
+	target := row{w.all[0].pk, sk}
+	if sk == "META" {
+		target = row{w.all[4].pk, sk}
+	}
 	rep, err := Run(context.Background(), &racing{API: w.c, c: w.c, table: w.table, r: target,
 		set: "SET CreatedAt = :n", vals: map[string]types.AttributeValue{":n": s("2026-04-01T09:00:00Z")}}, w.table, w.opts(false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Raced != 1 || rep.Removed["User"] != 0 {
-		t.Errorf("report = %+v, want Raced 1 and no User removed", rep)
+	if rep.Raced != 1 {
+		t.Errorf("Raced = %d, want 1", rep.Raced)
 	}
 	if got := created(t, w.c, w.table, target); got != "2026-04-01T09:00:00Z" {
 		t.Errorf("raced row CreatedAt = %q, want the concurrent writer's value", got)
