@@ -3,6 +3,8 @@
 /lambda.zip
 /purge.zip
 /purge-pkg/
+/backfill.zip
+/backfill-pkg/
 *.test
 vectors.log
 # Root-anchored: ignores a stray compiled binary from
