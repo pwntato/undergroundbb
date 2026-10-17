@@ -197,12 +197,15 @@ func TestDryRunReportsTheSameAndWritesNothing(t *testing.T) {
 	}
 }
 
-// racing changes a row's CreatedAt between the scan and the write.
+// racing changes a row between the scan and the write: set is the update
+// expression, vals its values.
 type racing struct {
 	API
 	c     *dynamodb.Client
 	table string
 	r     row
+	set   string
+	vals  map[string]types.AttributeValue
 	done  bool
 }
 
@@ -213,8 +216,8 @@ func (a *racing) Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(
 		_, err = a.c.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName:                 aws.String(a.table),
 			Key:                       map[string]types.AttributeValue{"PK": s(a.r.pk), "SK": s(a.r.sk)},
-			UpdateExpression:          aws.String("SET CreatedAt = :n"),
-			ExpressionAttributeValues: map[string]types.AttributeValue{":n": s("2026-04-01T09:00:00Z")},
+			UpdateExpression:          aws.String(a.set),
+			ExpressionAttributeValues: a.vals,
 		})
 	}
 	return out, err
@@ -223,7 +226,8 @@ func (a *racing) Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(
 func TestRowChangedAfterTheScanIsLeftAlone(t *testing.T) {
 	w := newWorld(t)
 	target := row{w.all[0].pk, "PROFILE"}
-	rep, err := Run(context.Background(), &racing{API: w.c, c: w.c, table: w.table, r: target}, w.table, w.opts(false))
+	rep, err := Run(context.Background(), &racing{API: w.c, c: w.c, table: w.table, r: target,
+		set: "SET CreatedAt = :n", vals: map[string]types.AttributeValue{":n": s("2026-04-01T09:00:00Z")}}, w.table, w.opts(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,6 +236,25 @@ func TestRowChangedAfterTheScanIsLeftAlone(t *testing.T) {
 	}
 	if got := created(t, w.c, w.table, target); got != "2026-04-01T09:00:00Z" {
 		t.Errorf("raced row CreatedAt = %q, want the concurrent writer's value", got)
+	}
+}
+
+// A profile that becomes a test account after the scan keeps its CreatedAt
+// even though that value is unchanged.
+func TestProfileFlaggedAsTestAfterTheScanIsLeftAlone(t *testing.T) {
+	w := newWorld(t)
+	target := row{w.all[0].pk, "PROFILE"}
+	api := &racing{API: w.c, c: w.c, table: w.table, r: target,
+		set: "SET TestAccount = :t", vals: map[string]types.AttributeValue{":t": &types.AttributeValueMemberBOOL{Value: true}}}
+	rep, err := Run(context.Background(), api, w.table, w.opts(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Raced != 1 {
+		t.Errorf("Raced = %d, want 1", rep.Raced)
+	}
+	if got := created(t, w.c, w.table, target); got != fullRes {
+		t.Errorf("CreatedAt = %q, want it kept (%q)", got, fullRes)
 	}
 }
 
