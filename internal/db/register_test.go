@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -108,6 +109,33 @@ func TestRegisterWritesAllThreeItems(t *testing.T) {
 	}
 	if claim.Item == nil {
 		t.Error("CLAIM item was not written")
+	}
+
+	// #147: no registration time on any row of a real account.
+	for name, item := range map[string]map[string]types.AttributeValue{"PROFILE": user.Item, "RECOVERY": recovery.Item, "CLAIM": claim.Item} {
+		if _, has := item["CreatedAt"]; has {
+			t.Errorf("%s row carries CreatedAt; see issue #147", name)
+		}
+	}
+}
+
+// TestRegisterTestAccountKeepsCreatedAt pins the one deliberate exception to
+// #147: the purge sorts and compares test accounts by their creation time.
+func TestRegisterTestAccountKeepsCreatedAt(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+
+	in := testRegisterInput("test-register-ta-"+randomSuffix(t), "zz-delete-test-"+randomSuffix(t))
+	in.TestAccount = true
+	if err := c.Register(ctx, in); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	user, err := c.ddb.GetItem(ctx, getItemInput(c.table, "USER#"+in.UserID, "PROFILE"))
+	if err != nil {
+		t.Fatalf("GetItem PROFILE: %v", err)
+	}
+	if _, has := user.Item["CreatedAt"]; !has {
+		t.Error("test account PROFILE has no CreatedAt; the purge needs it")
 	}
 }
 

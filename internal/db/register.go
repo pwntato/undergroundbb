@@ -85,12 +85,16 @@ type RegisterInput struct {
 func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	// CreatedAt is left UNSET on every row here except a test account's
+	// PROFILE (#147): a full-resolution registration time is a timing leak
+	// beyond THREAT_MODEL's day granularity, and nothing reads it for real
+	// users. The purge needs it for test accounts only, which are
+	// disposable by design.
 	user := models.User{
 		Record: models.Record{
-			PK:        "USER#" + in.UserID,
-			SK:        "PROFILE",
-			Type:      "User",
-			CreatedAt: now,
+			PK:   "USER#" + in.UserID,
+			SK:   "PROFILE",
+			Type: "User",
 		},
 		Username:           in.Username,
 		SigningPublicKey:   in.SigningPublicKey,
@@ -102,6 +106,7 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		TestAccount:        in.TestAccount,
 	}
 	if in.TestAccount {
+		user.CreatedAt = now
 		// Indexed so the purge can find test accounts without a Scan; sorted by
 		// creation time so it can ask only for those older than a cutoff.
 		user.GSI1PK = models.TestAccountGSI1PK
@@ -109,10 +114,9 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	}
 	recovery := models.Recovery{
 		Record: models.Record{
-			PK:        "USER#" + in.UserID,
-			SK:        "RECOVERY",
-			Type:      "Recovery",
-			CreatedAt: now,
+			PK:   "USER#" + in.UserID,
+			SK:   "RECOVERY",
+			Type: "Recovery",
 		},
 		Salt:                 in.RecoverySalt,
 		Argon2Params:         in.RecoveryArgon2Params,
@@ -124,10 +128,9 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 	}
 	claim := models.UsernameClaim{
 		Record: models.Record{
-			PK:        "USERNAME#" + in.UsernameLower,
-			SK:        "CLAIM",
-			Type:      "UsernameClaim",
-			CreatedAt: now,
+			PK:   "USERNAME#" + in.UsernameLower,
+			SK:   "CLAIM",
+			Type: "UsernameClaim",
 		},
 		UserID: in.UserID,
 	}
