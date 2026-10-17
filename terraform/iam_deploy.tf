@@ -670,62 +670,6 @@ resource "aws_iam_role_policy" "deploy_purge" {
   policy = data.aws_iam_policy_document.deploy_purge.json
 }
 
-# Grants for the one-off CreatedAt backfill Lambda (backfill.tf): its role,
-# function and log group. A SEPARATE policy resource for the same self-grant
-# ordering reason as deploy_purge above: every backfill.tf resource
-# depends_on this policy, and this document must not reference any
-# backfill.tf resource (ARNs are built from local.backfill_name). The first
-# apply can fail once on IAM propagation; a retry passes. Removed with
-# backfill.tf.
-data "aws_iam_policy_document" "deploy_backfill" {
-  statement {
-    actions = [
-      "iam:CreateRole",
-      "iam:DeleteRole",
-      "iam:TagRole",
-      "iam:UntagRole",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:PutRolePolicy",
-      "iam:DeleteRolePolicy",
-    ]
-    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.backfill_name}"]
-  }
-
-  statement {
-    actions   = ["iam:PassRole"]
-    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.backfill_name}"]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["lambda.amazonaws.com"]
-    }
-  }
-
-  # The web Lambda's function actions minus function URLs, event invoke config
-  # and concurrency, none of which the backfill uses.
-  statement {
-    actions = [
-      "lambda:GetFunction",
-      "lambda:GetFunctionCodeSigningConfig",
-      "lambda:GetPolicy",
-      "lambda:ListVersionsByFunction",
-      "lambda:CreateFunction",
-      "lambda:UpdateFunctionCode",
-      "lambda:UpdateFunctionConfiguration",
-      "lambda:DeleteFunction",
-      "lambda:TagResource",
-      "lambda:UntagResource",
-    ]
-    resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.backfill_name}"]
-  }
-}
-
-resource "aws_iam_role_policy" "deploy_backfill" {
-  name   = "undergroundbb-deploy-backfill"
-  role   = aws_iam_role.deploy.id
-  policy = data.aws_iam_policy_document.deploy_backfill.json
-}
-
 output "deploy_role_arn" {
   value       = aws_iam_role.deploy.arn
   description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub Actions environment secret (production)."
