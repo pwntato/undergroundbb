@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -145,6 +146,21 @@ func TestCreateGroupWritesAllThreeItems(t *testing.T) {
 	}
 	if grant.GrantedRole != models.RoleAdmin {
 		t.Errorf("root grant GrantedRole = %q, want %q", grant.GrantedRole, models.RoleAdmin)
+	}
+
+	// #147: no creation time on META or the root grant; the creator's
+	// membership carries only the UTC day.
+	for name, item := range map[string]map[string]types.AttributeValue{"META": metaOut.Item, "root grant": grantOut.Item} {
+		if _, has := item["CreatedAt"]; has {
+			t.Errorf("%s row carries CreatedAt; see issue #147", name)
+		}
+	}
+	joined, err := time.Parse(time.RFC3339, membership.CreatedAt)
+	if err != nil {
+		t.Fatalf("MEMBER# CreatedAt %q: %v", membership.CreatedAt, err)
+	}
+	if !joined.Equal(joined.UTC().Truncate(24 * time.Hour)) {
+		t.Errorf("MEMBER# CreatedAt = %q, want midnight UTC", membership.CreatedAt)
 	}
 }
 

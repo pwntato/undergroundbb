@@ -116,14 +116,18 @@ type CreateGroupInput struct {
 // attempt including a resumed one (PR #142 round 2 review: the caller must
 // never echo back an address nothing was written under).
 func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	// CreatedAt is left UNSET on the group META and the root grant (#147):
+	// nothing reads it, and a full-resolution creation time is a timing leak
+	// beyond THREAT_MODEL's day granularity. The creator's membership keeps
+	// a CreatedAt, truncated to the UTC day, because the successor claim
+	// reads it as the join date (handlers/claim.go) and compares by day.
+	joinedDay := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
 	group := models.Group{
 		Record: models.Record{
-			PK:        "GROUP#" + in.GroupID,
-			SK:        "META",
-			Type:      "Group",
-			CreatedAt: now,
+			PK:   "GROUP#" + in.GroupID,
+			SK:   "META",
+			Type: "Group",
 		},
 		CreatorUserID:           in.CreatorUserID,
 		CreatorSigningPublicKey: in.CreatorSigningPublicKey,
@@ -154,7 +158,7 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 			PK:        "GROUP#" + in.GroupID,
 			SK:        "MEMBER#" + in.CreatorUserID,
 			Type:      "Membership",
-			CreatedAt: now,
+			CreatedAt: joinedDay,
 			GSI1PK:    "USER#" + in.CreatorUserID,
 			GSI1SK:    "GROUP#" + in.GroupID,
 		},
@@ -166,10 +170,9 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 
 	grant := models.RoleGrant{
 		Record: models.Record{
-			PK:        "GROUP#" + in.GroupID,
-			SK:        in.RootGrantSortKey,
-			Type:      "RoleGrant",
-			CreatedAt: now,
+			PK:   "GROUP#" + in.GroupID,
+			SK:   in.RootGrantSortKey,
+			Type: "RoleGrant",
 		},
 		SubjectUserID:           in.CreatorUserID,
 		GrantedRole:             models.RoleAdmin,
