@@ -88,6 +88,11 @@ data "aws_iam_policy_document" "deploy_policy" {
       "iam:GetRolePolicy",
       "iam:ListAttachedRolePolicies",
       "iam:ListRolePolicies",
+      # aws_iam_role's delete always lists the role's instance profiles first
+      # (provider deleteRole -> deleteRoleInstanceProfiles), and any error but
+      # NoSuchEntity aborts it, so destroying or replacing a role needs this.
+      # No role had been destroyed before the backfill's (#253).
+      "iam:ListInstanceProfilesForRole",
       "iam:GetOpenIDConnectProvider",
       # data.aws_iam_openid_connect_provider resolves the provider's URL to
       # an ARN via ListOpenIDConnectProviders before GetOpenIDConnectProvider
