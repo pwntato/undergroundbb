@@ -67,6 +67,12 @@ func TestLeaveRotatingGroupWritesOnlyTheSignedMarker(t *testing.T) {
 	if marker == nil || numAttr(marker, "Generation") != "1" || strAttr(marker, "StartedBy") != carol.userID || strAttr(marker, "RemovedUserID") != carol.userID {
 		t.Fatalf("marker = %v", marker)
 	}
+	if _, has := marker["CreatedAt"]; has {
+		t.Error("leave marker carries CreatedAt; see issue #258")
+	}
+	if strAttr(marker, "StartedAt") == "" {
+		t.Error("leave marker has no StartedAt; the staleness deadline needs it")
+	}
 	if got := bytesAttrB64(marker, "StartSignature"); got != body.Rotation.StartSignature {
 		t.Errorf("marker StartSignature = %q, want %q", got, body.Rotation.StartSignature)
 	}

@@ -47,13 +47,14 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 		linkIndex   = 1
 		callerIndex = 2
 	)
+	// CreatedAt is unset on both rows; the marker's StartedAt stays (see
+	// RemoveMember) (#258).
 	now := time.Now().UTC().Format(time.RFC3339)
 	marker, err := attributevalue.MarshalMap(models.Rotation{
 		Record: models.Record{
-			PK:        "GROUP#" + in.GroupID,
-			SK:        RotationSortKey,
-			Type:      "Rotation",
-			CreatedAt: now,
+			PK:   "GROUP#" + in.GroupID,
+			SK:   RotationSortKey,
+			Type: "Rotation",
 		},
 		Generation:     in.CurrentGeneration + 1,
 		StartedAt:      now,
@@ -66,10 +67,9 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 	}
 	link, err := attributevalue.MarshalMap(models.GenerationKey{
 		Record: models.Record{
-			PK:        "GROUP#" + in.GroupID,
-			SK:        GenKeySortKey(in.CurrentGeneration),
-			Type:      "GenerationKey",
-			CreatedAt: now,
+			PK:   "GROUP#" + in.GroupID,
+			SK:   GenKeySortKey(in.CurrentGeneration),
+			Type: "GenerationKey",
 		},
 		Wrapped:        in.Link,
 		RemoverUserID:  in.CallerUserID,

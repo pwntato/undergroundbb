@@ -94,6 +94,9 @@ func TestReadmitEndpoint(t *testing.T) {
 	if strAttr(row, "InviterUserID") != owner.userID || strAttr(row, "InviteID") != ok.InviteID || strAttr(row, "Day") != ok.Day {
 		t.Fatalf("the stored admission is not the owner's fresh one: %v", row)
 	}
+	if _, has := row["CreatedAt"]; has {
+		t.Error("re-admitted admission carries CreatedAt; see issue #258")
+	}
 }
 
 func setGrantSortKey(t *testing.T, gid, userID, ref string) {

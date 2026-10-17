@@ -494,13 +494,13 @@ func (c *Client) deleteOwnInvites(ctx context.Context, groupID, userID string) e
 // RemovedUserID are both the leaver: that pair is how a marker no admin has
 // taken over yet is recognised (TakeOverLeaveRotation, and every client).
 func (c *Client) leaveMarker(groupID, leaver string, rot *LeaveRotation) (types.TransactWriteItem, error) {
+	// CreatedAt is unset; StartedAt stays (see RemoveMember) (#258).
 	now := time.Now().UTC().Format(time.RFC3339)
 	marker, err := attributevalue.MarshalMap(models.Rotation{
 		Record: models.Record{
-			PK:        "GROUP#" + groupID,
-			SK:        RotationSortKey,
-			Type:      "Rotation",
-			CreatedAt: now,
+			PK:   "GROUP#" + groupID,
+			SK:   RotationSortKey,
+			Type: "Rotation",
 		},
 		Generation:     rot.CurrentGeneration + 1,
 		StartedAt:      now,

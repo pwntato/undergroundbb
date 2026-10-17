@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 )
@@ -94,6 +95,14 @@ func TestTakeOverEndpointMintsTheAdminsRotation(t *testing.T) {
 	link := getRow(t, "GROUP#"+f.gid, "GENKEY#000000")
 	if strAttr(link, "RemoverUserID") != f.owner.userID || strAttr(link, "RemovedUserID") != f.carol.userID {
 		t.Fatalf("link = %v", link)
+	}
+	for name, row := range map[string]map[string]types.AttributeValue{"marker": m, "link": link} {
+		if _, has := row["CreatedAt"]; has {
+			t.Errorf("takeover %s carries CreatedAt; see issue #258", name)
+		}
+	}
+	if strAttr(m, "StartedAt") == "" {
+		t.Error("takeover marker has no StartedAt; the staleness deadline needs it")
 	}
 	if getRow(t, "GROUP#"+f.gid, "ADMISSION#"+f.carol.userID) != nil {
 		t.Error("the takeover left the leaver's admission behind")

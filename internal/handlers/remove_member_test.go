@@ -322,6 +322,13 @@ func TestRemoveMemberRotatingStartsRotation(t *testing.T) {
 	if _, ttl := link["TTL"]; ttl {
 		t.Error("chain link carries a TTL")
 	}
+	// #258: neither row carries a creation time; the marker keeps StartedAt,
+	// which the staleness deadline needs.
+	for name, row := range map[string]map[string]types.AttributeValue{"marker": marker, "chain link": link} {
+		if _, has := row["CreatedAt"]; has {
+			t.Errorf("%s carries CreatedAt; see issue #258", name)
+		}
+	}
 	// The removal record outlives the marker: it is also on the durable chain
 	// link, where a verifier holding a later generation finds it (#178).
 	if strAttr(link, "RemoverUserID") != owner.userID || strAttr(link, "RemovedUserID") != bob.userID {
