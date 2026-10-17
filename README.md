@@ -263,8 +263,18 @@ that nothing schedules. It coarsens the full-resolution `CreatedAt` on rows writ
 (removed on real accounts' PROFILE, RECOVERY, username claims, group META and role grants; MEMBER#
 truncated to its UTC day; test accounts' PROFILE left alone). It is a dry run unless
 `var.backfill_dry_run` is `false`, and an invocation payload (`{"dryRun": true}`) can force a dry run
-but never turn writing on. The report is the response and a `backfill report:` log line. Its zip is
-built like the purge's (`backfill-pkg/bootstrap` into `backfill.zip`). Delete it once the run is done.
+but never turn writing on. The report is the response and a `backfill report:` log line, and a
+membership whose `CreatedAt` does not parse is logged by key and counted as `unparsed`. Its zip is
+built like the purge's (`backfill-pkg/bootstrap` into `backfill.zip`). Invoke it with the CLI's read
+timeout off, because the default 60s timeout retries a synchronous invoke, which would start a second
+run and return that run's smaller counts instead of the real one:
+
+```sh
+aws lambda invoke --function-name "$(terraform output -raw backfill_function_name)" \
+  --cli-read-timeout 0 --cli-binary-format raw-in-base64-out --payload '{}' out.json && cat out.json
+```
+
+Delete it once the run is done.
 
 **The test-account purge** is a second Lambda (`cmd/purge`, `terraform/purge.tf`) that deletes accounts
 created by automated smoke tests (reserved `zz-delete-test-` username prefix) and everything they

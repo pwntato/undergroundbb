@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -41,6 +42,10 @@ type Report struct {
 	// accounts' PROFILE (the purge needs it), MEMBER# rows already at midnight
 	// UTC, and rows of any other Type.
 	Kept int `json:"kept"`
+	// Unparsed counts MEMBER# rows whose CreatedAt is not RFC 3339. They are
+	// left alone, but the successor claim already refuses such a row
+	// (designation_before_join), so each is logged by key to be looked at.
+	Unparsed int `json:"unparsed"`
 	// Raced counts rows that changed between the scan and the write; the
 	// conditional update refused them and a rerun picks them up.
 	Raced int `json:"raced"`
@@ -63,6 +68,7 @@ const (
 	keep action = iota
 	remove
 	truncate
+	unparsed
 )
 
 // decide classifies a scanned row. day is the UTC-midnight form of its
@@ -78,7 +84,7 @@ func decide(item map[string]types.AttributeValue) (act action, typ, day string) 
 		// day, so it keeps the day and loses the time.
 		t, err := time.Parse(time.RFC3339, created)
 		if err != nil {
-			return keep, typ, ""
+			return unparsed, typ, ""
 		}
 		d := t.UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 		if d == created {
@@ -126,6 +132,11 @@ func Run(ctx context.Context, api API, table string, opts Options) (Report, erro
 		for _, item := range out.Items {
 			rep.Scanned++
 			act, typ, day := decide(item)
+			if act == unparsed {
+				rep.Unparsed++
+				log.Printf("backfill: %s/%s has a CreatedAt that is not RFC 3339: %q", strAttr(item, "PK"), strAttr(item, "SK"), strAttr(item, "CreatedAt"))
+				continue
+			}
 			if act == keep {
 				rep.Kept++
 				continue

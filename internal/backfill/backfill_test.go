@@ -120,6 +120,8 @@ func newWorld(t *testing.T) world {
 	add(seed(t, c, table, "GROUP#bf-"+id, "MEMBER#b", "Membership", dayRes, nil), dayRes)
 	// Out of scope for #147's backfill: left exactly as written.
 	add(seed(t, c, table, "GROUP#bf-"+id, "ADMISSION#a", "Admission", fullRes, nil), fullRes)
+	// Left alone, but reported on its own so a dry run shows it.
+	add(seed(t, c, table, "GROUP#bf-"+id, "MEMBER#c", "Membership", "yesterday", nil), "yesterday")
 	// No CreatedAt to begin with: the scan filter never returns it.
 	add(seed(t, c, table, "GROUP#bf-"+id, "GRANT#other", "RoleGrant", "", nil), "")
 	return w
@@ -151,8 +153,8 @@ func TestRunBackfillsEachRowType(t *testing.T) {
 		t.Errorf("Removed = %v, want %v", rep.Removed, wantRemoved)
 	}
 	// Kept: the test profile, the midnight membership and the admission.
-	if rep.Truncated != 1 || rep.Kept != 3 || rep.Raced != 0 || rep.Scanned != 9 {
-		t.Errorf("report = %+v, want Truncated 1, Kept 3, Raced 0, Scanned 9", rep)
+	if rep.Truncated != 1 || rep.Kept != 3 || rep.Unparsed != 1 || rep.Raced != 0 || rep.Scanned != 10 {
+		t.Errorf("report = %+v, want Truncated 1, Kept 3, Unparsed 1, Raced 0, Scanned 10", rep)
 	}
 }
 
@@ -291,7 +293,7 @@ func TestDecide(t *testing.T) {
 		{"membership", item("Membership", fullRes, nil), truncate, dayRes},
 		{"membership in a non-UTC offset", item("Membership", "2026-03-04T22:30:00-08:00", nil), truncate, "2026-03-05T00:00:00Z"},
 		{"membership at midnight", item("Membership", dayRes, nil), keep, ""},
-		{"membership unparseable", item("Membership", "not a time", nil), keep, ""},
+		{"membership unparseable", item("Membership", "not a time", nil), unparsed, ""},
 		{"rotation", item("Rotation", fullRes, nil), keep, ""},
 	}
 	for _, tt := range tests {
