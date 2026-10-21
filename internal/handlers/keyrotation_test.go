@@ -1078,6 +1078,37 @@ func TestRotateKeysTransactionRefusesWhatHasMovedUnderIt(t *testing.T) {
 	}
 	unchanged(t, 1)
 
+	// Signed against epoch 0 while the account is at 1 is stale on the PROFILE
+	// condition alone, once the KEYCHANGE# row that would also refuse it is out
+	// of the way.
+	deleteRow(t, "USER#"+user.userID, db.KeyChangeSortKey(1))
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.ExpectedKeyEpoch = 0 })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("epoch 0 signed, 1 held, no KEYCHANGE# row in the way: %v, want ErrKeyEpochStale", err)
+	}
+	if u, _ := h.db.GetUserByID(ctx, user.userID); u.KeyEpoch != 1 {
+		t.Errorf("KeyEpoch = %d after the refused request, want 1", u.KeyEpoch)
+	}
+
+	// PROFILE and RECOVERY each carry the credential version; either one being
+	// behind refuses the rotation.
+	cv, cvCookie := loggedInUser(t, h)
+	_ = cvCookie
+	setProfileAttr(t, cv.userID, "PROFILE", "CredentialVersion", 5)
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, cv.userID, func(in *db.RotateKeysInput) { in.Credentials.ExpectedCredentialVersion = 1 })); !errors.Is(err, db.ErrCredentialVersionStale) {
+		t.Errorf("PROFILE ahead of the version signed against: %v, want ErrCredentialVersionStale", err)
+	}
+	if getRow(t, "USER#"+cv.userID, db.KeyChangeSortKey(1)) != nil {
+		t.Error("the refused rotation wrote a KEYCHANGE# row")
+	}
+
+	// A tombstoned account is refused on PROFILE's own condition, with its
+	// RECOVERY item still in place.
+	tomb, _ := loggedInUser(t, h)
+	setProfileAttrS(t, tomb.userID, "DeletedAt", "2026-01-01T00:00:00Z")
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, tomb.userID, nil)); !errors.Is(err, db.ErrUserNotFound) {
+		t.Errorf("a tombstoned PROFILE with RECOVERY intact: %v, want ErrUserNotFound", err)
+	}
+
 	// A deleted account is refused by the transaction itself.
 	gone, goneCookie := loggedInUser(t, h)
 	if rec := doJSON(t, h, http.MethodDelete, "/api/account", goneCookie, nil); rec.Code != http.StatusOK {
@@ -1088,5 +1119,56 @@ func TestRotateKeysTransactionRefusesWhatHasMovedUnderIt(t *testing.T) {
 	}
 	if getRow(t, "USER#"+gone.userID, db.KeyChangeSortKey(1)) != nil {
 		t.Error("a deleted account got a KEYCHANGE# row")
+	}
+}
+
+func setProfileAttr(t *testing.T, userID, sk, attr string, n int) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression:          aws.String("SET " + attr + " = :v"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberN{Value: strconv.Itoa(n)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setProfileAttrS(t *testing.T, userID, attr, v string) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression:          aws.String("SET " + attr + " = :v"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberS{Value: v}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A handoff row is refused when the account's wrapping key is not the one the
+// handler compared it against: a rotation committed between the read and the
+// write, and the row would otherwise land beside keys it was not made for.
+func TestPutHandoffTransactionRefusesAKeyThatMovedUnderIt(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, user, cookie)
+	err := h.db.PutHandoff(t.Context(), db.PutHandoffInput{
+		UserID: user.userID, GroupID: gid, Generation: 0,
+		NewWrappingPublicKey: randBytes(32),
+		WrappedGroupKey:      models.WrappedKey{EphemeralPub: randBytes(32), Nonce: randBytes(12), Ciphertext: randBytes(48)},
+		CurrentWrappingKey:   randBytes(32), // not the account's
+	})
+	if !errors.Is(err, db.ErrHandoffAccountChanged) {
+		t.Fatalf("a stale current key: %v, want ErrHandoffAccountChanged", err)
+	}
+	if handoffRowExists(t, user.userID, gid) {
+		t.Error("the refused write left a row")
 	}
 }
