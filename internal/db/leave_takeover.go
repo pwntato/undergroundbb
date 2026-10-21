@@ -125,6 +125,12 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 		// The caller's re-wrap is to the key they hold now (#62); last, so no
 		// index above shifts.
 		c.keyEpochCheck(in.CallerUserID, in.CallerKeyEpoch),
+		// A takeover is a start like a removal's: it consumes the caller's
+		// handoff row for this group, in the same transaction.
+		{Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key:       handoffKey(in.CallerUserID, in.GroupID),
+		}},
 	}
 	const epochIndex = 4
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {

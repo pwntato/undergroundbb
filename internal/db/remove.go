@@ -274,7 +274,17 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 	epochIndex := -1
 	if rotating {
 		epochIndex = len(items)
-		items = append(items, c.keyEpochCheck(in.RemoverUserID, in.Rotation.RemoverKeyEpoch))
+		items = append(items,
+			c.keyEpochCheck(in.RemoverUserID, in.Rotation.RemoverKeyEpoch),
+			// The start is the self re-key a committed key rotation's handoff row
+			// exists for, so the row goes with it, in this transaction: a crash
+			// cannot leave a used row behind to block the next rotation. Deleting
+			// a row that is not there is not a failure.
+			types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(c.table),
+				Key:       handoffKey(in.RemoverUserID, in.GroupID),
+			}},
+		)
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {

@@ -825,3 +825,151 @@ func TestDeleteAccountSweepsHandoffAndCooldownRowsButKeepsTheChain(t *testing.T)
 		t.Error("account deletion removed the KEYCHANGE# chain, which the tombstone keeps")
 	}
 }
+
+// rotateUser rotates user's keys through the endpoint, writing a handoff row
+// for each group they administer first, and returns the account as it reads
+// afterwards with a session for it.
+func rotateUser(t *testing.T, h *Handler, user registeredUser, cookie *http.Cookie, adminGroups ...string) (registeredUser, *http.Cookie) {
+	t.Helper()
+	newWrap := randBytes(32)
+	for _, gid := range adminGroups {
+		gen, err := strconv.ParseInt(numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+user.userID), "Generation"), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A group that has rotated is one past its newest link; the fixtures
+		// here keep the admin at that generation.
+		if rec := doPutHandoff(t, h, cookie, gid, handoffBody(newWrap, gen)); rec.Code != http.StatusNoContent {
+			t.Fatalf("handoff for %s: %d %s", gid, rec.Code, rec.Body.String())
+		}
+	}
+	rot := signedRotation(t, user, rotateOpts{newWrap: newWrap})
+	if rec := doRotateKeys(t, h, cookie, rot.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body.String())
+	}
+	return rot.next, loginCookie(t, h, rot.next)
+}
+
+func wrapEpochOf(t *testing.T, gid, userID string) string {
+	t.Helper()
+	row := getRow(t, "GROUP#"+gid, "MEMBER#"+userID)
+	if _, has := row["WrapEpoch"]; !has {
+		return "absent"
+	}
+	return numAttr(row, "WrapEpoch")
+}
+
+func TestGroupCreatedByARotatedUserIsNotDormant(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	plain := createPrivateGroup(t, h, user, cookie)
+	if got := wrapEpochOf(t, plain, user.userID); got != "absent" {
+		t.Errorf("a never-rotated creator's WrapEpoch = %s, want it absent", got)
+	}
+	next, nextCookie := rotateUser(t, h, user, cookie, plain)
+	// Their entry in the first group is now dormant (WrapEpoch 0 < KeyEpoch 1);
+	// a group created after the rotation must not be.
+	gid := createPrivateGroup(t, h, next, nextCookie)
+	if got := wrapEpochOf(t, gid, next.userID); got != "1" {
+		t.Errorf("a rotated creator's WrapEpoch = %s, want 1", got)
+	}
+	if got := wrapEpochOf(t, plain, next.userID); got != "absent" {
+		t.Errorf("the pre-rotation membership's WrapEpoch = %s, want it left alone", got)
+	}
+}
+
+func TestCompleteInviteForAnInviteeWhoRotatedAfterAccepting(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, h)
+	inviteeCookie := loginCookie(t, h, invitee)
+	rotateUser(t, h, invitee, inviteeCookie)
+
+	adm := signedAdmission(t, h, creator, groupID, inviteID, invitee)
+	rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "invitee_keys_changed" {
+		t.Fatalf("complete: %d %s, want 409 invitee_keys_changed", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+groupID, "MEMBER#"+invitee.userID) != nil {
+		t.Error("a membership was written for keys the invitee no longer holds")
+	}
+	// The invite can never complete, so its rows are cleared instead of left as a
+	// zombie in pending-completions.
+	if getRow(t, "INVITE#"+inviteID, "META") != nil || getRow(t, "USER#"+creator.userID, "SENT#"+inviteID) != nil {
+		t.Error("the unfinishable invite's rows were left behind")
+	}
+}
+
+func TestCompleteInviteForAnInviteeWhoRotatedBeforeAccepting(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+	invitee, inviteeCookie := loggedInUser(t, h)
+	next, nextCookie := rotateUser(t, h, invitee, inviteeCookie)
+	_ = inviteeCookie
+
+	if rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/accept", nextCookie, signedAcceptInviteRequest(t, next, inviteID)); rec.Code != http.StatusOK {
+		t.Fatalf("accept: %d %s", rec.Code, rec.Body.String())
+	}
+	adm := signedAdmission(t, h, creator, groupID, inviteID, next)
+	if rec := doJSON(t, h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm)); rec.Code != http.StatusOK {
+		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := wrapEpochOf(t, groupID, next.userID); got != "1" {
+		t.Errorf("WrapEpoch = %s, want 1: the wrap went to the key they hold", got)
+	}
+}
+
+func TestRewrapEndpointRefusesADormantMemberAndAStaleEpoch(t *testing.T) {
+	f := startRotation(t) // owner at generation 1; carol and dave at 0
+	carolNext, _ := rotateUser(t, f.h, f.carol, loginCookie(t, f.h, f.carol))
+
+	req := rewrapReq(1, f.dave, carolNext)
+	req.Wraps[1].WrapEpoch = 1 // wrapped to the key carol holds now
+	rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "member_dormant" {
+		t.Fatalf("dormant: %d %s, want 409 member_dormant", rec.Code, rec.Body.String())
+	}
+	req.Wraps[1].WrapEpoch = 0 // wrapped to the key carol replaced
+	rec = doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "wrap_epoch_stale" {
+		t.Fatalf("stale: %d %s, want 409 wrap_epoch_stale", rec.Code, rec.Body.String())
+	}
+	if memberGen(t, f.gid, f.dave) != "0" || memberGen(t, f.gid, f.carol) != "0" {
+		t.Error("a refused batch moved a member")
+	}
+	// Without carol the batch is fine, and the rotation completes around her.
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, f.dave)); rec.Code != http.StatusNoContent {
+		t.Fatalf("without the dormant member: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
+		t.Fatalf("complete around the dormant member: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A rotated admin's own entry is dormant until a start brings it current, and
+// the start consumes their handoff row in the same transaction.
+func TestStartByARotatedAdminBringsTheirEntryCurrentAndConsumesTheHandoff(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	victim := registerTestUser(t, h)
+	addMember(t, gid, victim, "member")
+
+	next, nextCookie := rotateUser(t, h, owner, ownerCookie, gid)
+	if !handoffRowExists(t, owner.userID, gid) {
+		t.Fatal("no handoff row after the rotation")
+	}
+	if got := wrapEpochOf(t, gid, owner.userID); got != "absent" {
+		t.Fatalf("WrapEpoch before the re-key = %s, want it absent (dormant)", got)
+	}
+	if rec := doRemove(t, h, nextCookie, gid, victim.userID, &removeMemberRequest{Rotation: rotationBody(t, next, gid, victim.userID, 1)}); rec.Code != http.StatusNoContent {
+		t.Fatalf("re-key: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := wrapEpochOf(t, gid, owner.userID); got != "1" {
+		t.Errorf("WrapEpoch after the re-key = %s, want 1", got)
+	}
+	if handoffRowExists(t, owner.userID, gid) {
+		t.Error("the start left the handoff row behind")
+	}
+}
