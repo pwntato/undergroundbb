@@ -28,5 +28,9 @@ export default defineConfig({
     // Crypto runs in a worker; keeping the target modern avoids downlevelling
     // the WASM glue code.
     target: 'es2022',
+    // The single bundle is large on purpose: the crypto worker is inlined so the bundle's SRI
+    // hash covers it (#248). Vite's warning recommends code-splitting, which would emit chunks
+    // the SRI plugin refuses to build. Raise this only with a matching change in plugins/sri.ts.
+    chunkSizeWarningLimit: 1000,
   },
 })

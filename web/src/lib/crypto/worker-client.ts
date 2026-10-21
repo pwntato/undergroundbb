@@ -8,6 +8,10 @@
 // this app needs more than one crypto call in flight at a time.
 
 import { DecryptionFailedError } from './aesgcm.js'
+// Inlined into the main bundle (#248): `new Worker(url)` has no integrity option, so a separate
+// worker file could be swapped without the bundle's SRI hash noticing. Inline, the worker bytes
+// are covered by that hash. Needs `worker-src blob:` in the CSP (terraform/cloudfront.tf).
+import CryptoWorker from './worker.ts?worker&inline'
 import { InviteMACError } from './credential-material.js'
 import type {
   ChangePasswordMaterial,
@@ -99,7 +103,7 @@ function reconstructWorkerError(msg: WorkerErrorResponse): Error {
 let worker: Worker | undefined
 
 function getWorker(): Worker {
-  worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+  worker ??= new CryptoWorker()
   return worker
 }
 

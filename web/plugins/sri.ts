@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { Plugin } from 'vite'
@@ -9,8 +9,8 @@ import type { Plugin } from 'vite'
 // modified-JavaScript gap in docs/THREAT_MODEL.md: it catches a tampered file in the bucket or
 // on the CDN, not a tampered index.html, which carries the hashes.
 //
-// It covers only tags in index.html. The crypto worker (and anything it loads) is fetched at
-// runtime by `new Worker(...)`, which has no integrity option, so it is not covered.
+// It covers only tags in index.html. The crypto worker is inlined into the main bundle
+// (`?worker&inline`, #248), so the bundle's hash covers it.
 
 const TAG = /<(?:script|link)\b[^>]*?(?:src|href)="(\/assets\/[^"]+)"[^>]*>/g
 
@@ -40,6 +40,22 @@ export function addIntegrity(
   return out
 }
 
+/**
+ * Throws when an emitted .js file is not one index.html hashes. The crypto worker is inlined
+ * into the main bundle (#248) so that nothing is fetched without a hash; a lazy import, a code
+ * split or a dropped `&inline` would emit an untagged chunk that loads silently, so fail the
+ * build instead. (Do not follow Vite's chunk-size advice to code-split: see
+ * build.chunkSizeWarningLimit in vite.config.ts.)
+ */
+export function assertAllScriptsTagged(
+  emitted: Iterable<string>,
+  tagged: ReadonlySet<string>,
+): void {
+  for (const name of emitted)
+    if (name.endsWith('.js') && !tagged.has(name))
+      throw new Error(`sri: ${name} is emitted but not covered by an integrity tag`)
+}
+
 // Runs in writeBundle, on the files as they are on disk. The chunk code visible to
 // transformIndexHtml is not the final output (the JS bundle's hash computed there did not match
 // the written file, and the browser blocked an untampered app), so hash what is actually served.
@@ -61,6 +77,13 @@ export function subresourceIntegrity(): Plugin {
           if (existsSync(join(dir, name))) files.set(name, readFileSync(join(dir, name)))
         }
         writeFileSync(indexPath, addIntegrity(html, files))
+        const assets = join(dir, 'assets')
+        if (existsSync(assets)) {
+          assertAllScriptsTagged(
+            readdirSync(assets).map((f) => `assets/${f}`),
+            new Set(files.keys()),
+          )
+        }
       },
     },
   }

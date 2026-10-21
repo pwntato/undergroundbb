@@ -35,6 +35,7 @@ const EXPECTED: Record<string, string> = {
 const CSP_DIRECTIVES = [
   "default-src 'none'",
   "script-src 'self' 'wasm-unsafe-eval'",
+  'worker-src blob:',
   "style-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self'",
