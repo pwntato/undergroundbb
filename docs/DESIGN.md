@@ -378,10 +378,12 @@ that `KeyEpoch` is the value it holds, which is also what makes the request sing
 - `RECOVERY`: the new keys wrapped under a **new recovery code**, which the flow makes the user
   store before it completes. The old code unwraps the old keys, which are now worth nothing, but
   leaving it live would leave a second credential nobody is tracking.
-- `KEYCHANGE#<epoch>` under the user's partition: the payload, the roster list behind its digest, and both signatures, written once
-  and never edited. The rows form a chain, each new signing key introduced by the one before it,
-  and they are served in the user projection with the keys. See "What a key change looks like to
-  others."
+- `KEYCHANGE#<epoch>` under the user's partition: the payload, the roster list behind its digest,
+  and both signatures, written once and never edited. The rows form a chain, each new signing key
+  introduced by the one before it. `GET /api/users/:id` serves each row's payload (with the digest)
+  and signatures **but strips the list**, since its length would tell anyone how many people this
+  user has pinned or verified; `GET /api/pins` serves the list to its owner. See "What a key change
+  looks like to others."
 
 `KeyEpoch` is a counter on `PROFILE`, 0 for every account that has never rotated (an absent
 attribute reads as 0), and it is plaintext and served. It orders states: a client that has seen
@@ -434,9 +436,10 @@ longer hold the current key, with no admin action aimed at them.
 **Approval: what the admin does, and when it mints.** The roster shows the dormant member with the
 `KEYCHANGE#` evidence and their fingerprint. Approving replaces the admin's pin deliberately (see the
 pinning section), after the admin has compared the fingerprint with the user out of band, and wraps
-to the new key. This is the step that stops a rotation being an account takeover: someone who
-rotated a victim's keys gets a new key set and no groups, because no admin will wrap to a
-fingerprint the real person did not give them. Whether it also mints a generation is decided by
+to the new key. This is the step that stops a rotation being an account takeover **in groups where the rotated
+user is not an admin**: someone who rotated a victim's keys gets a new key set and no content
+there, because no admin will wrap to a fingerprint the real person did not give them. Where the
+victim is an admin it does not hold; see self-approval below. Whether it also mints a generation is decided by
 state: **it mints exactly when the member's own entry is still at the group's current
 generation**, because then the old keys hold the current key.
 
@@ -470,7 +473,14 @@ that stays so.
 they hold the current group key at rotation time, and what approval protects against is a stranger
 obtaining the key through the rotated identity. Here the approver is the person who just proved
 possession of the old keys, and someone who stole those keys already held an admin's powers in
-that group before rotating, so self-approval grants nothing new. So right after `rotate-keys` the
+that group before rotating, so self-approval grants nothing new **at the moment of rotation**. It does change what they keep:
+the server cannot tell the owner from a thief holding the same keys, so a thief who rotates can run
+this too, and then holds the admin seat under keys only they have, including every future
+generation, while the real owner has no way back in. Dropping self-approval from the flow would not
+prevent that, because the thief can run the same steps from their own client. What recovers it is a
+co-admin, who sees the key change, hears from the owner out of band, and removes that identity; in
+a sole-admin group nobody can, which is the same end state as a sole admin who has lost their
+keys. So right after `rotate-keys` the
 client runs the re-key itself in each `Rotating` group where the user is an admin (the ordinary
 rotation job, with every recipient's pin and admission checks, plus their own new key) and
 self-wraps the current key in each `Open` group where they are an admin. This is what keeps a
@@ -479,6 +489,23 @@ the old keys off at once in those groups. It is a resumable job like any other, 
 `WrapEpoch` state, so a closed tab falls back to the explicit approval by another admin. Other
 members still see the admin's key change through their pins, so it is not silent. Members and
 ambassadors have no such path; they wait for an admin.
+
+**Other admins after an approval.** Once admin X approves dormant member M, M is no longer
+dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check
+fails and M lands in `blocked`: the server will not clear the marker while M is behind, so Y's
+removal cannot finish until Y re-pins M. The same happens to every other admin who pinned a
+self-approved rotating admin. The approval list only shows dormant members, so it would show Y
+nothing. The rule is **fail-closed by default and one explicit action to resolve**: the roster
+lists every member whose served keys fail the viewer's pin and who is not dormant, with an
+**"accept key change"** action. The action is offered with evidence and never taken automatically:
+the verified `KEYCHANGE#` chain from the pinned keys to the served ones (rotation by a holder of the
+pinned key, or no link), the member's fingerprint to compare out of band, and whether the wrap was
+made by another admin or was a self-approval. Accepting replaces that admin's pin, exactly as the
+original approval did. `runRotation` reports such members as their own outcome, "keys changed and
+approved elsewhere; accept them to continue", instead of a plain `blocked`, and still wraps to
+nobody until the admin accepts. A signed approval record by the first approver was considered, so
+that Y could re-pin on X's word; it is not needed to close this stall and adds a delegation the
+pinning section does not otherwise have, so each admin makes their own decision.
 
 **The window, stated plainly.** From the moment of rotation until an admin acts in a group, the old
 keys keep reading that group's new content, `Rotating` included, because the generation in use is
@@ -722,7 +749,8 @@ The re-invitation flow is therefore the one path that **clears a stale pin rathe
 it**. The authorizing admin's own client also sees the mismatch, and a blanket "hard-block on
 mismatch" check would block the very operation that resolves it, making a key change unrecoverable.
 Approving the re-invite *is* the trust decision, and it replaces that admin's pin explicitly. Other
-members' pins update once that has happened. This delegates verification to whoever re-invited — a
+members' pins do **not** update by themselves; see "Other admins after an approval" in the Key
+rotation section for how each of them resolves it. This delegates verification to whoever re-invited — a
 real trust decision, and the honest limit of what pinning gives you.
 
 **A fingerprint is SHA-256 over both of a user's current public keys — the Ed25519 signing key and
@@ -746,17 +774,19 @@ decimal digits in twelve groups of five.** Each of those choices closes a specif
   invite link, at the cost of two comparisons instead of one when two people verify each other.
 
 **What "I verified them" is.** A verification is a signed record in the verifier's own partition,
-`USER#<verifier>` / `VERIFIED#<verified uuid>`, signed under the verifier's current Ed25519 key
-(`underground-bb:verification:v1`) over `{verifier uuid, verified uuid, verifier signing key,
-fingerprint}`. **It signs the fingerprint string, not the keys**, for two reasons. The fingerprint is
+`USER#<verifier>` / `VERIFIED#<verified uuid>`, signed under the verifier's Ed25519 key
+(`underground-bb:verification:v2`) over `{verifier uuid, verified uuid, verifier signing key,
+fingerprint, UTC day signed}`. A reader checks it against the verifier's key **for that day**, from
+their own served history, and a record signed under a superseded key counts only if the rotation's
+roster digest lists it (Key rotation, above). **It signs the fingerprint string, not the keys**, for two reasons. The fingerprint is
 exactly what the person compared out of band, so the record says what they actually checked. And it
 already covers both of the other user's current keys, so the record stops applying the moment either
 changes, with no separate staleness rule. The client computes the fingerprint locally from the keys
 the server serves and never takes one from the server. Reading a record back has four outcomes:
 *none* (no record, the normal case), *verified* (the record is valid and the served keys still give
 that fingerprint), *changed* (valid, but the served keys now give a different fingerprint) and
-*bad signature* (the record does not verify under the reader's own current key, or is for another
-pair). **Changed is shown as a warning, never as "not verified"**: a real key change and a
+*bad signature* (the record does not verify under the reader's key for its day, is signed by a
+superseded key the rotation digest does not list, or is for another pair). **Changed is shown as a warning, never as "not verified"**: a real key change and a
 substituted key are indistinguishable from here, and a substituted key after a verification is
 precisely the case verification exists to catch. This also makes it the one signal that notices a
 deleted pin on a user the reader had verified, because the substituted keys no longer give the
