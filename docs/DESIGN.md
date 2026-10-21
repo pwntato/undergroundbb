@@ -307,7 +307,9 @@ flow exists to invalidate, and the reverse leaves an account whose recovery code
 the password that works.
 
 Neither operation is a **key rotation**, which is the subject of the next section: a much heavier
-operation, and the only one that invalidates existing wrapped group keys.
+operation, and the only one that invalidates existing wrapped group keys. Rotation does not rescue a
+user who has lost both the password and the recovery code: it needs the current keys unwrapped to
+authorise it, so that account stays permanently lost.
 
 **The `RECOVERY` item carries its own guessing-bound lockout**, a counter and lock-until timestamp
 distinct from login's — the same rolling-window mechanism as login's (the lock-until value itself
@@ -333,78 +335,228 @@ no real security cost given the code's actual entropy.
 
 Three operations get conflated under "changing my keys," and only the third one actually changes
 them. A password change (above) and a recovery-code reset both re-wrap **the same private keys**
-under a new wrapper. **Key rotation replaces the keypairs themselves**, and it happens in exactly
-two cases:
+under a new wrapper. **Key rotation replaces the keypairs themselves**, and it exists for one
+reason: **the user believes their private keys, or the means to reach them, are in someone else's
+hands** (a stolen laptop, malware, a leaked password together with a copied key blob). It takes a
+security incident, so it should happen a handful of times in a deployment's life.
 
-1. The user has lost **both** their password and their recovery code. The private keys still exist
-   in the database but nothing can unwrap them, so they are permanently useless and the account
-   needs new ones to keep participating.
-2. Deliberate invalidation after suspected compromise — a stolen laptop, malware.
+**It is not a way out of losing both credentials, and an earlier draft of this section said it
+was.** A user who has lost the password *and* the recovery code has nothing that proves they are the
+owner of the uuid, and rotation changes the keys of an existing uuid, so an endpoint that accepted
+that user would accept anyone: any visitor could replace the keys of any username. The
+[Recovery](#recovery) section's answer stands: that account is permanently lost, and the person
+registers a new one and is invited back. What rotation requires instead is **live proof**: the
+request is signed by the user's *current* Ed25519 key, so the client must already hold the private
+keys unwrapped. That is true after a password login, after a recovery-code reset, and in a tab that
+is still signed in with a warm worker; it is not true after a page reload with no password (the keys
+live only in the worker), which is the "forgot the password, tab still open" case, and the answer
+there is the recovery code, not a new keypair.
 
-Naming both cases is what makes "rare but heavyweight" a fact rather than an assertion: it takes a
-double loss or a security incident, so it should happen a handful of times in a deployment's life.
+Live proof also removes a case this section used to describe: rotating because the old private
+keys *cannot* be unwrapped. Every rotation is by someone who can unwrap them, so there is a single
+mode, and it assumes exposure (below).
 
-The consequence is the reason it is heavy. **Every group key the user holds was wrapped to the old
-X25519 key**, which they can no longer unwrap, so they are locked out of all group content while
-still appearing in every member list. The design's answer is **dormant memberships plus a
-re-invitation per group**: the membership rows survive — the user stays in the member list and their
-post history stays attributed to them — but they cannot read until an admin or ambassador in each
-group re-wraps the current group key to their new public key. That concentrates the work into one
-deliberate action per group, taken by someone who already has the authority, rather than spreading
-confusion across every co-member. It is the same re-invitation event the pinning section describes,
-and this is its cause.
+#### What a rotation writes
 
-**The Ed25519 half of a rotation is the harder half, and it is why the user item keeps a key
-history.** Replacing a signing key does not merely affect what the user signs next — it invalidates
-every signature they have ever made, because the only public key a reader could fetch would be the
-new one. Two of those signatures are claimed as permanent properties: every post and comment carries
+`POST /api/account/rotate-keys` needs a session **and** two signatures over one payload
+(`underground-bb:key-rotation:v1`: uuid, the current signing and wrapping public keys, the new
+ones, the UTC day, and the current `KeyEpoch`): one by the **old** Ed25519 key, one by the **new**
+one. The first proves the caller holds the keys being replaced. The second proves the caller holds
+the new private key, so nobody can register a public key they cannot use (or one lifted from
+another user). The server checks both, that the day is within the usual skew of its own clock, and
+that `KeyEpoch` is the value it holds, which is also what makes the request single-use. Then, in
+**one `TransactWriteItems`**, conditioned on `KeyEpoch` being unchanged:
+
+- `PROFILE`: the new public keys, the private keys re-wrapped under a **new password** the user
+  sets in the same flow, a fresh salt, the **old Ed25519 key appended to `SupersededSigningKeys`**
+  with its interval (it ends now), `KeyEpoch + 1`, `SessionGeneration + 1` (every other session,
+  and any copied cookie, is signed out, exactly as a password change does), and the preferences
+  blob **re-sealed under the new X25519 key**. The sealing key is derived from the X25519 private
+  key, so the old blob would otherwise become unreadable; the client holds the old key and can do
+  this. A rotation that did not would look like a theme that reset itself.
+- `RECOVERY`: the new keys wrapped under a **new recovery code**, which the flow makes the user
+  store before it completes. The old code unwraps the old keys, which are now worth nothing, but
+  leaving it live would leave a second credential nobody is tracking.
+- `KEYCHANGE#<epoch>` under the user's partition: the payload and both signatures, written once
+  and never edited. The rows form a chain, each new signing key introduced by the one before it,
+  and they are served in the user projection with the keys. See "What a key change looks like to
+  others."
+
+`KeyEpoch` is a counter on `PROFILE`, 0 for every account that has never rotated (an absent
+attribute reads as 0), and it is plaintext and served. It orders states: a client that has seen
+epoch 2 can recognise a server that now serves epoch 1.
+
+Two limits keep a rotation from being a tool against other people. **Rotations are rate-limited to
+one per 24 hours per account** (a deployment setting), because each one obliges an admin in every
+group the user belongs to to act, and a user, or someone holding their session and keys, could
+otherwise keep every one of those groups busy indefinitely. And a rotation does not touch any group
+or any other user's rows; everything else follows from state, below.
+
+#### Dormant memberships, and why a re-wrap is not enough
+
+Every group key the user holds was wrapped to the old X25519 key. The user can unwrap them (that is
+what live proof means), but **they do not**, and the reason is the point of the mode: if the keys
+are exposed, whoever holds the old private key holds the same wrapped copies and can unwrap the same
+generation. Wrapping the current key to the new public key would hand the user a copy and leave the
+attacker with theirs. So a rotation does not re-wrap anything. The membership rows survive, the
+user stays in the member list and keeps their attributed history, and they cannot read new content
+until an admin or ambassador acts in each group. That concentrates the work into one deliberate
+action per group by someone who already has the authority, rather than spreading warnings across
+every co-member. It is the same re-invitation event the pinning section describes.
+
+**Dormancy is derived, not stored.** Each `MEMBER#` row records `WrapEpoch`, the recipient's
+`KeyEpoch` when that wrap was made (an absent attribute reads as 0). A membership is dormant
+exactly when `WrapEpoch` is behind the user's served `KeyEpoch`. Nothing marks it and nothing has
+to be cleared, a half-finished re-wrap resumes by the same query that finds the stragglers of an
+interrupted generation rotation, and a server that serves an old epoch cannot make a dormant member
+look current without a wrap an admin signed. Every path that writes a `MEMBER#` wrap (invite
+accept, readmit, rotation, re-wrap) sets `WrapEpoch` from the recipient's `KeyEpoch` and checks it
+in the same transaction, so a wrap to a key that has just been replaced is refused rather than
+stored.
+
+**The re-wrap depends on the group's mode, and for a `Rotating` group it does mint a generation.**
+The earlier draft of this section said a dormant membership must never mint one, to stop every user
+rotation from burning a generation in every group. That is right for a membership that is merely
+unreadable. It is wrong here: the old identity still holds the current key, so for the group to stop
+being readable by it, the key has to change. What a re-wrap does:
+
+- **`Rotating`:** the admin's client starts the ordinary rotation job (marker, new `GENKEY#` link,
+  re-wrap of every member's entry point), with the rotated user as a member to be re-wrapped to
+  their **new** key rather than one to be dropped. The start signature names a reason, so a
+  re-key is distinguishable from a removal. The cost is one generation and one full re-wrap per
+  group per rotation, which is why rotations are rate-limited, and it is bounded by the same cap
+  that bounds a removal. Only an **admin** can do this, as for a removal; an ambassador cannot.
+- **`Open`:** the admin (or an ambassador, who can already invite) wraps the **current** key to the
+  new key, and nothing else. An `Open` group has no way to re-key, by its own definition, so the
+  holder of the old keys keeps reading it. The rotation flow says so, naming each `Open` group,
+  before the user confirms: a rotation cannot make them safe, and they should assume that group's
+  content is known to whoever holds the old keys.
+
+The history is not lost either way. The new entry point is a wrap of the *current* generation, and
+older `GENKEY#` links are reachable backward from it, so rotation costs no history. The mirror is
+also true: the holder of the old keys can read everything the user could read at rotation time and
+that stays so.
+
+**Before wrapping anything, the admin's client has to see the new keys.** The roster check already
+compares a member's served keys with the admin's pin and pauses on a mismatch. A rotation is
+exactly that mismatch. Approving the re-wrap is the trust decision and replaces the admin's pin
+deliberately (see the pinning section), after the admin has compared the fingerprint with the user
+out of band. This is the step that stops a rotation being an account takeover: someone who rotated
+a victim's keys gets a new key set and no groups, because no admin will wrap to a fingerprint the
+real person did not give them.
+
+`POST /api/groups/{id}/rewrap/{uid}` is the write for the `Open` case (a conditional update of the
+member's wrap and `WrapEpoch`, rejected unless `WrapEpoch < KeyEpoch` and `KeyEpoch` is the value the
+admin wrapped to). The `Rotating` case is written by the rotation endpoints the group already has.
+
+#### The Ed25519 half and the key history
+
+Replacing a signing key does not merely affect what the user signs next. It would invalidate every
+signature they have ever made, because the only public key a reader could fetch would be the new
+one. Two of those signatures are claimed as permanent properties: every post and comment carries
 one, and `GRANT#` items must stay verifiable back to the group creator *forever*, which is why they
 never expire. A rotating creator would otherwise strand the root of every role chain in their group.
-There is no re-signing path either, since case 1 is a user who no longer holds the old private key
-and cannot reproduce anything with it.
+There is no re-signing path, and rotation does not need one.
 
 So **superseded Ed25519 public keys are retained on the `PROFILE`, each with the interval it was
 current for, and a signature is verified against the key that was current when the item was
-written**. For posts and grants the day in the sort key gives that to the resolution required;
+written**. (The write side is `rotate-keys` above; the read side, `keysOnDay` and the projection,
+already exists.) For posts and grants the day in the sort key gives that to the resolution required;
 **comments carry no day in their key, so the signing day is part of the signed payload** and the
 verifier reads it before selecting a key. A comment's parent post's day cannot stand in: threads
 routinely outlive the day their post was written, so a comment written on day 20 of a post's life
 would resolve to the interval current on day 1 and, if the author rotated in between, verify against
 the **wrong** superseded key. That fails in the direction that looks like an attack — not
 "unverifiable" but affirmatively invalid, which is the exact confusion the retention exists to
-prevent, and the same symptom as the forgery the threat model claims this machinery blocks. Putting
-the day in the comment sort key would fix it and is **rejected**: lexicographic order there is
-depth-first traversal order, and that property is why the materialized path exists. A rotation appends to
-this history rather than replacing an entry, the `GET /api/users/:id` projection serves the whole
-set, and `PIN#` accordingly pins a key *set* rather than a single key. Without the history a client
-has only bad options: reject unverifiable posts and the user's history vanishes, contradicting the
-attribution this section promises; show them unverified and "forged" becomes indistinguishable from
-"signed with a superseded key"; or stop verifying old items and the property is gone altogether.
+prevent. Putting the day in the comment sort key would fix it and is **rejected**: lexicographic
+order there is depth-first traversal order, and that property is why the materialized path exists. A
+rotation appends to this history rather than replacing an entry, the `GET /api/users/:id` projection
+serves the whole set, and `PIN#` accordingly pins a key *set*. Without the history a client has only
+bad options: reject unverifiable posts and the user's history vanishes; show them unverified and
+"forged" becomes indistinguishable from "signed with a superseded key"; or stop verifying old items
+and the property is gone altogether.
 
 Retention is why this is affordable: the history holds public keys only, it grows by one entry per
-rotation, and rotations are rare by construction. The X25519 half needs no equivalent — group keys
-are re-wrapped to the new key, so nothing verifies against an old one.
+rotation, and rotations are rare by construction. The X25519 half needs no equivalent, because
+nothing is ever verified against an old wrapping key.
 
-Two further properties are easy to get wrong when implementing it:
+**A leaked superseded key must not be able to write.** The day in a signed item is chosen by its
+signer, so the holder of an old private key can sign a grant or comment dated inside the old
+interval, and a verifier that accepts any key current on that day will accept it. What stops it is
+on the write path: the server checks the signature against the **current** key, and refuses a day
+outside its skew tolerance of its own clock (it already does for grants, claims and designations),
+and the rotation signs the session out. An attacker without the operator's database access cannot
+land a backdated item. **An operator can, and so can a server bug**; that is the same trust
+boundary the rest of this document draws, not a new gap. On the rotation day itself both keys are
+candidates (day resolution), which is accepted.
 
-- **A rotating user re-enters the chain at the current generation, and keeps their history.** Their
-  new entry point is a wrap of the *current* group key, and the older `GENKEY#` links are reachable
-  backward from it. Rotation therefore costs no history — the backward chain rescues this case for
-  free, which is worth knowing before someone builds an expensive re-wrap that is not needed.
-- **A dormant membership is not a removal, and must not mint a generation.** In a `Rotating` group
-  a removal triggers a re-key; if dormancy were implemented as remove-then-re-invite, every user
-  keypair rotation would burn a generation in every group that user belongs to and drag the entire
-  membership through a re-wrap. The distinction is invisible unless stated, and the cost of missing
-  it scales with how many groups the rotating user is in.
+**Every signer-key lookup has to use the served set.** `resolveSignerKeys` in
+`web/src/routes/runRotation.ts` has a "current key only" shortcut for the caller, and it now also
+covers every removal record the caller has ever signed, which are permanent. Once keys rotate, an
+admin who ever removed anyone under an older key would have their own rotations stop on "does not
+verify". The fix covers removal history, not only resuming a rotation.
 
-**The interface must clearly distinguish "change password" from "rotate keys."** They sound alike
-and differ enormously: one is trivial and keeps everything, the other invalidates every wrapped
-group key the user holds and requires an admin in every one of their groups to act. A user who
-conflates them picks the destructive one believing it is the cheap one.
+#### What a key change looks like to others
+
+A client that pinned a user sees a different key set, and the existing rule holds: **exact equality
+or hard-block**. Rotation adds what a block could not say before. The served `KEYCHANGE#` chain
+lets the client verify whether the new key was introduced by a holder of the pinned one (each link
+is signed by the key before it and by the key after it). The block then reads either **"keys
+rotated by the holder of the key you saved"** or **"keys changed with no link to the key you
+saved"**, which is the operator-substitution signature, since the operator never holds the old
+private key. Both block, and both resolve through re-invitation. The link informs the human
+deciding whether to approve; it never approves anything. A link is also exactly what someone with
+the stolen keys can produce, which is why it is evidence and not a trust path.
+
+**A pin and a verification record carry the day and the epoch, and rotation re-signs neither.**
+Earlier drafts had the client re-sign every pin and verification under the new key before
+discarding the old one, with an interval attribute to finish an interrupted run. That loop is the
+most fragile thing in this feature: it needs the old private key to survive an interruption, and an
+unfinished set leaves rows nobody can verify. It is unnecessary, because a pin is a signed record
+like a comment, and the cure is the same: **the payload includes the UTC day it was signed on**
+(checked by the server against its clock), and the pinner's own client verifies it against the key
+that was current that day, from the pinner's own served history. Pins and verification records
+therefore move to payload version 2 (`underground-bb:pin:v2`, `underground-bb:verification:v2`),
+and the pin also carries the **`KeyEpoch` of the pinned user** it saw. Existing v1 rows fail the v2
+check and read as no pin, so those users are re-pinned on first sight; nothing is deployed with
+real users yet, and the accounts that exist are test accounts and the maintainer's.
+
+With the epoch in the pin the verdicts become: served set equal and epoch equal → **match**; served
+epoch lower → **rollback** (hard-block: the server is serving keys older than ones this account
+already saw); served epoch higher or set different → **changed** (hard-block, with the link
+evidence above). A verification record needs no new rule: it signs the fingerprint, which covers
+both current keys, so after a rotation it reads "Keys changed since you checked", which is correct.
+
+**What this does not close.** Replay of a *whole old state* to a client whose only memory is on the
+server (the old pin, the old key set, the old epoch, all served together) still reads as `match`,
+because nothing the client holds is newer. That is the manifest problem the pinning section
+defers, and rotation does not make it worse than deleting the pin, but it is the reason the manifest
+should follow. The epoch makes the replay detectable the moment the client has seen anything newer,
+including in another session on the same device.
+
+#### Everything else a rotation touches
+
+- **Group `META` anchors** record the creator's signing key at creation and are verified against the
+  creator's history, so they keep verifying.
+- **Admissions** follow the `KEYCHANGE#` chain for the X25519 key (the admission check, below under
+  "Roles and the chain of trust"); the Ed25519 rule already accepts superseded keys.
+- **Pending invites** the user created stop working, because `k` comes from the old signing seed
+  (see the invite section). The flow revokes them first.
+- **`Open` groups** are the one place the user is told, at the point of rotation, that the old keys
+  keep working as readers.
+- **The interface must clearly distinguish "change password" from "rotate keys."** They sound alike
+  and differ enormously: one is trivial and keeps everything, the other signs out every session,
+  invalidates every pin and requires an admin in every one of the user's groups to act. A user who
+  conflates them picks the destructive one believing it is the cheap one. The flow lists the user's
+  groups and which are `Open`, states what is lost and what is not, and requires the new password
+  and the recovery code before it completes.
 
 **Group governance rules — who may leave, what happens to the last admin of a group, how a
 successor is chosen — are decided in the issues rather than here.** They are membership policy
-rather than cryptography, and they do not change any key or item in this document.
+rather than cryptography, and they do not change any key or item in this document. The one overlap:
+a group whose only admin rotates has nobody who can act until they are re-invited or another admin
+exists, which is the same state as a sole admin who has lost their key, and the successor
+designation exists for it.
 
 ### Key pinning and verification
 
@@ -437,26 +589,17 @@ every new login re-TOFUs every counterparty, and warnings that fire constantly a
 reads. This is state that follows the user rather than the browser, which is possible precisely
 because the signature makes server storage safe. One consequence follows and is worth stating here
 rather than rediscovering later: since a pin is signed by the pinning user's Ed25519 key, **rotating
-that keypair invalidates that user's entire pin set**, exactly as it resets the preferences blob.
+that keypair must not orphan that user's pin set**, exactly as it must not orphan their posts.
 
-**Rotation must therefore re-sign every pin row under the new key, and must do it before the old key
-is discarded.** The superseded-key retention above resolves the key interval from a day — carried in the sort key
-for posts and grants, and in the signed payload for comments. **A pin has neither**: `PIN#<other-uuid>`
-carries no day in its key, and unlike a comment it is not signed over a payload the pinning client
-chose, so there is nothing to read an interval out of. A client loading its own pins
-after a rotation would hold the superseded key set with no way to know which interval any pin
-belongs to, and would be left with the three bad options this section already rejects: drop the
-unverifiable pins and every counterparty silently returns to first contact — reproducing, across the
-whole pin set at once, the deletion attack the threat model marks *Possible*; trust them unverified,
-which is the unsigned pin the section calls protection against nothing; or prompt on all of them,
-which is the warning fatigue the re-invitation flow exists to avoid. The material for the re-sign is
-all local — the client already holds its pins — and it is one `BatchWriteItem` loop of the same
-shape as the rotation and mark-read loops, interruptible in the same way. **The ordering is the part
-most likely to be got wrong: re-sign, then discard the old private key.** Because that loop can be
-interrupted, the pin row also carries the **interval of the pinning key it was signed under**, so a
-half-re-signed set can be finished on the next login instead of being ambiguous forever. Rebuilding
-a pin set from scratch remains one more thing a re-invitation event has to do, but a rotation alone
-no longer requires it.
+**A pin carries the UTC day it was signed on, and is verified against the pinner's key for that day.**
+It is the same mechanism comments use (the superseded-key retention above), and it is why rotation
+re-signs nothing: the pinner's client loads its own pins after a rotation, reads each one's day, and
+selects the key from the pinner's own served history. Earlier drafts re-signed every pin under the new
+key before the old one was discarded, with an interval attribute to finish an interrupted run. That
+loop needs the old private key to survive an interruption and leaves unverifiable rows when it
+does not, and the day removes the need for it. The server checks the day against its own clock, as
+it does for grants. Details, and what the pin also carries, are under "What a key change looks like
+to others" in the Key rotation section.
 
 **A signature authenticates a pin's contents, not its existence, and that gap is not closed in v1.**
 The operator cannot rewrite a pin, but it can withhold or delete one. If the server serves a
@@ -470,36 +613,38 @@ Closing it needs a signed record of the pin *set* rather than of each pin — a 
 over the pinned usernames, held on the user's own `PROFILE` and checked on load, so a missing row
 becomes a detectable mismatch. That is deferred rather than dismissed, for two reasons worth
 stating: it puts a read-modify-write on the profile item back into every new pin, and it has to
-survive the keypair rotation described above, which invalidates the whole pin set and would
-therefore have to reset the manifest in the same operation without that reset being forgeable.
+survive the keypair rotation described above, where the pin set stays valid but the manifest's own
+signature has to move to the new key without that move being forgeable.
 Until it exists, **fingerprint verification is the only control that detects a deleted pin**, which
 is the same answer the design already gives for first contact — and that is the honest way to read
 this: pin deletion returns a counterparty to the first-contact case, silently.
 
-**A superseded pin can be replayed, and that is worse than deletion.** A pin carries no version or freshness,
-and writing one replaces the previous row. Once a user re-pins (after a key change), the server can keep the old
-row and serve it later, together with the old key set: the client verifies its own signature, finds the served set
-equal to it, and reports `match` for keys the user has already moved off, which is exactly when those keys may be
-compromised. Deletion only drops the client to first contact, which the roster does not label "verified"; a replay
-passes as a genuine pin. It is unreachable today, because nothing changes the keys of an existing uuid, so no
-re-pin ever replaces a pin. It becomes reachable with key rotation (#62) or any same-uuid re-invitation re-pin, so
-those must not treat `match` as fresh. The pin-set digest above would close it only if it covers each pin's
-contents (or a per-pin counter), not merely the pinned usernames.
+**A superseded pin can be replayed, and that is worse than deletion.** Writing a pin replaces the previous row.
+Once a user re-pins (after a key change), the server can keep the old row and serve it later, together with the old
+key set: the client verifies its own signature, finds the served set equal to it, and reports `match` for keys the
+user has already moved off, which is exactly when those keys may be compromised. Deletion only drops the client to
+first contact, which the roster does not label "verified"; a replay passes as a genuine pin. Rotation makes this
+reachable, so a pin now carries the pinned user's **`KeyEpoch`** under the signature, and a served epoch below the
+pinned one is a hard-block of its own (`rollback`). That closes replay of a stale *pin* or *key set* against a client
+that has seen anything newer. It does not close replay of a whole old state (pin, keys and epoch together) to a client
+that has nothing newer to compare with; only the pin-set manifest above would, so rotation does not make deletion or
+replay worse than they were, and does not fix them.
 
 **What a pin covers, and what counts as a match.** A pin signs the pinned user's current X25519 wrapping key and
 their Ed25519 signing keys as a *set* (current plus every superseded key, order not significant), together with
 both uuids and the pinner's own signing key. A served key set matches only if it is **exactly equal** to the pinned
 one. A set that merely *adds* a key is a mismatch, not an "extension": a server inventing a superseded key for
-someone looks identical, and that key would then verify backdated grants. Accepting a legitimate rotation needs a
-signed continuity link from the old key, which arrives with key rotation (#62). Until then a rotation of the pinned
-user hard-blocks and resolves through re-invitation like any other change. Implemented as `PUT /api/pins/{userId}`
+someone looks identical, and that key would then verify backdated grants. A legitimate rotation is a different
+set with a higher `KeyEpoch`, so it hard-blocks and resolves through re-invitation like any other change; the
+`KEYCHANGE#` chain only tells the person deciding whether the new key was introduced by a holder of the pinned one. Implemented as `PUT /api/pins/{userId}`
 (the server checks the signature under the caller's current key, for hygiene only) and `GET /api/pins` (the caller's
 own pins, unverified by the server); the verdict logic is `evaluatePin` in `web/src/lib/crypto/pin.ts`.
 The roster check (`runGrantCheck.ts`) pin-checks every grantor's served key set before the grant-chain verifier sees
 it: a match passes, a first sighting is pinned and reported as first-seen, and a mismatch or bad signature is
 **withheld** (the verifier then fails closed on that person) and named to the user, never re-pinned over. The roster
 says "verified" only when the group anchor and every grantor's keys all matched something saved earlier. A pin covers
-the key *set*, not the intervals of superseded keys, so rotation (#62) has to sign intervals as well.
+the key *set* and the pinned user's `KeyEpoch`, not the intervals of superseded keys; those are served and chained
+(Key rotation, above), and a set that differs from the pinned one blocks regardless.
 
 Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
 **re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
@@ -553,8 +698,9 @@ compute for the other user's keys right now (a clear 409 `fingerprint_stale` if 
 the person was comparing), as hygiene only: the party that must verify a record is the client that
 reads it. Like a pin, a record can be withheld or deleted, which only costs the reader the
 "verified" mark and never makes anything look verified that was not. Records are swept on account
-deletion, and a key rotation (#62) invalidates a user's records along with their pins, since both
-are signed under the old key.
+deletion. A key rotation of the *verifier* leaves their records valid, since the record carries the day it was
+signed on and is checked against the verifier's key for that day (the pin mechanism); a rotation of the *verified*
+user changes the fingerprint, so the record reads "Keys changed since you checked", which is the correct outcome.
 
 The roster shows each member's fingerprint on request, four groups to a row so that it is read and
 compared whole, with a "check fingerprint" action that signs and stores a record once the person
@@ -617,17 +763,15 @@ or signs with. This binds the acceptance to whoever holds the actual invite link
 the model the single-use rule already assumes but plain Ed25519 verification alone did not enforce.
 
 **`k` is derived from the inviter's *current* signing seed, so key rotation between creation and
-completion permanently breaks the invite.** If the inviter's Ed25519 identity key is ever rotated
-(key-supersession is designed elsewhere in this document but not yet implemented) after creating an
-invite but before it completes, step 3 re-derives `k` from the NEW seed, `invite_mac` no longer
-verifies against a payload accepted under the OLD seed's `k`, and the invite fails permanently — not
-transiently, and not distinguishable client-side from a real substitution attempt, since both produce
-the identical `InviteMACError`. This is an accepted trade-off for now (rotation itself does not exist
-yet), but it is a real constraint any future rotation design must account for: either rotation must
-carry forward every outstanding invite's `k` (recomputing and re-storing `invite_mac` under the
-inviter's own client before the old seed is discarded, the same "re-sign before discarding" ordering
-key pinning already requires elsewhere in this document), or completion must be able to try every
-seed in the superseded-key retention window, not just the current one.
+completion permanently breaks the invite.** If the inviter's Ed25519 identity key is rotated after
+creating an invite but before it completes, step 3 re-derives `k` from the NEW seed, `invite_mac` no
+longer verifies against a payload accepted under the OLD seed's `k`, and the invite fails permanently
+— not transiently, and not distinguishable client-side from a real substitution attempt, since both
+produce the identical `InviteMACError`. Key rotation (#62) accepts this rather than carrying invites
+across: the old seed is the one thing a rotation is meant to stop relying on, and `k` cannot be
+re-bound without the invitee's link. So the rotation flow **lists the user's pending invites and
+revokes them before the keys change**, and says so; any that survive (a revoke that failed) fail
+with the error above and have to be re-created.
 
 **The MAC's guarantee also has a precondition worth stating explicitly: it protects the invite only
 if the link itself reaches the invitee without passing through this server.** `k` travels in the URL
@@ -1276,9 +1420,12 @@ browser that has never seen this group the server can serve an invented creator,
 signed, and matching admissions, and the check passes. Failing closed on first sight would not help,
 because opening the members screen first takes the same pin. (5) **Key rotation (#62).** The
 invitee's Ed25519 key is matched against current and superseded keys, but the X25519 key must equal the
-current served wrapping key. Once user key rotation exists, every member who rotates would be
-unadmitted in every group until re-invited, so #62 must bring a signed continuity link this check can
-follow. (6) **Liveness.** An inviter whose keys can no longer be
+current served wrapping key, so a member who rotates would be unadmitted in every group until
+re-invited. With rotation the check **follows the `KEYCHANGE#` chain**: an admission naming keys
+that a verified chain of rotations carries to the served ones is accepted. The chain proves the
+served keys were introduced by a holder of the admitted ones, which is what an admission attests to
+about the invitee; it does not make the member readable (that is the dormant re-wrap) or grant
+anything the admission did not. (6) **Liveness.** An inviter whose keys can no longer be
 read, or who has another grant dated from the ref grant's day through an admission's day (their role changed
 later on that admission's own day, or their current grant shares a day with an earlier one), leaves their
 invitees unadmitted until an
