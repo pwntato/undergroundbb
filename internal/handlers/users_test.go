@@ -66,7 +66,7 @@ func TestGetUserProjectionLeaksNothingElse(t *testing.T) {
 	if err := json.Unmarshal(doGetUser(t, h, cookie, target.userID).Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true}
+	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true, "keyEpoch": true}
 	for k := range raw {
 		if !want[k] {
 			t.Errorf("unexpected field %q in projection", k)
@@ -127,5 +127,16 @@ func TestGetUserServesSupersededKeys(t *testing.T) {
 		got.SupersededSigningKeys[0].PublicKey != base64.StdEncoding.EncodeToString(old[0].PublicKey) ||
 		got.SupersededSigningKeys[0].From != old[0].From || got.SupersededSigningKeys[0].Until != old[0].Until {
 		t.Errorf("superseded = %+v, want %+v", got.SupersededSigningKeys, old)
+	}
+}
+
+// KeyEpoch is plaintext and served (#62); an account that never rotated has no
+// attribute and reads as 0.
+func TestProjectUserServesKeyEpoch(t *testing.T) {
+	if got := projectUser("u", &models.User{}).KeyEpoch; got != 0 {
+		t.Errorf("absent KeyEpoch served as %d, want 0", got)
+	}
+	if got := projectUser("u", &models.User{KeyEpoch: 2}).KeyEpoch; got != 2 {
+		t.Errorf("KeyEpoch = %d, want 2", got)
 	}
 }

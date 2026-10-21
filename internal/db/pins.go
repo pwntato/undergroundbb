@@ -15,7 +15,7 @@ import (
 // PutPin writes or replaces the pinner's pin of pinnedUserID. Replacing is
 // deliberate: a person resolving a key change re-pins, and only the pinner can
 // write their own partition, so an overwrite is never someone else's.
-func (c *Client) PutPin(ctx context.Context, pinnerID, pinnedUserID string, signingKeys [][]byte, wrappingKey, pinnerSigningKey, signature []byte) error {
+func (c *Client) PutPin(ctx context.Context, pinnerID, pinnedUserID string, signingKeys [][]byte, wrappingKey, pinnerSigningKey, signature []byte, keyEpoch uint64, signedDay string) error {
 	item, err := attributevalue.MarshalMap(models.Pin{
 		Record: models.Record{
 			PK:   "USER#" + pinnerID,
@@ -26,6 +26,8 @@ func (c *Client) PutPin(ctx context.Context, pinnerID, pinnedUserID string, sign
 		WrappingPublicKey:      wrappingKey,
 		PinnerSigningPublicKey: pinnerSigningKey,
 		Signature:              signature,
+		KeyEpoch:               keyEpoch,
+		SignedDay:              signedDay,
 	})
 	if err != nil {
 		return fmt.Errorf("db: marshal pin: %w", err)

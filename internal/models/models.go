@@ -109,6 +109,11 @@ type User struct {
 	// increments it, which makes every token issued at a lower value invalid.
 	// Absent (0) on a row from before it existed.
 	SessionGeneration int64 `dynamodbav:"SessionGeneration,omitempty"`
+	// KeyEpoch counts this user's key rotations (#62): 0 for an account that
+	// has never rotated, and an absent attribute reads as 0. It is plaintext
+	// and served, and it orders key states so a client that has seen epoch 2
+	// can recognise a server now serving epoch 1 (a pin's rollback verdict).
+	KeyEpoch uint64 `dynamodbav:"KeyEpoch,omitempty"`
 	// TestAccount marks an account registered for automated testing: its
 	// username starts with TestUsernamePrefix and the register request sent
 	// TestAccountHeader. The scheduled purge only touches accounts that carry
@@ -715,6 +720,11 @@ type Pin struct {
 	// other value as tampering, until #62 adds a signed continuity link.
 	PinnerSigningPublicKey []byte `dynamodbav:"PinnerSigningPublicKey"`
 	Signature              []byte `dynamodbav:"Signature"`
+	// KeyEpoch is the pinned user's KeyEpoch the pinner saw, and SignedDay the
+	// UTC day the pin was signed ("2006-01-02"); both are inside the signed
+	// payload (pin v2, #62). A row without SignedDay is a v1 row.
+	KeyEpoch  uint64 `dynamodbav:"KeyEpoch"`
+	SignedDay string `dynamodbav:"SignedDay"`
 }
 
 // Verification is the USER#<verifier> / VERIFIED#<verified uuid> item -- issue
@@ -734,6 +744,9 @@ type Verification struct {
 	// on read: a client verifies only under its own current key.
 	VerifierSigningPublicKey []byte `dynamodbav:"VerifierSigningPublicKey"`
 	Signature                []byte `dynamodbav:"Signature"`
+	// SignedDay is the UTC day the record was signed ("2006-01-02"), inside the
+	// signed payload (verification v2, #62). A row without it is a v1 row.
+	SignedDay string `dynamodbav:"SignedDay"`
 }
 
 // GenerationKey is one link of a group's key chain: GROUP#<gid> /

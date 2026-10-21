@@ -254,6 +254,8 @@ type pinVector struct {
 	PinnedUUID        string   `json:"pinned_uuid"`
 	WrappingPublicHex string   `json:"wrapping_public_key_hex"`
 	SigningKeysHex    []string `json:"signing_keys_hex"`
+	KeyEpoch          uint64   `json:"key_epoch"`
+	SignedDay         string   `json:"signed_day"`
 	PayloadHex        string   `json:"payload_hex"`
 	SignatureHex      string   `json:"signature_hex"`
 }
@@ -270,8 +272,53 @@ type verificationVector struct {
 	VerifiedSignHex string `json:"verified_signing_public_key_hex"`
 	VerifiedWrapHex string `json:"verified_wrapping_public_key_hex"`
 	Fingerprint     string `json:"fingerprint"`
+	SignedDay       string `json:"signed_day"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
+}
+
+// keyRotationVector proves KeyRotationPayload's exact encoding (#62) and that
+// the old-key and new-key signatures are over the same bytes. The roster
+// digest is computed by RosterDigest from the listed (sk, signature) rows.
+type keyRotationVector struct {
+	Name            string      `json:"name"`
+	UserUUID        string      `json:"user_uuid"`
+	OldPrivateHex   string      `json:"old_private_key_hex"`
+	OldSigningHex   string      `json:"old_signing_public_key_hex"`
+	OldWrappingHex  string      `json:"old_wrapping_public_key_hex"`
+	NewPrivateHex   string      `json:"new_private_key_hex"`
+	NewSigningHex   string      `json:"new_signing_public_key_hex"`
+	NewWrappingHex  string      `json:"new_wrapping_public_key_hex"`
+	UTCDay          string      `json:"utc_day"`
+	KeyEpoch        uint64      `json:"key_epoch"`
+	RosterRows      []rosterRow `json:"roster_rows"`
+	RosterDigestHex string      `json:"roster_digest_hex"`
+	PayloadHex      string      `json:"payload_hex"`
+	OldSignatureHex string      `json:"old_signature_hex"`
+	NewSignatureHex string      `json:"new_signature_hex"`
+}
+
+// rosterRow is one PIN# or VERIFIED# row listed in a rotation's roster.
+type rosterRow struct {
+	SK           string `json:"sk"`
+	SignatureHex string `json:"signature_hex"`
+	EntryIDHex   string `json:"entry_id_hex"`
+}
+
+// handoffWrapVector proves HandoffWrapAAD's exact encoding (#62), plus the
+// AES-256-GCM ciphertext it produces under a fixed key/nonce/plaintext, and
+// that two groups' rows have different AADs.
+type handoffWrapVector struct {
+	Name                 string `json:"name"`
+	UserUUID             string `json:"user_uuid"`
+	GroupID              string `json:"group_id"`
+	Generation           uint64 `json:"generation"`
+	NewWrappingPublicHex string `json:"new_wrapping_public_key_hex"`
+	AADHex               string `json:"aad_hex"`
+	KeyHex               string `json:"key_hex"`
+	PlaintextHex         string `json:"plaintext_hex"`
+	NonceHex             string `json:"nonce_hex"`
+	CiphertextHex        string `json:"ciphertext_hex"`
 }
 
 // memberWrapVector proves MemberWrapAAD's exact encoding -- the same
@@ -371,6 +418,8 @@ type vectorFile struct {
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
+	KeyRotation          []keyRotationVector          `json:"key_rotation"`
+	HandoffWrap          []handoffWrapVector          `json:"handoff_wrap_aad"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
@@ -664,15 +713,18 @@ func main() {
 		pinnerUUID := "pinner-uuid-1"
 		pinnedUUID := "pinned-uuid-1"
 		orders := []struct {
-			name string
-			keys [][]byte
+			name  string
+			keys  [][]byte
+			epoch uint64
 		}{
-			{"two_keys", [][]byte{pinned1, pinned2}},
-			{"two_keys_reordered", [][]byte{pinned2, pinned1}},
-			{"one_key", [][]byte{pinned1}},
+			{"two_keys", [][]byte{pinned1, pinned2}, 1},
+			{"two_keys_reordered", [][]byte{pinned2, pinned1}, 1},
+			{"one_key", [][]byte{pinned1}, 0},
+			// Same keys as two_keys but a different epoch: the epoch is signed.
+			{"two_keys_epoch_2", [][]byte{pinned1, pinned2}, 2},
 		}
 		for _, o := range orders {
-			payload := crypto.PinPayload(pinnerUUID, pinnedUUID, pub, wrapping[:], o.keys)
+			payload := crypto.PinPayload(pinnerUUID, pinnedUUID, pub, wrapping[:], o.keys, o.epoch, "2026-10-21")
 			sig, err := crypto.Sign(priv, crypto.ContextPin, payload)
 			if err != nil {
 				panic(err)
@@ -689,6 +741,8 @@ func main() {
 				PinnedUUID:        pinnedUUID,
 				WrappingPublicHex: hex.EncodeToString(wrapping[:]),
 				SigningKeysHex:    hexKeys,
+				KeyEpoch:          o.epoch,
+				SignedDay:         "2026-10-21",
 				PayloadHex:        hex.EncodeToString(payload),
 				SignatureHex:      hex.EncodeToString(sig),
 			})
@@ -709,7 +763,7 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
-			payload := crypto.VerificationPayload("verifier-uuid-1", tc.verified, pub, fp)
+			payload := crypto.VerificationPayload("verifier-uuid-1", tc.verified, pub, fp, "2026-10-21")
 			sig, err := crypto.Sign(priv, crypto.ContextVerification, payload)
 			if err != nil {
 				panic(err)
@@ -723,8 +777,99 @@ func main() {
 				VerifiedSignHex: hex.EncodeToString(targetSign),
 				VerifiedWrapHex: hex.EncodeToString(targetWrap[:]),
 				Fingerprint:     fp,
+				SignedDay:       "2026-10-21",
 				PayloadHex:      hex.EncodeToString(payload),
 				SignatureHex:    hex.EncodeToString(sig),
+			})
+		}
+	}
+
+	// --- Key rotation (#62): with a roster, and with an empty one ---
+	{
+		userUUID := "rotating-uuid-1"
+		oldPub, oldPriv := fixedEd25519Key("rotation-old-signing")
+		newPub, newPriv := fixedEd25519Key("rotation-new-signing")
+		oldWrap := fixedX25519Key("rotation-old-wrapping").PublicKey().Bytes()
+		newWrap := fixedX25519Key("rotation-new-wrapping").PublicKey().Bytes()
+		sigA := fixedSeed("rotation-roster-sig-a")
+		sigB := fixedSeed("rotation-roster-sig-b")
+		cases := []struct {
+			name  string
+			epoch uint64
+			rows  []rosterRow
+			sigs  [][]byte
+		}{
+			{"with_roster", 0, []rosterRow{{SK: "PIN#pinned-uuid-1"}, {SK: "VERIFIED#verified-uuid-1"}}, [][]byte{sigA, sigB}},
+			{"empty_roster", 3, nil, nil},
+		}
+		for _, c := range cases {
+			var entries [][]byte
+			for i := range c.rows {
+				id := crypto.RosterEntryID(c.rows[i].SK, c.sigs[i])
+				c.rows[i].SignatureHex = hex.EncodeToString(c.sigs[i])
+				c.rows[i].EntryIDHex = hex.EncodeToString(id)
+				entries = append(entries, id)
+			}
+			digest := crypto.RosterDigest(entries)
+			payload := crypto.KeyRotationPayload(userUUID, oldPub, oldWrap, newPub, newWrap, "2026-10-21", c.epoch, digest)
+			oldSig, err := crypto.Sign(oldPriv, crypto.ContextKeyRotation, payload)
+			if err != nil {
+				panic(err)
+			}
+			newSig, err := crypto.Sign(newPriv, crypto.ContextKeyRotation, payload)
+			if err != nil {
+				panic(err)
+			}
+			out.KeyRotation = append(out.KeyRotation, keyRotationVector{
+				Name:            c.name,
+				UserUUID:        userUUID,
+				OldPrivateHex:   hex.EncodeToString(oldPriv),
+				OldSigningHex:   hex.EncodeToString(oldPub),
+				OldWrappingHex:  hex.EncodeToString(oldWrap),
+				NewPrivateHex:   hex.EncodeToString(newPriv),
+				NewSigningHex:   hex.EncodeToString(newPub),
+				NewWrappingHex:  hex.EncodeToString(newWrap),
+				UTCDay:          "2026-10-21",
+				KeyEpoch:        c.epoch,
+				RosterRows:      c.rows,
+				RosterDigestHex: hex.EncodeToString(digest),
+				PayloadHex:      hex.EncodeToString(payload),
+				OldSignatureHex: hex.EncodeToString(oldSig),
+				NewSignatureHex: hex.EncodeToString(newSig),
+			})
+		}
+	}
+
+	// --- Handoff wrap AAD (#62): two groups, same user and generation ---
+	{
+		userUUID := "rotating-uuid-1"
+		newWrap := fixedX25519Key("rotation-new-wrapping").PublicKey().Bytes()
+		for _, tc := range []struct {
+			name, groupID string
+			generation    uint64
+		}{
+			{"group_a", "group-uuid-a", 4},
+			{"group_b", "group-uuid-b", 4},
+		} {
+			key := fixedSeed("handoff-wrap-key-" + tc.name)[:crypto.KeySize]
+			plaintext := fixedSeed("handoff-wrap-plaintext-" + tc.name)[:crypto.KeySize]
+			nonce := fixedSeed("handoff-wrap-nonce-" + tc.name)[:crypto.NonceSize]
+			aad := crypto.HandoffWrapAAD(userUUID, tc.groupID, tc.generation, newWrap)
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.HandoffWrap = append(out.HandoffWrap, handoffWrapVector{
+				Name:                 tc.name,
+				UserUUID:             userUUID,
+				GroupID:              tc.groupID,
+				Generation:           tc.generation,
+				NewWrappingPublicHex: hex.EncodeToString(newWrap),
+				AADHex:               hex.EncodeToString(aad),
+				KeyHex:               hex.EncodeToString(key),
+				PlaintextHex:         hex.EncodeToString(plaintext),
+				NonceHex:             hex.EncodeToString(nonce),
+				CiphertextHex:        hex.EncodeToString(ciphertext),
 			})
 		}
 	}

@@ -16,7 +16,7 @@ import (
 // Replacing is deliberate: after the other user's keys change and the verifier
 // compares again, the new record supersedes the stale one. Only the verifier
 // can write their own partition.
-func (c *Client) PutVerification(ctx context.Context, verifierID, verifiedUserID, fingerprint string, verifierSigningKey, signature []byte) error {
+func (c *Client) PutVerification(ctx context.Context, verifierID, verifiedUserID, fingerprint string, verifierSigningKey, signature []byte, signedDay string) error {
 	item, err := attributevalue.MarshalMap(models.Verification{
 		Record: models.Record{
 			PK:   "USER#" + verifierID,
@@ -26,6 +26,7 @@ func (c *Client) PutVerification(ctx context.Context, verifierID, verifiedUserID
 		Fingerprint:              fingerprint,
 		VerifierSigningPublicKey: verifierSigningKey,
 		Signature:                signature,
+		SignedDay:                signedDay,
 	})
 	if err != nil {
 		return fmt.Errorf("db: marshal verification: %w", err)

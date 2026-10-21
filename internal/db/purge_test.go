@@ -139,7 +139,7 @@ func TestPurgeRemovesTestAccountsAndTheirTestOnlyGroups(t *testing.T) {
 	gid := putGroup(t, c, a.UserID, b.UserID)
 
 	// A's own rows: a pin, a challenge, and an invite it sent (SENT# + INVITE#).
-	if err := c.PutPin(ctx, a.UserID, newUserID(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64)); err != nil {
+	if err := c.PutPin(ctx, a.UserID, newUserID(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64), 0, "2026-10-21"); err != nil {
 		t.Fatalf("PutPin: %v", err)
 	}
 	if err := c.PutChallenge(ctx, a.UserID, []byte("nonce"), time.Minute); err != nil {

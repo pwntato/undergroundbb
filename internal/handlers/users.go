@@ -33,6 +33,8 @@ type userProjection struct {
 	SigningPublicKey      string               `json:"signingPublicKey"`
 	WrappingPublicKey     string               `json:"wrappingPublicKey"`
 	SupersededSigningKeys []supersededKeyEntry `json:"supersededSigningKeys"`
+	// KeyEpoch counts the user's key rotations (#62); 0 if they never rotated.
+	KeyEpoch uint64 `json:"keyEpoch"`
 	// Deleted marks a tombstoned account (#77): the username is empty and the
 	// keys are served only so signatures the user made still verify.
 	Deleted bool `json:"deleted,omitempty"`
@@ -80,6 +82,7 @@ func projectUser(id string, user *models.User) userProjection {
 		SigningPublicKey:      base64.StdEncoding.EncodeToString(user.SigningPublicKey),
 		WrappingPublicKey:     base64.StdEncoding.EncodeToString(user.WrappingPublicKey),
 		SupersededSigningKeys: superseded,
+		KeyEpoch:              user.KeyEpoch,
 		Deleted:               user.DeletedAt != "",
 	}
 }
