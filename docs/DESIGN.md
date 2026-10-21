@@ -83,6 +83,7 @@ relocated ciphertext fail loudly:
 | Generation key | group id + generation number |
 | Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. That guard only holds while `PROFILE` exists for every uuid ever used, though — user uuids are never reused, so account deletion (`DELETE /api/account`, below) tombstones `PROFILE` rather than deleting it, or a re-registration on a stale uuid could inherit another user's still-live memberships, invites, and other items keyed on it. |
 | Group name/description | group id + which field (name vs. description) + generation number — `GroupNameAAD` in `internal/crypto/group.go`. The field distinguishes the two ciphertexts sharing the same group id and generation, since without it an attacker with write access could swap a group's name and description with both tags still verifying. |
+| Rotation handoff wrap | user uuid + group id + generation number + the new X25519 public key it is wrapped to — `HandoffWrapAAD`. Like `MemberWrapAAD` it is row-specific: the plaintext is a group key, so without the group id an operator could swap two of the user's `HANDOFF#` rows and the self re-key would write group A's key into group B's `GENKEY#` chain, readable by every member of B. The new public key keeps a row written for one rotation from opening under another. |
 | Member's wrapped group key | group id + member uuid + generation number — `MemberWrapAAD` in `internal/crypto/group.go`. Unlike the generation key row above, this wrap is **member-specific** (each member holds their own ECIES-wrapped copy on their own `MEMBER#` item, per docs/DESIGN.md's key-generations discussion), so the member uuid has to be part of the binding: without it, an attacker with write access could swap two members' wrapped entries at the same generation and both tags would still verify, silently handing each member the other's copy — harmless only when the two copies happen to unwrap to the same plaintext, which is true within one generation but not the property this table is trying to guarantee. |
 
 **Posts and comments are signed over their address as well as their content**, for the same reason
@@ -499,20 +500,29 @@ their pins, so it is not silent. Members and ambassadors have no such path; they
 current group key, which the client could otherwise only get by unwrapping its `MEMBER#` entry with
 the old X25519 key, which now exists only in that tab. So before `rotate-keys` the client, holding
 the old keys, writes one **handoff row** per group where it is an admin: `HANDOFF#<groupId>` in the
-caller's own partition, holding that group's current key and generation wrapped (ECIES) to the
+caller's own partition, holding that group's current key and generation wrapped (ECIES, with `HandoffWrapAAD`) to the
 **new** X25519 public key, plus that public key. These are written with ordinary writes
 (`PUT /api/account/rotation-handoff/{groupId}`, authenticated by the old session), not in the
 `rotate-keys` transaction, so the number of admin groups is not capped by the 100-item transaction
 limit. `rotate-keys` refuses with 409 `handoff_required` unless every group where the caller is an
-admin has a row naming the new key at that group's current generation, and the flow re-sends any it
-names. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
+admin has a row naming the new key at that group's newest `GENKEY#` link, and the flow re-sends any it
+names. "Newest link" includes one a rotation in progress has already written, so the self re-key
+resumes that job from the handed-off key like any other resume. If the user's own entry is behind
+the newest link (another admin's job has not wrapped to them yet), no row can be written for it,
+and `rotate-keys` answers 409 `rotation_in_progress` naming the group; the flow waits for that job
+to finish, and any admin can resume it. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
 new private key from any later session, runs, and deletes the row when the group's start (or
-self-wrap) commits, so it resumes like any other rotation job. A row carries a TTL, so an abandoned
-rotation leaves nothing behind. A thief gets nothing from these rows: only the holder of the new
+self-wrap) commits, so it resumes like any other rotation job. **A row has no TTL**: the
+rows of a committed rotation are the only copy of a key that group's sole admin can still reach, so
+nothing may delete them on a timer. An abandoned rotation leaves rows wrapped to a key that is not
+the account's current one; a write of a new row replaces the group's old one, and the existing hourly
+purge deletes rows whose wrapping key is not the current one and are over a day old (account deletion
+sweeps them with the user's other own rows). A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
-another admin advances a group's generation between the check and the commit, that group's row is
-stale and is treated as not handed off; the group then has another admin to approve, by
-construction. Other than that, no group the user administers depends on a tab staying open.
+another admin advances a group's generation after the row is written, that row is stale until the
+self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
+conditioned on the generation, so a stale row fails the condition and is treated as not handed off;
+the group then has another admin to approve, by construction. Other than that, no group the user administers depends on a tab staying open.
 
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check
@@ -1953,6 +1963,9 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
+| Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
+| Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
+| Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; stale rows swept by the purge) |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
