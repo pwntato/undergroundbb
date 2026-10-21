@@ -51,12 +51,33 @@ why.
   root of trust is verified by every future member's client, so this
   encoding must be byte-identical across Go and TypeScript before any real
   group exists under it.
+- `pin`: `(pinner uuid, pinned uuid, pinner signing public key, wrapping
+  public key, signing key set, pinned KeyEpoch, UTC day) -> payload`, plus the
+  Ed25519 signature over it — pinning `PinPayload` (v2, #62; signed under
+  `underground-bb:pin:v2`). The key set is sorted before encoding, so two cases
+  list the same keys in different orders and must share a payload; a fourth
+  case differs from the first only in its epoch, proving the epoch is signed.
 - `verification`: `(verifier uuid, verified uuid, verifier signing public
-  key, fingerprint) -> payload`, plus the Ed25519 signature over it — pinning
-  `VerificationPayload` (#65), a user's signed record that they compared
+  key, fingerprint, UTC day) -> payload`, plus the Ed25519 signature over it —
+  pinning `VerificationPayload` (v2, #62; signed under
+  `underground-bb:verification:v2`), a user's signed record that they compared
   another user's fingerprint out of band. Two cases for two different
   verified users, each carrying the real `Fingerprint` of its keys so the
   signed string is tied to what a person actually reads out.
+- `key_rotation`: `(user uuid, old and new signing and wrapping public keys,
+  UTC day, KeyEpoch, roster digest) -> payload`, plus two signatures over the
+  same bytes, one by the old Ed25519 key and one by the new, under
+  `underground-bb:key-rotation:v1` — pinning `KeyRotationPayload` (#62), plus
+  `RosterEntryID` (`SHA-256(SK || signature)` truncated to 16 bytes) and
+  `RosterDigest` (order-independent) behind its last field. Two cases: a
+  roster of one pin and one verification row, and an empty roster at a later
+  epoch. Each signature must verify only under its own key.
+- `handoff_wrap_aad`: `(user uuid, group id, generation, new wrapping public
+  key) -> AAD`, plus the AES-256-GCM ciphertext that AAD produces under a
+  fixed key/nonce/plaintext — pinning `HandoffWrapAAD` (#62), the AAD for a
+  rotation handoff row's wrap of a group key to the user's new X25519 key. Two
+  cases differ only in the group id, and a row must not open under the other's
+  AAD.
 - `role_grant`: `(group id, subject uuid, role, grantor grant ref) ->
   payload`, plus the Ed25519 signature over it — pinning `RoleGrantPayload`
   (#34). Two cases: a root grant (empty grantor grant ref, no predecessor to
