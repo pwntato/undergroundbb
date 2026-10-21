@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -713,5 +714,114 @@ func TestRotateKeysSweepsRowsNothingCanUse(t *testing.T) {
 	}
 	if handoffRowExists(t, user.userID, abandoned) {
 		t.Error("the sweep kept a row naming a key that is not the account's")
+	}
+}
+
+func TestUserProjectionServesTheKeyChangeChainWithoutTheRoster(t *testing.T) {
+	h := noCooldown(t)
+	user, cookie := loggedInUser(t, h)
+	_, viewerCookie := loggedInUser(t, h)
+
+	// No rotation yet: the chain is present and empty.
+	rec := doJSON(t, h, http.MethodGet, "/api/users/"+user.userID, viewerCookie, nil)
+	var detail struct {
+		KeyEpoch   uint64           `json:"keyEpoch"`
+		KeyChanges []keyChangeEntry `json:"keyChanges"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &detail) != nil {
+		t.Fatalf("get user: %d %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(rec.Body.Bytes(), &raw)
+	if string(raw["keyChanges"]) != "[]" {
+		t.Errorf("keyChanges before any rotation = %s, want []", raw["keyChanges"])
+	}
+
+	roster := [][]byte{randBytes(16), randBytes(16), randBytes(16)}
+	first := signedRotation(t, user, rotateOpts{roster: roster})
+	if rec := doRotateKeys(t, h, cookie, first.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, h, http.MethodGet, "/api/users/"+user.userID, viewerCookie, nil)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &detail) != nil {
+		t.Fatalf("get user: %d %s", rec.Code, rec.Body.String())
+	}
+	if detail.KeyEpoch != 1 || len(detail.KeyChanges) != 1 {
+		t.Fatalf("epoch = %d, chain = %+v", detail.KeyEpoch, detail.KeyChanges)
+	}
+	link := detail.KeyChanges[0]
+	if link.KeyEpoch != 1 || link.OldSigningPublicKey != pinB64(user.signPub) || link.NewSigningPublicKey != first.req.NewSigningPublicKey ||
+		link.OldSignature != first.req.OldSignature || link.NewSignature != first.req.NewSignature {
+		t.Errorf("link = %+v", link)
+	}
+	// What the viewer is served lets them verify the link themselves.
+	digest, _ := base64.StdEncoding.DecodeString(link.RosterDigest)
+	oldSig, _ := base64.StdEncoding.DecodeString(link.OldSignature)
+	payload := crypto.KeyRotationPayload(user.userID, user.signPub, user.wrapPub, first.next.signPub, first.next.wrapPub, link.Day, 0, digest)
+	if !crypto.Verify(user.signPub, crypto.ContextKeyRotation, payload, oldSig) {
+		t.Error("the served link does not verify under the old key")
+	}
+	// The roster itself is not in the response: its length is private.
+	if bytesContain(rec.Body.Bytes(), pinB64(roster[0])) || bytesContain(rec.Body.Bytes(), "roster\"") {
+		t.Errorf("GET /api/users served the roster: %s", rec.Body.String())
+	}
+	// The batch read stays chain-free.
+	batch := doJSON(t, h, http.MethodPost, "/api/users:batch", viewerCookie, batchUsersRequest{IDs: []string{user.userID}})
+	if bytesContain(batch.Body.Bytes(), "keyChanges") {
+		t.Errorf("batch read served the chain: %s", batch.Body.String())
+	}
+
+	// The owner, and only the owner, gets the roster list from GET /api/pins.
+	pins := decodePins(t, doListPins(t, h, loginCookie(t, h, first.next), ""))
+	if len(pins.KeyChangeRosters) != 1 || pins.KeyChangeRosters[0].KeyEpoch != 1 || len(pins.KeyChangeRosters[0].Roster) != 3 {
+		t.Fatalf("keyChangeRosters = %+v", pins.KeyChangeRosters)
+	}
+	got := map[string]bool{}
+	for _, e := range pins.KeyChangeRosters[0].Roster {
+		got[e] = true
+	}
+	for _, e := range roster {
+		if !got[pinB64(e)] {
+			t.Errorf("roster entry %x missing from GET /api/pins", e)
+		}
+	}
+	other := decodePins(t, doListPins(t, h, viewerCookie, ""))
+	if len(other.KeyChangeRosters) != 0 {
+		t.Errorf("another user's GET /api/pins carried a roster: %+v", other.KeyChangeRosters)
+	}
+}
+
+func bytesContain(b []byte, s string) bool { return strings.Contains(string(b), s) }
+
+func TestDeleteAccountSweepsHandoffAndCooldownRowsButKeepsTheChain(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	rot := signedRotation(t, user, rotateOpts{})
+	if rec := doRotateKeys(t, h, cookie, rot.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body.String())
+	}
+	// A handoff row the account was left with (its group is gone).
+	gid := "11111111-2222-4333-8444-555555555555"
+	if _, err := rawDDB(t).PutItem(t.Context(), &dynamodb.PutItemInput{
+		TableName: aws.String(testTableName()),
+		Item: map[string]types.AttributeValue{
+			"PK":                   &types.AttributeValueMemberS{Value: "USER#" + user.userID},
+			"SK":                   &types.AttributeValueMemberS{Value: "HANDOFF#" + gid},
+			"Type":                 &types.AttributeValueMemberS{Value: "Handoff"},
+			"GroupID":              &types.AttributeValueMemberS{Value: gid},
+			"NewWrappingPublicKey": &types.AttributeValueMemberB{Value: rot.next.wrapPub},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := loginCookie(t, h, rot.next)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account", fresh, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if handoffRowExists(t, user.userID, gid) || getRow(t, "USER#"+user.userID, "ROTCOOLDOWN") != nil {
+		t.Error("account deletion left a handoff or cooldown row")
+	}
+	if getRow(t, "USER#"+user.userID, db.KeyChangeSortKey(1)) == nil {
+		t.Error("account deletion removed the KEYCHANGE# chain, which the tombstone keeps")
 	}
 }

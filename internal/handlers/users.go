@@ -40,6 +40,35 @@ type userProjection struct {
 	Deleted bool `json:"deleted,omitempty"`
 }
 
+// keyChangeEntry is one KEYCHANGE# row as served (#62): the payload both keys
+// signed, minus the roster list, and both signatures. The list is withheld
+// because its length would tell anyone how many people this user has pinned or
+// verified; only its digest is public, and GET /api/pins serves the list to its
+// owner. A client verifies each link: the old key signed it, the new key
+// signed it, and each link's old key is the previous link's new key.
+type keyChangeEntry struct {
+	KeyEpoch             uint64 `json:"keyEpoch"`
+	Day                  string `json:"day"`
+	OldSigningPublicKey  string `json:"oldSigningPublicKey"`
+	OldWrappingPublicKey string `json:"oldWrappingPublicKey"`
+	NewSigningPublicKey  string `json:"newSigningPublicKey"`
+	NewWrappingPublicKey string `json:"newWrappingPublicKey"`
+	RosterDigest         string `json:"rosterDigest"`
+	OldSignature         string `json:"oldSignature"`
+	NewSignature         string `json:"newSignature"`
+}
+
+// userDetailProjection is the single-user read: the projection plus the user's
+// whole KEYCHANGE# chain, so a client can tell "rotated by the holder of the
+// key you saved" from "changed with no link". The batch read does not carry it
+// (a roster is up to a hundred users and the chain is only needed for the one a
+// pin check blocked on). The chain is always present, empty for a user who has
+// never rotated, so an absent field is never mistaken for an empty chain.
+type userDetailProjection struct {
+	userProjection
+	KeyChanges []keyChangeEntry `json:"keyChanges"`
+}
+
 // getUser implements GET /api/users/{userId} -- issue #157. Any
 // authenticated user may read any user's projection. A malformed id and an
 // unknown id get the same 404.
@@ -62,7 +91,27 @@ func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not read user")
 		return
 	}
-	WriteJSON(w, http.StatusOK, projectUser(id, user))
+	rows, err := h.db.ListKeyChanges(r.Context(), id)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not read user")
+		return
+	}
+	enc := base64.StdEncoding.EncodeToString
+	chain := make([]keyChangeEntry, 0, len(rows))
+	for _, row := range rows {
+		chain = append(chain, keyChangeEntry{
+			KeyEpoch:             row.KeyEpoch,
+			Day:                  row.Day,
+			OldSigningPublicKey:  enc(row.OldSigningPublicKey),
+			OldWrappingPublicKey: enc(row.OldWrappingPublicKey),
+			NewSigningPublicKey:  enc(row.NewSigningPublicKey),
+			NewWrappingPublicKey: enc(row.NewWrappingPublicKey),
+			RosterDigest:         enc(row.RosterDigest),
+			OldSignature:         enc(row.OldSignature),
+			NewSignature:         enc(row.NewSignature),
+		})
+	}
+	WriteJSON(w, http.StatusOK, userDetailProjection{userProjection: projectUser(id, user), KeyChanges: chain})
 }
 
 // projectUser is the one place a User item becomes its served projection, for

@@ -129,7 +129,7 @@ func (c *Client) tombstoneAccount(ctx context.Context, userID, usernameLower str
 	return nil
 }
 
-// sweepUserRows removes the user's own PIN#, VERIFIED#, SENT# and CHALLENGE rows, the
+// sweepUserRows removes the user's own PIN#, VERIFIED#, HANDOFF#, SENT#, CHALLENGE and ROTCOOLDOWN rows, the
 // INVITE# row behind each SENT#, and the invites addressed to them (the GSI1
 // "INVITE#" reverse lookup). Invites others sent are removed because the
 // invitee can no longer complete them. A SENT# copy held by another inviter
@@ -157,7 +157,10 @@ func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
 				continue
 			}
 			switch {
-			case strings.HasPrefix(sk.Value, "PIN#"), strings.HasPrefix(sk.Value, "VERIFIED#"), sk.Value == "CHALLENGE":
+			case strings.HasPrefix(sk.Value, "PIN#"), strings.HasPrefix(sk.Value, "VERIFIED#"), sk.Value == "CHALLENGE",
+				strings.HasPrefix(sk.Value, handoffPrefix), sk.Value == rotCooldownSortKey:
+				// KEYCHANGE# rows stay with the tombstone: they are the chain that
+				// lets a signature made under an earlier key still be traced.
 			case strings.HasPrefix(sk.Value, "SENT#"):
 				if iid, ok := it["InviteID"].(*types.AttributeValueMemberS); ok && iid.Value != "" {
 					keys = append(keys, map[string]types.AttributeValue{

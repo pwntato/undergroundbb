@@ -66,7 +66,7 @@ func TestGetUserProjectionLeaksNothingElse(t *testing.T) {
 	if err := json.Unmarshal(doGetUser(t, h, cookie, target.userID).Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true, "keyEpoch": true}
+	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true, "keyEpoch": true, "keyChanges": true}
 	for k := range raw {
 		if !want[k] {
 			t.Errorf("unexpected field %q in projection", k)
