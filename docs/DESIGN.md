@@ -632,8 +632,17 @@ operator holding a leaked key can sign a fork that ends at a key of its own, but
 user's real keys), and **the flow holds this tab's pin and verification writes from building the digest until the
 commit** (the commit signs every other session out, so after it only this tab can write). A row
 that nonetheless lands in between, from another device, is not listed, so it reads as `bad-signature`
-and is named to the user: the honest race fails loud, not silent, and the user re-pins that person
-explicitly.
+and is named to the user: the honest race fails loud, not silent.
+
+**A `bad-signature` pin has one resolution, an explicit "reset saved key" action.** Without one, a
+member whose pin fails verification would block every rotation that admin runs, with nothing to
+resolve it. The roster and the `runRotation` outcome name the person and offer the action, which
+shows their fingerprint to compare out of band and, on confirmation, signs a fresh v2 pin for the
+keys now served and writes it with the existing `PUT /api/pins/{userId}`, which replaces the row (no
+delete endpoint is needed). It is never taken automatically and never by a rotation job. It gives
+the server no power it lacks, since the server can already delete a pin, and it makes the user's
+decision visible. A `bad-signature` verification record is resolved the same way, by checking the
+fingerprint again, which signs a new record over the old one.
 
 With the epoch in the pin the verdicts become: served set equal and epoch equal → **match**; served
 epoch lower → **rollback** (hard-block: the server is serving keys older than ones this account
@@ -1413,10 +1422,12 @@ server-substituted X25519 key for that member would hand the server the key and 
 Before wrapping to anyone the job checks their served keys against the caller's signed pin: a match
 is wrapped to; a first sighting is pinned (trust on first use, as the roster does) and wrapped to; a
 mismatch or bad signature is skipped, reported, never wrapped to and never re-pinned over, and the
-rotation is left unfinished (`members_behind`) until a person resolves it. Two cases are resolved
-without stalling: a dormant member is excluded from the recipient set and from `members_behind` (see
-"Dormant memberships"), and a member whose keys changed with an approval by another admin is reported
-as "approved elsewhere; accept to continue" (see "Other admins after an approval"). An unreadable pin set, or
+rotation is left unfinished (`members_behind`) until a person resolves it. A dormant member is the
+exception that does not stall: it is excluded from the recipient set and from `members_behind` (see
+"Dormant memberships"). A member whose keys changed with an approval by another admin is reported as
+"approved elsewhere; accept to continue" and still waits for that admin to accept (see "Other admins
+after an approval"), and a `bad-signature` pin waits for "reset saved key" (see "What a key change
+looks like to others"). An unreadable pin set, or
 keys that cannot be fetched, stops the run rather than wrapping unchecked. This differs from the
 roster's grant check, which can show a mark while "unchecked": there the worst case is a missing
 badge, here it is a leaked key. The job re-lists members each pass (state, not a cursor), re-wraps
