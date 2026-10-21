@@ -475,7 +475,7 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 		return nil
 	}
 	switch {
-	case in.Cooldown > 0 && isConditionalCheckFailure(err, cooldownIndex):
+	case isConditionalCheckFailure(err, cooldownIndex):
 		return ErrRotationCooldown
 	case isConditionalCheckFailure(err, 2):
 		return ErrKeyEpochStale
