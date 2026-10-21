@@ -49,10 +49,11 @@ type MemberRewrap struct {
 	UserID  string
 	Wrapped models.WrappedKey
 	// WrapEpoch is the recipient's KeyEpoch the wrap was made to (#62). It must
-	// be their current epoch, and it must be the epoch their existing entry
-	// point is already at: a member whose entry is behind their KeyEpoch is
-	// dormant and is not wrapped to by a rotation. It becomes the member's new
-	// WrapEpoch.
+	// be their current epoch (checked against PROFILE in the same transaction)
+	// and the epoch their existing entry point is already at: a member whose
+	// entry is behind their KeyEpoch is dormant and an ordinary rotation does
+	// not wrap to them. So the member's own WrapEpoch is the same value and is
+	// not rewritten here; only an explicit approval moves it.
 	WrapEpoch uint64
 }
 
@@ -189,7 +190,7 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		items = append(items, types.TransactWriteItem{Update: &types.Update{
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, w.UserID),
-			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped, WrapEpoch = :wep"),
+			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped"),
 			ConditionExpression:      aws.String(memberCond + " AND " + epochEquals("WrapEpoch", ":wep", w.WrapEpoch)),
 			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{

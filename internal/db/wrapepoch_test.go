@@ -245,7 +245,7 @@ func TestRewrapNeverWrapsToADormantMember(t *testing.T) {
 	}
 }
 
-func TestRewrapRecordsTheEpochOfARecipientWhoNeverRotated(t *testing.T) {
+func TestRewrapToARecipientWhoNeverRotated(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	g := startedRotation(t, c)
