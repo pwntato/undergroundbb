@@ -405,7 +405,7 @@ attacker with theirs. So a rotation does not re-wrap anything. The membership ro
 user stays in the member list and keeps their attributed history, and they cannot read new content
 until an admin or ambassador acts in each group. That concentrates the work into one deliberate
 action per group by someone who already has the authority, rather than spreading warnings across
-every co-member. It is the same re-invitation event the pinning section describes.
+every co-member. It is the same key-change event the pinning section describes, resolved by approval.
 
 **Dormancy is derived, not stored.** Each `MEMBER#` row records `WrapEpoch`, the recipient's
 `KeyEpoch` when that wrap was made (an absent attribute reads as 0). A membership is dormant
@@ -491,10 +491,28 @@ client runs the re-key itself in each `Rotating` group where the user is an admi
 rotation job, with every recipient's pin and admission checks, plus their own new key) and
 self-wraps the current key in each `Open` group where they are an admin. This is what keeps a
 group whose only admin rotates, and a solo group, from becoming unreadable to anyone, and it cuts
-the old keys off at once in those groups. It is a resumable job like any other, driven by the same
-`WrapEpoch` state, so a closed tab falls back to the explicit approval by another admin. Other
-members still see the admin's key change through their pins, so it is not silent. Members and
-ambassadors have no such path; they wait for an admin.
+the old keys off at once in those groups. Other members still see the admin's key change through
+their pins, so it is not silent. Members and ambassadors have no such path; they wait for an admin.
+
+**The self re-key must survive a closed tab, so it does not depend on the old private key.** After
+`rotate-keys` commits, `PROFILE` and `RECOVERY` hold only the new keys, and a re-key start needs the
+current group key, which the client could otherwise only get by unwrapping its `MEMBER#` entry with
+the old X25519 key, which now exists only in that tab. So before `rotate-keys` the client, holding
+the old keys, writes one **handoff row** per group where it is an admin: `HANDOFF#<groupId>` in the
+caller's own partition, holding that group's current key and generation wrapped (ECIES) to the
+**new** X25519 public key, plus that public key. These are written with ordinary writes
+(`PUT /api/account/rotation-handoff/{groupId}`, authenticated by the old session), not in the
+`rotate-keys` transaction, so the number of admin groups is not capped by the 100-item transaction
+limit. `rotate-keys` refuses with 409 `handoff_required` unless every group where the caller is an
+admin has a row naming the new key at that group's current generation, and the flow re-sends any it
+names. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
+new private key from any later session, runs, and deletes the row when the group's start (or
+self-wrap) commits, so it resumes like any other rotation job. A row carries a TTL, so an abandoned
+rotation leaves nothing behind. A thief gets nothing from these rows: only the holder of the new
+private key can open them, and the old keys already open the same groups. One window remains: if
+another admin advances a group's generation between the check and the commit, that group's row is
+stale and is treated as not handed off; the group then has another admin to approve, by
+construction. Other than that, no group the user administers depends on a tab staying open.
 
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check
@@ -590,7 +608,7 @@ lets the client verify whether the new key was introduced by a holder of the pin
 is signed by the key before it and by the key after it). The block then reads either **"keys
 rotated by the holder of the key you saved"** or **"keys changed with no link to the key you
 saved"**, which is the operator-substitution signature, since the operator never holds the old
-private key. Both block, and both resolve through re-invitation. The link informs the human
+private key. Both block, and both resolve through approval ("Approval: what the admin does", and "Other admins after an approval"). The link informs the human
 deciding whether to approve; it never approves anything. A link is also exactly what someone with
 the stolen keys can produce, which is why it is evidence and not a trust path.
 
@@ -678,8 +696,9 @@ including in another session on the same device.
 **Group governance rules — who may leave, what happens to the last admin of a group, how a
 successor is chosen — are decided in the issues rather than here.** They are membership policy
 rather than cryptography, and they do not change any key or item in this document. The one overlap:
-a group whose only admin rotates is handled by the self-approval above while the tab stays open; if
-it does not, nobody can act until they are re-invited or another admin exists, which is the same
+a group whose only admin rotates is handled by the self-approval above, which resumes from the
+handoff rows and so does not need the tab to stay open; if a row is stale (see above) and the group
+has no other admin, nobody can act until another admin exists, which is the same
 state as a sole admin who has lost their key, and the successor designation exists for it.
 
 ### Key pinning and verification
@@ -702,7 +721,7 @@ is not a pin.** This is the property the whole mechanism rests on, and it is not
 is a row in the same table as everything else, so without a signature the hard-block compares a key
 the server just served against a pin the server also just served: an operator substituting a key
 does not have to defeat the comparison, it rewrites the pin to match, and the client compares two
-attacker-chosen values and sees nothing wrong. No mismatch, no hard-block, no re-invitation
+attacker-chosen values and sees nothing wrong. No mismatch, no hard-block, no approval
 ceremony. The signature is what makes the record trustworthy to the only party who cares about it —
 the client that wrote it — and a client that stores a pin and reads it back without verifying has
 implemented something that passes every test and protects against nothing.
@@ -759,7 +778,7 @@ their Ed25519 signing keys as a *set* (current plus every superseded key, order 
 both uuids and the pinner's own signing key. A served key set matches only if it is **exactly equal** to the pinned
 one. A set that merely *adds* a key is a mismatch, not an "extension": a server inventing a superseded key for
 someone looks identical, and that key would then verify backdated grants. A legitimate rotation is a different
-set with a higher `KeyEpoch`, so it hard-blocks and resolves through re-invitation like any other change; the
+set with a higher `KeyEpoch`, so it hard-blocks and resolves through approval like any other change; the
 `KEYCHANGE#` chain only tells the person deciding whether the new key was introduced by a holder of the pinned one. Implemented as `PUT /api/pins/{userId}`
 (the server checks the signature under the caller's current key, for hygiene only) and `GET /api/pins` (the caller's
 own pins, unverified by the server); the verdict logic is `evaluatePin` in `web/src/lib/crypto/pin.ts`.
@@ -770,17 +789,18 @@ says "verified" only when the group anchor and every grantor's keys all matched 
 the key *set* and the pinned user's `KeyEpoch`, not the intervals of superseded keys; those are served and chained
 (Key rotation, above), and a set that differs from the pinned one blocks regardless.
 
-Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is a
-**re-invitation event**: the user's group memberships go dormant, and an admin or ambassador
-re-invites them through the same signed handshake, which forces exactly one deliberate check by
-someone with authority rather than N warnings across N members.
+Resolving a mismatch is deliberately not a dismissable dialog. A legitimate key change is an
+**approval event**: the user's group memberships go dormant, and an admin or ambassador approves
+the new keys (the rewrap endpoint, or an admin's re-key), which forces exactly one deliberate check
+by someone with authority rather than N warnings across N members. The invite handshake's point,
+that the invitee signs their own keys, is carried here by the second signature on the `KEYCHANGE#`
+link.
 
-The re-invitation flow is therefore the one path that **clears a stale pin rather than blocking on
-it**. The authorizing admin's own client also sees the mismatch, and a blanket "hard-block on
+Approval is therefore the one path that **clears a stale pin rather than blocking on it**. The authorizing admin's own client also sees the mismatch, and a blanket "hard-block on
 mismatch" check would block the very operation that resolves it, making a key change unrecoverable.
-Approving the re-invite *is* the trust decision, and it replaces that admin's pin explicitly. Other
+Approving the key change *is* the trust decision, and it replaces that admin's pin explicitly. Other
 members' pins do **not** update by themselves; see "Other admins after an approval" in the Key
-rotation section for how each of them resolves it. This delegates verification to whoever re-invited — a
+rotation section for how each of them resolves it. This delegates verification to whoever approved — a
 real trust decision, and the honest limit of what pinning gives you.
 
 **A fingerprint is SHA-256 over both of a user's current public keys — the Ed25519 signing key and
@@ -2003,7 +2023,7 @@ credential the system generates rather than the user, so its entropy is fully wi
 control and is stated rather than assumed.
 
 That derivation does have one case it does not survive, and it is worth naming rather than leaving
-to be discovered: a **keypair change resets preferences**. A pinned key change is a re-invitation
+to be discovered: a **keypair change resets preferences**. A pinned key change is an approval
 event, and the new X25519 key is a new HKDF input, so the old blob will not open. This is acceptable
 only because of what the blob holds — a theme and a font, both re-choosable in a few seconds — and
 it would not be acceptable for anything the user could not trivially reconstruct. Nothing else in
