@@ -52,6 +52,11 @@ type Config struct {
 	// burst of a rotation (one GENKEY link plus one wrap per member), so it is a
 	// tuning knob: raise it only after checking that burst.
 	MaxRotatingGroupMembers int
+	// KeyRotationCooldown is the shortest time between two key rotations of one
+	// account (#62). Each rotation obliges an admin in every group the user
+	// belongs to to act, so an uncapped rotation is a way to keep those groups
+	// busy; docs/DESIGN.md sets it at 24 hours.
+	KeyRotationCooldown time.Duration
 
 	// SessionSecret is the HMAC key session.Signer uses to issue and verify
 	// login session cookies -- see internal/session. Treat it as a
@@ -78,6 +83,11 @@ const (
 	DefaultRegistrationPolicy      = RegistrationOpen
 	DefaultAllowGroupExpirationOff = true
 	DefaultExpirationDays          = 30
+	// DefaultKeyRotationCooldown is KeyRotationCooldown's default, and
+	// MinKeyRotationCooldown and MaxKeyRotationCooldown bound the setting.
+	DefaultKeyRotationCooldown = 24 * time.Hour
+	MinKeyRotationCooldown     = time.Hour
+	MaxKeyRotationCooldown     = 30 * 24 * time.Hour
 	// DefaultMaxRotatingGroupMembers is MaxRotatingGroupMembers's default.
 	DefaultMaxRotatingGroupMembers = 1000
 	// MinRotatingGroupMembers and MaxRotatingGroupMembersCeiling bound the
@@ -129,6 +139,7 @@ func FromEnv() Config {
 		AllowGroupExpirationOff: BoolEnvOrDefault("ALLOW_GROUP_EXPIRATION_OFF", DefaultAllowGroupExpirationOff),
 		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
 		MaxRotatingGroupMembers: rotatingGroupMembersEnvOrDefault("MAX_ROTATING_GROUP_MEMBERS", DefaultMaxRotatingGroupMembers),
+		KeyRotationCooldown:     keyRotationCooldownEnvOrDefault("KEY_ROTATION_COOLDOWN_HOURS", DefaultKeyRotationCooldown),
 		SessionSecret:           sessionSecretBytes,
 		SessionTTL:              sessionTTLEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
 	}
@@ -218,6 +229,24 @@ func registrationPolicyEnvOrDefault(key, def string) string {
 		return RegistrationClosed
 	}
 	return v
+}
+
+// keyRotationCooldownEnvOrDefault reads KEY_ROTATION_COOLDOWN_HOURS. Unset or
+// unparseable falls back to def; a value outside [MinKeyRotationCooldown,
+// MaxKeyRotationCooldown] is clamped with a warning, as the other tuning knobs
+// are. The floor keeps the knob from being set to "no limit" by accident.
+func keyRotationCooldownEnvOrDefault(key string, def time.Duration) time.Duration {
+	hours := Int64EnvOrDefault(key, int64(def/time.Hour))
+	d := time.Duration(hours) * time.Hour
+	switch {
+	case d < MinKeyRotationCooldown:
+		log.Printf("warning: %s=%d is below the minimum of %s, using the minimum", key, hours, MinKeyRotationCooldown)
+		return MinKeyRotationCooldown
+	case d > MaxKeyRotationCooldown:
+		log.Printf("warning: %s=%d exceeds the maximum of %s, using the maximum", key, hours, MaxKeyRotationCooldown)
+		return MaxKeyRotationCooldown
+	}
+	return d
 }
 
 // rotatingGroupMembersEnvOrDefault reads MAX_ROTATING_GROUP_MEMBERS. Unset or
