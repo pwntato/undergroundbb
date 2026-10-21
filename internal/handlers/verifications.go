@@ -21,12 +21,14 @@ const (
 
 // verificationRequest is the wire shape of PUT /api/verifications/{userId}. The
 // client signs crypto.VerificationPayload(verifierUUID, verifiedUUID,
-// verifierSigningPublicKey, fingerprint) under crypto.ContextVerification with
+// verifierSigningPublicKey, fingerprint, signedDay) under crypto.ContextVerification (v2) with
 // its own current signing key. Keys and the signature are base64.
 type verificationRequest struct {
 	Fingerprint              string `json:"fingerprint"`
 	VerifierSigningPublicKey string `json:"verifierSigningPublicKey"`
 	Signature                string `json:"signature"`
+	// SignedDay is the UTC day signed ("2006-01-02"), inside the signed payload (v2).
+	SignedDay string `json:"signedDay"`
 }
 
 // verificationEntry is one record as served by GET /api/verifications.
@@ -35,6 +37,7 @@ type verificationEntry struct {
 	Fingerprint              string `json:"fingerprint"`
 	VerifierSigningPublicKey string `json:"verifierSigningPublicKey"`
 	Signature                string `json:"signature"`
+	SignedDay                string `json:"signedDay"`
 }
 
 type listVerificationsResponse struct {
@@ -107,11 +110,15 @@ func (h *Handler) putVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validSignedDay(req.SignedDay) {
+		WriteError(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)")
+		return
+	}
 	if string(signer) != string(verifier.SigningPublicKey) {
 		WriteErrorWithCode(w, http.StatusConflict, "verification is not signed under your current key; re-sign", "verification_signer_stale")
 		return
 	}
-	payload := crypto.VerificationPayload(userID, verifiedID, signer, req.Fingerprint)
+	payload := crypto.VerificationPayload(userID, verifiedID, signer, req.Fingerprint, req.SignedDay)
 	if !crypto.Verify(verifier.SigningPublicKey, crypto.ContextVerification, payload, sig) {
 		WriteError(w, http.StatusBadRequest, "signature: does not verify")
 		return
@@ -125,7 +132,7 @@ func (h *Handler) putVerification(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "that user's keys changed; compare their fingerprint again", "fingerprint_stale")
 		return
 	}
-	if err := h.db.PutVerification(r.Context(), userID, verifiedID, req.Fingerprint, signer, sig); err != nil {
+	if err := h.db.PutVerification(r.Context(), userID, verifiedID, req.Fingerprint, signer, sig, req.SignedDay); err != nil {
 		WriteInternalError(w, r, err, "could not save verification")
 		return
 	}
@@ -188,6 +195,7 @@ func (h *Handler) listVerifications(w http.ResponseWriter, r *http.Request) {
 			VerifiedUserID:           v.SK[len("VERIFIED#"):],
 			Fingerprint:              v.Fingerprint,
 			VerifierSigningPublicKey: enc(v.VerifierSigningPublicKey),
+			SignedDay:                v.SignedDay,
 			Signature:                enc(v.Signature),
 		})
 	}

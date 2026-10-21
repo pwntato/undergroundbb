@@ -17,6 +17,8 @@ export interface UserProjection {
   readonly signingPublicKey: string
   readonly wrappingPublicKey: string
   readonly supersededSigningKeys: readonly WireSupersededKey[]
+  /** How many times the user has rotated their keys (#62); 0 if never. */
+  readonly keyEpoch: number
   /** A tombstoned account (#77): `username` is empty and the keys are served only so old signatures verify. */
   readonly deleted?: boolean
 }

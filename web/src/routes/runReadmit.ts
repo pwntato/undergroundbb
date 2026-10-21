@@ -151,7 +151,8 @@ async function inspect(
     pin: pins.find((p) => p.pinnedUserId === subjectUserId),
     served,
   })
-  if (verdict === 'mismatch' || verdict === 'bad-signature') {
+  // An allowlist, so a verdict added later (rollback was) cannot fall through.
+  if (verdict !== 'match' && verdict !== 'first-sight') {
     return { ok: false, kind: 'pinMismatch' }
   }
 
@@ -222,6 +223,7 @@ export async function runReadmit(
         subjectUserId,
         found.signingKeys.map(bytesToBase64),
         served.wrappingPublicKey,
+        served.keyEpoch,
       )
     } catch (err) {
       return { ok: false, kind: 'unchecked', reason: `could not save their keys: ${describe(err)}` }

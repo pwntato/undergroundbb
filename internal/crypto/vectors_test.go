@@ -35,6 +35,8 @@ type vectorFile struct {
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
+	KeyRotation          []keyRotationVector          `json:"key_rotation"`
+	HandoffWrap          []handoffWrapVector          `json:"handoff_wrap_aad"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
@@ -228,6 +230,8 @@ type pinVector struct {
 	PinnedUUID        string   `json:"pinned_uuid"`
 	WrappingPublicHex string   `json:"wrapping_public_key_hex"`
 	SigningKeysHex    []string `json:"signing_keys_hex"`
+	KeyEpoch          uint64   `json:"key_epoch"`
+	SignedDay         string   `json:"signed_day"`
 	PayloadHex        string   `json:"payload_hex"`
 	SignatureHex      string   `json:"signature_hex"`
 }
@@ -241,8 +245,46 @@ type verificationVector struct {
 	VerifiedSignHex string `json:"verified_signing_public_key_hex"`
 	VerifiedWrapHex string `json:"verified_wrapping_public_key_hex"`
 	Fingerprint     string `json:"fingerprint"`
+	SignedDay       string `json:"signed_day"`
 	PayloadHex      string `json:"payload_hex"`
 	SignatureHex    string `json:"signature_hex"`
+}
+
+type keyRotationVector struct {
+	Name            string      `json:"name"`
+	UserUUID        string      `json:"user_uuid"`
+	OldPrivateHex   string      `json:"old_private_key_hex"`
+	OldSigningHex   string      `json:"old_signing_public_key_hex"`
+	OldWrappingHex  string      `json:"old_wrapping_public_key_hex"`
+	NewPrivateHex   string      `json:"new_private_key_hex"`
+	NewSigningHex   string      `json:"new_signing_public_key_hex"`
+	NewWrappingHex  string      `json:"new_wrapping_public_key_hex"`
+	UTCDay          string      `json:"utc_day"`
+	KeyEpoch        uint64      `json:"key_epoch"`
+	RosterRows      []rosterRow `json:"roster_rows"`
+	RosterDigestHex string      `json:"roster_digest_hex"`
+	PayloadHex      string      `json:"payload_hex"`
+	OldSignatureHex string      `json:"old_signature_hex"`
+	NewSignatureHex string      `json:"new_signature_hex"`
+}
+
+type rosterRow struct {
+	SK           string `json:"sk"`
+	SignatureHex string `json:"signature_hex"`
+	EntryIDHex   string `json:"entry_id_hex"`
+}
+
+type handoffWrapVector struct {
+	Name                 string `json:"name"`
+	UserUUID             string `json:"user_uuid"`
+	GroupID              string `json:"group_id"`
+	Generation           uint64 `json:"generation"`
+	NewWrappingPublicHex string `json:"new_wrapping_public_key_hex"`
+	AADHex               string `json:"aad_hex"`
+	KeyHex               string `json:"key_hex"`
+	PlaintextHex         string `json:"plaintext_hex"`
+	NonceHex             string `json:"nonce_hex"`
+	CiphertextHex        string `json:"ciphertext_hex"`
 }
 
 type memberWrapVector struct {
@@ -863,8 +905,8 @@ func TestVectorAdmission(t *testing.T) {
 // orders and must share a payload).
 func TestVectorPin(t *testing.T) {
 	v := loadVectors(t)
-	if len(v.Pin) < 3 {
-		t.Fatalf("expected at least 3 pin vectors, got %d", len(v.Pin))
+	if len(v.Pin) != 4 {
+		t.Fatalf("expected 4 pin vectors, got %d", len(v.Pin))
 	}
 	for _, tc := range v.Pin {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -877,7 +919,7 @@ func TestVectorPin(t *testing.T) {
 				keys = append(keys, mustHex(t, k))
 			}
 
-			gotPayload := PinPayload(tc.PinnerUUID, tc.PinnedUUID, pub, mustHex(t, tc.WrappingPublicHex), keys)
+			gotPayload := PinPayload(tc.PinnerUUID, tc.PinnedUUID, pub, mustHex(t, tc.WrappingPublicHex), keys, tc.KeyEpoch, tc.SignedDay)
 			if !bytes.Equal(gotPayload, wantPayload) {
 				t.Fatalf("PinPayload = %x, want %x", gotPayload, wantPayload)
 			}
@@ -891,6 +933,9 @@ func TestVectorPin(t *testing.T) {
 			if !Verify(pub, ContextPin, wantPayload, wantSig) {
 				t.Fatal("Verify rejected the vector's own signature over PinPayload")
 			}
+			if Verify(pub, SigningContext("underground-bb:pin:v1"), wantPayload, wantSig) {
+				t.Fatal("a v2 pin signature must not verify under the v1 context")
+			}
 		})
 	}
 	if v.Pin[0].PayloadHex != v.Pin[1].PayloadHex {
@@ -898,6 +943,9 @@ func TestVectorPin(t *testing.T) {
 	}
 	if v.Pin[0].PayloadHex == v.Pin[2].PayloadHex {
 		t.Fatal("a different key set must produce a different payload")
+	}
+	if v.Pin[0].PayloadHex == v.Pin[3].PayloadHex {
+		t.Fatal("a different pinned KeyEpoch must produce a different payload")
 	}
 }
 
@@ -922,7 +970,7 @@ func TestVectorVerification(t *testing.T) {
 			if fp != tc.Fingerprint {
 				t.Fatalf("Fingerprint = %q, want %q", fp, tc.Fingerprint)
 			}
-			gotPayload := VerificationPayload(tc.VerifierUUID, tc.VerifiedUUID, pub, tc.Fingerprint)
+			gotPayload := VerificationPayload(tc.VerifierUUID, tc.VerifiedUUID, pub, tc.Fingerprint, tc.SignedDay)
 			if !bytes.Equal(gotPayload, wantPayload) {
 				t.Fatalf("VerificationPayload = %x, want %x", gotPayload, wantPayload)
 			}
@@ -938,6 +986,9 @@ func TestVectorVerification(t *testing.T) {
 			}
 			if Verify(pub, ContextPin, wantPayload, wantSig) {
 				t.Fatal("a verification signature must not verify under the pin context")
+			}
+			if Verify(pub, SigningContext("underground-bb:verification:v1"), wantPayload, wantSig) {
+				t.Fatal("a v2 verification signature must not verify under the v1 context")
 			}
 		})
 	}
@@ -1179,5 +1230,99 @@ func TestVectorInviteMAC(t *testing.T) {
 				t.Fatal("VerifyInviteMAC accepted a MAC key derived under a different invite id")
 			}
 		})
+	}
+}
+
+// TestVectorKeyRotation pins KeyRotationPayload's exact encoding (#62), the
+// RosterEntryID/RosterDigest derivation behind its last field, and that the
+// old-key and new-key signatures are two valid signatures over the same bytes
+// -- each under its own key only.
+func TestVectorKeyRotation(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.KeyRotation) != 2 {
+		t.Fatalf("want 2 key_rotation vectors, got %d", len(v.KeyRotation))
+	}
+	for _, tc := range v.KeyRotation {
+		t.Run(tc.Name, func(t *testing.T) {
+			oldPub, newPub := mustHex(t, tc.OldSigningHex), mustHex(t, tc.NewSigningHex)
+			var entries [][]byte
+			for _, r := range tc.RosterRows {
+				id := RosterEntryID(r.SK, mustHex(t, r.SignatureHex))
+				if !bytes.Equal(id, mustHex(t, r.EntryIDHex)) {
+					t.Fatalf("RosterEntryID(%q) = %x, want %s", r.SK, id, r.EntryIDHex)
+				}
+				entries = append(entries, id)
+			}
+			digest := RosterDigest(entries)
+			if !bytes.Equal(digest, mustHex(t, tc.RosterDigestHex)) {
+				t.Fatalf("RosterDigest = %x, want %s", digest, tc.RosterDigestHex)
+			}
+			if len(entries) > 1 {
+				reversed := [][]byte{entries[1], entries[0]}
+				if !bytes.Equal(RosterDigest(reversed), digest) {
+					t.Fatal("roster digest must not depend on entry order")
+				}
+			}
+			payload := KeyRotationPayload(tc.UserUUID, oldPub, mustHex(t, tc.OldWrappingHex), newPub, mustHex(t, tc.NewWrappingHex), tc.UTCDay, tc.KeyEpoch, digest)
+			if !bytes.Equal(payload, mustHex(t, tc.PayloadHex)) {
+				t.Fatalf("KeyRotationPayload = %x, want %s", payload, tc.PayloadHex)
+			}
+			oldSig, newSig := mustHex(t, tc.OldSignatureHex), mustHex(t, tc.NewSignatureHex)
+			gotOld, err := Sign(ed25519.PrivateKey(mustHex(t, tc.OldPrivateHex)), ContextKeyRotation, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotNew, err := Sign(ed25519.PrivateKey(mustHex(t, tc.NewPrivateHex)), ContextKeyRotation, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotOld, oldSig) || !bytes.Equal(gotNew, newSig) {
+				t.Fatal("Sign does not reproduce the vector's signatures")
+			}
+			if !Verify(oldPub, ContextKeyRotation, payload, oldSig) || !Verify(newPub, ContextKeyRotation, payload, newSig) {
+				t.Fatal("Verify rejected a vector signature under its own key")
+			}
+			if Verify(oldPub, ContextKeyRotation, payload, newSig) || Verify(newPub, ContextKeyRotation, payload, oldSig) {
+				t.Fatal("each rotation signature must verify only under its own key")
+			}
+			if Verify(oldPub, ContextPin, payload, oldSig) {
+				t.Fatal("a rotation signature must not verify under another context")
+			}
+		})
+	}
+	if v.KeyRotation[0].PayloadHex == v.KeyRotation[1].PayloadHex {
+		t.Fatal("different epoch and roster must produce different payloads")
+	}
+}
+
+// TestVectorHandoffWrap pins HandoffWrapAAD's exact encoding (#62) and the
+// ciphertext it produces, and that a row cannot open under another group's AAD.
+func TestVectorHandoffWrap(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.HandoffWrap) != 2 {
+		t.Fatalf("want 2 handoff_wrap_aad vectors, got %d", len(v.HandoffWrap))
+	}
+	for _, tc := range v.HandoffWrap {
+		t.Run(tc.Name, func(t *testing.T) {
+			aad := HandoffWrapAAD(tc.UserUUID, tc.GroupID, tc.Generation, mustHex(t, tc.NewWrappingPublicHex))
+			if !bytes.Equal(aad, mustHex(t, tc.AADHex)) {
+				t.Fatalf("HandoffWrapAAD = %q, want %x", aad, mustHex(t, tc.AADHex))
+			}
+			key, nonce, plaintext := mustHex(t, tc.KeyHex), mustHex(t, tc.NonceHex), mustHex(t, tc.PlaintextHex)
+			ct, err := EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(ct, mustHex(t, tc.CiphertextHex)) {
+				t.Fatalf("ciphertext = %x, want %s", ct, tc.CiphertextHex)
+			}
+			other := HandoffWrapAAD(tc.UserUUID, "some-other-group", tc.Generation, mustHex(t, tc.NewWrappingPublicHex))
+			if _, err := Decrypt(key, nonce, ct, other); err == nil {
+				t.Fatal("a handoff row must not open under another group's AAD")
+			}
+		})
+	}
+	if v.HandoffWrap[0].AADHex == v.HandoffWrap[1].AADHex {
+		t.Fatal("different groups must produce different AADs")
 	}
 }

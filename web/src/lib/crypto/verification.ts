@@ -26,26 +26,30 @@
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { lengthPrefixedConcat } from './payload.js'
+import { isUtcDay } from './pin.js'
 
 const encoder = new TextEncoder()
 
 /**
  * Builds the canonical byte string a VERIFIED# signature covers. Must match
  * internal/crypto/verification.go's VerificationPayload byte-for-byte (pinned
- * by the shared vectors). Sign under SigningContext.Verification. Never change
- * this once a real verification exists.
+ * by the shared vectors). utcDay is the UTC day signed (YYYY-MM-DD, #62). Sign
+ * under SigningContext.Verification (v2). Never change this once a real
+ * verification exists.
  */
 export function verificationPayload(
   verifierUUID: string,
   verifiedUUID: string,
   verifierSigningPublicKey: Uint8Array,
   fingerprint: string,
+  utcDay: string,
 ): Uint8Array {
   return lengthPrefixedConcat([
     encoder.encode(verifierUUID),
     encoder.encode(verifiedUUID),
     verifierSigningPublicKey,
     encoder.encode(fingerprint),
+    encoder.encode(utcDay),
   ])
 }
 
@@ -55,6 +59,8 @@ export interface VerificationRecord {
   readonly fingerprint: string
   readonly verifierSigningPublicKey: string
   readonly signature: string
+  /** The UTC day signed (YYYY-MM-DD), inside the signed payload. */
+  readonly signedDay: string
 }
 
 export type VerificationVerdict = 'none' | 'verified' | 'changed' | 'bad-signature'
@@ -98,7 +104,15 @@ export function evaluateVerification(input: EvaluateVerificationInput): Verifica
   // may verify a record, whatever the row claims.
   if (!bytesEqual(signer, verifierSigningPublicKey)) return 'bad-signature'
 
-  const payload = verificationPayload(verifierUserId, verifiedUserId, signer, record.fingerprint)
+  if (!isUtcDay(record.signedDay)) return 'bad-signature'
+
+  const payload = verificationPayload(
+    verifierUserId,
+    verifiedUserId,
+    signer,
+    record.fingerprint,
+    record.signedDay,
+  )
   if (!verify(signer, SigningContext.Verification, payload, signature)) return 'bad-signature'
 
   if (servedFingerprint === null || servedFingerprint !== record.fingerprint) return 'changed'

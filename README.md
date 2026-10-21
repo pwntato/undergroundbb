@@ -278,6 +278,18 @@ because the repo is public) to subscribe an address, and confirm the subscriptio
 sends. Async retries are off, so a failed run waits for the next schedule. Accounts created before the
 `TESTACCOUNT` GSI1 entry existed are invisible to it and need a one-off backfill.
 
+**One-time migration for key rotation (#62).** Pins and verification records moved to payload v2 (they
+carry a signed day, and a pin carries the pinned user's `KeyEpoch`), so every existing v1 `PIN#` and
+`VERIFIED#` row can only read as `bad-signature`. Run `cmd/wipe-v1-keyrows` once per environment, after
+the v2 code is deployed, from a shell with your own AWS credentials. It is not a Lambda and the Lambda
+roles do not carry the `dynamodb:Scan` it needs. It defaults to a dry run and only the exact string
+`WIPE_DRY_RUN=false` deletes; it only ever matches rows with no `SignedDay`, so it is safe to repeat:
+
+```sh
+AWS_REGION=us-west-2 TABLE_NAME=<table> go run ./cmd/wipe-v1-keyrows                      # report only
+AWS_REGION=us-west-2 TABLE_NAME=<table> WIPE_DRY_RUN=false go run ./cmd/wipe-v1-keyrows   # delete
+```
+
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
 (#8) is the intended access-control boundary, matching `docs/DESIGN.md`'s infrastructure diagram.
 

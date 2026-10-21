@@ -38,6 +38,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
+import { handoffWrapAAD, keyRotationPayload, rosterDigest, rosterEntryId } from './key-rotation.js'
 import { pinPayload } from './pin.js'
 import { verificationPayload } from './verification.js'
 import { unwrap, wrapWithEphemeralAndNonce } from './x25519.js'
@@ -218,6 +219,8 @@ interface VectorFile {
     pinned_uuid: string
     wrapping_public_key_hex: string
     signing_keys_hex: string[]
+    key_epoch: number
+    signed_day: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -230,8 +233,38 @@ interface VectorFile {
     verified_signing_public_key_hex: string
     verified_wrapping_public_key_hex: string
     fingerprint: string
+    signed_day: string
     payload_hex: string
     signature_hex: string
+  }[]
+  key_rotation: {
+    name: string
+    user_uuid: string
+    old_private_key_hex: string
+    old_signing_public_key_hex: string
+    old_wrapping_public_key_hex: string
+    new_private_key_hex: string
+    new_signing_public_key_hex: string
+    new_wrapping_public_key_hex: string
+    utc_day: string
+    key_epoch: number
+    roster_rows: { sk: string; signature_hex: string; entry_id_hex: string }[] | null
+    roster_digest_hex: string
+    payload_hex: string
+    old_signature_hex: string
+    new_signature_hex: string
+  }[]
+  handoff_wrap_aad: {
+    name: string
+    user_uuid: string
+    group_id: string
+    generation: number
+    new_wrapping_public_key_hex: string
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
   }[]
   member_wrap_aad: {
     name: string
@@ -652,6 +685,8 @@ describe('pin vectors', () => {
         key.publicKey,
         hexToBytes(tc.wrapping_public_key_hex),
         tc.signing_keys_hex.map(hexToBytes),
+        tc.key_epoch,
+        tc.signed_day,
       )
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
@@ -681,11 +716,86 @@ describe('verification vectors', () => {
         tc.verified_uuid,
         key.publicKey,
         tc.fingerprint,
+        tc.signed_day,
       )
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.Verification, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins keyRotationPayload's exact encoding (#62), the roster entry id and
+// digest behind its last field, and that the old-key and new-key signatures
+// are two valid signatures over the same bytes, each under its own key only.
+describe('key rotation vectors', () => {
+  for (const tc of vectors.key_rotation) {
+    it(tc.name, () => {
+      const oldKey = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.old_private_key_hex))
+      const newKey = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.new_private_key_hex))
+      expect(bytesToHex(oldKey.publicKey)).toBe(tc.old_signing_public_key_hex)
+      expect(bytesToHex(newKey.publicKey)).toBe(tc.new_signing_public_key_hex)
+
+      const entries = (tc.roster_rows ?? []).map((r) => {
+        const id = rosterEntryId(r.sk, hexToBytes(r.signature_hex))
+        expect(bytesToHex(id)).toBe(r.entry_id_hex)
+        return id
+      })
+      const digest = rosterDigest(entries)
+      expect(bytesToHex(digest)).toBe(tc.roster_digest_hex)
+      expect(bytesToHex(rosterDigest([...entries].reverse()))).toBe(tc.roster_digest_hex)
+
+      const payload = keyRotationPayload(
+        tc.user_uuid,
+        oldKey.publicKey,
+        hexToBytes(tc.old_wrapping_public_key_hex),
+        newKey.publicKey,
+        hexToBytes(tc.new_wrapping_public_key_hex),
+        tc.utc_day,
+        tc.key_epoch,
+        digest,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const oldSig = ed25519.sign(oldKey, ed25519.SigningContext.KeyRotation, payload)
+      const newSig = ed25519.sign(newKey, ed25519.SigningContext.KeyRotation, payload)
+      expect(bytesToHex(oldSig)).toBe(tc.old_signature_hex)
+      expect(bytesToHex(newSig)).toBe(tc.new_signature_hex)
+      expect(
+        ed25519.verify(oldKey.publicKey, ed25519.SigningContext.KeyRotation, payload, oldSig),
+      ).toBe(true)
+      expect(
+        ed25519.verify(newKey.publicKey, ed25519.SigningContext.KeyRotation, payload, newSig),
+      ).toBe(true)
+      expect(
+        ed25519.verify(oldKey.publicKey, ed25519.SigningContext.KeyRotation, payload, newSig),
+      ).toBe(false)
+      expect(
+        ed25519.verify(newKey.publicKey, ed25519.SigningContext.KeyRotation, payload, oldSig),
+      ).toBe(false)
+    })
+  }
+})
+
+// Pins handoffWrapAAD's exact encoding (#62) and the ciphertext it produces,
+// and that a handoff row does not open under another group's AAD.
+describe('handoff wrap AAD vectors', () => {
+  for (const tc of vectors.handoff_wrap_aad) {
+    it(tc.name, async () => {
+      const newWrap = hexToBytes(tc.new_wrapping_public_key_hex)
+      const gotAad = handoffWrapAAD(tc.user_uuid, tc.group_id, tc.generation, newWrap)
+      expect(bytesToHex(gotAad)).toBe(tc.aad_hex)
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const plaintext = hexToBytes(tc.plaintext_hex)
+      const ciphertext = await encryptWithNonce(key, nonce, plaintext, gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+      expect(bytesToHex(await decrypt(key, nonce, ciphertext, gotAad))).toBe(tc.plaintext_hex)
+
+      const other = handoffWrapAAD(tc.user_uuid, 'some-other-group', tc.generation, newWrap)
+      await expect(decrypt(key, nonce, ciphertext, other)).rejects.toThrow(DecryptionFailedError)
     })
   }
 })

@@ -96,6 +96,7 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
     pinnedUserId: string,
     signingPublicKeys: readonly string[],
     wrappingPublicKey: string,
+    keyEpoch: number,
   ) => Promise<void>
   readonly rewrapCrypto: (req: {
     readonly userId: string
@@ -795,7 +796,8 @@ async function resolveSignerKeys(
       pin: pins.find((p) => p.pinnedUserId === id),
       served: projection,
     })
-    if (verdict === 'mismatch' || verdict === 'bad-signature') {
+    // An allowlist, so a verdict added later (rollback was) cannot fall through.
+    if (verdict !== 'match' && verdict !== 'first-sight') {
       return { ok: false, reason: `the keys served for ${who} do not match your pin` }
     }
     keys.set(id, servedSigningKeySet(projection))
@@ -945,7 +947,8 @@ async function checkRecipient(
     pin: pins.get(userId),
     served,
   })
-  if (verdict === 'mismatch' || verdict === 'bad-signature') {
+  // An allowlist, so a verdict added later (rollback was) cannot fall through.
+  if (verdict !== 'match' && verdict !== 'first-sight') {
     return { ok: false, reason: 'blocked' }
   }
   if (verdict === 'first-sight') {
@@ -954,7 +957,7 @@ async function checkRecipient(
       return { ok: false, reason: 'blocked' }
     }
     try {
-      await deps.pinKeys(userId, keys.map(bytesToBase64), served.wrappingPublicKey)
+      await deps.pinKeys(userId, keys.map(bytesToBase64), served.wrappingPublicKey, served.keyEpoch)
     } catch (err) {
       return {
         ok: false,

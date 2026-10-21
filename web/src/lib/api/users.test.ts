@@ -7,6 +7,7 @@ const user = (userId: string): UserProjection => ({
   signingPublicKey: '',
   wrappingPublicKey: '',
   supersededSigningKeys: [],
+  keyEpoch: 0,
 })
 
 function response(status: number, body: unknown) {

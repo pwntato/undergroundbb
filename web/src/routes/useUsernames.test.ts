@@ -8,6 +8,7 @@ const user = (userId: string, username: string): UserProjection => ({
   signingPublicKey: '',
   wrappingPublicKey: '',
   supersededSigningKeys: [],
+  keyEpoch: 0,
 })
 
 /** A getUsers stand-in that knows every id except those in `unknown`. */

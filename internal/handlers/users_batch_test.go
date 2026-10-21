@@ -101,7 +101,7 @@ func TestBatchUsersLeaksNothingElse(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || len(raw.Users) != 1 {
 		t.Fatalf("decoding: %v: %s", err, rec.Body.String())
 	}
-	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true}
+	want := map[string]bool{"userId": true, "username": true, "signingPublicKey": true, "wrappingPublicKey": true, "supersededSigningKeys": true, "keyEpoch": true}
 	for k := range raw.Users[0] {
 		if !want[k] {
 			t.Errorf("unexpected field %q in projection", k)

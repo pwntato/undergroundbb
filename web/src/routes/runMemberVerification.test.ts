@@ -34,6 +34,7 @@ function user(id: string, key = generateSigningKey(), wrapping = wrap): UserProj
     signingPublicKey: bytesToBase64(key.publicKey),
     wrappingPublicKey: bytesToBase64(wrapping),
     supersededSigningKeys: [],
+    keyEpoch: 0,
   }
 }
 

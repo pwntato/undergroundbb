@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -20,15 +21,31 @@ const (
 	maxPinPageSize     = 200
 )
 
+// validSignedDay reports whether s is a well-formed UTC day ("2006-01-02") within
+// the usual clock-skew tolerance of now, the same window every client-dated claim
+// gets (grantDaySkewTolerance), so a record cannot be backdated or future-dated.
+func validSignedDay(s string) bool {
+	day, err := time.Parse("2006-01-02", s)
+	if err != nil || day.Format("2006-01-02") != s {
+		return false
+	}
+	skew := time.Since(day.UTC())
+	return skew >= -grantDaySkewTolerance && skew <= 24*time.Hour+grantDaySkewTolerance
+}
+
 // pinRequest is the wire shape of PUT /api/pins/{userId}. The client signs
 // crypto.PinPayload(pinnerUUID, pinnedUUID, pinnerSigningPublicKey,
-// wrappingPublicKey, signingPublicKeys) under crypto.ContextPin with its own
-// current signing key. All keys are base64.
+// wrappingPublicKey, signingPublicKeys, keyEpoch, signedDay) under
+// crypto.ContextPin (v2) with its own current signing key. All keys are base64.
 type pinRequest struct {
 	SigningPublicKeys      []string `json:"signingPublicKeys"`
 	WrappingPublicKey      string   `json:"wrappingPublicKey"`
 	PinnerSigningPublicKey string   `json:"pinnerSigningPublicKey"`
 	Signature              string   `json:"signature"`
+	// KeyEpoch is the pinned user's KeyEpoch the pinner saw; SignedDay is the
+	// UTC day signed ("2006-01-02"). Both are inside the signed payload (v2).
+	KeyEpoch  uint64 `json:"keyEpoch"`
+	SignedDay string `json:"signedDay"`
 }
 
 // pinEntry is one pin as served by GET /api/pins.
@@ -38,6 +55,8 @@ type pinEntry struct {
 	WrappingPublicKey      string   `json:"wrappingPublicKey"`
 	PinnerSigningPublicKey string   `json:"pinnerSigningPublicKey"`
 	Signature              string   `json:"signature"`
+	KeyEpoch               uint64   `json:"keyEpoch"`
+	SignedDay              string   `json:"signedDay"`
 }
 
 type listPinsResponse struct {
@@ -116,7 +135,7 @@ func (h *Handler) putPin(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not save pin")
 		return
 	}
-	_, pinnedErr := h.db.GetUserByID(r.Context(), pinnedID)
+	pinned, pinnedErr := h.db.GetUserByID(r.Context(), pinnedID)
 	if errors.Is(pinnedErr, db.ErrUserNotFound) {
 		userNotFound(w)
 		return
@@ -126,16 +145,26 @@ func (h *Handler) putPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validSignedDay(req.SignedDay) {
+		WriteError(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)")
+		return
+	}
 	if string(signer) != string(pinner.SigningPublicKey) {
 		WriteErrorWithCode(w, http.StatusConflict, "pin is not signed under your current key; re-sign", "pin_signer_stale")
 		return
 	}
-	payload := crypto.PinPayload(userID, pinnedID, signer, wrapping, keys)
+	// Hygiene, as for the signature: a pin of an epoch the pinned user is no
+	// longer at is a clear 409 instead of a row that reads as a key change.
+	if req.KeyEpoch != pinned.KeyEpoch {
+		WriteErrorWithCode(w, http.StatusConflict, "that user's keys changed; pin again", "pin_epoch_stale")
+		return
+	}
+	payload := crypto.PinPayload(userID, pinnedID, signer, wrapping, keys, req.KeyEpoch, req.SignedDay)
 	if !crypto.Verify(pinner.SigningPublicKey, crypto.ContextPin, payload, sig) {
 		WriteError(w, http.StatusBadRequest, "signature: does not verify")
 		return
 	}
-	if err := h.db.PutPin(r.Context(), userID, pinnedID, keys, wrapping, signer, sig); err != nil {
+	if err := h.db.PutPin(r.Context(), userID, pinnedID, keys, wrapping, signer, sig, req.KeyEpoch, req.SignedDay); err != nil {
 		WriteInternalError(w, r, err, "could not save pin")
 		return
 	}
@@ -183,6 +212,8 @@ func (h *Handler) listPins(w http.ResponseWriter, r *http.Request) {
 			WrappingPublicKey:      enc(p.WrappingPublicKey),
 			PinnerSigningPublicKey: enc(p.PinnerSigningPublicKey),
 			Signature:              enc(p.Signature),
+			KeyEpoch:               p.KeyEpoch,
+			SignedDay:              p.SignedDay,
 		})
 	}
 	WriteJSON(w, http.StatusOK, listPinsResponse{Pins: entries, NextCursor: next})

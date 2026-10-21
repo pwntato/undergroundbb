@@ -25,11 +25,17 @@ const (
 	ContextInvite SigningContext = "underground-bb:invite:v1"
 	// ContextTrustAnchor signs a group's creator-signed trust anchor.
 	ContextTrustAnchor SigningContext = "underground-bb:trust-anchor:v1"
-	// ContextPin signs a user's pin of another user's key set.
-	ContextPin SigningContext = "underground-bb:pin:v1"
+	// ContextPin signs a user's pin of another user's key set. v2 (#62) adds
+	// the signed day and the pinned user's KeyEpoch; a verifier uses only
+	// this context, so a row claiming v1 fails.
+	ContextPin SigningContext = "underground-bb:pin:v2"
 	// ContextVerification signs a user's record that they compared another
-	// user's fingerprint out of band and it matched (#65).
-	ContextVerification SigningContext = "underground-bb:verification:v1"
+	// user's fingerprint out of band and it matched (#65). v2 (#62) adds the
+	// signed day.
+	ContextVerification SigningContext = "underground-bb:verification:v2"
+	// ContextKeyRotation signs a user's key rotation (#62), once under the
+	// old Ed25519 key and once under the new one.
+	ContextKeyRotation SigningContext = "underground-bb:key-rotation:v1"
 	// ContextSuccessorDesignation signs an admin's designation of the member
 	// who takes over if they go inactive (#161).
 	ContextSuccessorDesignation SigningContext = "underground-bb:successor-designation:v1"

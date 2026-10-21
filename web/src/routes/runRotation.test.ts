@@ -63,18 +63,29 @@ function served(p: Person): UserProjection {
     signingPublicKey: b64(p.signing.publicKey),
     wrappingPublicKey: b64(p.wrapping),
     supersededSigningKeys: [],
+    keyEpoch: 0,
   }
 }
 
-function pinFor(p: Person, overrideWrapping?: Uint8Array): PinRecord {
+function pinFor(p: Person, overrideWrapping?: Uint8Array, keyEpoch = 0): PinRecord {
   const wrapping = overrideWrapping ?? p.wrapping
-  const payload = pinPayload(ME, p.id, me.publicKey, wrapping, [p.signing.publicKey])
+  const payload = pinPayload(
+    ME,
+    p.id,
+    me.publicKey,
+    wrapping,
+    [p.signing.publicKey],
+    keyEpoch,
+    '2026-10-21',
+  )
   return {
     pinnedUserId: p.id,
     signingPublicKeys: [b64(p.signing.publicKey)],
     wrappingPublicKey: b64(wrapping),
     pinnerSigningPublicKey: b64(me.publicKey),
     signature: b64(sign(me, SigningContext.Pin, payload)),
+    keyEpoch,
+    signedDay: '2026-10-21',
   }
 }
 
@@ -720,6 +731,25 @@ describe('runRotation', () => {
       expect(f.pinned).toEqual([]) // never re-pins over a mismatch
     })
 
+    // A pin signed at a higher epoch than the server now serves is a rollback,
+    // and a rollback with substituted keys must block exactly as a mismatch does
+    // (every caller allowlists match / first-sight; none may fall through).
+    it('never wraps to a member whose served keys are a rollback of a different pinned key', async () => {
+      const f = new Fake()
+      const ok = f.add(person())
+      const swapped = person()
+      // pinned at epoch 1 with a different wrapping key; the server serves epoch 0
+      f.add(swapped, 'member', 0, pinFor(swapped, new Uint8Array(32).fill(250), 1))
+
+      const out = await runRotation(f.deps(), GROUP)
+
+      expect(out).toEqual({ status: 'blocked', blocked: [swapped.id], rewrapped: 1 })
+      expect(f.cryptoRecipients.flat()).toEqual([ok.id])
+      expect(f.gen(swapped)).toBe(0)
+      expect(f.completed).toEqual([])
+      expect(f.pinned).toEqual([])
+    })
+
     it('re-reads pins every pass: a retry never re-pins over a key pinned earlier in the run', async () => {
       const f = new Fake()
       const x = f.add(person(), 'member', 0, null) // first-sight
@@ -887,6 +917,17 @@ describe('runRotation', () => {
       const f = new Fake()
       const eve = f.add(person(), 'admin')
       f.pins.set(eve.id, pinFor({ ...eve, signing: generateSigningKey() }))
+      f.links = [removalLink(0, { remover: eve.id, signer: eve.signing })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain('do not match your pin')
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it('stops when the other admin who signed a removal serves a rollback of the pinned keys', async () => {
+      const f = new Fake()
+      const eve = f.add(person(), 'admin')
+      f.pins.set(eve.id, pinFor({ ...eve, signing: generateSigningKey() }, undefined, 1))
       f.links = [removalLink(0, { remover: eve.id, signer: eve.signing })]
       const out = await runRotation(f.deps(), GROUP)
       expect(out.status).toBe('incomplete')
@@ -1978,6 +2019,21 @@ describe('re-admitting a member', () => {
       const x = unadmitted(f, pinFor({ ...person(), id: 'ignored' } as Person))
       // A valid pin of a different key set for x.
       f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251)))
+      const { deps, calls } = readmitDeps(f)
+      expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'pinMismatch' })
+      expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'pinMismatch',
+      })
+      expect(calls.signed).toEqual([])
+      expect(calls.posted).toEqual([])
+    })
+
+    it('blocks on a rollback of a different pinned key, before showing a fingerprint or signing', async () => {
+      const f = new Fake()
+      const x = unadmitted(f, pinFor({ ...person(), id: 'ignored' } as Person))
+      // Pinned at epoch 1 with a different wrapping key; the server serves epoch 0.
+      f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251), 1))
       const { deps, calls } = readmitDeps(f)
       expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'pinMismatch' })
       expect(await runReadmit(deps, GROUP, x.id, printOf(x))).toEqual({

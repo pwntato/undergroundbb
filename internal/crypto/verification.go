@@ -14,15 +14,20 @@ package crypto
 // signed under, which a client checks against its own current key and treats
 // anything else as tampering, as with pins.
 //
-// Sign this payload under ContextVerification; verify it the same way. Same
+// utcDay is the UTC day the record was signed ("2006-01-02"), so a verifier
+// can check it against the key that was current that day (#62). Unlike a pin
+// it carries no KeyEpoch: the fingerprint already covers both current keys.
+//
+// Sign this payload under ContextVerification (v2); verify it the same way. Same
 // length-prefixed encoding as the other payloads in this package, and the same
 // warning: this must never change once a real verification has been signed
 // under it.
-func VerificationPayload(verifierUUID, verifiedUUID string, verifierSigningPublicKey []byte, fingerprint string) []byte {
+func VerificationPayload(verifierUUID, verifiedUUID string, verifierSigningPublicKey []byte, fingerprint, utcDay string) []byte {
 	return lengthPrefixedConcat([][]byte{
 		[]byte(verifierUUID),
 		[]byte(verifiedUUID),
 		verifierSigningPublicKey,
 		[]byte(fingerprint),
+		[]byte(utcDay),
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -26,7 +27,13 @@ func signedVerification(t *testing.T, verifier, verified registeredUser) verific
 
 func signedVerificationOver(t *testing.T, verifier registeredUser, verifiedID, fp string) verificationRequest {
 	t.Helper()
-	payload := crypto.VerificationPayload(verifier.userID, verifiedID, verifier.signPub, fp)
+	return signedVerificationAt(t, verifier, verifiedID, fp, utcToday())
+}
+
+// signedVerificationAt is signedVerificationOver with an explicit signed day.
+func signedVerificationAt(t *testing.T, verifier registeredUser, verifiedID, fp, day string) verificationRequest {
+	t.Helper()
+	payload := crypto.VerificationPayload(verifier.userID, verifiedID, verifier.signPub, fp, day)
 	sig, err := crypto.Sign(verifier.signPriv, crypto.ContextVerification, payload)
 	if err != nil {
 		t.Fatal(err)
@@ -35,6 +42,7 @@ func signedVerificationOver(t *testing.T, verifier registeredUser, verifiedID, f
 		Fingerprint:              fp,
 		VerifierSigningPublicKey: base64.StdEncoding.EncodeToString(verifier.signPub),
 		Signature:                base64.StdEncoding.EncodeToString(sig),
+		SignedDay:                day,
 	}
 }
 
@@ -148,6 +156,26 @@ func TestPutVerificationRejectsBadInput(t *testing.T) {
 	rec := put(cookie, path, stale)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "fingerprint_stale") {
 		t.Errorf("stale fingerprint: %d %s, want 409 fingerprint_stale", rec.Code, rec.Body.String())
+	}
+	// v2: the signed day is part of the payload and must be today's UTC date
+	// within skew. A day changed after signing fails on the signature.
+	dayTampered := good
+	dayTampered.SignedDay = time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	if rec := put(cookie, path, dayTampered); rec.Code != http.StatusBadRequest {
+		t.Errorf("signed day changed after signing: %d, want 400", rec.Code)
+	}
+	fp, err := crypto.Fingerprint(bob.signPub, bob.wrapPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, day := range map[string]string{
+		"backdated":  time.Now().UTC().Add(-72 * time.Hour).Format("2006-01-02"),
+		"future":     time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		"not a date": "yesterday",
+	} {
+		if rec := put(cookie, path, signedVerificationAt(t, alice, bob.userID, fp, day)); rec.Code != http.StatusBadRequest {
+			t.Errorf("signed day %s (%q): %d, want 400", name, day, rec.Code)
+		}
 	}
 	// Malformed fingerprints never reach the signature check.
 	bad := good

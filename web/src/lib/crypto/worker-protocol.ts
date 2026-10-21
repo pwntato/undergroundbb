@@ -301,11 +301,15 @@ export interface SignPinRequest {
   readonly pinnedUserId: string
   readonly signingPublicKeys: readonly string[]
   readonly wrappingPublicKey: string
+  /** The pinned user's served KeyEpoch (#62), signed into the pin. */
+  readonly keyEpoch: number
 }
 
 export interface SignPinResult {
   readonly pinnerSigningPublicKey: string
   readonly signature: string
+  readonly keyEpoch: number
+  readonly signedDay: string
 }
 
 export interface SignPinResponse {
@@ -330,6 +334,7 @@ export interface SignVerificationRequest {
 export interface SignVerificationResult {
   readonly verifierSigningPublicKey: string
   readonly signature: string
+  readonly signedDay: string
 }
 
 export interface SignVerificationResponse {

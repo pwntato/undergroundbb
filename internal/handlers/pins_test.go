@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -18,7 +20,15 @@ func pinB64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 // signedPin builds a pin request signed by pinner over the given fields.
 func signedPin(t *testing.T, pinner registeredUser, pinnedID string, wrapping []byte, keys ...[]byte) pinRequest {
 	t.Helper()
-	payload := crypto.PinPayload(pinner.userID, pinnedID, pinner.signPub, wrapping, keys)
+	return signedPinAt(t, pinner, pinnedID, wrapping, 0, utcToday(), keys...)
+}
+
+func utcToday() string { return time.Now().UTC().Format("2006-01-02") }
+
+// signedPinAt is signedPin with an explicit pinned KeyEpoch and signed day.
+func signedPinAt(t *testing.T, pinner registeredUser, pinnedID string, wrapping []byte, epoch uint64, day string, keys ...[]byte) pinRequest {
+	t.Helper()
+	payload := crypto.PinPayload(pinner.userID, pinnedID, pinner.signPub, wrapping, keys, epoch, day)
 	sig, err := crypto.Sign(pinner.signPriv, crypto.ContextPin, payload)
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +42,8 @@ func signedPin(t *testing.T, pinner registeredUser, pinnedID string, wrapping []
 		WrappingPublicKey:      pinB64(wrapping),
 		PinnerSigningPublicKey: pinB64(pinner.signPub),
 		Signature:              pinB64(sig),
+		KeyEpoch:               epoch,
+		SignedDay:              day,
 	}
 }
 
@@ -143,12 +155,41 @@ func TestPutPinRejectsBadInput(t *testing.T) {
 	if rec := doPutPin(t, h, cookie, bob.userID, forged); rec.Code != http.StatusConflict {
 		t.Errorf("signed under a key that is not my current one: %d, want 409", rec.Code)
 	}
-	wrongCtxPayload := crypto.PinPayload(alice.userID, bob.userID, alice.signPub, bob.wrapPub, [][]byte{bob.signPub})
+	wrongCtxPayload := crypto.PinPayload(alice.userID, bob.userID, alice.signPub, bob.wrapPub, [][]byte{bob.signPub}, 0, utcToday())
 	wrongCtx, _ := crypto.Sign(alice.signPriv, crypto.ContextRoleGrant, wrongCtxPayload)
 	badCtx := good
 	badCtx.Signature = pinB64(wrongCtx)
 	if rec := doPutPin(t, h, cookie, bob.userID, badCtx); rec.Code != http.StatusBadRequest {
 		t.Errorf("wrong signing context: %d, want 400", rec.Code)
+	}
+
+	// v2: the day and the epoch are signed, so changing either after signing
+	// fails on the signature; an unsigned-but-consistent change fails earlier.
+	dayTampered := good
+	dayTampered.SignedDay = time.Now().UTC().Add(-time.Hour * 24).Format("2006-01-02")
+	if rec := doPutPin(t, h, cookie, bob.userID, dayTampered); rec.Code != http.StatusBadRequest {
+		t.Errorf("signed day changed after signing: %d, want 400", rec.Code)
+	}
+	for name, day := range map[string]string{
+		"backdated":   time.Now().UTC().Add(-72 * time.Hour).Format("2006-01-02"),
+		"future":      time.Now().UTC().Add(72 * time.Hour).Format("2006-01-02"),
+		"not a date":  "yesterday",
+		"wrong shape": "2026-1-2",
+	} {
+		req := signedPinAt(t, alice, bob.userID, bob.wrapPub, 0, day, bob.signPub)
+		if rec := doPutPin(t, h, cookie, bob.userID, req); rec.Code != http.StatusBadRequest {
+			t.Errorf("signed day %s (%q): %d, want 400", name, day, rec.Code)
+		}
+	}
+	staleEpoch := signedPinAt(t, alice, bob.userID, bob.wrapPub, 3, utcToday(), bob.signPub)
+	rec := doPutPin(t, h, cookie, bob.userID, staleEpoch)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "pin_epoch_stale") {
+		t.Errorf("epoch the pinned user is not at: %d %s, want 409 pin_epoch_stale", rec.Code, rec.Body.String())
+	}
+	epochTampered := good
+	epochTampered.KeyEpoch = 1
+	if rec := doPutPin(t, h, cookie, bob.userID, epochTampered); rec.Code != http.StatusConflict {
+		t.Errorf("epoch changed after signing: %d, want 409 (checked against the served epoch first)", rec.Code)
 	}
 
 	shape := func(mutate func(*pinRequest)) *httptest.ResponseRecorder {

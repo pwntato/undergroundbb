@@ -61,8 +61,9 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * Builds the canonical byte string a PIN# signature covers. Must match
  * internal/crypto/pin.go's PinPayload byte-for-byte (pinned by the shared
  * vectors). signingKeys is a set: it is sorted bytewise, so order does not
- * matter. Sign under SigningContext.Pin. Never change this once a real pin
- * exists.
+ * matter. utcDay is the UTC day signed (YYYY-MM-DD) and pinnedKeyEpoch the
+ * pinned user's KeyEpoch the pinner saw (#62). Sign under SigningContext.Pin
+ * (v2). Never change this once a real pin exists.
  */
 export function pinPayload(
   pinnerUUID: string,
@@ -70,6 +71,8 @@ export function pinPayload(
   pinnerSigningPublicKey: Uint8Array,
   wrappingPublicKey: Uint8Array,
   signingKeys: readonly Uint8Array[],
+  pinnedKeyEpoch: number,
+  utcDay: string,
 ): Uint8Array {
   const sorted = [...signingKeys].sort(compareBytes)
   return lengthPrefixedConcat([
@@ -77,6 +80,8 @@ export function pinPayload(
     encoder.encode(pinnedUUID),
     pinnerSigningPublicKey,
     wrappingPublicKey,
+    encoder.encode(utcDay),
+    encoder.encode(String(pinnedKeyEpoch)),
     encoder.encode(String(sorted.length)),
     ...sorted,
   ])
@@ -89,6 +94,9 @@ export interface PinRecord {
   readonly wrappingPublicKey: string
   readonly pinnerSigningPublicKey: string
   readonly signature: string
+  /** The pinned user's KeyEpoch the pinner saw, and the UTC day signed (YYYY-MM-DD). Both signed. */
+  readonly keyEpoch: number
+  readonly signedDay: string
 }
 
 /** A user's keys as served by GET /api/users/{id}. */
@@ -96,9 +104,18 @@ export interface ServedUserKeys {
   readonly signingPublicKey: string
   readonly supersededSigningKeys: readonly { readonly publicKey: string }[]
   readonly wrappingPublicKey: string
+  /** The user's KeyEpoch (#62): 0 if they never rotated. */
+  readonly keyEpoch: number
 }
 
-export type PinVerdict = 'first-sight' | 'match' | 'mismatch' | 'bad-signature'
+export type PinVerdict = 'first-sight' | 'match' | 'mismatch' | 'rollback' | 'bad-signature'
+
+/** A well-formed UTC day, YYYY-MM-DD, that is a real calendar date. */
+export function isUtcDay(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const ms = Date.parse(`${s}T00:00:00Z`)
+  return !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === s
+}
 
 function decode(b64: string): Uint8Array | null {
   try {
@@ -157,16 +174,38 @@ export function evaluatePin(input: EvaluatePinInput): PinVerdict {
   if (!signer || !wrapping || !signature || !pinnedKeys || pinnedKeys.length === 0) {
     return 'bad-signature'
   }
+  if (!Number.isSafeInteger(pin.keyEpoch) || pin.keyEpoch < 0 || !isUtcDay(pin.signedDay)) {
+    return 'bad-signature'
+  }
   // The recorded signer is untrusted input: only the caller's own current key
   // may verify a pin, whatever the row claims.
   if (!bytesEqual(signer, pinnerSigningPublicKey)) return 'bad-signature'
 
-  const payload = pinPayload(pinnerUserId, pinnedUserId, signer, wrapping, pinnedKeys)
+  const payload = pinPayload(
+    pinnerUserId,
+    pinnedUserId,
+    signer,
+    wrapping,
+    pinnedKeys,
+    pin.keyEpoch,
+    pin.signedDay,
+  )
   if (!verify(signer, SigningContext.Pin, payload, signature)) return 'bad-signature'
+
+  // The server is serving keys older than ones this account already saw. No
+  // legitimate flow produces that, and accepting it would re-pin the older
+  // keys, so it is its own hard-block rather than a plain change.
+  if (served.keyEpoch < pin.keyEpoch) return 'rollback'
 
   const servedKeys = servedSigningKeySet(served)
   const servedWrapping = decode(served.wrappingPublicKey)
   if (!servedKeys || !servedWrapping) return 'mismatch'
-  if (!sameSet(pinnedKeys, servedKeys) || !bytesEqual(wrapping, servedWrapping)) return 'mismatch'
+  if (
+    served.keyEpoch !== pin.keyEpoch ||
+    !sameSet(pinnedKeys, servedKeys) ||
+    !bytesEqual(wrapping, servedWrapping)
+  ) {
+    return 'mismatch'
+  }
   return 'match'
 }

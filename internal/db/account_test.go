@@ -29,10 +29,10 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	in := registerTestUser(t, c)
 	uid := in.UserID
 
-	if err := c.PutPin(ctx, uid, "other-"+randomSuffix(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64)); err != nil {
+	if err := c.PutPin(ctx, uid, "other-"+randomSuffix(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64), 0, "2026-10-21"); err != nil {
 		t.Fatalf("PutPin: %v", err)
 	}
-	if err := c.PutVerification(ctx, uid, "other-"+randomSuffix(t), "00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000", make([]byte, 32), make([]byte, 64)); err != nil {
+	if err := c.PutVerification(ctx, uid, "other-"+randomSuffix(t), "00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000", make([]byte, 32), make([]byte, 64), "2026-10-21"); err != nil {
 		t.Fatalf("PutVerification: %v", err)
 	}
 	if err := c.PutChallenge(ctx, uid, []byte("nonce"), time.Minute); err != nil {

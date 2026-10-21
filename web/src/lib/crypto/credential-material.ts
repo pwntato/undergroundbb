@@ -435,25 +435,33 @@ export function signSuccessorClaim(
  * signing key. signingPublicKeys is a set (pinPayload sorts it). The result
  * carries the signing key used, which is what the server checks against the
  * caller's profile and what evaluatePin later requires to be the caller's
- * current key.
+ * current key. keyEpoch is the pinned user's KeyEpoch as served, and the signed
+ * day is today (UTC), both inside the signed payload (pin v2, #62).
  */
 export function signPin(
   keys: LiveKeys,
   pinnedUserId: string,
   signingPublicKeys: readonly Uint8Array[],
   wrappingPublicKey: Uint8Array,
-): { pinnerSigningPublicKey: string; signature: string } {
+  keyEpoch: number,
+  now: Date = new Date(),
+): { pinnerSigningPublicKey: string; signature: string; keyEpoch: number; signedDay: string } {
+  const signedDay = now.toISOString().slice(0, 10)
   const payload = pinPayload(
     keys.userId,
     pinnedUserId,
     keys.signingKey.publicKey,
     wrappingPublicKey,
     signingPublicKeys,
+    keyEpoch,
+    signedDay,
   )
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Pin, payload)
   return {
     pinnerSigningPublicKey: bytesToBase64(keys.signingKey.publicKey),
     signature: bytesToBase64(signature),
+    keyEpoch,
+    signedDay,
   }
 }
 
@@ -467,17 +475,21 @@ export function signVerification(
   keys: LiveKeys,
   verifiedUserId: string,
   fingerprint: string,
-): { verifierSigningPublicKey: string; signature: string } {
+  now: Date = new Date(),
+): { verifierSigningPublicKey: string; signature: string; signedDay: string } {
+  const signedDay = now.toISOString().slice(0, 10)
   const payload = verificationPayload(
     keys.userId,
     verifiedUserId,
     keys.signingKey.publicKey,
     fingerprint,
+    signedDay,
   )
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.Verification, payload)
   return {
     verifierSigningPublicKey: bytesToBase64(keys.signingKey.publicKey),
     signature: bytesToBase64(signature),
+    signedDay,
   }
 }
 
