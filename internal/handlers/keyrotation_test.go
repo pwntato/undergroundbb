@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // rotateOpts varies one thing about a signed rotation request so a test can
@@ -35,7 +37,10 @@ type rotateOpts struct {
 	newSignPub   ed25519.PublicKey
 	newSignPriv  ed25519.PrivateKey
 	oldSigner    ed25519.PrivateKey // default: the user's own key
-	prefs        *wrappedBlob
+	// newSigner, when set, makes the second signature with a key that is not the
+	// new one, leaving the first (and the payload) valid.
+	newSigner ed25519.PrivateKey
+	prefs     *wrappedBlob
 }
 
 type rotation struct {
@@ -80,7 +85,11 @@ func signedRotation(t *testing.T, user registeredUser, o rotateOpts) rotation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newSig, err := crypto.Sign(o.newSignPriv, crypto.ContextKeyRotation, payload)
+	newSigningKey := o.newSignPriv
+	if o.newSigner != nil {
+		newSigningKey = o.newSigner
+	}
+	newSig, err := crypto.Sign(newSigningKey, crypto.ContextKeyRotation, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,9 +249,9 @@ func TestRotateKeysRejections(t *testing.T) {
 		{name: "day out of skew", opts: rotateOpts{day: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}, wantCode: 400},
 		{name: "new wrapping key equals the old one", opts: rotateOpts{newWrap: user.wrapPub}, wantCode: 400},
 		{name: "new signing key equals the old one", opts: rotateOpts{newSignPub: user.signPub, newSignPriv: user.signPriv}, wantCode: 400},
-		{name: "new signature from a key that is not the new one", opts: rotateOpts{newSignPub: otherPub, newSignPriv: otherPriv}, mutate: func(r *rotateKeysRequest) {
-			pub, _, _ := crypto.GenerateSigningKey()
-			r.NewSigningPublicKey = pinB64(pub)
+		{name: "second signature not made by the new key", opts: rotateOpts{newSigner: otherPriv}, wantCode: 400},
+		{name: "new signing key swapped after signing", opts: rotateOpts{}, mutate: func(r *rotateKeysRequest) {
+			r.NewSigningPublicKey = pinB64(otherPub)
 		}, wantCode: 400},
 		{name: "stale credential version", opts: rotateOpts{credVersion: 7}, wantCode: 409},
 		{name: "duplicate roster entry", opts: rotateOpts{roster: [][]byte{stranger, stranger}}, wantCode: 400},
@@ -538,6 +547,15 @@ func TestRotateKeysWaitsForARotationThatHasNotReachedTheCaller(t *testing.T) {
 	rec := doPutHandoff(t, f.h, carolCookie, f.gid, handoffBody(newWrap, 1))
 	if rec.Code != http.StatusConflict || errCode(t, rec) != "handoff_stale" {
 		t.Fatalf("put while behind: %d %s, want 409 handoff_stale", rec.Code, rec.Body.String())
+	}
+	// Nor for the generation her own entry is at: the group's key has moved on,
+	// so that row would wrap a key nobody uses any more.
+	rec = doPutHandoff(t, f.h, carolCookie, f.gid, handoffBody(newWrap, 0))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "handoff_stale" {
+		t.Fatalf("put for her own generation: %d %s, want 409 handoff_stale", rec.Code, rec.Body.String())
+	}
+	if handoffRowExists(t, f.carol.userID, f.gid) {
+		t.Fatal("a refused PUT wrote a row")
 	}
 	rot := signedRotation(t, f.carol, rotateOpts{newWrap: newWrap})
 	rec = doRotateKeys(t, f.h, carolCookie, rot.req)
@@ -971,5 +989,104 @@ func TestStartByARotatedAdminBringsTheirEntryCurrentAndConsumesTheHandoff(t *tes
 	}
 	if handoffRowExists(t, owner.userID, gid) {
 		t.Error("the start left the handoff row behind")
+	}
+}
+
+// rotateKeysInput builds the db-level input a handler would, from the account's
+// PROFILE, so a test can vary what the handler's own checks would have caught.
+func rotateKeysInput(t *testing.T, h *Handler, userID string, mutate func(*db.RotateKeysInput)) db.RotateKeysInput {
+	t.Helper()
+	user, err := h.db.GetUserByID(t.Context(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _, _ := crypto.GenerateSigningKey()
+	in := db.RotateKeysInput{
+		Credentials: db.RewrapCredentialsInput{
+			UserID:                     userID,
+			ExpectedCredentialVersion:  user.CredentialVersion,
+			NewCredentialVersion:       user.CredentialVersion + 1,
+			Salt:                       randBytes(16),
+			Argon2Params:               user.Argon2Params,
+			WrappedPrivateKeys:         user.WrappedPrivateKeys,
+			RecoverySalt:               randBytes(16),
+			RecoveryArgon2Params:       user.Argon2Params,
+			RecoveryWrappedPrivateKeys: user.WrappedPrivateKeys,
+			RecoveryVerifierSalt:       randBytes(16),
+			RecoveryVerifierParams:     user.Argon2Params,
+			RecoveryVerifier:           randBytes(32),
+		},
+		ExpectedKeyEpoch:     user.KeyEpoch,
+		OldSigningPublicKey:  user.SigningPublicKey,
+		OldWrappingPublicKey: user.WrappingPublicKey,
+		NewSigningPublicKey:  pub,
+		NewWrappingPublicKey: randBytes(32),
+		SupersededFrom:       "1970-01-01T00:00:00Z",
+		SupersededUntil:      utcToday() + "T00:00:00Z",
+		KeyChange:            models.KeyChange{Day: utcToday()},
+		Now:                  time.Now(),
+	}
+	if mutate != nil {
+		mutate(&in)
+	}
+	return in
+}
+
+// The handler checks the epoch, the keys and the credential version before it
+// calls the database, but a rotation that lands between that read and the
+// write must still fail the transaction, and say why.
+func TestRotateKeysTransactionRefusesWhatHasMovedUnderIt(t *testing.T) {
+	h := noCooldown(t)
+	user, cookie := loggedInUser(t, h)
+	ctx := t.Context()
+	unchanged := func(t *testing.T, epoch uint64) {
+		t.Helper()
+		u, err := h.db.GetUserByID(ctx, user.userID)
+		if err != nil || u.KeyEpoch != epoch {
+			t.Fatalf("KeyEpoch = %d (%v), want it left at %d", u.KeyEpoch, err, epoch)
+		}
+		if getRow(t, "USER#"+user.userID, db.KeyChangeSortKey(epoch+1)) != nil {
+			t.Fatalf("KEYCHANGE#%06d was written by a refused rotation", epoch+1)
+		}
+	}
+
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.ExpectedKeyEpoch = 1 })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("epoch ahead of the account (0 held, 1 signed): %v, want ErrKeyEpochStale", err)
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.OldWrappingPublicKey = randBytes(32) })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("old wrapping key not the current one: %v, want ErrKeyEpochStale", err)
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.OldSigningPublicKey = randBytes(32) })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("old signing key not the current one: %v, want ErrKeyEpochStale", err)
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.Credentials.ExpectedCredentialVersion = 9 })); !errors.Is(err, db.ErrCredentialVersionStale) {
+		t.Errorf("credential version behind: %v, want ErrCredentialVersionStale", err)
+	}
+	unchanged(t, 0)
+
+	// Once the account has rotated, a request signed against the epoch that is
+	// now gone is stale: the condition is strict above zero too.
+	first := signedRotation(t, user, rotateOpts{})
+	if rec := doRotateKeys(t, h, cookie, first.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.ExpectedKeyEpoch = 2 })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("epoch ahead of the account (1 held, 2 signed): %v, want ErrKeyEpochStale", err)
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) { in.ExpectedKeyEpoch = 0 })); !errors.Is(err, db.ErrKeyEpochStale) {
+		t.Errorf("epoch behind the account (1 held, 0 signed): %v, want ErrKeyEpochStale", err)
+	}
+	unchanged(t, 1)
+
+	// A deleted account is refused by the transaction itself.
+	gone, goneCookie := loggedInUser(t, h)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account", goneCookie, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := h.db.RotateKeys(ctx, rotateKeysInput(t, h, gone.userID, nil)); !errors.Is(err, db.ErrUserNotFound) {
+		t.Errorf("a deleted account: %v, want ErrUserNotFound", err)
+	}
+	if getRow(t, "USER#"+gone.userID, db.KeyChangeSortKey(1)) != nil {
+		t.Error("a deleted account got a KEYCHANGE# row")
 	}
 }

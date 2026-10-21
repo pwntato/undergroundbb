@@ -141,10 +141,23 @@ func TestTakeOverRecordsAndChecksTheCallersEpoch(t *testing.T) {
 		t.Fatal("a refused takeover changed something")
 	}
 
+	// The caller's handoff row for this group goes with the start; a refused
+	// start leaves it for the client to retry or delete.
+	if _, err := c.ddb.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: map[string]types.AttributeValue{
+		"PK": s("USER#a1"), "SK": s("HANDOFF#" + g),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.TakeOverLeaveRotation(ctx, stale); !errors.Is(err, ErrWrapEpochStale) || !itemExists(t, c, "USER#a1", "HANDOFF#"+g) {
+		t.Fatalf("a refused start must keep the row: %v", err)
+	}
 	ok := takeOverInput(g, "a1")
 	ok.CallerKeyEpoch = 2
 	if err := c.TakeOverLeaveRotation(ctx, ok); err != nil {
 		t.Fatal(err)
+	}
+	if itemExists(t, c, "USER#a1", "HANDOFF#"+g) {
+		t.Error("the takeover left the caller's handoff row behind")
 	}
 	if m := readMember(t, c, g, "a1"); m.Generation != 1 || m.WrapEpoch != 2 {
 		t.Errorf("caller = gen %d, WrapEpoch %d, want 1 and 2", m.Generation, m.WrapEpoch)
