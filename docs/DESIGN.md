@@ -367,11 +367,18 @@ one. The first proves the caller holds the keys being replaced. The second prove
 the new private key, so nobody can register a public key they cannot use (or one lifted from
 another user). The server checks both, that the day is within the usual skew of its own clock, and
 that `KeyEpoch` is the value it holds, which is also what makes the request single-use. Then, in
-**one `TransactWriteItems`**, conditioned on `KeyEpoch` being unchanged:
+**one `TransactWriteItems`** of four items (`PROFILE`, `RECOVERY`, `KEYCHANGE#`, the cooldown), so the
+number of groups the user is in never meets the 100-item limit. `PROFILE` is conditioned on
+`KeyEpoch`, `CredentialVersion` and the old keys being what the request was signed against and on
+the account not being deleted, and the `KEYCHANGE#` put on the row not existing. The roster behind the
+digest is capped at 8192 entries (16 bytes each, which keeps the item well inside DynamoDB's 400 KiB):
 
 - `PROFILE`: the new public keys, the private keys re-wrapped under a **new password** the user
   sets in the same flow, a fresh salt, the **old Ed25519 key appended to `SupersededSigningKeys`**
-  with its interval (it ends now), `KeyEpoch + 1`, `SessionGeneration + 1` (every other session,
+  with its interval (it ends on the signed day: both bounds are day-start instants, so nothing
+  stores when in the day the rotation happened, and the day of the rotation itself has both keys as
+  candidates; the first retired key starts at the Unix epoch, since a user's creation time is not
+  stored, and each later one starts where the one before it ended), `KeyEpoch + 1`, `SessionGeneration + 1` (every other session,
   and any copied cookie, is signed out, exactly as a password change does), and the preferences
   blob **re-sealed under the new X25519 key**. The sealing key is derived from the X25519 private
   key, so the old blob would otherwise become unreadable; the client holds the old key and can do
@@ -379,11 +386,16 @@ that `KeyEpoch` is the value it holds, which is also what makes the request sing
 - `RECOVERY`: the new keys wrapped under a **new recovery code**, which the flow makes the user
   store before it completes. The old code unwraps the old keys, which are now worth nothing, but
   leaving it live would leave a second credential nobody is tracking.
-- `KEYCHANGE#<epoch>` under the user's partition: the payload, the roster list behind its digest,
-  and both signatures, written once and never edited. The rows form a chain, each new signing key
+- `KEYCHANGE#<epoch>` under the user's partition (the epoch zero-padded to six digits, so the chain
+  sorts, as `GENKEY#` does): the payload, the roster list behind its digest, and both signatures,
+  written once and never edited. The rows form a chain, each new signing key
   introduced by the one before it. `GET /api/users/:id` serves each row's payload (with the digest)
   and signatures **but strips the list**, since its length would tell anyone how many people this
-  user has pinned or verified; `GET /api/pins` serves the list to its owner. See "What a key change
+  user has pinned or verified; `GET /api/pins` serves the list to its owner (on its first page). The
+  chain is on the single-user read only, always present and empty for a user who never rotated; the
+  batch read, which a roster uses a hundred users at a time, does not carry it. Account deletion
+  removes the handoff and cooldown rows and leaves the `KEYCHANGE#` chain with the tombstone, which
+  keeps the public keys for the same reason. See "What a key change
   looks like to others."
 
 `KeyEpoch` is a counter on `PROFILE`, 0 for every account that has never rotated (an absent
@@ -391,7 +403,10 @@ attribute reads as 0), and it is plaintext and served. It orders states: a clien
 epoch 2 can recognise a server that now serves epoch 1.
 
 Two limits keep a rotation from being a tool against other people. **Rotations are rate-limited to
-one per 24 hours per account** (a deployment setting), because each one obliges an admin in every
+one per 24 hours per account** (a deployment setting, `KEY_ROTATION_COOLDOWN_HOURS`; the limit is a
+`ROTCOOLDOWN` item in the user's partition whose TTL is rounded up to the end of its UTC day like
+every stored TTL, so it runs up to a day longer than the setting and no permanent timestamp of when
+someone rotated sits next to their keys), because each one obliges an admin in every
 group the user belongs to to act, and a user, or someone holding their session and keys, could
 otherwise keep every one of those groups busy indefinitely. And a rotation does not touch any group
 or any other user's rows; everything else follows from state, below.
@@ -419,10 +434,19 @@ operator that also holds the old keys can serve the old key set with the old `Ke
 admin who has already seen the newer epoch; an admin whose only memory is the pre-rotation pin gets
 `match` and would wrap new generations to the old key. That is the whole-old-state replay under "What
 this does not close", and until the pin-set manifest exists rotation does not hold against an
-operator with the old keys. Every path that writes a `MEMBER#` wrap (invite
-accept, readmit, rotation, re-wrap) sets `WrapEpoch` from the recipient's `KeyEpoch` and checks it
-in the same transaction, so a wrap to a key that has just been replaced is refused rather than
-stored.
+operator with the old keys. Every path that writes a `MEMBER#` wrap (group creation, invite completion, the rotation re-wrap,
+and a removal's or takeover's own entry; readmit writes an admission, not a wrap) sets `WrapEpoch`
+from the recipient's `KeyEpoch` and checks it in the same transaction, so a wrap to a key that has
+just been replaced is refused rather than stored. Where the recipient is the caller, or the invitee,
+the server takes the epoch from the recipient's own `PROFILE`; invite completion also refuses (409
+`invitee_keys_changed`, clearing the invite) when the invitee's current keys are no longer the ones
+they signed at acceptance, since the wrap and the admission would name keys they no longer hold. The
+rotation re-wrap, where the recipient is another member, takes it from the client
+(`wrapEpoch` on each wrap, the `keyEpoch` it read from `GET /api/users`), and the member's condition
+requires their existing entry to be at that same epoch, so a dormant member is refused (409
+`member_dormant`) and a wrap to a replaced key is refused (409 `wrap_epoch_stale`). A start by a
+dormant admin sets their own `WrapEpoch` to their current epoch, which is how their self re-key brings
+their entry current.
 
 **An ordinary rotation never wraps to a dormant member.** A removal, a leave or any other
 generation job leaves a dormant member (`WrapEpoch < KeyEpoch`) out of its recipient set, out of
@@ -505,12 +529,14 @@ caller's own partition, holding that group's current key and generation wrapped 
 (`PUT /api/account/rotation-handoff/{groupId}`, authenticated by the old session), not in the
 `rotate-keys` transaction, so the number of admin groups is not capped by the 100-item transaction
 limit. `rotate-keys` refuses with 409 `handoff_required` unless every group where the caller is an
-admin has a row naming the new key at that group's newest `GENKEY#` link, and the flow re-sends any it
-names. "Newest link" includes one a rotation in progress has already written, so the self re-key
+admin has a row naming the new key at that group's current generation (one past its newest `GENKEY#`
+link, which is written when the rotation to the next generation starts, or 0 for a group that has
+never rotated), and the flow re-sends any it names. The 409 carries the group ids it is about. "Newest link" includes one a rotation in progress has already written, so the self re-key
 resumes that job from the handed-off key like any other resume. If the user's own entry is behind
 the newest link (another admin's job has not wrapped to them yet), no row can be written for it,
-and `rotate-keys` answers 409 `rotation_in_progress` naming the group; the flow waits for that job
-to finish. Only an admin the job has already wrapped to (in practice the one who started it) can
+and `rotate-keys` answers 409 `rotation_in_progress` naming the group (and the PUT, for a generation
+that is not the group's current one or one the caller's own entry is not at, answers 409
+`handoff_stale`); the flow waits for that job to finish. Only an admin the job has already wrapped to (in practice the one who started it) can
 resume it, so the user's rotation stays blocked on that group until then; it is not offered to
 proceed with the group marked not handed off. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
 new private key from any later session, runs, and deletes the row when the group's start (or
@@ -526,15 +552,16 @@ group, which is only the delete, would otherwise leave a row nothing can use and
 to rotate), and account deletion sweeps the rest with the user's other own rows. The order is
 enforced so a pending row is never overwritten: `PUT /api/account/rotation-handoff/{groupId}` answers 409 for
 a row whose public key is the account's **current** key (only rows from attempts that never
-committed can be replaced), `rotate-keys` refuses while any row naming the current key **for a group
-where the caller is still an admin** exists, and
+committed can be replaced), `rotate-keys` refuses (409 `handoff_pending`, naming the groups) while any row naming the current key
+**for a group where the caller is still an admin** exists, and
 the flow finishes pending self re-keys before it offers another rotation. A row whose start is refused because the generation moved, or because the user is no longer an
 admin or a member, is deleted by the client with an ordinary delete
 (`DELETE /api/account/rotation-handoff/{groupId}`), since nothing else would. The later session reads
 rows with `GET /api/account/rotation-handoff` (the caller's own, ciphertext only). The delete on
 success is not a separate call: the row is in the caller's partition at a known key, so the start's
 (or self-wrap's) own transaction deletes it, and a crash cannot leave a used row behind to block
-`rotate-keys`. A thief gets nothing from these rows: only the holder of the new
+`rotate-keys`. (Built for the two starts that exist, a removal's and a leave takeover's; the `Open`
+self-wrap has no endpoint yet.) A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
@@ -1982,6 +2009,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
+| Rotation cooldown | `USER#<uuid>` | `ROTCOOLDOWN` | | | TTL, end of the UTC day after the cooldown setting |
 | Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 

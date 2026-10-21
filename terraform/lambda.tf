@@ -137,17 +137,18 @@ resource "aws_lambda_function" "main" {
   # strconv.ParseBool/ParseInt) expect on the read side.
   environment {
     variables = {
-      TABLE_NAME                 = aws_dynamodb_table.main.name
-      ENVIRONMENT                = terraform.workspace
-      SITE_NAME                  = var.site_name
-      DOMAIN                     = local.domain_name
-      REGISTRATION_POLICY        = var.registration_policy
-      ALLOW_GROUP_EXPIRATION_OFF = tostring(var.allow_group_expiration_off)
-      DEFAULT_EXPIRATION_DAYS    = tostring(var.default_expiration_days)
-      MAX_ROTATING_GROUP_MEMBERS = tostring(var.max_rotating_group_members)
-      SESSION_SECRET             = random_id.session_secret.hex
-      ORIGIN_VERIFY_SECRET       = random_password.origin_verify.result
-      SESSION_TTL_HOURS          = tostring(var.session_ttl_hours)
+      TABLE_NAME                  = aws_dynamodb_table.main.name
+      ENVIRONMENT                 = terraform.workspace
+      SITE_NAME                   = var.site_name
+      DOMAIN                      = local.domain_name
+      REGISTRATION_POLICY         = var.registration_policy
+      ALLOW_GROUP_EXPIRATION_OFF  = tostring(var.allow_group_expiration_off)
+      DEFAULT_EXPIRATION_DAYS     = tostring(var.default_expiration_days)
+      MAX_ROTATING_GROUP_MEMBERS  = tostring(var.max_rotating_group_members)
+      KEY_ROTATION_COOLDOWN_HOURS = tostring(var.key_rotation_cooldown_hours)
+      SESSION_SECRET              = random_id.session_secret.hex
+      ORIGIN_VERIFY_SECRET        = random_password.origin_verify.result
+      SESSION_TTL_HOURS           = tostring(var.session_ttl_hours)
     }
   }
 

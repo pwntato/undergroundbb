@@ -345,7 +345,8 @@ type RotateKeysInput struct {
 	// here.
 	KeyChange models.KeyChange
 
-	// Cooldown is how long a following rotation is refused; Now is the clock.
+	// Cooldown is how long a following rotation is refused, rounded up to the end
+	// of its UTC day; zero or less turns the limit off. Now is the clock.
 	Cooldown time.Duration
 	Now      time.Time
 }
@@ -360,9 +361,10 @@ type RotateKeysInput struct {
 //     request was signed against and on the old keys still being current.
 //   - RECOVERY: the new keys wrapped under a new recovery code.
 //   - KEYCHANGE#<epoch>: the payload and both signatures, new.
-//   - ROTCOOLDOWN: refuses a second rotation until its TTL passes.
+//   - ROTCOOLDOWN: refuses a second rotation until its TTL passes (omitted when
+//     the cooldown is off).
 //
-// Four items, so the number of groups the user is in never meets the 100-item
+// At most four items, so the number of groups the user is in never meets the 100-item
 // transaction limit; the per-group handoff rows are written before, by
 // PutHandoff.
 func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
@@ -433,39 +435,47 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 	if err != nil {
 		return fmt.Errorf("db: marshal key change: %w", err)
 	}
-	cooldownItem, err := attributevalue.MarshalMap(models.RotationCooldown{
-		Record: models.Record{PK: "USER#" + userID, SK: rotCooldownSortKey, Type: "RotationCooldown"},
-		TTL:    in.Now.Add(in.Cooldown).Unix(),
-	})
-	if err != nil {
-		return fmt.Errorf("db: marshal rotation cooldown: %w", err)
+	items := []types.TransactWriteItem{
+		{Update: profileUpdate},
+		{Update: recoveryUpdate},
+		{Put: &types.Put{
+			TableName:           aws.String(c.table),
+			Item:                kcItem,
+			ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		}},
+	}
+	// The cooldown item goes last. A cooldown of zero or less turns the limit off
+	// (config never produces one; it clamps to an hour at least), and then no
+	// item is written. Its TTL is rounded up to the end of its UTC day like every
+	// stored TTL (docs/DESIGN.md, "Every stored TTL value is rounded up"): an
+	// unrounded one would be the second the rotation happened, in the clear, so
+	// the limit is the setting plus up to a day.
+	const cooldownIndex = 3
+	if in.Cooldown > 0 {
+		cooldownItem, err := attributevalue.MarshalMap(models.RotationCooldown{
+			Record: models.Record{PK: "USER#" + userID, SK: rotCooldownSortKey, Type: "RotationCooldown"},
+			TTL:    RoundUpToEndOfUTCDay(in.Now.Add(in.Cooldown)).Unix(),
+		})
+		if err != nil {
+			return fmt.Errorf("db: marshal rotation cooldown: %w", err)
+		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{
+			TableName:                aws.String(c.table),
+			Item:                     cooldownItem,
+			ConditionExpression:      aws.String("attribute_not_exists(PK) OR #ttl <= :now"),
+			ExpressionAttributeNames: map[string]string{"#ttl": "TTL"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Now.Unix(), 10)},
+			},
+		}})
 	}
 
-	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Update: profileUpdate},
-			{Update: recoveryUpdate},
-			{Put: &types.Put{
-				TableName:           aws.String(c.table),
-				Item:                kcItem,
-				ConditionExpression: aws.String("attribute_not_exists(PK)"),
-			}},
-			{Put: &types.Put{
-				TableName:                aws.String(c.table),
-				Item:                     cooldownItem,
-				ConditionExpression:      aws.String("attribute_not_exists(PK) OR #ttl <= :now"),
-				ExpressionAttributeNames: map[string]string{"#ttl": "TTL"},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Now.Unix(), 10)},
-				},
-			}},
-		},
-	})
+	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
 	}
 	switch {
-	case isConditionalCheckFailure(err, 3):
+	case in.Cooldown > 0 && isConditionalCheckFailure(err, cooldownIndex):
 		return ErrRotationCooldown
 	case isConditionalCheckFailure(err, 2):
 		return ErrKeyEpochStale

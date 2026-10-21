@@ -225,8 +225,14 @@ func TestRotateKeysCommits(t *testing.T) {
 		t.Fatal("no ROTCOOLDOWN row")
 	}
 	ttl, _ := strconv.ParseInt(numAttr(cd, "TTL"), 10, 64)
-	if d := time.Until(time.Unix(ttl, 0)); d < 23*time.Hour || d > 25*time.Hour {
-		t.Errorf("cooldown ends in %s, want about 24h", d)
+	end := time.Unix(ttl, 0).UTC()
+	// Rounded up to the end of its UTC day like every stored TTL, so it does not
+	// date the rotation to the second; at least the 24h setting, less than a day over.
+	if end.Hour() != 23 || end.Minute() != 59 || end.Second() != 59 {
+		t.Errorf("cooldown TTL = %s, want the end of a UTC day", end)
+	}
+	if d := time.Until(end); d < 24*time.Hour || d >= 48*time.Hour {
+		t.Errorf("cooldown ends in %s, want at least 24h and less than 48h", d)
 	}
 }
 
@@ -366,6 +372,10 @@ func TestRotateKeysChainsIntervalsAndKeyChanges(t *testing.T) {
 	}
 	if rows[0].KeyEpoch != 1 || rows[1].KeyEpoch != 2 {
 		t.Errorf("epochs = %d, %d", rows[0].KeyEpoch, rows[1].KeyEpoch)
+	}
+	// With the limit off (zero), no cooldown item is written at all.
+	if getRow(t, "USER#"+user.userID, "ROTCOOLDOWN") != nil {
+		t.Error("a rotation with the cooldown off wrote a ROTCOOLDOWN row")
 	}
 	// A key used before cannot come back.
 	third := signedRotation(t, second.next, rotateOpts{epoch: 2, credVersion: 3, newSignPub: user.signPub, newSignPriv: user.signPriv})

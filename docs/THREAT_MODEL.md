@@ -120,7 +120,7 @@ plaintext beside the day prefix and made the day meaningless.
 
 **The sort key is not the only place a time can hide, and the TTL attribute is the other one.** A
 DynamoDB TTL is a Unix epoch in seconds stored as a plaintext number, because DynamoDB reads it
-itself, and five item classes carry one. Left unrounded it would give back everything the random ids
+itself, and six item classes carry one (the key-rotation cooldown is the newest). Left unrounded it would give back everything the random ids
 withhold: a post's TTL minus the group's retention policy — an attribute on the same group's `META`
 item, in the same dump — is the second the post was written. **Stored TTLs are therefore rounded up
 to the end of their UTC day**, which puts the attribute at the same resolution as the key and costs
