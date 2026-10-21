@@ -520,13 +520,21 @@ nothing may delete them on a timer. Rows are cleaned up inside the user's own pa
 index and no purge job. An abandoned rotation leaves rows wrapped to a key that is not the account's
 current one: `rotate-keys`, right after its transaction commits, runs a `Query` on `USER#<uuid>`
 with `begins_with(SK, "HANDOFF#")` and deletes every row whose public key is not the one it just
-committed, and account deletion sweeps the rest with the user's other own rows. The order is
-enforced so a pending row is never overwritten: `PUT /rotation-handoff/{groupId}` answers 409 for
+committed, and also deletes rows for groups where the caller is no longer an admin or a member
+(a co-admin's demotion in a `Rotating` group, which mints no generation, or removal from an `Open`
+group, which is only the delete, would otherwise leave a row nothing can use and the account unable
+to rotate), and account deletion sweeps the rest with the user's other own rows. The order is
+enforced so a pending row is never overwritten: `PUT /api/account/rotation-handoff/{groupId}` answers 409 for
 a row whose public key is the account's **current** key (only rows from attempts that never
-committed can be replaced), `rotate-keys` refuses while any row naming the current key exists, and
-the flow finishes pending self re-keys before it offers another rotation. A row whose start fails the
-generation condition (below) is deleted by the client with an ordinary delete, since nothing else
-would. A thief gets nothing from these rows: only the holder of the new
+committed can be replaced), `rotate-keys` refuses while any row naming the current key **for a group
+where the caller is still an admin** exists, and
+the flow finishes pending self re-keys before it offers another rotation. A row whose start is refused because the generation moved, or because the user is no longer an
+admin or a member, is deleted by the client with an ordinary delete
+(`DELETE /api/account/rotation-handoff/{groupId}`), since nothing else would. The later session reads
+rows with `GET /api/account/rotation-handoff` (the caller's own, ciphertext only). The delete on
+success is not a separate call: the row is in the caller's partition at a known key, so the start's
+(or self-wrap's) own transaction deletes it, and a crash cannot leave a used row behind to block
+`rotate-keys`. A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
