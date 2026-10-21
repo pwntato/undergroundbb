@@ -35,12 +35,13 @@ export const SigningContext = {
   RoleGrant: 'underground-bb:role-grant:v1',
   Invite: 'underground-bb:invite:v1',
   TrustAnchor: 'underground-bb:trust-anchor:v1',
-  Pin: 'underground-bb:pin:v1',
-  Verification: 'underground-bb:verification:v1',
+  Pin: 'underground-bb:pin:v2',
+  Verification: 'underground-bb:verification:v2',
   SuccessorDesignation: 'underground-bb:successor-designation:v1',
   SuccessorClaim: 'underground-bb:successor-claim:v1',
   RotationStart: 'underground-bb:rotation-start:v1',
   Admission: 'underground-bb:admission:v1',
+  KeyRotation: 'underground-bb:key-rotation:v1',
 } as const
 
 export type SigningContext = (typeof SigningContext)[keyof typeof SigningContext]

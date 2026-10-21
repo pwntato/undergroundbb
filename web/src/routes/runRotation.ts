@@ -96,6 +96,7 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
     pinnedUserId: string,
     signingPublicKeys: readonly string[],
     wrappingPublicKey: string,
+    keyEpoch: number,
   ) => Promise<void>
   readonly rewrapCrypto: (req: {
     readonly userId: string
@@ -954,7 +955,7 @@ async function checkRecipient(
       return { ok: false, reason: 'blocked' }
     }
     try {
-      await deps.pinKeys(userId, keys.map(bytesToBase64), served.wrappingPublicKey)
+      await deps.pinKeys(userId, keys.map(bytesToBase64), served.wrappingPublicKey, served.keyEpoch)
     } catch (err) {
       return {
         ok: false,

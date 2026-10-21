@@ -222,6 +222,7 @@ export async function runReadmit(
         subjectUserId,
         found.signingKeys.map(bytesToBase64),
         served.wrappingPublicKey,
+        served.keyEpoch,
       )
     } catch (err) {
       return { ok: false, kind: 'unchecked', reason: `could not save their keys: ${describe(err)}` }

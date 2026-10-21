@@ -24,11 +24,19 @@ const wrapA = new Uint8Array(32).fill(7)
 const wrapB = new Uint8Array(32).fill(9)
 const b64 = bytesToBase64
 
-function served(current: SigningKey, superseded: SigningKey[], wrapping = wrapA): ServedUserKeys {
+const DAY = '2026-10-21'
+
+function served(
+  current: SigningKey,
+  superseded: SigningKey[],
+  wrapping = wrapA,
+  keyEpoch = 0,
+): ServedUserKeys {
   return {
     signingPublicKey: b64(current.publicKey),
     supersededSigningKeys: superseded.map((k) => ({ publicKey: b64(k.publicKey) })),
     wrappingPublicKey: b64(wrapping),
+    keyEpoch,
   }
 }
 
@@ -40,6 +48,9 @@ function makePin(
     keys?: SigningKey[]
     wrapping?: Uint8Array
     recordedSigner?: SigningKey
+    keyEpoch?: number
+    day?: string
+    recordedDay?: string
   } = {},
 ): PinRecord {
   const signer = opts.signer ?? me
@@ -51,6 +62,8 @@ function makePin(
     signer.publicKey,
     wrapping,
     keys.map((k) => k.publicKey),
+    opts.keyEpoch ?? 0,
+    opts.day ?? DAY,
   )
   return {
     pinnedUserId: BOB,
@@ -58,6 +71,8 @@ function makePin(
     wrappingPublicKey: b64(wrapping),
     pinnerSigningPublicKey: b64((opts.recordedSigner ?? signer).publicKey),
     signature: b64(sign(signer, SigningContext.Pin, payload)),
+    keyEpoch: opts.keyEpoch ?? 0,
+    signedDay: opts.recordedDay ?? opts.day ?? DAY,
   }
 }
 
@@ -90,6 +105,51 @@ describe('evaluatePin', () => {
   // would pass. Here the served set gains a key the pin never saw.
   it('a served set that ADDS a key is a mismatch, not an extension', () => {
     expect(run(makePin(), served(bob, [bobOld]))).toBe('mismatch')
+  })
+
+  // The pinned user's KeyEpoch is signed. Lower served = the server is
+  // serving keys older than ones this account already saw: its own verdict,
+  // not a plain change. Higher, or a different set at the same epoch, is a
+  // change.
+  it('a served epoch below the pinned one is a rollback', () => {
+    expect(run(makePin({ keyEpoch: 2 }), served(bob, [], wrapA, 1))).toBe('rollback')
+  })
+
+  it('a rollback is reported even when the served keys equal the pinned ones', () => {
+    expect(run(makePin({ keyEpoch: 2 }), served(bob, [], wrapA, 0))).toBe('rollback')
+  })
+
+  it('a served epoch above the pinned one is a mismatch even with the same keys', () => {
+    expect(run(makePin({ keyEpoch: 1 }), served(bob, [], wrapA, 2))).toBe('mismatch')
+  })
+
+  it('an equal epoch and equal keys match', () => {
+    expect(run(makePin({ keyEpoch: 2 }), served(bob, [], wrapA, 2))).toBe('match')
+  })
+
+  it('an epoch or a day changed after signing is bad-signature, not a rollback', () => {
+    const pin = makePin({ keyEpoch: 2 })
+    expect(run({ ...pin, keyEpoch: 1 }, served(bob, [], wrapA, 1))).toBe('bad-signature')
+    expect(run({ ...pin, signedDay: '2026-10-20' }, served(bob, [], wrapA, 2))).toBe(
+      'bad-signature',
+    )
+  })
+
+  it.each(['yesterday', '2026-1-2', '2026-02-30', ''])(
+    'a malformed signed day %j is bad-signature',
+    (day) => {
+      expect(run(makePin({ day, recordedDay: day }), served(bob, []))).toBe('bad-signature')
+    },
+  )
+
+  it.each([-1, 1.5, Number.NaN])('an invalid epoch %j is bad-signature', (keyEpoch) => {
+    expect(run({ ...makePin(), keyEpoch }, served(bob, []))).toBe('bad-signature')
+  })
+
+  it('a pin signed under the v1 pin context is bad-signature', () => {
+    const payload = pinPayload(ME, BOB, me.publicKey, wrapA, [bob.publicKey], 0, DAY)
+    const v1 = b64(sign(me, 'underground-bb:pin:v1' as never, payload))
+    expect(run({ ...makePin(), signature: v1 }, served(bob, []))).toBe('bad-signature')
   })
 
   it('a swapped current key is a mismatch', () => {

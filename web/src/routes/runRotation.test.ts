@@ -63,18 +63,29 @@ function served(p: Person): UserProjection {
     signingPublicKey: b64(p.signing.publicKey),
     wrappingPublicKey: b64(p.wrapping),
     supersededSigningKeys: [],
+    keyEpoch: 0,
   }
 }
 
 function pinFor(p: Person, overrideWrapping?: Uint8Array): PinRecord {
   const wrapping = overrideWrapping ?? p.wrapping
-  const payload = pinPayload(ME, p.id, me.publicKey, wrapping, [p.signing.publicKey])
+  const payload = pinPayload(
+    ME,
+    p.id,
+    me.publicKey,
+    wrapping,
+    [p.signing.publicKey],
+    0,
+    '2026-10-21',
+  )
   return {
     pinnedUserId: p.id,
     signingPublicKeys: [b64(p.signing.publicKey)],
     wrappingPublicKey: b64(wrapping),
     pinnerSigningPublicKey: b64(me.publicKey),
     signature: b64(sign(me, SigningContext.Pin, payload)),
+    keyEpoch: 0,
+    signedDay: '2026-10-21',
   }
 }
 

@@ -1126,8 +1126,18 @@ describe('signPin', () => {
     const keys = { userId: PINNER, signingKey, wrappingKey: undefined as never }
     const bob = ed25519.generateSigningKey()
     const wrapping = new Uint8Array(32).fill(8)
-    const { pinnerSigningPublicKey, signature } = signPin(keys, PINNED, [bob.publicKey], wrapping)
+    const signed = signPin(
+      keys,
+      PINNED,
+      [bob.publicKey],
+      wrapping,
+      2,
+      new Date('2026-10-21T23:59:59Z'),
+    )
+    const { pinnerSigningPublicKey, signature } = signed
     expect(pinnerSigningPublicKey).toBe(bytesToBase64(signingKey.publicKey))
+    expect(signed.signedDay).toBe('2026-10-21')
+    expect(signed.keyEpoch).toBe(2)
 
     const pin = {
       pinnedUserId: PINNED,
@@ -1135,11 +1145,14 @@ describe('signPin', () => {
       wrappingPublicKey: bytesToBase64(wrapping),
       pinnerSigningPublicKey,
       signature,
+      keyEpoch: signed.keyEpoch,
+      signedDay: signed.signedDay,
     }
     const served = {
       signingPublicKey: bytesToBase64(bob.publicKey),
       supersededSigningKeys: [],
       wrappingPublicKey: bytesToBase64(wrapping),
+      keyEpoch: 2,
     }
     const run = (own: Uint8Array, id = PINNER) =>
       evaluatePin({

@@ -63,6 +63,7 @@ function user(id: string, key: SigningKey): UserProjection {
     signingPublicKey: b64(key.publicKey),
     wrappingPublicKey: b64(WRAP),
     supersededSigningKeys: [],
+    keyEpoch: 0,
   }
 }
 
@@ -120,13 +121,15 @@ function deps(
     selfUserId: SELF,
     ownSigningKey: async () => b64(w.selfKey.publicKey),
     listPins: async () => [...keyPins.values()],
-    pinKeys: async (pinnedUserId, signingPublicKeys, wrappingPublicKey) => {
+    pinKeys: async (pinnedUserId, signingPublicKeys, wrappingPublicKey, keyEpoch) => {
       const payload = pinPayload(
         SELF,
         pinnedUserId,
         w.selfKey.publicKey,
         base64ToBytes(wrappingPublicKey),
         signingPublicKeys.map((k) => base64ToBytes(k)),
+        keyEpoch,
+        '2026-10-21',
       )
       keyPins.set(pinnedUserId, {
         pinnedUserId,
@@ -134,6 +137,8 @@ function deps(
         wrappingPublicKey,
         pinnerSigningPublicKey: b64(w.selfKey.publicKey),
         signature: b64(sign(w.selfKey, SigningContext.Pin, payload)),
+        keyEpoch,
+        signedDay: '2026-10-21',
       })
     },
     listGrants: async (_g, cursor) => {

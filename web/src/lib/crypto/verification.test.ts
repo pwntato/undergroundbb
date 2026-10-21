@@ -16,6 +16,7 @@ import {
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const BOB = 'b0000000-0000-4000-8000-000000000002'
 const CAROL = 'c0000000-0000-4000-8000-000000000003'
+const DAY = '2026-10-21'
 
 const me = generateSigningKey()
 const bob = generateSigningKey()
@@ -31,6 +32,8 @@ function makeRecord(
     fp?: string
     recordedVerified?: string
     recordedSigner?: SigningKey
+    day?: string
+    recordedDay?: string
   } = {},
 ): VerificationRecord {
   const signer = opts.signer ?? me
@@ -40,12 +43,14 @@ function makeRecord(
     opts.verified ?? BOB,
     signer.publicKey,
     fp,
+    opts.day ?? DAY,
   )
   return {
     verifiedUserId: opts.recordedVerified ?? opts.verified ?? BOB,
     fingerprint: fp,
     verifierSigningPublicKey: bytesToBase64((opts.recordedSigner ?? signer).publicKey),
     signature: bytesToBase64(sign(signer, SigningContext.Verification, payload)),
+    signedDay: opts.recordedDay ?? opts.day ?? DAY,
   }
 }
 
@@ -123,9 +128,28 @@ describe('evaluateVerification', () => {
     expect(evaluate({ ...rec, verifierSigningPublicKey: '***' })).toBe('bad-signature')
   })
 
+  // v2: the day is signed, so a day edited after signing, a malformed day, or
+  // a record signed under the v1 context must all fail, never read as none.
+  it('a signed day changed after signing is bad-signature', () => {
+    expect(evaluate({ ...makeRecord(), signedDay: '2026-10-20' })).toBe('bad-signature')
+  })
+
+  it.each(['yesterday', '2026-1-2', '2026-02-30', ''])(
+    'a malformed signed day %j is bad-signature',
+    (day) => {
+      expect(evaluate(makeRecord({ day, recordedDay: day }))).toBe('bad-signature')
+    },
+  )
+
+  it('a record signed under the v1 verification context is bad-signature', () => {
+    const payload = verificationPayload(ME, BOB, me.publicKey, bobFp, DAY)
+    const v1 = bytesToBase64(sign(me, 'underground-bb:verification:v1' as never, payload))
+    expect(evaluate({ ...makeRecord(), signature: v1 })).toBe('bad-signature')
+  })
+
   it('a verification does not verify as a pin signature', () => {
     // Domain separation: the same bytes signed under the pin context are not accepted.
-    const payload = verificationPayload(ME, BOB, me.publicKey, bobFp)
+    const payload = verificationPayload(ME, BOB, me.publicKey, bobFp, DAY)
     const rec: VerificationRecord = {
       ...makeRecord(),
       signature: bytesToBase64(sign(me, SigningContext.Pin, payload)),

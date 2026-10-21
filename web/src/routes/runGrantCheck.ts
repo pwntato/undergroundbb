@@ -112,6 +112,7 @@ export interface GrantCheckDeps {
     pinnedUserId: string,
     signingPublicKeys: readonly string[],
     wrappingPublicKey: string,
+    keyEpoch: number,
   ) => Promise<void>
 }
 
@@ -367,7 +368,7 @@ async function checkServedKeys(
       }
       keyHistories.set(id, historyOf(u))
       try {
-        await deps.pinKeys(id, keys.map(bytesToBase64), u.wrappingPublicKey)
+        await deps.pinKeys(id, keys.map(bytesToBase64), u.wrappingPublicKey, u.keyEpoch)
         firstSeen = true
       } catch {
         unchecked = true

@@ -32,8 +32,14 @@ import type { RotationDeps } from './runRotation'
 
 /** Signs a pin of someone's served keys with the caller's key and stores it. */
 export function makePinKeys(userId: string): RotationDeps['pinKeys'] {
-  return async (pinnedUserId, signingPublicKeys, wrappingPublicKey) => {
-    const signed = await signPin({ userId, pinnedUserId, signingPublicKeys, wrappingPublicKey })
+  return async (pinnedUserId, signingPublicKeys, wrappingPublicKey, keyEpoch) => {
+    const signed = await signPin({
+      userId,
+      pinnedUserId,
+      signingPublicKeys,
+      wrappingPublicKey,
+      keyEpoch,
+    })
     await putPin(pinnedUserId, { signingPublicKeys, wrappingPublicKey, ...signed })
   }
 }

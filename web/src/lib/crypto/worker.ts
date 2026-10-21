@@ -319,6 +319,7 @@ function signPin(req: SignPinRequest): void {
     req.pinnedUserId,
     req.signingPublicKeys.map((k) => base64ToBytes(k)),
     base64ToBytes(req.wrappingPublicKey),
+    req.keyEpoch,
   )
   post({ kind: 'signPinDone', id: req.id, result })
 }

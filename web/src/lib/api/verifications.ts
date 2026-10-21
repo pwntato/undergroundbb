@@ -54,6 +54,7 @@ export interface PutVerificationRequest {
   readonly fingerprint: string
   readonly verifierSigningPublicKey: string
   readonly signature: string
+  readonly signedDay: string
 }
 
 /** PUT /api/verifications/{userId}; replaces any earlier record. 204 on success. */

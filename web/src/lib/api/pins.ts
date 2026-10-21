@@ -54,6 +54,8 @@ export interface PutPinRequest {
   readonly wrappingPublicKey: string
   readonly pinnerSigningPublicKey: string
   readonly signature: string
+  readonly keyEpoch: number
+  readonly signedDay: string
 }
 
 /** PUT /api/pins/{userId}; replaces any earlier pin. 204 on success. */
