@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { describe, expect, it } from 'vitest'
 
-import { addIntegrity, integrityOf } from './sri.ts'
+import { addIntegrity, assertAllScriptsTagged, integrityOf } from './sri.ts'
 
 const html = `<head>
 <script type="module" crossorigin src="/assets/index-A.js"></script>
@@ -43,5 +43,21 @@ describe('addIntegrity', () => {
   it('throws on a tag that already has integrity', () => {
     const had = '<script src="/assets/index-A.js" integrity="sha384-x"></script>'
     expect(() => addIntegrity(had, files)).toThrow(/already has/)
+  })
+})
+
+describe('assertAllScriptsTagged', () => {
+  const tagged = new Set(['assets/index-A.js'])
+
+  it('accepts the tagged script and non-script assets', () => {
+    expect(() =>
+      assertAllScriptsTagged(['assets/index-A.js', 'assets/index-B.css'], tagged),
+    ).not.toThrow()
+  })
+
+  it('refuses an emitted script that no tag hashes', () => {
+    expect(() =>
+      assertAllScriptsTagged(['assets/index-A.js', 'assets/worker-C.js'], tagged),
+    ).toThrow(/assets\/worker-C\.js is emitted but not covered/)
   })
 })

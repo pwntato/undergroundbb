@@ -433,7 +433,7 @@ and a `Permissions-Policy` that disables camera, microphone, geolocation, paymen
 `no-referrer`, browsers send `Origin: null` on same-origin non-GET requests; any CSRF check has to use
 `Sec-Fetch-Site`, not `Origin`.
 
-Four of the CSP directives are load-bearing in ways worth naming:
+Five of the CSP directives are load-bearing in ways worth naming:
 
 - **`'wasm-unsafe-eval'`, and specifically not `'unsafe-eval'`.** Argon2id runs in WebAssembly, and
   some instantiation paths need an allowance for it. An implementer who hits a WASM CSP error and
@@ -443,6 +443,12 @@ Four of the CSP directives are load-bearing in ways worth naming:
   says subresource integrity narrows the modified-JS gap — SRI only helps if the policy also stops
   the page loading script from somewhere else, so the two controls are stated a document apart and
   only work as a pair.
+- **`worker-src blob:`, and specifically not `'self'`.** The crypto worker is inlined into the
+  SRI-hashed main bundle and started from a Blob URL, because `new Worker(url)` cannot carry an
+  integrity hash (#248). A developer who hits a worker CSP error and adds `'self'` only loosens the
+  policy, and one who drops `&inline` to go back to a worker file silently reopens #248: a swapped
+  worker file would no longer be caught by the bundle's hash. The SRI plugin fails the build when
+  any emitted script is not hash-tagged in `index.html`.
 - **`base-uri 'none'`** closes `<base>` hijacking of relative script URLs, which otherwise routes
   around `script-src 'self'`.
 - **`frame-ancestors 'none'`** closes clickjacking. This section already worries about an overlay
