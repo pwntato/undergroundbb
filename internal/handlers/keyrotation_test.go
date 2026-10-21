@@ -1171,4 +1171,25 @@ func TestPutHandoffTransactionRefusesAKeyThatMovedUnderIt(t *testing.T) {
 	if handoffRowExists(t, user.userID, gid) {
 		t.Error("the refused write left a row")
 	}
+
+	// Nor for an account that has been tombstoned, even one still holding an
+	// admin membership (account deletion refuses while any membership exists,
+	// so only the transaction stands between a stale request and that state).
+	setProfileAttrS(t, user.userID, "DeletedAt", "2026-01-01T00:00:00Z")
+	current, err := h.db.GetUserByID(t.Context(), user.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = h.db.PutHandoff(t.Context(), db.PutHandoffInput{
+		UserID: user.userID, GroupID: gid, Generation: 0,
+		NewWrappingPublicKey: randBytes(32),
+		WrappedGroupKey:      models.WrappedKey{EphemeralPub: randBytes(32), Nonce: randBytes(12), Ciphertext: randBytes(48)},
+		CurrentWrappingKey:   current.WrappingPublicKey,
+	})
+	if !errors.Is(err, db.ErrHandoffAccountChanged) {
+		t.Fatalf("a tombstoned account: %v, want ErrHandoffAccountChanged", err)
+	}
+	if handoffRowExists(t, user.userID, gid) {
+		t.Error("the write for a tombstoned account left a row")
+	}
 }
