@@ -411,8 +411,14 @@ every co-member. It is the same re-invitation event the pinning section describe
 `KeyEpoch` when that wrap was made (an absent attribute reads as 0). A membership is dormant
 exactly when `WrapEpoch` is behind the user's served `KeyEpoch`. Nothing marks it and nothing has
 to be cleared, a half-finished re-wrap resumes by the same query that finds the stragglers of an
-interrupted generation rotation, and a server that serves an old epoch cannot make a dormant member
-look current without a wrap an admin signed. Every path that writes a `MEMBER#` wrap (invite
+interrupted generation rotation. Both `KeyEpoch` and `WrapEpoch` are **server-held and unsigned**, and
+`MEMBER#` wraps carry no admin signature, so dormancy is only as trustworthy as the server: an
+operator that also holds the old keys can serve the old key set with the old `KeyEpoch` (or raise
+`WrapEpoch`) and a dormant member looks current. What detects it is the pin's epoch, and only for an
+admin who has already seen the newer epoch; an admin whose only memory is the pre-rotation pin gets
+`match` and would wrap new generations to the old key. That is the whole-old-state replay under "What
+this does not close", and until the pin-set manifest exists rotation does not hold against an
+operator with the old keys. Every path that writes a `MEMBER#` wrap (invite
 accept, readmit, rotation, re-wrap) sets `WrapEpoch` from the recipient's `KeyEpoch` and checks it
 in the same transaction, so a wrap to a key that has just been replaced is refused rather than
 stored.
@@ -496,8 +502,10 @@ fails and M lands in `blocked`: the server will not clear the marker while M is 
 removal cannot finish until Y re-pins M. The same happens to every other admin who pinned a
 self-approved rotating admin. The approval list only shows dormant members, so it would show Y
 nothing. The rule is **fail-closed by default and one explicit action to resolve**: the roster
-lists every member whose served keys fail the viewer's pin and who is not dormant, with an
-**"accept key change"** action. The action is offered with evidence and never taken automatically:
+lists every member whose served keys fail the viewer's pin with the `changed` verdict and who is
+not dormant, with an **"accept key change"** action. A `rollback` verdict is **not** offered it: no
+legitimate flow produces one, and accepting it would re-pin keys the user rotated away from, so it
+stays a hard-block with no accept action. The action is offered with evidence and never taken automatically:
 the verified `KEYCHANGE#` chain from the pinned keys to the served ones (rotation by a holder of the
 pinned key, or no link), the member's fingerprint to compare out of band, and whether the wrap was
 made by another admin or was a self-approval. Accepting replaces that admin's pin, exactly as the
@@ -514,9 +522,14 @@ whose admins do not open it has an unbounded window. The cooldown, the self-appr
 admin groups, and a roster that lists dormant members first are the mitigations; there is no
 server-side timer that acts for them, because the server cannot wrap keys.
 
-`POST /api/groups/{id}/rewrap/{uid}` is the write for the plain-wrap cases (a conditional update
-of the member's wrap, its generation and `WrapEpoch`, rejected unless `WrapEpoch < KeyEpoch` and
-`KeyEpoch` is the value the approver wrapped to). The minting case and the self re-key are written
+`POST /api/groups/{id}/rewrap/{uid}` is the write for the plain-wrap cases, and **the server
+enforces the mint rule itself rather than trusting the client**. The caller must be an admin or an
+ambassador of the group. It is a conditional update of the member's wrap, its generation and
+`WrapEpoch`, rejected unless `WrapEpoch < KeyEpoch`, `KeyEpoch` is the value the approver wrapped
+to, and, in a `Rotating` group, the member's entry is **behind** the group's current generation.
+Otherwise it answers 409 `rekey_required`, which sends the caller to the re-key: without that
+condition a buggy or old client, or an ambassador, could "approve" with a plain wrap of the current
+generation while the old keys still hold it, and the roster would then show the member as current. The minting case and the self re-key are written
 by the rotation endpoints the group already has.
 
 #### The Ed25519 half and the key history
@@ -589,9 +602,14 @@ unfinished set leaves rows nobody can verify. It is unnecessary for ordinary use
 includes the UTC day it was signed on** (checked by the server against its clock), and the pinner's
 own client verifies it against the key that was current that day, from the pinner's own served
 history. Pins and verification records therefore move to payload version 2
-(`underground-bb:pin:v2`, `underground-bb:verification:v2`). Existing v1 rows fail the v2 check and
-read as no pin, so those users are re-pinned on first sight; nothing is deployed with real users
-yet, and the accounts that exist are test accounts and the maintainer's. Only the **pin** also
+(`underground-bb:pin:v2`, `underground-bb:verification:v2`). A verifier uses only the v2
+signing context, so a row that claims v1 fails and a v2 row relabelled v1 by the server fails the same
+way. **A pin or record that does not verify is `bad-signature`, never `first-sight`**, exactly as
+`evaluatePin` already treats any pin that fails verification (the server must not be able to reset a pin by
+corrupting it): it is withheld and named to the user and never re-pinned over. Existing v1 rows are
+therefore wiped once, by a migration step in the v2 slice (`PIN#` and `VERIFIED#` for every user),
+rather than left to fail; nothing is deployed with real users yet, and the accounts that exist are test
+accounts and the maintainer's. Only the **pin** also
 carries the pinned user's `KeyEpoch` that it saw (below). A verification record does not: it signs
 the fingerprint, which already covers both current keys.
 
@@ -611,8 +629,11 @@ written after the rotation is signed under the current key. The client already h
 it builds the payload, so this stays one transaction with no loop. Two rules close the remaining
 holes: the client requires the served chain to **end at the signing key it unwrapped itself** (an
 operator holding a leaked key can sign a fork that ends at a key of its own, but cannot produce the
-user's real keys), and a row written between building the digest and the commit is simply not
-listed, so it reads as no pin, which is the deletion case and not a forgery.
+user's real keys), and **the flow holds this tab's pin and verification writes from building the digest until the
+commit** (the commit signs every other session out, so after it only this tab can write). A row
+that nonetheless lands in between, from another device, is not listed, so it reads as `bad-signature`
+and is named to the user: the honest race fails loud, not silent, and the user re-pins that person
+explicitly.
 
 With the epoch in the pin the verdicts become: served set equal and epoch equal → **match**; served
 epoch lower → **rollback** (hard-block: the server is serving keys older than ones this account
@@ -1368,7 +1389,8 @@ way to hold the key), and every member exists and is not already past it, or not
 generation is accepted, which makes a retry after a lost response safe. `POST /api/groups/{gid}/rotation/takeover`
 is the admin's move for a rotation a leaver started (see "Leaving a private Rotating group").
 `POST /api/groups/{gid}/rotation/complete`
-deletes the marker only when no member is behind (`members_behind`). The scan is a consistent read
+deletes the marker only when no member is behind (`members_behind`), not counting dormant members
+(`WrapEpoch < KeyEpoch`), which reach a new generation only through the explicit approval. The scan is a consistent read
 but is not atomic with the delete, and an invite completed by an inviter who was re-wrapped
 mid-request could land a member one generation behind (the `CompleteInvite` transaction conditions
 on the inviter's generation, which closes that), so a behind member after completion is unlikely but
@@ -1391,7 +1413,10 @@ server-substituted X25519 key for that member would hand the server the key and 
 Before wrapping to anyone the job checks their served keys against the caller's signed pin: a match
 is wrapped to; a first sighting is pinned (trust on first use, as the roster does) and wrapped to; a
 mismatch or bad signature is skipped, reported, never wrapped to and never re-pinned over, and the
-rotation is left unfinished (`members_behind`) until a person resolves it. An unreadable pin set, or
+rotation is left unfinished (`members_behind`) until a person resolves it. Two cases are resolved
+without stalling: a dormant member is excluded from the recipient set and from `members_behind` (see
+"Dormant memberships"), and a member whose keys changed with an approval by another admin is reported
+as "approved elsewhere; accept to continue" (see "Other admins after an approval"). An unreadable pin set, or
 keys that cannot be fetched, stops the run rather than wrapping unchecked. This differs from the
 roster's grant check, which can show a mark while "unchecked": there the worst case is a missing
 badge, here it is a leaked key. The job re-lists members each pass (state, not a cursor), re-wraps
