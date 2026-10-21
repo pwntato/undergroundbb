@@ -286,8 +286,8 @@ roles do not carry the `dynamodb:Scan` it needs. It defaults to a dry run and on
 `WIPE_DRY_RUN=false` deletes; it only ever matches rows with no `SignedDay`, so it is safe to repeat:
 
 ```sh
-TABLE_NAME=<table> go run ./cmd/wipe-v1-keyrows                      # report only
-TABLE_NAME=<table> WIPE_DRY_RUN=false go run ./cmd/wipe-v1-keyrows   # delete
+AWS_REGION=us-west-2 TABLE_NAME=<table> go run ./cmd/wipe-v1-keyrows                      # report only
+AWS_REGION=us-west-2 TABLE_NAME=<table> WIPE_DRY_RUN=false go run ./cmd/wipe-v1-keyrows   # delete
 ```
 
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront

@@ -17,8 +17,9 @@ import (
 // be copied to a different pinned user's row or into someone else's
 // partition. pinnerSigningPublicKey is the key the pin is signed under: it is
 // what the "interval of the pinning key" in the design reduces to. It is a
-// server-served field and untrusted: a client verifies a pin only under the key
-// its own history says was current on the signed day.
+// server-served field and untrusted: a client verifies a pin only under its own
+// current key. Checking it against the key that was current on the signed day
+// comes with the key-history lookup (#62, later slice).
 //
 // signingKeys is a set: it is sorted bytewise before encoding, so the same
 // keys in any order sign identically, and the caller need not agree on an
@@ -26,7 +27,7 @@ import (
 // so a set cannot be re-cut into a different number of fields with the same
 // concatenation.
 //
-// utcDay is the UTC day the pin was signed ("2006-01-02"), so a verifier can
+// utcDay is the UTC day the pin was signed ("2006-01-02"), so a later slice can
 // check it against the key that was current that day (#62) and nothing needs
 // re-signing when the pinner rotates. pinnedKeyEpoch is the pinned user's
 // KeyEpoch as the pinner saw it: a served epoch below it is a rollback.
