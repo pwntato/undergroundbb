@@ -510,14 +510,23 @@ names. "Newest link" includes one a rotation in progress has already written, so
 resumes that job from the handed-off key like any other resume. If the user's own entry is behind
 the newest link (another admin's job has not wrapped to them yet), no row can be written for it,
 and `rotate-keys` answers 409 `rotation_in_progress` naming the group; the flow waits for that job
-to finish, and any admin can resume it. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
+to finish. Only an admin the job has already wrapped to (in practice the one who started it) can
+resume it, so the user's rotation stays blocked on that group until then; it is not offered to
+proceed with the group marked not handed off. After the commit, the self re-key (or the `Open` self-wrap) reads the row, unwraps it with the
 new private key from any later session, runs, and deletes the row when the group's start (or
 self-wrap) commits, so it resumes like any other rotation job. **A row has no TTL**: the
 rows of a committed rotation are the only copy of a key that group's sole admin can still reach, so
-nothing may delete them on a timer. An abandoned rotation leaves rows wrapped to a key that is not
-the account's current one; a write of a new row replaces the group's old one, and the existing hourly
-purge deletes rows whose wrapping key is not the current one and are over a day old (account deletion
-sweeps them with the user's other own rows). A thief gets nothing from these rows: only the holder of the new
+nothing may delete them on a timer. Rows are cleaned up inside the user's own partition, which needs no
+index and no purge job. An abandoned rotation leaves rows wrapped to a key that is not the account's
+current one: `rotate-keys`, right after its transaction commits, runs a `Query` on `USER#<uuid>`
+with `begins_with(SK, "HANDOFF#")` and deletes every row whose public key is not the one it just
+committed, and account deletion sweeps the rest with the user's other own rows. The order is
+enforced so a pending row is never overwritten: `PUT /rotation-handoff/{groupId}` answers 409 for
+a row whose public key is the account's **current** key (only rows from attempts that never
+committed can be replaced), `rotate-keys` refuses while any row naming the current key exists, and
+the flow finishes pending self re-keys before it offers another rotation. A row whose start fails the
+generation condition (below) is deleted by the client with an ordinary delete, since nothing else
+would. A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
@@ -1965,7 +1974,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
-| Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; stale rows swept by the purge) |
+| Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use, or by the next `rotate-keys` commit when it names another key) |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
