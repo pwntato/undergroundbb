@@ -1982,7 +1982,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
-| Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use, or by the next `rotate-keys` commit when it names another key) |
+| Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
