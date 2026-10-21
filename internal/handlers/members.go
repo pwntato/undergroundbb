@@ -457,7 +457,7 @@ func (h *Handler) buildLeaveRotation(ctx context.Context, groupID, userID string
 	if req.Generation != callerGeneration+1 {
 		return nil, removeRejection{http.StatusBadRequest, "rotation_required"}, fmt.Sprintf("rotation.generation: must be %d (one past your own key generation)", callerGeneration+1)
 	}
-	sig, rej, msg := h.verifyRotationStart(ctx, userID, groupID, userID, req.StartSignature, callerGeneration)
+	sig, _, rej, msg := h.verifyRotationStart(ctx, userID, groupID, userID, req.StartSignature, callerGeneration)
 	if msg != "" {
 		return nil, rej, msg
 	}
@@ -862,7 +862,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 			WriteErrorWithCode(w, http.StatusBadRequest, msg, "rotation_required")
 			return
 		}
-		sig, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, subjectID, req.Rotation.StartSignature, rot.CurrentGeneration)
+		sig, keyEpoch, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, subjectID, req.Rotation.StartSignature, rot.CurrentGeneration)
 		if msg != "" {
 			if rej.code == "" {
 				WriteError(w, rej.status, msg)
@@ -872,6 +872,7 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rot.StartSignature = sig
+		rot.RemoverKeyEpoch = keyEpoch
 		in.Rotation = rot
 	} else if req.Rotation != nil {
 		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")
@@ -904,6 +905,8 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, db.ErrRotationInProgress):
 		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; finish it before removing another member", "rotation_in_progress")
+	case errors.Is(err, db.ErrWrapEpochStale):
+		WriteErrorWithCode(w, http.StatusConflict, "your keys were rotated by another request; reload and try again", "key_epoch_stale")
 	case errors.Is(err, db.ErrRotationStaleGeneration):
 		WriteErrorWithCode(w, http.StatusConflict, "your key is behind the group's current generation; reload and try again", "rotation_stale_generation")
 	case errors.Is(err, db.ErrGrantorChanged):
@@ -956,21 +959,23 @@ func decodeRemoveRotation(req *removeRotationRequest, callerGeneration int64) (*
 // are starting and stores it on rot. It is checked here as well as by every
 // resuming client so a marker that could never verify is refused up front
 // instead of stalling the rotation for whoever resumes it (#178).
-func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, subjectID, startSignature string, currentGeneration int64) (sig []byte, rej removeRejection, msg string) {
+func (h *Handler) verifyRotationStart(ctx context.Context, removerID, groupID, subjectID, startSignature string, currentGeneration int64) (sig []byte, keyEpoch uint64, rej removeRejection, msg string) {
 	sig, err := decodeBase64Field(startSignature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
-		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: " + err.Error()
+		return nil, 0, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: " + err.Error()
 	}
 	remover, err := h.db.GetUserByID(ctx, removerID)
 	if err != nil {
 		log.Printf("verify rotation start: load remover %s: %v", removerID, err)
-		return nil, removeRejection{http.StatusInternalServerError, ""}, "could not start the rotation"
+		return nil, 0, removeRejection{http.StatusInternalServerError, ""}, "could not start the rotation"
 	}
 	payload := crypto.RotationStartPayload(groupID, removerID, subjectID, currentGeneration+1)
 	if !crypto.Verify(remover.SigningPublicKey, crypto.ContextRotationStart, payload, sig) {
-		return nil, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: does not verify against the caller's current signing key"
+		return nil, 0, removeRejection{http.StatusBadRequest, "bad_signature"}, "rotation.startSignature: does not verify against the caller's current signing key"
 	}
-	return sig, removeRejection{}, ""
+	// keyEpoch is the starter's KeyEpoch, which the start's own re-wrap records
+	// as the entry's WrapEpoch and the transaction re-checks (#62).
+	return sig, remover.KeyEpoch, removeRejection{}, ""
 }
 
 type removeRejection struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -32,6 +33,12 @@ var (
 	// the rotation's generation. Nothing in the batch was written; the client
 	// re-lists members and resends.
 	ErrRewrapMemberChanged = errors.New("db: a member in the batch changed")
+	// ErrRewrapMemberDormant: a member in the batch is dormant (their entry
+	// point is wrapped to a key they have since rotated away from) and the wrap
+	// was made to their current key. An ordinary rotation never wraps to a
+	// dormant member: only an explicit approval does (docs/DESIGN.md, "An
+	// ordinary rotation never wraps to a dormant member"). Nothing was written.
+	ErrRewrapMemberDormant = errors.New("db: a member in the batch is dormant")
 	// ErrMembersBehind: completion refused because some member's entry point
 	// is still at an older generation.
 	ErrMembersBehind = errors.New("db: members are still on an older key generation")
@@ -41,6 +48,12 @@ var (
 type MemberRewrap struct {
 	UserID  string
 	Wrapped models.WrappedKey
+	// WrapEpoch is the recipient's KeyEpoch the wrap was made to (#62). It must
+	// be their current epoch, and it must be the epoch their existing entry
+	// point is already at: a member whose entry is behind their KeyEpoch is
+	// dormant and is not wrapped to by a rotation. It becomes the member's new
+	// WrapEpoch.
+	WrapEpoch uint64
 }
 
 // RewrapMembersInput moves a batch of members' entry points to generation
@@ -146,6 +159,8 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		callerIndex = 1
 		firstWrap   = 2
 	)
+	// The recipients' PROFILE checks follow the wraps, one each, at index
+	// firstWrap+len(wraps)+i.
 	marker, err := c.GetRotation(ctx, in.GroupID)
 	if err != nil {
 		return err
@@ -174,14 +189,18 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		items = append(items, types.TransactWriteItem{Update: &types.Update{
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, w.UserID),
-			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped"),
-			ConditionExpression:      aws.String(memberCond),
+			UpdateExpression:         aws.String("SET #gen = :gen, #wrapped = :wrapped, WrapEpoch = :wep"),
+			ConditionExpression:      aws.String(memberCond + " AND " + epochEquals("WrapEpoch", ":wep", w.WrapEpoch)),
 			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":gen":     genAttr(in.Generation),
 				":wrapped": wrapped,
+				":wep":     epochAttr(w.WrapEpoch),
 			},
 		}})
+	}
+	for _, w := range in.Wraps {
+		items = append(items, c.keyEpochCheck(w.UserID, w.WrapEpoch))
 	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
@@ -192,14 +211,46 @@ func (c *Client) RewrapMembers(ctx context.Context, in RewrapMembersInput) error
 		case isTransactionConflict(err):
 			return ErrRoleChangeConflict
 		}
-		for i := firstWrap; i < len(items); i++ {
-			if isConditionalCheckFailure(err, i) {
-				return ErrRewrapMemberChanged
+		// A recipient whose keys moved on is stale, whatever else is true of them.
+		for i := range in.Wraps {
+			if isConditionalCheckFailure(err, firstWrap+len(in.Wraps)+i) {
+				return ErrWrapEpochStale
+			}
+		}
+		for i, w := range in.Wraps {
+			if isConditionalCheckFailure(err, firstWrap+i) {
+				return c.whyRewrapMemberFailed(ctx, in, w, marker != nil)
 			}
 		}
 		return err
 	}
 	return nil
+}
+
+// whyRewrapMemberFailed tells a dormant member from one that left or moved on,
+// by reading the member back: the update's condition cannot say which clause
+// failed.
+func (c *Client) whyRewrapMemberFailed(ctx context.Context, in RewrapMembersInput, w MemberRewrap, markerPresent bool) error {
+	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(c.table),
+		Key:            memberKey(in.GroupID, w.UserID),
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return fmt.Errorf("db: read member after rewrap: %w", err)
+	}
+	if out.Item == nil {
+		return ErrRewrapMemberChanged
+	}
+	var m models.Membership
+	if err := attributevalue.UnmarshalMap(out.Item, &m); err != nil {
+		return fmt.Errorf("db: unmarshal member after rewrap: %w", err)
+	}
+	moved := m.Generation > in.Generation || (!markerPresent && m.Generation == in.Generation)
+	if !moved && m.WrapEpoch != w.WrapEpoch {
+		return ErrRewrapMemberDormant
+	}
+	return ErrRewrapMemberChanged
 }
 
 // CompleteRotation deletes the marker, only once every member's entry point is
@@ -215,7 +266,19 @@ func (c *Client) CompleteRotation(ctx context.Context, groupID, callerUserID str
 			return err
 		}
 		for _, m := range page {
-			if m.Generation < gen {
+			if m.Generation >= gen {
+				continue
+			}
+			// A member behind the generation blocks completion, unless they are
+			// dormant: their entry is wrapped to a key they have rotated away
+			// from, an ordinary rotation never wraps to them, and only an
+			// explicit approval brings them forward (#62). Their KeyEpoch is read
+			// only for members found behind, which is few.
+			dormant, err := c.memberIsDormant(ctx, m)
+			if err != nil {
+				return err
+			}
+			if !dormant {
 				return ErrMembersBehind
 			}
 		}
@@ -286,4 +349,20 @@ func (c *Client) ListGenerationKeys(ctx context.Context, groupID string, from, t
 		next = n
 	}
 	return links, next, nil
+}
+
+// memberIsDormant reports whether the member's entry point is wrapped to a key
+// their account has since replaced: WrapEpoch behind the PROFILE's KeyEpoch,
+// both absent-as-0. A member with no readable profile is not dormant, so a
+// completion that cannot tell blocks rather than clearing early.
+func (c *Client) memberIsDormant(ctx context.Context, m models.Membership) (bool, error) {
+	userID := strings.TrimPrefix(m.SK, "MEMBER#")
+	user, err := c.getUserConsistent(ctx, userID)
+	if errors.Is(err, ErrUserNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("db: read member profile: %w", err)
+	}
+	return m.WrapEpoch < user.KeyEpoch, nil
 }

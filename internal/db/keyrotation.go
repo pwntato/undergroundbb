@@ -45,6 +45,11 @@ var (
 	// entry point is not at the generation the row names, so they cannot be
 	// holding the key they are handing off.
 	ErrHandoffNotAdmin = errors.New("db: caller is not an admin of the group at that generation")
+	// ErrWrapEpochStale: a group key was wrapped to a key its recipient has
+	// since rotated away from (the recipient's PROFILE KeyEpoch is no longer the
+	// one the write was built against). Nothing was written; the client
+	// re-reads the recipient's keys and wraps again.
+	ErrWrapEpochStale = errors.New("db: the recipient's keys changed; the wrap is stale")
 	// ErrHandoffAccountChanged: the account's wrapping key is no longer the one
 	// the handler compared the row against (a rotation committed in between).
 	ErrHandoffAccountChanged = errors.New("db: the account's keys changed")
@@ -507,4 +512,53 @@ func (c *Client) getUserConsistent(ctx context.Context, userID string) (*models.
 		return nil, err
 	}
 	return &user, nil
+}
+
+// epochEquals is a condition fragment requiring attr to equal the epoch held in
+// placeholder, where an absent attribute reads as 0 (KeyEpoch and WrapEpoch are
+// both omitted until a user first rotates).
+func epochEquals(attr, placeholder string, epoch uint64) string {
+	if epoch == 0 {
+		return "(attribute_not_exists(" + attr + ") OR " + attr + " = " + placeholder + ")"
+	}
+	return attr + " = " + placeholder
+}
+
+func epochAttr(epoch uint64) types.AttributeValue {
+	return &types.AttributeValueMemberN{Value: strconv.FormatUint(epoch, 10)}
+}
+
+// profileKey is the PK/SK of a user's PROFILE item.
+func profileKey(userID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+		"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+	}
+}
+
+// keyEpochCheck asserts userID's PROFILE is not deleted and still at KeyEpoch
+// epoch: the same-transaction half of "every path that writes a MEMBER# wrap
+// sets WrapEpoch from the recipient's KeyEpoch and checks it" (docs/DESIGN.md,
+// "Dormancy is derived, not stored"), so a wrap to a key that has just been
+// replaced is refused instead of stored.
+func (c *Client) keyEpochCheck(userID string, epoch uint64) types.TransactWriteItem {
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName:                 aws.String(c.table),
+		Key:                       profileKey(userID),
+		ConditionExpression:       aws.String("attribute_not_exists(DeletedAt) AND " + epochEquals("KeyEpoch", ":kep", epoch)),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":kep": epochAttr(epoch)},
+	}}
+}
+
+// whyProfileCheckFailed says why a keyEpochCheck failed: deleted is true for a
+// tombstoned (or missing) account; otherwise the epoch moved, ErrWrapEpochStale.
+func (c *Client) whyProfileCheckFailed(ctx context.Context, userID string) (deleted bool, err error) {
+	user, err := c.getUserConsistent(ctx, userID)
+	if errors.Is(err, ErrUserNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return user.DeletedAt != "", nil
 }

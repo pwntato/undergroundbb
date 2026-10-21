@@ -578,6 +578,12 @@ type CompleteInviteInput struct {
 	InviterUserID string
 
 	InvitedUserID string
+	// InviteeKeyEpoch is the invitee's KeyEpoch as the handler read it, after
+	// checking their current wrapping key is the one they signed at acceptance
+	// (#62). It becomes the membership's WrapEpoch and is checked against
+	// PROFILE in the same transaction, so an invitee who rotates between the
+	// handler's read and this write gets no wrap to the key they replaced.
+	InviteeKeyEpoch uint64
 	// Generation and WrappedGroupKey are the invitee's own entry point to
 	// the group key, exactly like CreateGroupInput.GenerationKeyWrapped --
 	// wrapped client-side (the inviter's browser, which alone holds the
@@ -787,6 +793,7 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 		Role:            in.Role,
 		Generation:      in.Generation,
 		WrappedGroupKey: in.WrappedGroupKey,
+		WrapEpoch:       in.InviteeKeyEpoch,
 	}
 	membershipItem, err := attributevalue.MarshalMap(membership)
 	if err != nil {
@@ -897,17 +904,9 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 			// The invitee's account must not have been deleted (#77): account
 			// deletion refuses while any membership exists, so a membership
 			// written after the tombstone would belong to an account nobody
-			// can sign in to.
-			{
-				ConditionCheck: &types.ConditionCheck{
-					TableName: aws.String(c.table),
-					Key: map[string]types.AttributeValue{
-						"PK": &types.AttributeValueMemberS{Value: "USER#" + in.InvitedUserID},
-						"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-					},
-					ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
-				},
-			},
+			// can sign in to. The same item holds the KeyEpoch the membership's
+			// WrapEpoch was taken from (#62).
+			c.keyEpochCheck(in.InvitedUserID, in.InviteeKeyEpoch),
 			// The inviter's signed admission record (#178). Unconditional: a
 			// rejoin replaces the previous record, and the membership Put's
 			// own condition already refuses a current member.
@@ -921,7 +920,14 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 	})
 	if err != nil {
 		if isConditionalCheckFailure(err, inviteeIndex) {
-			return ErrInviteeDeleted
+			deleted, whyErr := c.whyProfileCheckFailed(ctx, in.InvitedUserID)
+			if whyErr != nil {
+				return whyErr
+			}
+			if deleted {
+				return ErrInviteeDeleted
+			}
+			return ErrWrapEpochStale
 		}
 		if seenSeq != nil && isTransactionConflict(err) {
 			return errJoinRaced
