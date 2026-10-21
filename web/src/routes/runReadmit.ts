@@ -151,7 +151,8 @@ async function inspect(
     pin: pins.find((p) => p.pinnedUserId === subjectUserId),
     served,
   })
-  if (verdict === 'mismatch' || verdict === 'bad-signature') {
+  // An allowlist, so a verdict added later (rollback was) cannot fall through.
+  if (verdict !== 'match' && verdict !== 'first-sight') {
     return { ok: false, kind: 'pinMismatch' }
   }
 

@@ -374,7 +374,7 @@ async function checkServedKeys(
         unchecked = true
       }
     } else {
-      // mismatch or bad-signature: withhold, never re-pin over it.
+      // mismatch, rollback or bad-signature: withhold, never re-pin over it.
       blockedKeyUsers.push(id)
     }
   }

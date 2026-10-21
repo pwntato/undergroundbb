@@ -796,7 +796,8 @@ async function resolveSignerKeys(
       pin: pins.find((p) => p.pinnedUserId === id),
       served: projection,
     })
-    if (verdict === 'mismatch' || verdict === 'bad-signature') {
+    // An allowlist, so a verdict added later (rollback was) cannot fall through.
+    if (verdict !== 'match' && verdict !== 'first-sight') {
       return { ok: false, reason: `the keys served for ${who} do not match your pin` }
     }
     keys.set(id, servedSigningKeySet(projection))
@@ -946,7 +947,8 @@ async function checkRecipient(
     pin: pins.get(userId),
     served,
   })
-  if (verdict === 'mismatch' || verdict === 'bad-signature') {
+  // An allowlist, so a verdict added later (rollback was) cannot fall through.
+  if (verdict !== 'match' && verdict !== 'first-sight') {
     return { ok: false, reason: 'blocked' }
   }
   if (verdict === 'first-sight') {
