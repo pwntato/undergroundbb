@@ -325,8 +325,10 @@ written, and a build that finds no such tag, or a tag with no file behind it, fa
 a tampered or swapped main script or stylesheet in the bucket or on the CDN is refused by the
 browser while `index.html` is intact. What it does not: `index.html` carries the hashes and comes from the same operator, so
 whoever can change it can change the hashes, which is the operator case this section is about. The
-crypto worker is loaded at runtime by `new Worker(...)`, which has no integrity option, so it is not
-covered either.
+crypto worker is covered too: `new Worker(url)` has no integrity option, so the worker is inlined
+into the hashed main bundle and started from a Blob URL (#248). That costs `worker-src blob:` in the
+CSP, which lets script that already runs start a worker from text it builds; it does not let any
+script run that `script-src` forbids.
 
 **If your threat model includes the operator of the server, use a native application with an
 independently verified binary. This is not that.**
@@ -416,6 +418,7 @@ served as a response header from CloudFront:
 ```
 default-src 'none';
 script-src 'self' 'wasm-unsafe-eval';
+worker-src blob:;
 style-src 'self';
 img-src 'self' data:;
 connect-src 'self';

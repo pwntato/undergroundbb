@@ -203,6 +203,12 @@ resource "aws_cloudfront_function" "spa_index_rewrite" {
 #   - frame-ancestors 'none': closes clickjacking, the other route to the
 #     same false-fingerprint outcome the theme-as-JSON restriction defends
 #     against for #65's fingerprint-verification UI.
+#   - worker-src blob: (#248): the crypto worker is inlined into the
+#     SRI-hashed main bundle and started from a Blob URL, because
+#     `new Worker(url)` cannot carry an integrity hash. 'self' is not
+#     listed: nothing loads a worker file any more. Script execution is
+#     still bounded by script-src; blob: only lets script that already runs
+#     start a worker from text it builds.
 # Served as a CloudFront response headers policy applied to every behavior
 # (both origins), since a stolen-cookie or injected-script outcome is a risk
 # on the API path too, not just the static SPA.
@@ -215,6 +221,7 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
       content_security_policy = join("; ", [
         "default-src 'none'",
         "script-src 'self' 'wasm-unsafe-eval'",
+        "worker-src blob:",
         "style-src 'self'",
         "img-src 'self' data:",
         "connect-src 'self'",

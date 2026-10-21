@@ -9,8 +9,8 @@ import type { Plugin } from 'vite'
 // modified-JavaScript gap in docs/THREAT_MODEL.md: it catches a tampered file in the bucket or
 // on the CDN, not a tampered index.html, which carries the hashes.
 //
-// It covers only tags in index.html. The crypto worker (and anything it loads) is fetched at
-// runtime by `new Worker(...)`, which has no integrity option, so it is not covered.
+// It covers only tags in index.html. The crypto worker is inlined into the main bundle
+// (`?worker&inline`, #248), so the bundle's hash covers it.
 
 const TAG = /<(?:script|link)\b[^>]*?(?:src|href)="(\/assets\/[^"]+)"[^>]*>/g
 
