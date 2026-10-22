@@ -33,6 +33,7 @@ describe('failureMessage', () => {
     { kind: 'changedElsewhere' },
     { kind: 'rejected', message: 'bad signature.' },
     { kind: 'unreachable' },
+    { kind: 'unconfirmed', recoveryCode: 'ABCD' },
   ]
 
   it('has a message for every failure, and none of them uses a dash as punctuation', () => {
@@ -48,6 +49,13 @@ describe('failureMessage', () => {
       'Group a, Group b',
     )
     expect(failureMessage({ kind: 'groupBusy', groups: [] }, label)).toContain('a group')
+  })
+
+  it('never tells the user their keys are unchanged when the request was sent and the answer is unknown', () => {
+    const msg = failureMessage({ kind: 'unconfirmed', recoveryCode: 'ABCD' }, label)
+    expect(msg).toContain("couldn't confirm")
+    expect(msg).not.toMatch(/not changed|Nothing was rotated/)
+    expect(msg).toContain('never rotates twice')
   })
 
   it('says nothing was rotated for the failures that mean it, and that keys are unchanged when unreachable', () => {

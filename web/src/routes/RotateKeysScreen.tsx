@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ApiError, getAccountCredentials } from '@/lib/api/auth'
+import { ApiError, challenge, getAccountCredentials } from '@/lib/api/auth'
 import { getGroup, getKeychain, listGroups } from '@/lib/api/groups'
 import { sentInvites, revokeInvite } from '@/lib/api/invites'
 import { putHandoff, rotateKeys } from '@/lib/api/keyRotation'
@@ -34,6 +34,7 @@ import { Progress } from '@/components/ui/progress'
 import { groupLabel } from './groupLabel'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { failureMessage, stepText } from './rotateKeysCopy'
+import { RotateKeysRetry } from './RotateKeysRetry'
 import { RotateKeysReview } from './RotateKeysReview'
 import { runListGroups } from './runListGroups'
 import {
@@ -57,12 +58,23 @@ type Step =
       readonly step: KeyRotationStep
       readonly progress: SignupProgressEvent | null
     }
-  | { readonly name: 'recoveryCode'; readonly recoveryCode: string }
+  | {
+      readonly name: 'retry'
+      readonly pre: KeyRotationPreflight
+      readonly recoveryCode: string
+    }
+  | {
+      readonly name: 'recoveryCode'
+      readonly recoveryCode: string
+      /** No session for the new keys: acknowledging goes to log in, not Home. */
+      readonly needsRelogin: boolean
+    }
 
 const deps: KeyRotationDeps = {
   hasLiveKeys,
   getCredentials: getAccountCredentials,
   getUser,
+  challenge,
   listGroups,
   getGroup,
   sentInvites,
@@ -131,7 +143,7 @@ export function RotateKeysScreen() {
   // A rotation in flight, or a recovery code not yet written down, is lost on
   // reload (the new keys live only in the worker).
   useEffect(() => {
-    if (step.name !== 'running' && step.name !== 'recoveryCode') {
+    if (step.name !== 'running' && step.name !== 'recoveryCode' && step.name !== 'retry') {
       return
     }
     const handleBeforeUnload = (e: BeforeUnloadEvent): void => {
@@ -157,7 +169,9 @@ export function RotateKeysScreen() {
     [step, labels],
   )
 
-  const handleSubmit = (pre: KeyRotationPreflight, newPassword: string) => {
+  // Runs the flow. A retry passes no password: the request it resends was
+  // signed under the one chosen the first time.
+  const start = (pre: KeyRotationPreflight, newPassword: string) => {
     setError(null)
     setStep({ name: 'running', pre, step: { name: 'preparing' }, progress: null })
     void (async () => {
@@ -171,10 +185,21 @@ export function RotateKeysScreen() {
       })
       if (result.ok) {
         attempt.current = {}
-        setStep({ name: 'recoveryCode', recoveryCode: result.recoveryCode })
+        setStep({
+          name: 'recoveryCode',
+          recoveryCode: result.recoveryCode,
+          needsRelogin: result.needsRelogin,
+        })
         return
       }
       const { failure } = result
+      if (failure.kind === 'unconfirmed') {
+        // Sent, outcome unknown: keep the attempt and the pending keys, and show
+        // the recovery code. Nothing here may be discarded.
+        setError(failureMessage(failure, labelFor))
+        setStep({ name: 'retry', pre, recoveryCode: failure.recoveryCode })
+        return
+      }
       if (failure.kind !== 'unreachable') {
         // Nothing committed and nothing will: drop the new keys and let pins
         // and verifications be signed again.
@@ -230,7 +255,7 @@ export function RotateKeysScreen() {
             invitesAwaitingCompletion={step.pre.invitesAwaitingCompletion}
             error={error}
             onSubmit={(pw) => {
-              handleSubmit(step.pre, pw)
+              start(step.pre, pw)
             }}
           />
         </div>
@@ -253,14 +278,39 @@ export function RotateKeysScreen() {
         </div>
       )
     }
-    case 'recoveryCode':
+    case 'retry':
       return (
-        <RecoveryCodeStep
+        <RotateKeysRetry
+          message={error ?? ''}
           recoveryCode={step.recoveryCode}
-          onAcknowledged={() => {
-            navigate('/', { replace: true })
+          onRetry={() => {
+            start(step.pre, '')
           }}
         />
+      )
+    case 'recoveryCode':
+      return (
+        <div className="flex w-full max-w-lg flex-col items-center gap-4">
+          {step.needsRelogin && (
+            <Alert>
+              <AlertDescription>
+                Your keys were rotated. After you save the code below, log in again with your new
+                password.
+              </AlertDescription>
+            </Alert>
+          )}
+          <RecoveryCodeStep
+            recoveryCode={step.recoveryCode}
+            onAcknowledged={() => {
+              if (step.needsRelogin) {
+                session.logout()
+                navigate('/login', { replace: true })
+                return
+              }
+              navigate('/', { replace: true })
+            }}
+          />
+        </div>
       )
   }
 }

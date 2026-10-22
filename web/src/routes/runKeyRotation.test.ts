@@ -57,7 +57,13 @@ function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] 
   const deps: KeyRotationDeps = {
     hasLiveKeys: vi.fn().mockResolvedValue(true),
     getCredentials: vi.fn().mockResolvedValue({ userId: USER, credentialVersion: 4 }),
-    getUser: vi.fn().mockResolvedValue({ keyEpoch: 2, wrappingPublicKey: 'old' }),
+    getUser: vi
+      .fn()
+      .mockResolvedValue({ keyEpoch: 2, wrappingPublicKey: 'old', username: 'alice' }),
+    // Serves the OLD credentials until a test says the rotation landed.
+    challenge: vi
+      .fn()
+      .mockResolvedValue({ wrappedPrivateKeys: { nonce: 'old', ciphertext: 'old' } }),
     listGroups: vi.fn().mockResolvedValue({ groups }),
     getGroup: vi.fn().mockResolvedValue({ revocationMode: 'rotating' } as GroupDetail),
     sentInvites: vi.fn().mockResolvedValue({ invites: [] }),
@@ -87,6 +93,7 @@ function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] 
 function pre(over: Partial<KeyRotationPreflight> = {}): KeyRotationPreflight {
   return {
     userId: USER,
+    username: 'alice',
     keyEpoch: 2,
     credentialVersion: 4,
     adminGroups: [
@@ -155,7 +162,12 @@ describe('runKeyRotation', () => {
       listAllVerifications: vi.fn().mockResolvedValue([{ verifiedUserId: 'b', signature: sig }]),
     })
     const { result, steps } = await run(deps)
-    expect(result).toEqual({ ok: true, recoveryCode: 'ABCD-EFGH', keyEpoch: 3 })
+    expect(result).toEqual({
+      ok: true,
+      recoveryCode: 'ABCD-EFGH',
+      keyEpoch: 3,
+      needsRelogin: false,
+    })
 
     expect(deps.wrapHandoff).toHaveBeenCalledWith({
       userId: USER,
@@ -329,32 +341,175 @@ describe('runKeyRotation', () => {
     expect(deps.commitKeyRotation).not.toHaveBeenCalled()
   })
 
-  it('treats a lost response as success when the server shows the rotation landed', async () => {
-    const deps = makeDeps({
-      rotateKeys: vi.fn().mockRejectedValue(new TypeError('network')),
-      getUser: vi.fn().mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: NEW_WRAP_PUB }),
+  describe('when rotate-keys was sent and the answer is unknown', () => {
+    const LANDED = { wrappedPrivateKeys: { nonce: BLOB.nonce, ciphertext: BLOB.ciphertext } }
+    const dead = () => new ApiError(401, 'not authenticated')
+
+    /** A server that commits, then loses the response and ends every session. */
+    function landedThenLost(over: Partial<KeyRotationDeps> = {}) {
+      let committed = false
+      const gone = () => (committed ? Promise.reject(dead()) : undefined)
+      const deps = makeDeps({
+        rotateKeys: vi.fn().mockImplementation(() => {
+          committed = true
+          return Promise.reject(new TypeError('Failed to fetch'))
+        }),
+        // Everything that needs a session fails once the rotation landed.
+        getUser: vi
+          .fn()
+          .mockImplementation(() => gone() ?? Promise.resolve({ keyEpoch: 2, username: 'alice' })),
+        listGroups: vi
+          .fn()
+          .mockImplementation(() => gone() ?? Promise.resolve({ groups: [group('g1')] })),
+        challenge: vi
+          .fn()
+          .mockImplementation(() =>
+            Promise.resolve(
+              committed ? LANDED : { wrappedPrivateKeys: { nonce: 'old', ciphertext: 'old' } },
+            ),
+          ),
+        ...over,
+      })
+      return deps
+    }
+
+    it('settles a lost response from the login challenge, with no session, and shows the recovery code', async () => {
+      const deps = landedThenLost()
+      const { result } = await run(deps)
+      expect(result).toEqual({
+        ok: true,
+        recoveryCode: 'ABCD-EFGH',
+        keyEpoch: 3,
+        needsRelogin: true,
+      })
+      expect(deps.commitKeyRotation).toHaveBeenCalledWith(USER)
+      // It asked the unauthenticated endpoint, not one that needs the dead session.
+      expect(deps.challenge).toHaveBeenCalledWith('alice')
+      expect(deps.getUser).not.toHaveBeenCalled()
     })
-    const { result } = await run(deps)
-    expect(result).toEqual({ ok: true, recoveryCode: 'ABCD-EFGH', keyEpoch: 3 })
-    expect(deps.commitKeyRotation).toHaveBeenCalledWith(USER)
+
+    it('reports unconfirmed, never "keys unchanged", when the challenge still serves the old keys', async () => {
+      const deps = makeDeps({ rotateKeys: vi.fn().mockRejectedValue(new TypeError('network')) })
+      const attempt: KeyRotationAttempt = {}
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { kind: 'unconfirmed', recoveryCode: 'ABCD-EFGH' },
+      })
+      expect(deps.commitKeyRotation).not.toHaveBeenCalled()
+      // Everything needed to resume is kept.
+      expect(attempt.ambiguous).toBe(true)
+      expect(attempt.request).toBeDefined()
+      expect(attempt.begun).toBeDefined()
+    })
+
+    it('reports unconfirmed when the challenge itself cannot be read', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi.fn().mockRejectedValue(new TypeError('network')),
+        challenge: vi.fn().mockRejectedValue(new TypeError('network')),
+      })
+      const { result } = await run(deps)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+    })
+
+    it('does not read a later 401 as "nothing was rotated": the retry settles it as landed', async () => {
+      // The reviewer's repro: first run unconfirmed (the read was stale), the
+      // retry then meets a dead session.
+      let landedNow = false
+      const deps = landedThenLost({
+        challenge: vi
+          .fn()
+          .mockImplementation(() =>
+            Promise.resolve(
+              landedNow ? LANDED : { wrappedPrivateKeys: { nonce: 'old', ciphertext: 'old' } },
+            ),
+          ),
+      })
+      const attempt: KeyRotationAttempt = {}
+      const first = await run(deps, attempt)
+      expect(first.result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+
+      landedNow = true // the read has caught up
+      const retry = await run(deps, attempt)
+      expect(retry.result).toMatchObject({
+        ok: true,
+        needsRelogin: true,
+        recoveryCode: 'ABCD-EFGH',
+      })
+      // The retry used no session: nothing before the send was repeated, and the
+      // request was not sent a second time.
+      expect(deps.listGroups).toHaveBeenCalledTimes(1)
+      expect(deps.rotateKeys).toHaveBeenCalledTimes(1)
+      expect(deps.commitKeyRotation).toHaveBeenCalledWith(USER)
+    })
+
+    it('treats a 401 or a stale epoch after an unknown send as unconfirmed or landed, never as a plain failure', async () => {
+      for (const err of [
+        dead(),
+        new ApiError(409, 'stale', 'key_epoch_stale'),
+        new ApiError(400, 'stale day'),
+      ]) {
+        const rotateKeys = vi
+          .fn()
+          .mockRejectedValueOnce(new TypeError('network'))
+          .mockRejectedValue(err)
+        const deps = makeDeps({ rotateKeys })
+        const attempt: KeyRotationAttempt = {}
+        await run(deps, attempt)
+        const { result } = await run(deps, attempt)
+        expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+      }
+    })
+
+    it('resends the same signed request on retry, and a first-send 401 is still a plain authRequired', async () => {
+      const rotateKeys = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError('network'))
+        .mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 })
+      const deps = makeDeps({ rotateKeys })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      const retry = await run(deps, attempt)
+      expect(retry.result).toMatchObject({ ok: true, needsRelogin: false })
+      expect(deps.beginKeyRotation).toHaveBeenCalledTimes(1)
+      expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
+      const [a, b] = rotateKeys.mock.calls
+      expect(a?.[0]).toBe(b?.[0])
+
+      // A 401 on the very first send is a definite answer: nothing was sent before it.
+      const first = makeDeps({ rotateKeys: vi.fn().mockRejectedValue(dead()) })
+      const { result } = await run(first)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'authRequired' } })
+    })
+
+    it('does not ask for a password again on a retry: the request keeps the first one', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(new TypeError('network'))
+          .mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      // The retry passes no password (the screen offers none) and signs nothing.
+      const steps: KeyRotationStep[] = []
+      const retry = await runKeyRotation(deps, pre(), '', attempt, {
+        onStep: (s) => steps.push(s),
+        onProgress: () => {},
+      })
+      expect(retry.ok).toBe(true)
+      expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(deps.signKeyRotation).mock.calls[0]?.[0].newPassword).toBe('a new password')
+      expect(steps.map((s) => s.name)).toEqual(['committing'])
+    })
   })
 
-  it('on a lost response that did not land, keeps the signed request so a retry resends it', async () => {
-    const rotateKeys = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError('network'))
-      .mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 })
-    const deps = makeDeps({ rotateKeys })
-    const attempt: KeyRotationAttempt = {}
-    const first = await run(deps, attempt)
-    expect(first.result).toMatchObject({ ok: false, failure: { kind: 'unreachable' } })
-    expect(deps.commitKeyRotation).not.toHaveBeenCalled()
-
-    const second = await run(deps, attempt)
-    expect(second.result.ok).toBe(true)
-    expect(deps.beginKeyRotation).toHaveBeenCalledTimes(1)
-    expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
-    const [a, b] = rotateKeys.mock.calls
-    expect(a?.[0]).toBe(b?.[0])
+  it('shows the recovery code when the worker cannot switch keys after the server accepted', async () => {
+    const deps = makeDeps({
+      commitKeyRotation: vi.fn().mockRejectedValue(new Error('worker died')),
+    })
+    const { result } = await run(deps)
+    expect(result).toEqual({ ok: true, recoveryCode: 'ABCD-EFGH', keyEpoch: 3, needsRelogin: true })
+    expect(deps.rotateKeys).toHaveBeenCalledTimes(1)
   })
 })

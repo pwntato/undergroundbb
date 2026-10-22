@@ -18,9 +18,19 @@
 //   5. POST rotate-keys, answering each 409 the server defines;
 //   6. only after the server accepted it, make the new keys the worker's live
 //      keys.
-// Every outcome is a value, not a throw. A rotation that did not commit keeps
-// its signed request in `attempt`, so "try again" resends the same request
-// (the epoch makes it single-use) instead of minting a second set of keys.
+// Every outcome is a value, not a throw.
+//
+// Once rotate-keys has been sent, the outcome can be unknown (the response was
+// lost), and then nothing the server says afterwards can be read as "it did not
+// happen": a landed rotation ends every session, so the next calls 401, and its
+// epoch and day make a resend stale. So from that point the attempt, the pending
+// keys and the recovery code are never discarded. The question "did it land?" is
+// answered without a session or a password, from the login challenge, which
+// serves the account's current wrapped keys: if they are the ones this request
+// carried, it landed. (That read is eventually consistent, so "still the old
+// ones" proves nothing; the answer is then `unconfirmed`, and a retry checks
+// again before it resends the same signed request, which the epoch makes
+// single-use.)
 
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail, GroupListEntry } from '@/lib/api/groups'
@@ -47,6 +57,7 @@ export interface AdminGroup {
 
 export interface KeyRotationPreflight {
   readonly userId: string
+  readonly username: string
   readonly keyEpoch: number
   readonly credentialVersion: number
   readonly adminGroups: readonly AdminGroup[]
@@ -60,6 +71,10 @@ export interface KeyRotationDeps {
   readonly hasLiveKeys: (userId: string) => Promise<boolean>
   readonly getCredentials: () => Promise<{ userId: string; credentialVersion: number }>
   readonly getUser: (userId: string) => Promise<UserProjection>
+  /** The unauthenticated login challenge; only the account's current wrapped keys are read from it. */
+  readonly challenge: (username: string) => Promise<{
+    wrappedPrivateKeys: { nonce: string; ciphertext: string }
+  }>
   readonly listGroups: () => Promise<{ groups: readonly GroupListEntry[] }>
   readonly getGroup: (groupId: string) => Promise<GroupDetail>
   readonly sentInvites: () => Promise<{ invites: readonly SentInvite[] }>
@@ -106,15 +121,32 @@ export type KeyRotationFailure =
   | { readonly kind: 'changedElsewhere' }
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
-  /** No answer, and the account's keys did not change. Retrying resends the same request. */
+  /** No answer before the request was sent, so the account's keys did not change. */
   | { readonly kind: 'unreachable' }
+  /**
+   * The request was sent and the outcome is unknown. The keys may or may not
+   * have changed. `recoveryCode` is the one the new keys' recovery wrap was made
+   * from: shown now, it costs nothing if the rotation did not land and is the
+   * only copy if it did.
+   */
+  | { readonly kind: 'unconfirmed'; readonly recoveryCode: string }
 
 export type KeyRotationResult =
-  | { readonly ok: true; readonly recoveryCode: string; readonly keyEpoch: number }
+  | {
+      readonly ok: true
+      readonly recoveryCode: string
+      readonly keyEpoch: number
+      /** The caller has no session or the worker did not switch keys: send them to log in with the new password. */
+      readonly needsRelogin: boolean
+    }
   | { readonly ok: false; readonly failure: KeyRotationFailure; readonly error?: unknown }
 
 /** What a retry needs to resume: the new keys' public halves and, once built, the signed request. */
 export interface KeyRotationAttempt {
+  /** Set once rotate-keys has been called with an unknown result; never cleared except by success. */
+  ambiguous?: boolean
+  /** Set when rotate-keys is first called; an error after it is as unknown as the call. */
+  sent?: boolean
   begun?: { newSigningPublicKey: string; newWrappingPublicKey: string }
   signed?: SignedKeyRotation
   request?: RotateKeysRequest
@@ -135,6 +167,7 @@ export async function preflightKeyRotation(deps: KeyRotationDeps): Promise<KeyRo
   const adminGroups = await adminGroupsOf(deps, list.groups)
   return {
     userId,
+    username: user.username,
     keyEpoch: user.keyEpoch,
     credentialVersion,
     adminGroups,
@@ -266,76 +299,31 @@ export async function runKeyRotation(
   try {
     if (!(await deps.hasLiveKeys(userId))) return fail({ kind: 'needsLogin' })
 
-    hooks.onStep({ name: 'preparing' })
-    if (attempt.invitesRevoked !== true) {
-      for (const invite of pre.invitesToRevoke) {
-        try {
-          await deps.revokeInvite(invite.inviteId)
-        } catch (err) {
-          // Accepted in the meantime: it can no longer be revoked, and it is
-          // the same case as the ones already waiting on step 3.
-          if (!(err instanceof ApiError && err.code === 'invite_already_accepted')) throw err
-        }
-      }
-      attempt.invitesRevoked = true
-    }
-
-    // 2. Mint the new keys, once per attempt.
-    attempt.begun ??= await deps.beginKeyRotation(userId)
-
-    // 3. Handoff rows for every administered group.
-    const groupIds = pre.adminGroups.map((g) => g.groupId)
-    const handoffFailure = await writeHandoffs(deps, userId, groupIds, hooks.onStep)
-    if (handoffFailure !== null) return fail(handoffFailure)
-
-    // 4. Sign, once per attempt (a retry resends the same request).
+    // A retry of a request already built and sent: nothing before the send is
+    // repeated (it all needs a session, which a landed rotation ended).
     if (attempt.request === undefined) {
-      hooks.onStep({ name: 'signing' })
-      const [pins, verifications] = await Promise.all([
-        deps.listAllPins(),
-        deps.listAllVerifications(),
-      ])
-      const signed = await deps.signKeyRotation(
-        {
-          userId,
-          newPassword,
-          expectedKeyEpoch: pre.keyEpoch,
-          roster: rosterOf(pins, verifications),
-        },
-        hooks.onProgress,
-      )
-      attempt.signed = signed
-      attempt.request = {
-        expectedKeyEpoch: pre.keyEpoch,
-        expectedCredentialVersion: pre.credentialVersion,
-        signedDay: signed.signedDay,
-        newSigningPublicKey: signed.newSigningPublicKey,
-        newWrappingPublicKey: signed.newWrappingPublicKey,
-        roster: signed.roster,
-        oldSignature: signed.oldSignature,
-        newSignature: signed.newSignature,
-        salt: signed.credentials.salt,
-        argon2Params: signed.credentials.argon2Params,
-        wrappedPrivateKeys: signed.credentials.wrappedPrivateKeys,
-        recoverySalt: signed.credentials.recoverySalt,
-        recoveryArgon2Params: signed.credentials.recoveryArgon2Params,
-        recoveryWrappedPrivateKeys: signed.credentials.recoveryWrappedPrivateKeys,
-        recoveryVerifierSalt: signed.credentials.recoveryVerifierSalt,
-        recoveryVerifierParams: signed.credentials.recoveryVerifierParams,
-        recoveryVerifier: signed.credentials.recoveryVerifier,
-      }
+      const failure = await prepare(deps, pre, newPassword, attempt, hooks)
+      if (failure !== null) return fail(failure)
     }
     const request = attempt.request
     const signed = attempt.signed
-    if (signed === undefined) throw new Error('rotation: signed material missing')
+    if (request === undefined || signed === undefined) {
+      throw new Error('rotation: signed material missing')
+    }
+    const recoveryCode = signed.credentials.recoveryCode
 
-    // 5. Commit, answering the server's 409s.
+    if (attempt.ambiguous === true && (await rotationLanded(deps, pre, request))) {
+      return landed(deps, pre, recoveryCode)
+    }
+
+    // Commit, answering the server's 409s.
     hooks.onStep({ name: 'committing' })
+    const groupIds = pre.adminGroups.map((g) => g.groupId)
     for (let round = 0; round < MAX_ROUNDS; round++) {
+      let res: RotateKeysResponse
+      attempt.sent = true
       try {
-        const res = await deps.rotateKeys(request)
-        await deps.commitKeyRotation(userId)
-        return { ok: true, recoveryCode: signed.credentials.recoveryCode, keyEpoch: res.keyEpoch }
+        res = await deps.rotateKeys(request)
       } catch (err) {
         if (err instanceof GroupsConflictError && err.code === 'handoff_required') {
           const failure = await writeHandoffs(deps, userId, err.groups, hooks.onStep)
@@ -350,39 +338,157 @@ export async function runKeyRotation(
           hooks.onStep({ name: 'committing' })
           continue
         }
-        const failure = classify(err)
-        if (failure.kind === 'unreachable') {
-          // No usable answer: did it commit? The account's epoch and key say.
-          const committed = await rotationLanded(deps, userId, pre.keyEpoch, request)
-          if (committed) {
-            await deps.commitKeyRotation(userId)
-            return {
-              ok: true,
-              recoveryCode: signed.credentials.recoveryCode,
-              keyEpoch: pre.keyEpoch + 1,
-            }
-          }
+        // The server's answer is final only if no earlier send is unaccounted
+        // for. Otherwise even a 401 or a stale epoch may be the aftermath of
+        // an earlier send that landed.
+        if (err instanceof ApiError && err.status < 500 && attempt.ambiguous !== true) {
+          return fail(classify(err), err)
         }
-        return fail(failure, err)
+        return settle(deps, pre, attempt, request, recoveryCode, err)
       }
+      // The server accepted it; the worker switches to the new keys. If that
+      // fails the rotation still happened: the code is shown and the user logs
+      // in with the new password.
+      let needsRelogin = false
+      try {
+        await deps.commitKeyRotation(userId)
+      } catch {
+        needsRelogin = true
+      }
+      return { ok: true, recoveryCode, keyEpoch: res.keyEpoch, needsRelogin }
     }
     return fail({ kind: 'groupBusy', groups: [] })
   } catch (err) {
+    // An error after the send (a failed handoff rewrite mid-loop) leaves the
+    // outcome as unknown as the send itself did.
+    if (attempt.request !== undefined && attempt.sent === true) {
+      const signed = attempt.signed
+      if (signed !== undefined) {
+        return settle(deps, pre, attempt, attempt.request, signed.credentials.recoveryCode, err)
+      }
+    }
     return fail(classify(err), err)
   }
 }
 
-/** Whether rotate-keys committed although its response was lost: epoch moved and the new key is served. */
+/** Everything before the send: invites, new keys, handoff rows, the signed request. */
+async function prepare(
+  deps: KeyRotationDeps,
+  pre: KeyRotationPreflight,
+  newPassword: string,
+  attempt: KeyRotationAttempt,
+  hooks: {
+    readonly onStep: (step: KeyRotationStep) => void
+    readonly onProgress: (event: SignupProgressEvent) => void
+  },
+): Promise<KeyRotationFailure | null> {
+  const { userId } = pre
+  hooks.onStep({ name: 'preparing' })
+  if (attempt.invitesRevoked !== true) {
+    for (const invite of pre.invitesToRevoke) {
+      try {
+        await deps.revokeInvite(invite.inviteId)
+      } catch (err) {
+        // Accepted in the meantime: it can no longer be revoked, and it is the
+        // same case as the ones already waiting on step 3.
+        if (!(err instanceof ApiError && err.code === 'invite_already_accepted')) throw err
+      }
+    }
+    attempt.invitesRevoked = true
+  }
+
+  // Mint the new keys, once per attempt.
+  attempt.begun ??= await deps.beginKeyRotation(userId)
+
+  // Handoff rows for every administered group.
+  const groupIds = pre.adminGroups.map((g) => g.groupId)
+  const handoffFailure = await writeHandoffs(deps, userId, groupIds, hooks.onStep)
+  if (handoffFailure !== null) return handoffFailure
+
+  // Sign, once per attempt.
+  hooks.onStep({ name: 'signing' })
+  const [pins, verifications] = await Promise.all([deps.listAllPins(), deps.listAllVerifications()])
+  const signed = await deps.signKeyRotation(
+    {
+      userId,
+      newPassword,
+      expectedKeyEpoch: pre.keyEpoch,
+      roster: rosterOf(pins, verifications),
+    },
+    hooks.onProgress,
+  )
+  attempt.signed = signed
+  attempt.request = {
+    expectedKeyEpoch: pre.keyEpoch,
+    expectedCredentialVersion: pre.credentialVersion,
+    signedDay: signed.signedDay,
+    newSigningPublicKey: signed.newSigningPublicKey,
+    newWrappingPublicKey: signed.newWrappingPublicKey,
+    roster: signed.roster,
+    oldSignature: signed.oldSignature,
+    newSignature: signed.newSignature,
+    salt: signed.credentials.salt,
+    argon2Params: signed.credentials.argon2Params,
+    wrappedPrivateKeys: signed.credentials.wrappedPrivateKeys,
+    recoverySalt: signed.credentials.recoverySalt,
+    recoveryArgon2Params: signed.credentials.recoveryArgon2Params,
+    recoveryWrappedPrivateKeys: signed.credentials.recoveryWrappedPrivateKeys,
+    recoveryVerifierSalt: signed.credentials.recoveryVerifierSalt,
+    recoveryVerifierParams: signed.credentials.recoveryVerifierParams,
+    recoveryVerifier: signed.credentials.recoveryVerifier,
+  }
+  return null
+}
+
+/**
+ * The outcome of a send is unknown: it landed (settled by the login challenge)
+ * or it is unconfirmed. Marks the attempt ambiguous either way, so nothing is
+ * discarded and a retry checks again before it resends.
+ */
+async function settle(
+  deps: KeyRotationDeps,
+  pre: KeyRotationPreflight,
+  attempt: KeyRotationAttempt,
+  request: RotateKeysRequest,
+  recoveryCode: string,
+  error: unknown,
+): Promise<KeyRotationResult> {
+  attempt.ambiguous = true
+  if (await rotationLanded(deps, pre, request)) {
+    return landed(deps, pre, recoveryCode)
+  }
+  return { ok: false, failure: { kind: 'unconfirmed', recoveryCode }, error }
+}
+
+/** The rotation landed but this tab did not see the response, so it has no session for the new keys. */
+async function landed(
+  deps: KeyRotationDeps,
+  pre: KeyRotationPreflight,
+  recoveryCode: string,
+): Promise<KeyRotationResult> {
+  try {
+    await deps.commitKeyRotation(pre.userId)
+  } catch {
+    // Same as any worker failure after the server accepted: the user logs in.
+  }
+  return { ok: true, recoveryCode, keyEpoch: pre.keyEpoch + 1, needsRelogin: true }
+}
+
+/**
+ * Whether rotate-keys committed: the login challenge (unauthenticated, so it
+ * works with every session ended) serves the account's wrapped keys, and they
+ * are this request's if it landed. A failed or stale read is "not known".
+ */
 async function rotationLanded(
   deps: KeyRotationDeps,
-  userId: string,
-  fromEpoch: number,
+  pre: KeyRotationPreflight,
   request: RotateKeysRequest,
 ): Promise<boolean> {
   try {
-    const user = await deps.getUser(userId)
+    const { wrappedPrivateKeys: served } = await deps.challenge(pre.username)
     return (
-      user.keyEpoch === fromEpoch + 1 && user.wrappingPublicKey === request.newWrappingPublicKey
+      served.nonce === request.wrappedPrivateKeys.nonce &&
+      served.ciphertext === request.wrappedPrivateKeys.ciphertext
     )
   } catch {
     return false

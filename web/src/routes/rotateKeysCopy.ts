@@ -44,6 +44,8 @@ export function failureMessage(
       return `The server refused the rotation: ${failure.message} Nothing was rotated.`
     case 'unreachable':
       return "We couldn't reach the server, and your keys have not changed. Check your connection and try again."
+    case 'unconfirmed':
+      return "We couldn't confirm whether your keys were rotated. If they were, the new password you just chose and the recovery code below are the ones that work, so write the code down now. Trying again checks first and never rotates twice."
   }
 }
 
