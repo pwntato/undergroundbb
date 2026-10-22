@@ -519,6 +519,77 @@ describe('runKeyRotation', () => {
     })
   })
 
+  describe('a failure while answering a 409', () => {
+    const net = () => new TypeError('network')
+
+    it('drops the built request when nothing could have landed, so a retry signs under the password typed then', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(conflict('handoff_required', ['g1']))
+          .mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
+        // the prepare step's write succeeds; the rewrite the 409 asks for fails
+        putHandoff: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(net())
+          .mockResolvedValue(undefined),
+      })
+      const attempt: KeyRotationAttempt = {}
+      const first = await run(deps, attempt)
+      expect(first.result).toMatchObject({ ok: false, failure: { kind: 'unreachable' } })
+      expect(attempt.request).toBeUndefined()
+      expect(attempt.signed).toBeUndefined()
+      expect(attempt.ambiguous).toBeUndefined()
+
+      const second = await runKeyRotation(deps, pre(), 'the retyped password', attempt, {
+        onStep: () => {},
+        onProgress: () => {},
+      })
+      expect(second.ok).toBe(true)
+      expect(deps.signKeyRotation).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(deps.signKeyRotation).mock.calls[1]?.[0].newPassword).toBe(
+        'the retyped password',
+      )
+    })
+
+    it('settles instead of failing when an earlier send is unaccounted for', async () => {
+      // First run: the send's response is lost. Retry: the server answers
+      // handoff_required, then the handoff rewrite fails.
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(net())
+          .mockRejectedValueOnce(conflict('handoff_required', ['g1'])),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      expect(attempt.ambiguous).toBe(true)
+      vi.mocked(deps.putHandoff).mockRejectedValueOnce(net())
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { kind: 'unconfirmed', recoveryCode: 'ABCD-EFGH' },
+      })
+      expect(attempt.request).toBeDefined()
+      expect(attempt.ambiguous).toBe(true)
+    })
+
+    it('settles instead of failing when an earlier send is unaccounted for and the rounds run out', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(net())
+          .mockRejectedValue(new ApiError(409, 'changed', 'handoff_changed')),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+      expect(attempt.request).toBeDefined()
+    })
+  })
+
   it('shows the recovery code when the worker cannot switch keys after the server accepted', async () => {
     const deps = makeDeps({
       commitKeyRotation: vi.fn().mockRejectedValue(new Error('worker died')),

@@ -296,6 +296,22 @@ export async function runKeyRotation(
     ...(error === undefined ? {} : { error }),
   })
 
+  // A definite failure after the request was built. If an earlier send is
+  // unaccounted for it is as unknown as that send (the guard below), so it is
+  // settled, not reported. Otherwise nothing landed and the built request is
+  // dropped: a retry that shows the password form must sign under the password
+  // typed then, not resend one signed under the first.
+  const halt = (failure: KeyRotationFailure, error?: unknown): Promise<KeyRotationResult> => {
+    const { request: built, signed: builtSigned } = attempt
+    if (attempt.ambiguous === true && built !== undefined && builtSigned !== undefined) {
+      return settle(deps, pre, attempt, built, builtSigned.credentials.recoveryCode, error)
+    }
+    delete attempt.request
+    delete attempt.signed
+    attempt.sent = false
+    return Promise.resolve(fail(failure, error))
+  }
+
   try {
     if (!(await deps.hasLiveKeys(userId))) return fail({ kind: 'needsLogin' })
 
@@ -326,15 +342,17 @@ export async function runKeyRotation(
         res = await deps.rotateKeys(request)
       } catch (err) {
         if (err instanceof GroupsConflictError && err.code === 'handoff_required') {
+          attempt.sent = false // a definite answer: this send did not commit
           const failure = await writeHandoffs(deps, userId, err.groups, hooks.onStep)
-          if (failure !== null) return fail(failure)
+          if (failure !== null) return halt(failure)
           hooks.onStep({ name: 'committing' })
           continue
         }
         if (err instanceof ApiError && err.status === 409 && err.code === 'handoff_changed') {
           // A handoff row moved while the server checked: rewrite them all.
+          attempt.sent = false
           const failure = await writeHandoffs(deps, userId, groupIds, hooks.onStep)
-          if (failure !== null) return fail(failure)
+          if (failure !== null) return halt(failure)
           hooks.onStep({ name: 'committing' })
           continue
         }
@@ -342,7 +360,7 @@ export async function runKeyRotation(
         // for. Otherwise even a 401 or a stale epoch may be the aftermath of
         // an earlier send that landed.
         if (err instanceof ApiError && err.status < 500 && attempt.ambiguous !== true) {
-          return fail(classify(err), err)
+          return halt(classify(err), err)
         }
         return settle(deps, pre, attempt, request, recoveryCode, err)
       }
@@ -357,17 +375,19 @@ export async function runKeyRotation(
       }
       return { ok: true, recoveryCode, keyEpoch: res.keyEpoch, needsRelogin }
     }
-    return fail({ kind: 'groupBusy', groups: [] })
+    return halt({ kind: 'groupBusy', groups: [] })
   } catch (err) {
-    // An error after the send (a failed handoff rewrite mid-loop) leaves the
-    // outcome as unknown as the send itself did.
+    // An error while a send is outstanding leaves the outcome as unknown as
+    // the send itself. (A definite 409 clears `sent` first, so a failure while
+    // answering it is not this case; `halt` still settles it if an earlier
+    // send is unaccounted for.)
     if (attempt.request !== undefined && attempt.sent === true) {
       const signed = attempt.signed
       if (signed !== undefined) {
         return settle(deps, pre, attempt, attempt.request, signed.credentials.recoveryCode, err)
       }
     }
-    return fail(classify(err), err)
+    return halt(classify(err), err)
   }
 }
 
