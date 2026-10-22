@@ -1321,3 +1321,19 @@ func TestListKeyChangesWithoutRosterLeavesItOut(t *testing.T) {
 		t.Errorf("the projection dropped a served attribute: %+v vs %+v", b, f)
 	}
 }
+
+// A DELETE that runs after account deletion swept the rows must not recreate
+// HANDOFFSEQ, which nothing would remove.
+func TestDeleteHandoffAfterAccountDeletionLeavesNoCounter(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account", cookie, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete account: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := h.db.DeleteHandoff(t.Context(), user.userID, "11111111-2222-4333-8444-555555555555"); err != nil {
+		t.Fatalf("DeleteHandoff on a deleted account: %v, want nil", err)
+	}
+	if getRow(t, "USER#"+user.userID, "HANDOFFSEQ") != nil {
+		t.Error("DeleteHandoff recreated HANDOFFSEQ on a deleted account")
+	}
+}

@@ -237,14 +237,27 @@ func (c *Client) PutHandoff(ctx context.Context, in PutHandoffInput) error {
 // DeleteHandoff removes the caller's handoff row for a group and bumps the
 // HANDOFFSEQ counter in the same transaction, so a rotation that checked the
 // rows before this one fails instead of committing without it. Deleting a row
-// that is not there succeeds.
+// that is not there succeeds. For an account that is deleted or gone it also
+// succeeds and writes nothing: account deletion has swept its rows, and a bump
+// here would recreate a HANDOFFSEQ item that nothing removes.
 func (c *Client) DeleteHandoff(ctx context.Context, userID, groupID string) error {
 	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Delete: &types.Delete{TableName: aws.String(c.table), Key: handoffKey(userID, groupID)}},
 			c.bumpHandoffSeq(userID),
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(c.table),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+					"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+				},
+				ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(DeletedAt)"),
+			}},
 		},
 	})
+	if isConditionalCheckFailure(err, 2) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("db: delete handoff: %w", err)
 	}
