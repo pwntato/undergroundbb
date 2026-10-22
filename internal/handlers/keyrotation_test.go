@@ -1337,3 +1337,36 @@ func TestDeleteHandoffAfterAccountDeletionLeavesNoCounter(t *testing.T) {
 		t.Error("DeleteHandoff recreated HANDOFFSEQ on a deleted account")
 	}
 }
+
+// An admin of a public group can write the handoff row and rotate: the group
+// list serves the wrap the row is made from.
+func TestAdminOfAPublicGroupCanRotate(t *testing.T) {
+	h := noCooldown(t)
+	user, cookie := loggedInUser(t, h)
+	gid := createPublicGroup(t, h, user, cookie)
+
+	rot := signedRotation(t, user, rotateOpts{})
+	rec := doRotateKeys(t, h, cookie, rot.req)
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "handoff_required" {
+		t.Fatalf("without a row: %d %s, want 409 handoff_required", rec.Code, rec.Body.String())
+	}
+	if got := conflictGroups(t, rec); len(got) != 1 || got[0] != gid {
+		t.Fatalf("groups = %v, want [%s]", got, gid)
+	}
+
+	// What the client builds the row from.
+	var list listGroupsResponse
+	if rec := doJSON(t, h, http.MethodGet, "/api/groups", cookie, nil); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &list) != nil {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(list.Groups) != 1 || list.Groups[0].WrappedGroupKey == nil {
+		t.Fatalf("the list did not serve the caller's wrap for the public group: %+v", list.Groups)
+	}
+
+	if rec := doPutHandoff(t, h, cookie, gid, handoffBody(rot.next.wrapPub, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRotateKeys(t, h, cookie, rot.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate with a row: %d %s", rec.Code, rec.Body.String())
+	}
+}

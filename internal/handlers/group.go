@@ -477,10 +477,11 @@ func encodeWrappedKey(k models.WrappedKey) wrappedKey {
 // Exactly one of the two field pairs is populated, matching Visibility, the
 // same split createGroupRequest's own doc comment describes for the
 // opposite (write) direction: NamePlaintext/DescriptionPlaintext for a
-// public group, NameCiphertext/DescriptionCiphertext (plus the member's own
-// WrappedGroupKey, needed to ever decrypt them) for a private one. There is
-// no unread count field -- see listGroups' own doc comment for why this
-// issue ships without one.
+// public group, NameCiphertext/DescriptionCiphertext for a private one. The
+// member's own WrappedGroupKey is served for both: a private group needs it
+// to decrypt the name, and any group needs it for a key rotation's handoff
+// row. There is no unread count field -- see listGroups' own doc comment for
+// why this issue ships without one.
 type groupListEntry struct {
 	GroupID    string `json:"groupId"`
 	Visibility string `json:"visibility"`
@@ -570,9 +571,12 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 				dc := encodeWrappedBlob(*g.DescriptionCiphertext)
 				entry.DescriptionCiphertext = &dc
 			}
-			wk := encodeWrappedKey(m.WrappedGroupKey)
-			entry.WrappedGroupKey = &wk
 		}
+		// The caller's own wrap, public groups included: rotating keys needs it
+		// for every group they administer (docs/DESIGN.md, "The self re-key must
+		// survive a closed tab"), and it is their own ciphertext.
+		wk := encodeWrappedKey(m.WrappedGroupKey)
+		entry.WrappedGroupKey = &wk
 		entries = append(entries, entry)
 	}
 
@@ -724,6 +728,10 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 			dc := encodeWrappedBlob(*g.DescriptionCiphertext)
 			entry.DescriptionCiphertext = &dc
 		}
+	}
+	// A member's own wrap, public groups included; a visitor to a public group
+	// has none.
+	if m != nil {
 		wk := encodeWrappedKey(m.WrappedGroupKey)
 		entry.WrappedGroupKey = &wk
 	}

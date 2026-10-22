@@ -735,8 +735,13 @@ func TestListGroupsReturnsPublicAndPrivate(t *testing.T) {
 	if pub.NamePlaintext != "Book Club" {
 		t.Errorf("public entry NamePlaintext = %q, want %q", pub.NamePlaintext, "Book Club")
 	}
-	if pub.NameCiphertext != nil || pub.WrappedGroupKey != nil {
-		t.Errorf("public entry carries ciphertext/wrapped-key fields it must not: %+v", pub)
+	if pub.NameCiphertext != nil {
+		t.Errorf("public entry carries ciphertext fields it must not: %+v", pub)
+	}
+	// The member's own wrap is served for a public group too: a key rotation
+	// writes a handoff row for every group the caller administers.
+	if pub.WrappedGroupKey == nil {
+		t.Errorf("public entry is missing the caller's own WrappedGroupKey: %+v", pub)
 	}
 }
 

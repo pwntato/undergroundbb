@@ -95,11 +95,12 @@ export interface CreateGroupResponse {
 /**
  * One group in GET /api/groups's response -- see
  * internal/handlers/group.go's groupListEntry for the server side. Exactly
- * one of the two field pairs is populated, matching visibility: a public
- * group's plaintext name/description, or a private group's ciphertext plus
- * the caller's own wrappedGroupKey (needed to ever decrypt it) -- never
- * both, and a consumer should not assume the other pair is merely absent
- * rather than meaningless for that entry's visibility.
+ * one of the two name pairs is populated, matching visibility: a public
+ * group's plaintext name/description, or a private group's ciphertext, and a
+ * consumer should not assume the other pair is merely absent rather than
+ * meaningless for that entry's visibility. The caller's own wrappedGroupKey is
+ * served for both: a private group needs it to decrypt the name, and any group
+ * needs it for a key rotation's handoff row.
  *
  * No unread count -- see groupListEntry's own doc comment on the Go side
  * for why issue #35 ships without one despite its own one-line description

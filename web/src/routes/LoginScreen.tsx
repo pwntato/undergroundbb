@@ -19,6 +19,7 @@ import { completeInvite as completeInviteApi, pendingInviteCompletions } from '@
 import { DecryptionFailedError } from '@/lib/crypto/aesgcm'
 import { completeInvite as completeInviteCrypto, completeLogin } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
+import { makeGetOwnMembership } from './ownMembership'
 import { runCompleteInvites } from './runCompleteInvites'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -93,34 +94,10 @@ export function LoginScreen() {
         // comment). A failure here (network, one invite's signature not
         // verifying, etc.) is swallowed by runCompleteInvites itself and
         // simply leaves that invite pending for the next login.
-        // Fetched once and reused across every pending invite's own
-        // getOwnMembership call below, rather than each one re-calling
-        // listGroups() itself -- with N pending invites that was N
-        // redundant round trips for a list that does not change between
-        // them within this same runCompleteInvites call.
-        let ownGroupsPromise: ReturnType<typeof listGroups> | undefined
         void runCompleteInvites({
           userId: result.userId,
           pendingInviteCompletions,
-          getOwnMembership: async (groupId) => {
-            ownGroupsPromise ??= listGroups()
-            const { groups } = await ownGroupsPromise
-            const entry = groups.find((g) => g.groupId === groupId)
-            if (entry === undefined || entry.wrappedGroupKey === undefined) {
-              return null
-            }
-            // The admission signs the inviter's own current grant (#178), which
-            // only the group detail reports.
-            const detail = await getGroup(groupId)
-            if (detail.myGrantSortKey === undefined) {
-              throw new Error('your own grant is not on record for this group')
-            }
-            return {
-              generation: entry.generation,
-              grantSortKey: detail.myGrantSortKey,
-              wrappedGroupKey: entry.wrappedGroupKey,
-            }
-          },
+          getOwnMembership: makeGetOwnMembership({ listGroups, getGroup }),
           completeInviteCrypto,
           completeInvite: completeInviteApi,
         })

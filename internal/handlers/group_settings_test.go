@@ -142,6 +142,10 @@ func TestGetGroupPublicVisibleToNonMember(t *testing.T) {
 	if d.Role != "" || d.WrappedGroupKey != nil {
 		t.Errorf("non-member must get no role or key: %+v", d)
 	}
+	// A member of the same public group gets their own wrap.
+	if own := decodeDetail(t, doGroupRequest(t, h, ownerCookie, http.MethodGet, gid, nil)); own.WrappedGroupKey == nil {
+		t.Errorf("a member of a public group must get their own WrappedGroupKey: %+v", own)
+	}
 }
 
 // The client signs a role change over this value, so it must be exactly the
