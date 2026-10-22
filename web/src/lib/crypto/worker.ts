@@ -41,10 +41,21 @@ import {
   signSuccessorDesignation as signSuccessorDesignationPure,
   type LiveKeys,
 } from './credential-material.js'
+import {
+  beginKeyRotation as beginKeyRotationPure,
+  signKeyRotation as signKeyRotationPure,
+  wrapHandoff as wrapHandoffPure,
+  RotationState,
+} from './rotation-material.js'
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
 import type {
+  BeginKeyRotationRequest,
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
+  CommitKeyRotationRequest,
+  DiscardKeyRotationRequest,
+  SignKeyRotationRequest,
+  WrapHandoffRequest,
   CompleteChangePasswordRequest,
   CompleteInviteRequest,
   CompleteLoginRequest,
@@ -92,6 +103,13 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope
  * things, but cannot read the key itself out of it.
  */
 let liveKeys: LiveKeys | null = null
+
+/**
+ * The new keypairs of a key rotation between beginKeyRotation and its commit
+ * (or discard), #62. Same trust boundary as liveKeys: never posted back. While
+ * it is set, signPin and signVerification refuse (RotationState.assertIdle).
+ */
+const rotation = new RotationState()
 
 ctx.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const req = event.data
@@ -172,6 +190,21 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'rewrapGroupKey':
       await rewrapGroupKey(req)
+      return
+    case 'beginKeyRotation':
+      beginKeyRotation(req)
+      return
+    case 'wrapHandoff':
+      await wrapHandoff(req)
+      return
+    case 'signKeyRotation':
+      await signKeyRotation(req)
+      return
+    case 'commitKeyRotation':
+      commitKeyRotation(req)
+      return
+    case 'discardKeyRotation':
+      discardKeyRotation(req)
       return
     case 'clearLiveKeys':
       clearLiveKeys(req)
@@ -306,6 +339,7 @@ function signSuccessorClaim(req: SignSuccessorClaimRequest): void {
 
 /** Signs a fingerprint verification -- issue #65. Same liveKeys guards as signPin. */
 function signVerification(req: SignVerificationRequest): void {
+  rotation.assertIdle('verify a fingerprint')
   const keys = requireLiveKeys(req.userId, 'verify a fingerprint')
   const result = signVerificationPure(keys, req.verifiedUserId, req.fingerprint)
   post({ kind: 'signVerificationDone', id: req.id, result })
@@ -313,6 +347,7 @@ function signVerification(req: SignVerificationRequest): void {
 
 /** Signs a pin -- issue #63. Same liveKeys-unset/wrong-account guards as signRoleGrant. */
 function signPin(req: SignPinRequest): void {
+  rotation.assertIdle('pin a key')
   const keys = requireLiveKeys(req.userId, 'pin a key')
   const result = signPinPure(
     keys,
@@ -506,6 +541,39 @@ async function rewrapGroupKey(req: RewrapGroupKeyRequest): Promise<void> {
 
 function clearLiveKeys(_req: ClearLiveKeysRequest): void {
   liveKeys = null
+  rotation.clear()
+}
+
+/** Begins a rotation: mints the new keypairs and returns their public halves. Replaces an unfinished attempt. */
+function beginKeyRotation(req: BeginKeyRotationRequest): void {
+  const keys = requireLiveKeys(req.userId, 'rotate your keys')
+  const { pending, newSigningPublicKey, newWrappingPublicKey } = beginKeyRotationPure(keys)
+  rotation.begin(pending)
+  post({ kind: 'beginKeyRotationDone', id: req.id, newSigningPublicKey, newWrappingPublicKey })
+}
+
+async function wrapHandoff(req: WrapHandoffRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'rotate your keys')
+  const result = await wrapHandoffPure(keys, rotation.require(req.userId), req)
+  post({ kind: 'wrapHandoffDone', id: req.id, result })
+}
+
+async function signKeyRotation(req: SignKeyRotationRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'rotate your keys')
+  const result = await signKeyRotationPure(keys, rotation.require(req.userId), req, (p) => {
+    post({ kind: 'signupProgress', id: req.id, ...p })
+  })
+  post({ kind: 'signKeyRotationDone', id: req.id, result })
+}
+
+function commitKeyRotation(req: CommitKeyRotationRequest): void {
+  liveKeys = rotation.commit(req.userId)
+  post({ kind: 'commitKeyRotationDone', id: req.id })
+}
+
+function discardKeyRotation(req: DiscardKeyRotationRequest): void {
+  rotation.clear()
+  post({ kind: 'discardKeyRotationDone', id: req.id })
 }
 
 async function completeRecovery(req: CompleteRecoveryRequest): Promise<void> {

@@ -764,7 +764,7 @@ export interface WireWrapped {
   ciphertext: string
 }
 
-function toWireWrapped(w: Wrapped): WireWrapped {
+export function toWireWrapped(w: Wrapped): WireWrapped {
   return {
     ephemeralPub: bytesToBase64(w.ephemeralPub),
     nonce: bytesToBase64(w.nonce),
@@ -772,7 +772,7 @@ function toWireWrapped(w: Wrapped): WireWrapped {
   }
 }
 
-async function unwrapOwnGroupKey(
+export async function unwrapOwnGroupKey(
   keys: LiveKeys,
   groupId: string,
   ownWrappedGroupKey: Wrapped,
