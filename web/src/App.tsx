@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router'
 import { AcceptInviteScreen } from '@/routes/AcceptInviteScreen'
 import { ChangePasswordScreen } from '@/routes/ChangePasswordScreen'
+import { RotateKeysScreen } from '@/routes/RotateKeysScreen'
 import { DeleteAccountScreen } from '@/routes/DeleteAccountScreen'
 import { CreateGroupScreen } from '@/routes/CreateGroupScreen'
 import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
@@ -85,6 +86,14 @@ function App() {
               element={
                 <RequireAuth>
                   <ChangePasswordScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/account/rotate-keys"
+              element={
+                <RequireAuth>
+                  <RotateKeysScreen />
                 </RequireAuth>
               }
             />

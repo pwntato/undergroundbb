@@ -10,6 +10,8 @@
 // conceptually (signup's three sequential derivations all go through the
 // same worker), even though this module always awaits one at a time today.
 
+import type { HandoffWrap, SignedKeyRotation } from './rotation-material.js'
+
 export interface GenerateSignupMaterialRequest {
   readonly kind: 'generateSignupMaterial'
   readonly id: string
@@ -734,6 +736,81 @@ export interface EncryptGroupTextResponse {
 }
 
 /**
+ * Key rotation (#62), the worker half. The new keypairs exist only inside the
+ * worker between beginKeyRotation and commitKeyRotation/discardKeyRotation;
+ * while they do, signPin and signVerification refuse, so no pin is signed under
+ * a key that is about to be replaced and then missing from the roster.
+ */
+export interface BeginKeyRotationRequest {
+  readonly kind: 'beginKeyRotation'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface BeginKeyRotationResponse {
+  readonly kind: 'beginKeyRotationDone'
+  readonly id: string
+  readonly newSigningPublicKey: string
+  readonly newWrappingPublicKey: string
+}
+
+/** Wraps one administered group's current key to the NEW wrapping key (a HANDOFF# row). */
+export interface WrapHandoffRequest {
+  readonly kind: 'wrapHandoff'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly generation: number
+}
+
+export interface WrapHandoffResponse {
+  readonly kind: 'wrapHandoffDone'
+  readonly id: string
+  readonly result: HandoffWrap
+}
+
+/** Signs the rotation under both keys and re-wraps the new keys under a new password. */
+export interface SignKeyRotationRequest {
+  readonly kind: 'signKeyRotation'
+  readonly id: string
+  readonly userId: string
+  readonly newPassword: string
+  readonly expectedKeyEpoch: number
+  /** Base64 RosterEntryID of each PIN# and VERIFIED# row. */
+  readonly roster: readonly string[]
+}
+
+export interface SignKeyRotationResponse {
+  readonly kind: 'signKeyRotationDone'
+  readonly id: string
+  readonly result: SignedKeyRotation
+}
+
+/** The server accepted the rotation: the new keys become the live keys. */
+export interface CommitKeyRotationRequest {
+  readonly kind: 'commitKeyRotation'
+  readonly id: string
+  readonly userId: string
+}
+
+export interface CommitKeyRotationResponse {
+  readonly kind: 'commitKeyRotationDone'
+  readonly id: string
+}
+
+/** The rotation will not be committed: drop the new keys and allow pins again. */
+export interface DiscardKeyRotationRequest {
+  readonly kind: 'discardKeyRotation'
+  readonly id: string
+}
+
+export interface DiscardKeyRotationResponse {
+  readonly kind: 'discardKeyRotationDone'
+  readonly id: string
+}
+
+/**
  * Clears the worker's cached liveKeys -- posted on logout so a worker
  * instance reused across a logout/login in the same tab cannot sign
  * anything under the previous account's keys. See worker.ts's own doc
@@ -782,6 +859,11 @@ export type WorkerRequest =
   | StartGroupRotationRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
+  | BeginKeyRotationRequest
+  | WrapHandoffRequest
+  | SignKeyRotationRequest
+  | CommitKeyRotationRequest
+  | DiscardKeyRotationRequest
   | ClearLiveKeysRequest
 
 export type WorkerResponse =
@@ -808,4 +890,9 @@ export type WorkerResponse =
   | StartGroupRotationResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse
+  | BeginKeyRotationResponse
+  | WrapHandoffResponse
+  | SignKeyRotationResponse
+  | CommitKeyRotationResponse
+  | DiscardKeyRotationResponse
   | WorkerErrorResponse

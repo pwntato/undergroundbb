@@ -14,6 +14,14 @@ import { DecryptionFailedError } from './aesgcm.js'
 import CryptoWorker from './worker.ts?worker&inline'
 import { InviteMACError } from './credential-material.js'
 import type {
+  BeginKeyRotationRequest,
+  BeginKeyRotationResponse,
+  CommitKeyRotationRequest,
+  DiscardKeyRotationRequest,
+  SignKeyRotationRequest,
+  SignKeyRotationResponse,
+  WrapHandoffRequest,
+  WrapHandoffResponse,
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
   CompleteChangePasswordRequest,
@@ -78,6 +86,7 @@ import type {
   SignupMaterial,
   SignupProgressEvent,
   WorkerErrorResponse,
+  WorkerRequest,
   WorkerResponse,
 } from './worker-protocol.js'
 
@@ -888,4 +897,85 @@ export function hasLiveKeys(userId: string): Promise<boolean> {
     w.addEventListener('message', onMessage)
     w.postMessage(fullReq)
   })
+}
+
+/**
+ * One request/response round trip for the key-rotation ops: posts req, relays
+ * signupProgress events to onProgress, and resolves with the response whose
+ * kind is doneKind. Rejects with the worker's own error, reconstructed.
+ */
+function rotationCall<Res extends WorkerResponse>(
+  req: WorkerRequest,
+  doneKind: Res['kind'],
+  onProgress?: (event: SignupProgressEvent) => void,
+): Promise<Res> {
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== req.id) {
+        return
+      }
+      if (msg.kind === 'signupProgress') {
+        onProgress?.(msg)
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === doneKind) {
+        resolve(msg as Res)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for ${req.kind}`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(req)
+  })
+}
+
+/** Starts a key rotation (#62): mints the new keypairs in the worker and returns their public halves. */
+export async function beginKeyRotation(
+  userId: string,
+): Promise<{ newSigningPublicKey: string; newWrappingPublicKey: string }> {
+  const req: BeginKeyRotationRequest = { kind: 'beginKeyRotation', id: nextRequestID(), userId }
+  const res = await rotationCall<BeginKeyRotationResponse>(req, 'beginKeyRotationDone')
+  return {
+    newSigningPublicKey: res.newSigningPublicKey,
+    newWrappingPublicKey: res.newWrappingPublicKey,
+  }
+}
+
+/** Wraps one administered group's current key to the new wrapping key, for a HANDOFF# row. */
+export async function wrapHandoff(
+  req: Omit<WrapHandoffRequest, 'kind' | 'id'>,
+): Promise<WrapHandoffResponse['result']> {
+  const full: WrapHandoffRequest = { kind: 'wrapHandoff', id: nextRequestID(), ...req }
+  return (await rotationCall<WrapHandoffResponse>(full, 'wrapHandoffDone')).result
+}
+
+/** Signs the rotation under both keys and re-wraps the new keys under the new password, reporting each Argon2id step. */
+export async function signKeyRotation(
+  req: Omit<SignKeyRotationRequest, 'kind' | 'id'>,
+  onProgress: (event: SignupProgressEvent) => void,
+): Promise<SignKeyRotationResponse['result']> {
+  const full: SignKeyRotationRequest = { kind: 'signKeyRotation', id: nextRequestID(), ...req }
+  return (await rotationCall<SignKeyRotationResponse>(full, 'signKeyRotationDone', onProgress))
+    .result
+}
+
+/** The server accepted the rotation: the worker's live keys become the new ones. */
+export async function commitKeyRotation(userId: string): Promise<void> {
+  const req: CommitKeyRotationRequest = { kind: 'commitKeyRotation', id: nextRequestID(), userId }
+  await rotationCall(req, 'commitKeyRotationDone')
+}
+
+/** Drops an unfinished rotation's new keys and lets pins and verifications be signed again. */
+export async function discardKeyRotation(): Promise<void> {
+  const req: DiscardKeyRotationRequest = { kind: 'discardKeyRotation', id: nextRequestID() }
+  await rotationCall(req, 'discardKeyRotationDone')
 }
