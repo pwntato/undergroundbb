@@ -478,10 +478,10 @@ func encodeWrappedKey(k models.WrappedKey) wrappedKey {
 // same split createGroupRequest's own doc comment describes for the
 // opposite (write) direction: NamePlaintext/DescriptionPlaintext for a
 // public group, NameCiphertext/DescriptionCiphertext for a private one. The
-// member's own WrappedGroupKey is served for both: a private group needs it to
-// decrypt the name, and any group needs it for a key rotation's handoff row. There is
-// no unread count field -- see listGroups' own doc comment for why this
-// issue ships without one.
+// member's own WrappedGroupKey is served for both: a private group needs it
+// to decrypt the name, and any group needs it for a key rotation's handoff
+// row. There is no unread count field -- see listGroups' own doc comment for
+// why this issue ships without one.
 type groupListEntry struct {
 	GroupID    string `json:"groupId"`
 	Visibility string `json:"visibility"`

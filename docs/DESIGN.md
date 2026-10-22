@@ -531,8 +531,9 @@ caller's own partition, holding that group's current key and generation wrapped 
 `rotate-keys` transaction, so the number of admin groups is not capped by the 100-item transaction
 limit. Every group counts, public ones included (a public group is always `Open`, and its admin
 needs the row for the `Open` self-wrap), so `GET /api/groups` and `GET /api/groups/{id}` serve the
-caller's own wrapped group key for a public group as well as a private one. `rotate-keys` refuses with 409 `handoff_required` unless every group where the caller is an
-admin has a row naming the new key at that group's current generation (one past its newest `GENKEY#`
+caller's own wrapped group key for a public group as well as a private one. `rotate-keys` refuses
+with 409 `handoff_required` unless every group where the caller is an admin has a row naming the new
+key at that group's current generation (one past its newest `GENKEY#`
 link, which is written when the rotation to the next generation starts, or 0 for a group that has
 never rotated), and the flow re-sends any it names. The 409 carries the group ids it is about. "Newest link" includes one a rotation in progress has already written, so the self re-key
 resumes that job from the handed-off key like any other resume. If the user's own entry is behind
