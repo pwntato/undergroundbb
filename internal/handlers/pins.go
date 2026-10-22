@@ -232,7 +232,7 @@ func (h *Handler) listPins(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := listPinsResponse{Pins: entries, NextCursor: next}
 	if cursor == "" {
-		changes, err := h.db.ListKeyChanges(r.Context(), userID)
+		changes, err := h.db.ListKeyChanges(r.Context(), userID, true)
 		if err != nil {
 			WriteInternalError(w, r, err, "could not list pins")
 			return

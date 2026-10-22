@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -363,7 +364,7 @@ func TestRotateKeysChainsIntervalsAndKeyChanges(t *testing.T) {
 		t.Errorf("second interval starts %q, want the first one's end %q", b.From, a.Until)
 	}
 	// The chain: each new key introduced by the one before it.
-	rows, err := h.db.ListKeyChanges(t.Context(), user.userID)
+	rows, err := h.db.ListKeyChanges(t.Context(), user.userID, true)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("ListKeyChanges = %d rows, %v", len(rows), err)
 	}
@@ -842,12 +843,31 @@ func TestDeleteAccountSweepsHandoffAndCooldownRowsButKeepsTheChain(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The DELETE endpoint bumps HANDOFFSEQ, so the account has one.
 	fresh := loginCookie(t, h, rot.next)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account/rotation-handoff/"+gid, fresh, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete handoff: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "USER#"+user.userID, "HANDOFFSEQ") == nil {
+		t.Fatal("DELETE did not write HANDOFFSEQ")
+	}
+	if _, err := rawDDB(t).PutItem(t.Context(), &dynamodb.PutItemInput{
+		TableName: aws.String(testTableName()),
+		Item: map[string]types.AttributeValue{
+			"PK":                   &types.AttributeValueMemberS{Value: "USER#" + user.userID},
+			"SK":                   &types.AttributeValueMemberS{Value: "HANDOFF#" + gid},
+			"Type":                 &types.AttributeValueMemberS{Value: "Handoff"},
+			"GroupID":              &types.AttributeValueMemberS{Value: gid},
+			"NewWrappingPublicKey": &types.AttributeValueMemberB{Value: rot.next.wrapPub},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if rec := doJSON(t, h, http.MethodDelete, "/api/account", fresh, nil); rec.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
 	}
-	if handoffRowExists(t, user.userID, gid) || getRow(t, "USER#"+user.userID, "ROTCOOLDOWN") != nil {
-		t.Error("account deletion left a handoff or cooldown row")
+	if handoffRowExists(t, user.userID, gid) || getRow(t, "USER#"+user.userID, "ROTCOOLDOWN") != nil || getRow(t, "USER#"+user.userID, "HANDOFFSEQ") != nil {
+		t.Error("account deletion left a handoff, cooldown or HANDOFFSEQ row")
 	}
 	if getRow(t, "USER#"+user.userID, db.KeyChangeSortKey(1)) == nil {
 		t.Error("account deletion removed the KEYCHANGE# chain, which the tombstone keeps")
@@ -1201,5 +1221,103 @@ func TestPutHandoffTransactionRefusesAKeyThatMovedUnderIt(t *testing.T) {
 	}
 	if handoffRowExists(t, user.userID, gid) {
 		t.Error("the write for a tombstoned account left a row")
+	}
+}
+
+// A handoff PUT or DELETE between the handler's check and the commit used to
+// leave a committed rotation with no usable row, and the sweep then deleted the
+// replaced one. HANDOFFSEQ makes the commit fail instead.
+func TestRotateKeysFailsWhenAHandoffChangedAfterTheCheck(t *testing.T) {
+	h := noCooldown(t)
+	user, cookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, user, cookie)
+	ctx := t.Context()
+	keyA, keyB := randBytes(32), randBytes(32)
+	if rec := doPutHandoff(t, h, cookie, gid, handoffBody(keyA, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("put A: %d %s", rec.Code, rec.Body.String())
+	}
+	seq, err := h.db.GetHandoffSeq(ctx, user.userID) // what checkHandoffs read
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotateToA := func(seq int64) error {
+		return h.db.RotateKeys(ctx, rotateKeysInput(t, h, user.userID, func(in *db.RotateKeysInput) {
+			in.NewWrappingPublicKey = keyA
+			in.ExpectedHandoffSeq = seq
+		}))
+	}
+
+	// Tab two replaces the row with one for a different key.
+	if rec := doPutHandoff(t, h, cookie, gid, handoffBody(keyB, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("put B: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := rotateToA(seq); !errors.Is(err, db.ErrHandoffChanged) {
+		t.Fatalf("a PUT after the check: %v, want ErrHandoffChanged", err)
+	}
+	if got := bytesAttrB64(getRow(t, "USER#"+user.userID, "HANDOFF#"+gid), "NewWrappingPublicKey"); got != pinB64(keyB) {
+		t.Error("the row for B was lost")
+	}
+	if u, _ := h.db.GetUserByID(ctx, user.userID); u.KeyEpoch != 0 {
+		t.Errorf("KeyEpoch = %d, the refused rotation committed", u.KeyEpoch)
+	}
+
+	// A DELETE after the check fails it too.
+	seq, _ = h.db.GetHandoffSeq(ctx, user.userID)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account/rotation-handoff/"+gid, cookie, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := rotateToA(seq); !errors.Is(err, db.ErrHandoffChanged) {
+		t.Fatalf("a DELETE after the check: %v, want ErrHandoffChanged", err)
+	}
+
+	// Nothing moved since this read, so the same rotation commits.
+	if rec := doPutHandoff(t, h, cookie, gid, handoffBody(keyA, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("put A again: %d %s", rec.Code, rec.Body.String())
+	}
+	seq, _ = h.db.GetHandoffSeq(ctx, user.userID)
+	if err := rotateToA(seq); err != nil {
+		t.Fatalf("an unchanged seq: %v", err)
+	}
+}
+
+// The seq starts absent (0), so the first rotation of an account that never
+// wrote a handoff still commits.
+func TestRotateKeysWithNoHandoffsEverWrittenCommits(t *testing.T) {
+	h := noCooldown(t)
+	user, _ := loggedInUser(t, h)
+	seq, err := h.db.GetHandoffSeq(t.Context(), user.userID)
+	if err != nil || seq != 0 {
+		t.Fatalf("seq = %d (%v), want 0", seq, err)
+	}
+	if err := h.db.RotateKeys(t.Context(), rotateKeysInput(t, h, user.userID, nil)); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+}
+
+// The public read of the chain must not pull the client-supplied rosters.
+func TestListKeyChangesWithoutRosterLeavesItOut(t *testing.T) {
+	h := noCooldown(t)
+	user, cookie := loggedInUser(t, h)
+	rot := signedRotation(t, user, rotateOpts{roster: [][]byte{randBytes(16), randBytes(16)}})
+	if rec := doRotateKeys(t, h, cookie, rot.req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body.String())
+	}
+	bare, err := h.db.ListKeyChanges(t.Context(), user.userID, false)
+	if err != nil || len(bare) != 1 {
+		t.Fatalf("without roster: %d rows (%v)", len(bare), err)
+	}
+	full, err := h.db.ListKeyChanges(t.Context(), user.userID, true)
+	if err != nil || len(full) != 1 {
+		t.Fatalf("with roster: %d rows (%v)", len(full), err)
+	}
+	if len(bare[0].Roster) != 0 || len(full[0].Roster) != 2 {
+		t.Errorf("roster lengths = %d without, %d with; want 0 and 2", len(bare[0].Roster), len(full[0].Roster))
+	}
+	b, f := bare[0], full[0]
+	if b.KeyEpoch != 1 || b.Day != f.Day || !bytes.Equal(b.OldSignature, f.OldSignature) || !bytes.Equal(b.NewSignature, f.NewSignature) ||
+		!bytes.Equal(b.RosterDigest, f.RosterDigest) || !bytes.Equal(b.NewWrappingPublicKey, f.NewWrappingPublicKey) ||
+		!bytes.Equal(b.OldSigningPublicKey, f.OldSigningPublicKey) || !bytes.Equal(b.OldWrappingPublicKey, f.OldWrappingPublicKey) ||
+		!bytes.Equal(b.NewSigningPublicKey, f.NewSigningPublicKey) {
+		t.Errorf("the projection dropped a served attribute: %+v vs %+v", b, f)
 	}
 }

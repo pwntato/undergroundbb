@@ -914,6 +914,18 @@ type Handoff struct {
 	WrappedGroupKey      WrappedKey `dynamodbav:"WrappedGroupKey"`
 }
 
+// HandoffSeq is the USER#<uuid> / HANDOFFSEQ item (#62): a counter that every
+// PutHandoff and DeleteHandoff bumps in its own transaction and that
+// rotate-keys' transaction checks is still the value its handoff check read, so
+// a handoff row written or removed after that check fails the rotation instead
+// of stranding it (docs/DESIGN.md, "A handoff change during a rotation"). Absent
+// reads as 0. No TTL and no timestamp.
+type HandoffSeq struct {
+	Record
+
+	Seq int64 `dynamodbav:"Seq"`
+}
+
 // RotationCooldown is the USER#<uuid> / ROTCOOLDOWN item rotate-keys writes
 // (#62): while it exists and its TTL is in the future, a second rotation is
 // refused. It is an item with a TTL rather than a timestamp on PROFILE so that

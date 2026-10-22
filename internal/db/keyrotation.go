@@ -22,6 +22,7 @@ const (
 	handoffPrefix      = "HANDOFF#"
 	keyChangePrefix    = "KEYCHANGE#"
 	rotCooldownSortKey = "ROTCOOLDOWN"
+	handoffSeqSortKey  = "HANDOFFSEQ"
 )
 
 // KeyChangeSortKey is the KEYCHANGE# sort key for the rotation that produced
@@ -50,6 +51,10 @@ var (
 	// one the write was built against). Nothing was written; the client
 	// re-reads the recipient's keys and wraps again.
 	ErrWrapEpochStale = errors.New("db: the recipient's keys changed; the wrap is stale")
+	// ErrHandoffChanged: a handoff row was written or deleted after the handler
+	// read the rows it checked, so the rotation was built against rows that may
+	// no longer be there. Nothing was written; the client retries.
+	ErrHandoffChanged = errors.New("db: the handoff rows changed during the rotation")
 	// ErrHandoffAccountChanged: the account's wrapping key is no longer the one
 	// the handler compared the row against (a rotation committed in between).
 	ErrHandoffAccountChanged = errors.New("db: the account's keys changed")
@@ -164,7 +169,8 @@ type PutHandoffInput struct {
 // request, (2) the row is new or names a key other than the current one, since
 // a row naming the current key is a committed rotation's only copy and is never
 // replaced (docs/DESIGN.md, "The order is enforced so a pending row is never
-// overwritten").
+// overwritten"), and (3) the HANDOFFSEQ counter moves, which fails a rotation
+// whose handoff check read the rows before this one.
 func (c *Client) PutHandoff(ctx context.Context, in PutHandoffInput) error {
 	item, err := attributevalue.MarshalMap(models.Handoff{
 		Record: models.Record{
@@ -211,6 +217,7 @@ func (c *Client) PutHandoff(ctx context.Context, in PutHandoffInput) error {
 				ConditionExpression:       aws.String("attribute_not_exists(PK) OR NewWrappingPublicKey <> :cur"),
 				ExpressionAttributeValues: map[string]types.AttributeValue{":cur": curKey},
 			}},
+			c.bumpHandoffSeq(in.UserID),
 		},
 	})
 	if err != nil {
@@ -227,17 +234,64 @@ func (c *Client) PutHandoff(ctx context.Context, in PutHandoffInput) error {
 	return nil
 }
 
-// DeleteHandoff removes the caller's handoff row for a group. Deleting a row
+// DeleteHandoff removes the caller's handoff row for a group and bumps the
+// HANDOFFSEQ counter in the same transaction, so a rotation that checked the
+// rows before this one fails instead of committing without it. Deleting a row
 // that is not there succeeds.
 func (c *Client) DeleteHandoff(ctx context.Context, userID, groupID string) error {
-	_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(c.table),
-		Key:       handoffKey(userID, groupID),
+	_, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{TableName: aws.String(c.table), Key: handoffKey(userID, groupID)}},
+			c.bumpHandoffSeq(userID),
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("db: delete handoff: %w", err)
 	}
 	return nil
+}
+
+func handoffSeqKey(userID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+		"SK": &types.AttributeValueMemberS{Value: handoffSeqSortKey},
+	}
+}
+
+// bumpHandoffSeq is the transaction item that moves the HANDOFFSEQ counter.
+func (c *Client) bumpHandoffSeq(userID string) types.TransactWriteItem {
+	return types.TransactWriteItem{Update: &types.Update{
+		TableName:                aws.String(c.table),
+		Key:                      handoffSeqKey(userID),
+		UpdateExpression:         aws.String("SET #type = :type ADD #seq :one"),
+		ExpressionAttributeNames: map[string]string{"#type": "Type", "#seq": "Seq"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":type": &types.AttributeValueMemberS{Value: "HandoffSeq"},
+			":one":  &types.AttributeValueMemberN{Value: "1"},
+		},
+	}}
+}
+
+// GetHandoffSeq returns the HANDOFFSEQ counter, strongly consistent; absent is
+// 0. Read it BEFORE ListHandoffs and pass it to RotateKeys as
+// ExpectedHandoffSeq.
+func (c *Client) GetHandoffSeq(ctx context.Context, userID string) (int64, error) {
+	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(c.table),
+		Key:            handoffSeqKey(userID),
+		ConsistentRead: aws.Bool(true),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("db: read handoff seq: %w", err)
+	}
+	if out.Item == nil {
+		return 0, nil
+	}
+	var seq models.HandoffSeq
+	if err := attributevalue.UnmarshalMap(out.Item, &seq); err != nil {
+		return 0, fmt.Errorf("db: unmarshal handoff seq: %w", err)
+	}
+	return seq.Seq, nil
 }
 
 func handoffKey(userID, groupID string) map[string]types.AttributeValue {
@@ -286,12 +340,20 @@ func (c *Client) SweepHandoffs(ctx context.Context, userID string, currentWrappi
 	return c.batchDelete(ctx, doomed)
 }
 
-// ListKeyChanges returns the user's KEYCHANGE# chain in epoch order.
-func (c *Client) ListKeyChanges(ctx context.Context, userID string) ([]models.KeyChange, error) {
+// keyChangeServedAttrs are the KEYCHANGE# attributes served without the roster.
+// The roster is client-supplied (up to 128 KiB a row), so the public read never
+// pulls it.
+const keyChangeServedAttrs = "PK, SK, KeyEpoch, #day, OldSigningPublicKey, OldWrappingPublicKey, " +
+	"NewSigningPublicKey, NewWrappingPublicKey, RosterDigest, OldSignature, NewSignature"
+
+// ListKeyChanges returns the user's KEYCHANGE# chain in epoch order. Roster is
+// filled in only when withRoster is set, which is for the owner's own pin list;
+// the public read of the chain passes false and the rows come back without it.
+func (c *Client) ListKeyChanges(ctx context.Context, userID string, withRoster bool) ([]models.KeyChange, error) {
 	var rows []models.KeyChange
 	var start map[string]types.AttributeValue
 	for {
-		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+		in := &dynamodb.QueryInput{
 			TableName:              aws.String(c.table),
 			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -300,7 +362,12 @@ func (c *Client) ListKeyChanges(ctx context.Context, userID string) ([]models.Ke
 			},
 			ExclusiveStartKey: start,
 			ConsistentRead:    aws.Bool(true),
-		})
+		}
+		if !withRoster {
+			in.ProjectionExpression = aws.String(keyChangeServedAttrs)
+			in.ExpressionAttributeNames = map[string]string{"#day": "Day"}
+		}
+		out, err := c.ddb.Query(ctx, in)
 		if err != nil {
 			return nil, fmt.Errorf("db: list key changes: %w", err)
 		}
@@ -326,6 +393,11 @@ type RotateKeysInput struct {
 	Credentials RewrapCredentialsInput
 
 	ExpectedKeyEpoch uint64
+
+	// ExpectedHandoffSeq is the HANDOFFSEQ counter as GetHandoffSeq read it
+	// before the handoff rows were listed. The commit fails with
+	// ErrHandoffChanged if a PutHandoff or DeleteHandoff has moved it since.
+	ExpectedHandoffSeq int64
 
 	OldSigningPublicKey  []byte
 	OldWrappingPublicKey []byte
@@ -363,8 +435,11 @@ type RotateKeysInput struct {
 //   - KEYCHANGE#<epoch>: the payload and both signatures, new.
 //   - ROTCOOLDOWN: refuses a second rotation until its TTL passes (omitted when
 //     the cooldown is off).
+//   - HANDOFFSEQ: a condition check that no handoff row was written or deleted
+//     since the handler read them (docs/DESIGN.md, "A handoff change during a
+//     rotation").
 //
-// At most four items, so the number of groups the user is in never meets the 100-item
+// At most five items, so the number of groups the user is in never meets the 100-item
 // transaction limit; the per-group handoff rows are written before, by
 // PutHandoff.
 func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
@@ -470,13 +545,26 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 		}})
 	}
 
+	seqIndex := len(items)
+	items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName:                aws.String(c.table),
+		Key:                      handoffSeqKey(userID),
+		ConditionExpression:      aws.String("attribute_not_exists(#seq) OR #seq = :seq"),
+		ExpressionAttributeNames: map[string]string{"#seq": "Seq"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":seq": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.ExpectedHandoffSeq, 10)},
+		},
+	}})
+
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
 	}
 	switch {
-	case isConditionalCheckFailure(err, cooldownIndex):
+	case in.Cooldown > 0 && isConditionalCheckFailure(err, cooldownIndex):
 		return ErrRotationCooldown
+	case isConditionalCheckFailure(err, seqIndex):
+		return ErrHandoffChanged
 	case isConditionalCheckFailure(err, 2):
 		return ErrKeyEpochStale
 	case isConditionalCheckFailure(err, 0), isConditionalCheckFailure(err, 1):

@@ -91,7 +91,7 @@ func (h *Handler) getUser(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not read user")
 		return
 	}
-	rows, err := h.db.ListKeyChanges(r.Context(), id)
+	rows, err := h.db.ListKeyChanges(r.Context(), id, false)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not read user")
 		return

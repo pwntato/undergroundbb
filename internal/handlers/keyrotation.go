@@ -219,7 +219,8 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.checkHandoffs(w, r, userID, user, newWrapping) {
+	handoffSeq, ok := h.checkHandoffs(w, r, userID, user, newWrapping)
+	if !ok {
 		return
 	}
 
@@ -248,8 +249,9 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 		RecoveryVerifier:       decoded.RecoveryVerifier,
 	}
 	err = h.db.RotateKeys(r.Context(), db.RotateKeysInput{
-		Credentials:      creds,
-		ExpectedKeyEpoch: user.KeyEpoch,
+		Credentials:        creds,
+		ExpectedKeyEpoch:   user.KeyEpoch,
+		ExpectedHandoffSeq: handoffSeq,
 
 		OldSigningPublicKey:  user.SigningPublicKey,
 		OldWrappingPublicKey: user.WrappingPublicKey,
@@ -288,6 +290,9 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, db.ErrCredentialVersionStale):
 		WriteError(w, http.StatusConflict, errCredentialVersionStale)
 		return
+	case errors.Is(err, db.ErrHandoffChanged):
+		WriteErrorWithCode(w, http.StatusConflict, "your handoffs changed while the rotation was being checked; try again", "handoff_changed")
+		return
 	case errors.Is(err, db.ErrUserNotFound):
 		WriteError(w, http.StatusNotFound, "account not found")
 		return
@@ -315,17 +320,24 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkHandoffs applies the pre-commit handoff rules and writes the 409 itself
-// when one fails.
-func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID string, user *models.User, newWrapping []byte) bool {
+// when one fails. It returns the HANDOFFSEQ value read before the rows, which
+// RotateKeys' transaction checks is unchanged, so a row written or deleted after
+// this read fails the rotation instead of leaving it committed without one.
+func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID string, user *models.User, newWrapping []byte) (int64, bool) {
+	seq, err := h.db.GetHandoffSeq(r.Context(), userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not rotate keys")
+		return 0, false
+	}
 	rows, err := h.db.ListHandoffs(r.Context(), userID)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not rotate keys")
-		return false
+		return 0, false
 	}
 	admin, err := h.db.ListAdminGroups(r.Context(), userID)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not rotate keys")
-		return false
+		return 0, false
 	}
 	administered := make(map[string]bool, len(admin))
 	for _, g := range admin {
@@ -346,7 +358,7 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 	}
 	if len(pending) > 0 {
 		writeGroupsConflict(w, "finish the key changes already under way in these groups before rotating again", "handoff_pending", pending)
-		return false
+		return 0, false
 	}
 
 	var behind, missing []string
@@ -354,7 +366,7 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 		cur, err := h.db.GroupCurrentGeneration(r.Context(), g.GroupID)
 		if err != nil {
 			WriteInternalError(w, r, err, "could not rotate keys")
-			return false
+			return 0, false
 		}
 		if g.Generation != cur {
 			behind = append(behind, g.GroupID)
@@ -367,13 +379,13 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 	}
 	if len(behind) > 0 {
 		writeGroupsConflict(w, "a key rotation is under way in these groups and has not reached you yet; wait for it to finish", "rotation_in_progress", behind)
-		return false
+		return 0, false
 	}
 	if len(missing) > 0 {
 		writeGroupsConflict(w, "write a handoff for these groups first", "handoff_required", missing)
-		return false
+		return 0, false
 	}
-	return true
+	return seq, true
 }
 
 // handoffRequest is the wire shape of PUT /api/account/rotation-handoff/{groupId}:
@@ -437,6 +449,10 @@ func (h *Handler) putHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.db.GetUserByID(r.Context(), userID)
+	if errors.Is(err, db.ErrUserNotFound) {
+		WriteError(w, http.StatusNotFound, "account not found")
+		return
+	}
 	if err != nil {
 		WriteInternalError(w, r, err, "could not save handoff")
 		return

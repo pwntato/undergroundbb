@@ -367,7 +367,8 @@ one. The first proves the caller holds the keys being replaced. The second prove
 the new private key, so nobody can register a public key they cannot use (or one lifted from
 another user). The server checks both, that the day is within the usual skew of its own clock, and
 that `KeyEpoch` is the value it holds, which is also what makes the request single-use. Then, in
-**one `TransactWriteItems`** of four items (`PROFILE`, `RECOVERY`, `KEYCHANGE#`, the cooldown), so the
+**one `TransactWriteItems`** of five items (`PROFILE`, `RECOVERY`, `KEYCHANGE#`, the cooldown, and a
+condition check on `HANDOFFSEQ`, below), so the
 number of groups the user is in never meets the 100-item limit. `PROFILE` is conditioned on
 `KeyEpoch`, `CredentialVersion` and the old keys being what the request was signed against and on
 the account not being deleted, and the `KEYCHANGE#` put on the row not existing. The roster behind the
@@ -567,6 +568,19 @@ another admin advances a group's generation after the row is written, that row i
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
 conditioned on the generation, so a stale row fails the condition and is treated as not handed off;
 the group then has another admin to approve, by construction. Other than that, no group the user administers depends on a tab staying open.
+
+**A handoff change during a rotation.** `rotate-keys` checks the handoff rows before it commits, and
+the commit alone cannot see them (a transaction of this size cannot condition on one row per group). A
+`PUT` or `DELETE` landing between the check and the commit (a second tab, or a client retrying with
+fresh keys while the first request is in flight) would leave a committed rotation whose handoff row is
+gone or names another key, and the sweep after the commit deletes a row that names a key other than
+the current one. A sole admin would be left with a group nobody can open, and `PUT` would refuse to
+repair it (the key it needs to name is now the current one). So every `PUT` and `DELETE` of a handoff
+row adds one to a counter, `USER#<uuid>` / `HANDOFFSEQ`, in the same transaction; `rotate-keys` reads
+the counter (strongly consistent, absent as 0) **before** it lists the rows, and its commit carries a
+condition check that the counter is still that value. Any write in the window fails the rotation with
+409 `handoff_changed`, which the flow retries from the top. The counter is never reset and is swept
+with the account.
 
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check
@@ -2011,6 +2025,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
 | Rotation cooldown | `USER#<uuid>` | `ROTCOOLDOWN` | | | TTL, end of the UTC day after the cooldown setting |
 | Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
+| Rotation handoff counter | `USER#<uuid>` | `HANDOFFSEQ` | | | never (absent reads as 0; deleted with the account) |
 | Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
