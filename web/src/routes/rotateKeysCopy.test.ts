@@ -56,6 +56,9 @@ describe('failureMessage', () => {
     expect(msg).toContain("couldn't confirm")
     expect(msg).not.toMatch(/not changed|Nothing was rotated/)
     expect(msg).toContain('never rotates twice')
+    // The code is the one thing that cannot be recovered if the rotation did land.
+    expect(msg).toContain('write the code down')
+    expect(msg).toContain('new password')
   })
 
   it('says nothing was rotated for the failures that mean it, and that keys are unchanged when unreachable', () => {

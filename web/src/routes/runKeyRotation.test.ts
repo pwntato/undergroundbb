@@ -403,6 +403,21 @@ describe('runKeyRotation', () => {
       expect(attempt.begun).toBeDefined()
     })
 
+    it("only counts the rotation as landed when the served wrap is exactly this request's, nonce and ciphertext", async () => {
+      for (const served of [
+        { nonce: BLOB.nonce, ciphertext: 'other' },
+        { nonce: 'other', ciphertext: BLOB.ciphertext },
+      ]) {
+        const deps = makeDeps({
+          rotateKeys: vi.fn().mockRejectedValue(new TypeError('network')),
+          challenge: vi.fn().mockResolvedValue({ wrappedPrivateKeys: served }),
+        })
+        const { result } = await run(deps)
+        expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+        expect(deps.commitKeyRotation).not.toHaveBeenCalled()
+      }
+    })
+
     it('reports unconfirmed when the challenge itself cannot be read', async () => {
       const deps = makeDeps({
         rotateKeys: vi.fn().mockRejectedValue(new TypeError('network')),
