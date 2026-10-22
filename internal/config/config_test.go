@@ -291,3 +291,34 @@ func TestRotatingGroupMembersEnvOrDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestKeyRotationCooldownEnvOrDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        time.Duration
+	}{
+		{"unset", "", DefaultKeyRotationCooldown},
+		{"set", "72", 72 * time.Hour},
+		{"the minimum", "1", MinKeyRotationCooldown},
+		{"zero is clamped up, never 'no limit'", "0", MinKeyRotationCooldown},
+		{"negative is clamped up", "-5", MinKeyRotationCooldown},
+		{"the maximum", "720", MaxKeyRotationCooldown},
+		{"above the maximum is clamped down", "721", MaxKeyRotationCooldown},
+		{"not a number falls back to the default", "soon", DefaultKeyRotationCooldown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UBB_TEST_COOLDOWN", tc.value)
+			if got := keyRotationCooldownEnvOrDefault("UBB_TEST_COOLDOWN", DefaultKeyRotationCooldown); got != tc.want {
+				t.Errorf("KEY_ROTATION_COOLDOWN_HOURS=%q = %s, want %s", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromEnvReadsTheKeyRotationCooldown(t *testing.T) {
+	t.Setenv("SESSION_SECRET", testSessionSecret)
+	t.Setenv("KEY_ROTATION_COOLDOWN_HOURS", "48")
+	if got := FromEnv().KeyRotationCooldown; got != 48*time.Hour {
+		t.Errorf("FromEnv().KeyRotationCooldown = %s, want 48h", got)
+	}
+}

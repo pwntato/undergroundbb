@@ -26,6 +26,10 @@ type rewrapMembersRequest struct {
 type memberRewrapIn struct {
 	UserID     string     `json:"userId"`
 	WrappedKey wrappedKey `json:"wrappedKey"`
+	// WrapEpoch is the recipient's keyEpoch (as served by GET /api/users) the
+	// key was wrapped to; 0 for a user who has never rotated. The server checks
+	// it is their current epoch, in the same transaction as the write (#62).
+	WrapEpoch uint64 `json:"wrapEpoch"`
 }
 
 // rewrapMembers implements PUT /api/groups/{groupId}/rotation/members. Admin
@@ -71,7 +75,7 @@ func (h *Handler) rewrapMembers(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, "wraps: wrappedKey: "+err.Error())
 			return
 		}
-		in.Wraps = append(in.Wraps, db.MemberRewrap{UserID: w2.UserID, Wrapped: wk})
+		in.Wraps = append(in.Wraps, db.MemberRewrap{UserID: w2.UserID, Wrapped: wk, WrapEpoch: w2.WrapEpoch})
 	}
 
 	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
@@ -205,7 +209,7 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "wrappedKey: "+err.Error())
 		return
 	}
-	sig, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, marker.RemovedUserID, req.StartSignature, caller.Generation)
+	sig, keyEpoch, rej, msg := h.verifyRotationStart(r.Context(), userID, groupID, marker.RemovedUserID, req.StartSignature, caller.Generation)
 	if msg != "" {
 		if rej.code == "" {
 			WriteError(w, rej.status, msg)
@@ -221,9 +225,15 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		CurrentGeneration: caller.Generation,
 		Link:              link,
 		CallerWrappedKey:  wrapped,
+		CallerKeyEpoch:    keyEpoch,
 		StartSignature:    sig,
 	}
-	if !h.writeRotationErr(w, r, h.db.TakeOverLeaveRotation(r.Context(), in), "could not take over the rotation") {
+	err = h.db.TakeOverLeaveRotation(r.Context(), in)
+	if errors.Is(err, db.ErrWrapEpochStale) {
+		WriteErrorWithCode(w, http.StatusConflict, "your keys were rotated by another request; reload and try again", "key_epoch_stale")
+		return
+	}
+	if !h.writeRotationErr(w, r, err, "could not take over the rotation") {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -240,6 +250,10 @@ func (h *Handler) writeRotationErr(w http.ResponseWriter, r *http.Request, err e
 		WriteErrorWithCode(w, http.StatusConflict, "your own key is not at the rotation's generation; reload", "rotation_caller_behind")
 	case errors.Is(err, db.ErrRewrapMemberChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "a member in the batch left or changed; re-list members and resend", "member_changed")
+	case errors.Is(err, db.ErrRewrapMemberDormant):
+		WriteErrorWithCode(w, http.StatusConflict, "a member in the batch rotated their keys; a key rotation does not wrap to them until an admin approves the change", "member_dormant")
+	case errors.Is(err, db.ErrWrapEpochStale):
+		WriteErrorWithCode(w, http.StatusConflict, "a member's keys changed since you read them; re-read their keys and wrap again", "wrap_epoch_stale")
 	case errors.Is(err, db.ErrMembersBehind):
 		WriteErrorWithCode(w, http.StatusConflict, "some members are not yet on the new key generation", "members_behind")
 	case errors.Is(err, db.ErrRoleChangeConflict):

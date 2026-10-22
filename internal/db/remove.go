@@ -92,6 +92,11 @@ type RemoveRotation struct {
 	// transaction as the marker and the remover's own re-wrap, means no
 	// membership can point at the new generation without its chain link.
 	Link models.WrappedBlob
+	// RemoverKeyEpoch is the remover's KeyEpoch as the handler read it (#62): it
+	// becomes their WrapEpoch (the new entry is wrapped to the key they hold now,
+	// which is what brings a dormant admin's own membership current again) and is
+	// checked against PROFILE in the same transaction.
+	RemoverKeyEpoch uint64
 	// RemoverWrappedKey re-wraps the new key for the remover, who then holds
 	// it durably: it is the only copy of the minted key anywhere, so a resumed
 	// rotation re-uses it rather than minting a second one.
@@ -159,11 +164,12 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 		removerValues[":cur"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Rotation.CurrentGeneration, 10)}
 		removerValues[":next"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Rotation.CurrentGeneration+1, 10)}
 		removerValues[":wrapped"] = wrapped
+		removerValues[":wep"] = epochAttr(in.Rotation.RemoverKeyEpoch)
 		removerItem = types.TransactWriteItem{Update: &types.Update{
 			TableName:                 aws.String(c.table),
 			Key:                       memberKey(in.GroupID, in.RemoverUserID),
 			ConditionExpression:       aws.String(removerCond + " AND #gen = :cur"),
-			UpdateExpression:          aws.String("SET #gen = :next, #wrapped = :wrapped"),
+			UpdateExpression:          aws.String("SET #gen = :next, #wrapped = :wrapped, WrapEpoch = :wep"),
 			ExpressionAttributeNames:  map[string]string{"#role": "Role", "#gsk": "GrantSortKey", "#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: removerValues,
 		}}
@@ -263,8 +269,27 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 	// The removed member's admission record goes with their membership (#178);
 	// see admissionDelete. Last, so no condition-check index above shifts.
 	items = append(items, admissionDelete(c.table, in.GroupID, in.SubjectUserID))
+	// The remover's own re-wrap is to the key they hold now (#62); its epoch is
+	// checked last for the same reason.
+	epochIndex := -1
+	if rotating {
+		epochIndex = len(items)
+		items = append(items,
+			c.keyEpochCheck(in.RemoverUserID, in.Rotation.RemoverKeyEpoch),
+			// The start is the self re-key a committed key rotation's handoff row
+			// exists for, so the row goes with it, in this transaction: a crash
+			// cannot leave a used row behind to block the next rotation. Deleting
+			// a row that is not there is not a failure.
+			types.TransactWriteItem{Delete: &types.Delete{
+				TableName: aws.String(c.table),
+				Key:       handoffKey(in.RemoverUserID, in.GroupID),
+			}},
+		)
+	}
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
+		case rotating && isConditionalCheckFailure(err, epochIndex):
+			return ErrWrapEpochStale
 		case rotating && isConditionalCheckFailure(err, rotationIndex):
 			return ErrRotationInProgress
 		case rotating && isConditionalCheckFailure(err, rotationIndex+1):

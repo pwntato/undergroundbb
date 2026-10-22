@@ -75,6 +75,20 @@ variable "max_rotating_group_members" {
   }
 }
 
+variable "key_rotation_cooldown_hours" {
+  type        = number
+  default     = 24
+  description = "The shortest time between two key rotations of one account (#62), in hours; the stored limit is rounded up to the end of its UTC day, so it can run up to a day longer. See internal/config.DefaultKeyRotationCooldown."
+
+  validation {
+    # The Go side clamps out-of-range values with a warning; a fraction would
+    # tostring() to something it cannot parse and would silently replace with
+    # the default. 720 hours is internal/config.MaxKeyRotationCooldown.
+    condition     = var.key_rotation_cooldown_hours >= 1 && var.key_rotation_cooldown_hours <= 720 && floor(var.key_rotation_cooldown_hours) == var.key_rotation_cooldown_hours
+    error_message = "key_rotation_cooldown_hours must be a whole number from 1 to 720."
+  }
+}
+
 variable "default_expiration_days" {
   type        = number
   default     = 30

@@ -301,6 +301,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 
 		CreatorUserID:           userID,
 		CreatorSigningPublicKey: creator.SigningPublicKey,
+		CreatorKeyEpoch:         creator.KeyEpoch,
 		TrustAnchorSignature:    trustAnchorSig,
 
 		Visibility: req.Visibility,
@@ -329,6 +330,10 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, db.ErrCreatorDeleted) {
 			WriteErrorWithCode(w, http.StatusGone, "this account was deleted", "account_deleted")
+			return
+		}
+		if errors.Is(err, db.ErrWrapEpochStale) {
+			WriteErrorWithCode(w, http.StatusConflict, "your keys were rotated by another request; reload and try again", "key_epoch_stale")
 			return
 		}
 		if errors.Is(err, db.ErrGroupIDTaken) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"time"
 
@@ -191,97 +192,10 @@ type RewrapCredentialsInput struct {
 // A caller that wants to keep its own session reads GetSessionGeneration
 // afterwards and issues a fresh token.
 func (c *Client) RewrapCredentials(ctx context.Context, in RewrapCredentialsInput) error {
-	userKey := "USER#" + in.UserID
-
-	// RECOVERY's SET clause and value map are built incrementally so
-	// LastRewrapToken is only ever written when in.IdempotencyToken is set --
-	// an empty/nil binary AttributeValue is best avoided rather than relied
-	// on to behave like "no value" (unlike every other field re-wrapped
-	// here, this one has a real "caller didn't provide one" case:
-	// changePassword, #30, never sets it). See
-	// RewrapCredentialsInput.IdempotencyToken and
-	// models.Recovery.LastRewrapToken's own doc comments; issue #130.
-	recoverySet := "SET Salt = :recoverySalt, Argon2Params = :recoveryArgon2Params, WrappedPrivateKeys = :recoveryWrappedPrivateKeys, " +
-		"VerifierSalt = :verifierSalt, VerifierArgon2Params = :verifierArgon2Params, #V = :verifier, " +
-		"CredentialVersion = :newVersion"
-	recoveryValues := map[string]types.AttributeValue{}
-	if len(in.IdempotencyToken) > 0 {
-		recoverySet += ", LastRewrapToken = :idempotencyToken"
-		tokenValue, err := attributevalue.Marshal(in.IdempotencyToken)
-		if err != nil {
-			return err
-		}
-		recoveryValues[":idempotencyToken"] = tokenValue
-	}
-
-	profileUpdate := &types.Update{
-		TableName: aws.String(c.table),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: userKey},
-			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-		},
-		UpdateExpression: aws.String(
-			"SET Salt = :salt, Argon2Params = :argon2Params, WrappedPrivateKeys = :wrappedPrivateKeys, CredentialVersion = :newVersion " +
-				"ADD SessionGeneration :one",
-		),
-		ConditionExpression: aws.String("CredentialVersion = :expectedVersion"),
-	}
-	recoveryUpdate := &types.Update{
-		TableName: aws.String(c.table),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: userKey},
-			"SK": &types.AttributeValueMemberS{Value: "RECOVERY"},
-		},
-		UpdateExpression: aws.String(recoverySet),
-		// Verifier collides with a DynamoDB reserved word, so it needs an
-		// expression attribute name like every other reserved-word field
-		// this codebase writes via an UpdateExpression.
-		ExpressionAttributeNames: map[string]string{"#V": "Verifier"},
-		ConditionExpression:      aws.String("CredentialVersion = :expectedVersion"),
-	}
-
-	values, err := attributevalue.MarshalMap(map[string]any{
-		":salt":               in.Salt,
-		":argon2Params":       in.Argon2Params,
-		":wrappedPrivateKeys": in.WrappedPrivateKeys,
-
-		":recoverySalt":               in.RecoverySalt,
-		":recoveryArgon2Params":       in.RecoveryArgon2Params,
-		":recoveryWrappedPrivateKeys": in.RecoveryWrappedPrivateKeys,
-
-		":verifierSalt":         in.RecoveryVerifierSalt,
-		":verifierArgon2Params": in.RecoveryVerifierParams,
-		":verifier":             in.RecoveryVerifier,
-
-		":expectedVersion": in.ExpectedCredentialVersion,
-		":newVersion":      in.NewCredentialVersion,
-	})
+	profileUpdate, recoveryUpdate, err := c.credentialUpdates(in, profileExtras{})
 	if err != nil {
 		return err
 	}
-	// PROFILE's update only needs the subset of values its own expression
-	// references -- ExpressionAttributeValues on a TransactWriteItems Update
-	// rejects unused names, unlike a plain UpdateItem, so the two items
-	// cannot share one map the way a single-item call could.
-	profileValues := map[string]types.AttributeValue{
-		":salt":               values[":salt"],
-		":argon2Params":       values[":argon2Params"],
-		":wrappedPrivateKeys": values[":wrappedPrivateKeys"],
-		":newVersion":         values[":newVersion"],
-		":expectedVersion":    values[":expectedVersion"],
-		":one":                &types.AttributeValueMemberN{Value: "1"},
-	}
-	recoveryValues[":recoverySalt"] = values[":recoverySalt"]
-	recoveryValues[":recoveryArgon2Params"] = values[":recoveryArgon2Params"]
-	recoveryValues[":recoveryWrappedPrivateKeys"] = values[":recoveryWrappedPrivateKeys"]
-	recoveryValues[":verifierSalt"] = values[":verifierSalt"]
-	recoveryValues[":verifierArgon2Params"] = values[":verifierArgon2Params"]
-	recoveryValues[":verifier"] = values[":verifier"]
-	recoveryValues[":newVersion"] = values[":newVersion"]
-	recoveryValues[":expectedVersion"] = values[":expectedVersion"]
-	profileUpdate.ExpressionAttributeValues = profileValues
-	recoveryUpdate.ExpressionAttributeValues = recoveryValues
-
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: profileUpdate},
@@ -300,6 +214,118 @@ func (c *Client) RewrapCredentials(ctx context.Context, in RewrapCredentialsInpu
 		return err
 	}
 	return nil
+}
+
+// profileExtras is what a caller that rewrites the credentials as part of a
+// bigger PROFILE change (a key rotation) adds to credentialUpdates' PROFILE
+// update: more SET clauses (each ending in no comma; the first starts with
+// ", "), their values, and extra conjuncts for the condition.
+type profileExtras struct {
+	set       string
+	values    map[string]types.AttributeValue
+	condition string
+	names     map[string]string
+}
+
+// credentialUpdates builds the PROFILE and RECOVERY updates RewrapCredentials
+// writes, so a rotation can add its own PROFILE changes to the same two items
+// without a second copy of this expression.
+func (c *Client) credentialUpdates(in RewrapCredentialsInput, x profileExtras) (profileUpdate, recoveryUpdate *types.Update, err error) {
+	userKey := "USER#" + in.UserID
+
+	// RECOVERY's SET clause and value map are built incrementally so
+	// LastRewrapToken is only ever written when in.IdempotencyToken is set --
+	// an empty/nil binary AttributeValue is best avoided rather than relied
+	// on to behave like "no value" (unlike every other field re-wrapped
+	// here, this one has a real "caller didn't provide one" case:
+	// changePassword, #30, never sets it). See
+	// RewrapCredentialsInput.IdempotencyToken and
+	// models.Recovery.LastRewrapToken's own doc comments; issue #130.
+	recoverySet := "SET Salt = :recoverySalt, Argon2Params = :recoveryArgon2Params, WrappedPrivateKeys = :recoveryWrappedPrivateKeys, " +
+		"VerifierSalt = :verifierSalt, VerifierArgon2Params = :verifierArgon2Params, #V = :verifier, " +
+		"CredentialVersion = :newVersion"
+	recoveryValues := map[string]types.AttributeValue{}
+	if len(in.IdempotencyToken) > 0 {
+		recoverySet += ", LastRewrapToken = :idempotencyToken"
+		tokenValue, err := attributevalue.Marshal(in.IdempotencyToken)
+		if err != nil {
+			return nil, nil, err
+		}
+		recoveryValues[":idempotencyToken"] = tokenValue
+	}
+
+	profileUpdate = &types.Update{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: userKey},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression: aws.String(
+			"SET Salt = :salt, Argon2Params = :argon2Params, WrappedPrivateKeys = :wrappedPrivateKeys, CredentialVersion = :newVersion" +
+				x.set + " ADD SessionGeneration :one",
+		),
+		ConditionExpression:      aws.String("CredentialVersion = :expectedVersion" + x.condition),
+		ExpressionAttributeNames: x.names,
+	}
+	recoveryUpdate = &types.Update{
+		TableName: aws.String(c.table),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: userKey},
+			"SK": &types.AttributeValueMemberS{Value: "RECOVERY"},
+		},
+		UpdateExpression: aws.String(recoverySet),
+		// Verifier collides with a DynamoDB reserved word, so it needs an
+		// expression attribute name like every other reserved-word field
+		// this codebase writes via an UpdateExpression.
+		ExpressionAttributeNames: map[string]string{"#V": "Verifier"},
+		ConditionExpression:      aws.String("CredentialVersion = :expectedVersion"),
+	}
+
+	var values map[string]types.AttributeValue
+	values, err = attributevalue.MarshalMap(map[string]any{
+		":salt":               in.Salt,
+		":argon2Params":       in.Argon2Params,
+		":wrappedPrivateKeys": in.WrappedPrivateKeys,
+
+		":recoverySalt":               in.RecoverySalt,
+		":recoveryArgon2Params":       in.RecoveryArgon2Params,
+		":recoveryWrappedPrivateKeys": in.RecoveryWrappedPrivateKeys,
+
+		":verifierSalt":         in.RecoveryVerifierSalt,
+		":verifierArgon2Params": in.RecoveryVerifierParams,
+		":verifier":             in.RecoveryVerifier,
+
+		":expectedVersion": in.ExpectedCredentialVersion,
+		":newVersion":      in.NewCredentialVersion,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	// PROFILE's update only needs the subset of values its own expression
+	// references -- ExpressionAttributeValues on a TransactWriteItems Update
+	// rejects unused names, unlike a plain UpdateItem, so the two items
+	// cannot share one map the way a single-item call could.
+	profileValues := map[string]types.AttributeValue{
+		":salt":               values[":salt"],
+		":argon2Params":       values[":argon2Params"],
+		":wrappedPrivateKeys": values[":wrappedPrivateKeys"],
+		":newVersion":         values[":newVersion"],
+		":expectedVersion":    values[":expectedVersion"],
+		":one":                &types.AttributeValueMemberN{Value: "1"},
+	}
+	maps.Copy(profileValues, x.values)
+	recoveryValues[":recoverySalt"] = values[":recoverySalt"]
+	recoveryValues[":recoveryArgon2Params"] = values[":recoveryArgon2Params"]
+	recoveryValues[":recoveryWrappedPrivateKeys"] = values[":recoveryWrappedPrivateKeys"]
+	recoveryValues[":verifierSalt"] = values[":verifierSalt"]
+	recoveryValues[":verifierArgon2Params"] = values[":verifierArgon2Params"]
+	recoveryValues[":verifier"] = values[":verifier"]
+	recoveryValues[":newVersion"] = values[":newVersion"]
+	recoveryValues[":expectedVersion"] = values[":expectedVersion"]
+	profileUpdate.ExpressionAttributeValues = profileValues
+	recoveryUpdate.ExpressionAttributeValues = recoveryValues
+
+	return profileUpdate, recoveryUpdate, nil
 }
 
 // IsOwnRewrap reports whether a RewrapCredentials call this package cannot

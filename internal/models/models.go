@@ -476,6 +476,16 @@ type Membership struct {
 	// for a group creator on groups created before this field existed --
 	// there the current grant is Group.RootGrantSortKey.
 	GrantSortKey string `dynamodbav:"GrantSortKey,omitempty"`
+
+	// WrapEpoch is the recipient's KeyEpoch when WrappedGroupKey was wrapped
+	// (#62); an absent attribute reads as 0. A membership is dormant exactly
+	// when WrapEpoch is behind the user's PROFILE KeyEpoch: the entry point is
+	// wrapped to a key the user has since rotated away from. Every path that
+	// writes a wrap sets it from the epoch the client wrapped to and checks it
+	// in the same transaction, so a wrap to a key that was just replaced is
+	// refused instead of stored. Server-held and unsigned, see DESIGN.md,
+	// "Dormancy is derived, not stored."
+	WrapEpoch uint64 `dynamodbav:"WrapEpoch,omitempty"`
 }
 
 // RoleGrant is a GROUP#<gid> / GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand> item --
@@ -859,4 +869,71 @@ type SuccessorDesignation struct {
 	// Signature is the admin's Ed25519 signature under
 	// crypto.ContextSuccessorDesignation.
 	Signature []byte `dynamodbav:"Signature"`
+}
+
+// KeyChange is the USER#<uuid> / KEYCHANGE#<epoch> item (#62, docs/DESIGN.md,
+// "What a rotation writes"): the payload both keys signed to introduce the
+// new key set, and both signatures, written once by rotate-keys and never
+// edited. The rows form a chain, each new signing key introduced by the one
+// before it. KeyEpoch is the epoch this rotation produced (the row's sort key
+// is its zero-padded form). Roster is the list behind RosterDigest; it is
+// served only to the owner, since its length would tell anyone how many people
+// the user has pinned or verified. No CreatedAt: Day is the whole timestamp.
+type KeyChange struct {
+	Record
+
+	KeyEpoch             uint64 `dynamodbav:"KeyEpoch"`
+	Day                  string `dynamodbav:"Day"`
+	OldSigningPublicKey  []byte `dynamodbav:"OldSigningPublicKey"`
+	OldWrappingPublicKey []byte `dynamodbav:"OldWrappingPublicKey"`
+	NewSigningPublicKey  []byte `dynamodbav:"NewSigningPublicKey"`
+	NewWrappingPublicKey []byte `dynamodbav:"NewWrappingPublicKey"`
+	RosterDigest         []byte `dynamodbav:"RosterDigest"`
+	// Roster is every entry (crypto.RosterEntryID) behind RosterDigest. A list
+	// of 16-byte ids can be empty, which DynamoDB stores as an empty list.
+	Roster       [][]byte `dynamodbav:"Roster"`
+	OldSignature []byte   `dynamodbav:"OldSignature"`
+	NewSignature []byte   `dynamodbav:"NewSignature"`
+}
+
+// Handoff is the USER#<uuid> / HANDOFF#<groupId> item (#62): a group's current
+// key wrapped to the user's NEW X25519 key before rotate-keys, so the user's
+// self re-key survives a closed tab (docs/DESIGN.md, "The self re-key must
+// survive a closed tab"). Ciphertext only. No TTL, ever: the rows of a
+// committed rotation are the only copy of the key a sole admin can still
+// reach. No CreatedAt.
+type Handoff struct {
+	Record
+
+	GroupID string `dynamodbav:"GroupID"`
+	// Generation is the generation WrappedGroupKey holds, the group's newest
+	// GENKEY# link when the row was written (crypto.HandoffWrapAAD binds it).
+	Generation int64 `dynamodbav:"Generation"`
+	// NewWrappingPublicKey is the X25519 key WrappedGroupKey is wrapped to.
+	NewWrappingPublicKey []byte     `dynamodbav:"NewWrappingPublicKey"`
+	WrappedGroupKey      WrappedKey `dynamodbav:"WrappedGroupKey"`
+}
+
+// HandoffSeq is the USER#<uuid> / HANDOFFSEQ item (#62): a counter that every
+// PutHandoff and DeleteHandoff bumps in its own transaction and that
+// rotate-keys' transaction checks is still the value its handoff check read, so
+// a handoff row written or removed after that check fails the rotation instead
+// of stranding it (docs/DESIGN.md, "A handoff change during a rotation"). Absent
+// reads as 0. No TTL and no timestamp.
+type HandoffSeq struct {
+	Record
+
+	Seq int64 `dynamodbav:"Seq"`
+}
+
+// RotationCooldown is the USER#<uuid> / ROTCOOLDOWN item rotate-keys writes
+// (#62): while it exists and its TTL is in the future, a second rotation is
+// refused. It is an item with a TTL rather than a timestamp on PROFILE so that
+// no permanent full-resolution record of when someone rotated keys is left
+// next to their keys (#147). DynamoDB deletes expired items late, so the
+// reader compares TTL to the clock.
+type RotationCooldown struct {
+	Record
+
+	TTL int64 `dynamodbav:"TTL"`
 }

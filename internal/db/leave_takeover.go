@@ -24,7 +24,11 @@ type TakeOverLeaveRotationInput struct {
 	CurrentGeneration int64
 	Link              models.WrappedBlob
 	CallerWrappedKey  models.WrappedKey
-	StartSignature    []byte
+	// CallerKeyEpoch is the caller's KeyEpoch as the handler read it (#62): it
+	// becomes their WrapEpoch and is checked against PROFILE in the same
+	// transaction, as RemoveRotation.RemoverKeyEpoch is.
+	CallerKeyEpoch uint64
+	StartSignature []byte
 }
 
 // TakeOverLeaveRotation turns the marker a leaving member left (#178) into a
@@ -104,24 +108,37 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, in.CallerUserID),
 			ConditionExpression:      aws.String("#role = :admin AND #gen = :cur"),
-			UpdateExpression:         aws.String("SET #gen = :next, #wrapped = :wrapped"),
+			UpdateExpression:         aws.String("SET #gen = :next, #wrapped = :wrapped, WrapEpoch = :wep"),
 			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":admin":   &types.AttributeValueMemberS{Value: models.RoleAdmin},
 				":cur":     genAttr(in.CurrentGeneration),
 				":next":    genAttr(in.CurrentGeneration + 1),
 				":wrapped": wrapped,
+				":wep":     epochAttr(in.CallerKeyEpoch),
 			},
 		}},
 		// The leave kept the leaver's admission so this admin could check the
 		// leaver's key against it; it has served its purpose. Last, so no
 		// condition-check index above shifts.
 		admissionDelete(c.table, in.GroupID, in.LeaverUserID),
+		// The caller's re-wrap is to the key they hold now (#62); last, so no
+		// index above shifts.
+		c.keyEpochCheck(in.CallerUserID, in.CallerKeyEpoch),
+		// A takeover is a start like a removal's: it consumes the caller's
+		// handoff row for this group, in the same transaction.
+		{Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key:       handoffKey(in.CallerUserID, in.GroupID),
+		}},
 	}
+	const epochIndex = 4
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isConditionalCheckFailure(err, markerIndex), isConditionalCheckFailure(err, linkIndex):
 			return ErrRotationNotActive
+		case isConditionalCheckFailure(err, epochIndex):
+			return ErrWrapEpochStale
 		case isConditionalCheckFailure(err, callerIndex):
 			return ErrRewrapCallerBehind
 		case isTransactionConflict(err):

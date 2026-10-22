@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -811,11 +812,28 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The wrap goes to the X25519 key the invitee signed at acceptance. If they
+	// have rotated since, that key is no longer theirs and the membership would
+	// be dormant on arrival; the invite can never complete, so say so and clear
+	// it, and they are invited again (#62). A deleted invitee is left to the
+	// transaction, which reports invitee_deleted.
+	invitee, err := h.db.GetUserByID(r.Context(), match.InvitedUserID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not complete invite")
+		return
+	}
+	if invitee.DeletedAt == "" && (!bytes.Equal(invitee.WrappingPublicKey, match.InvitedX25519PublicKey) ||
+		!bytes.Equal(invitee.SigningPublicKey, match.InvitedEd25519PublicKey)) {
+		h.writeInviteeKeysChanged(w, r, inviteID, userID)
+		return
+	}
+
 	err = h.db.CompleteInvite(r.Context(), db.CompleteInviteInput{
 		InviteID:        inviteID,
 		GroupID:         match.GroupID,
 		InviterUserID:   userID,
 		InvitedUserID:   match.InvitedUserID,
+		InviteeKeyEpoch: invitee.KeyEpoch,
 		Generation:      req.Generation,
 		WrappedGroupKey: wrappedGroupKey,
 		Role:            models.RoleMember,
@@ -861,6 +879,11 @@ func (h *Handler) completeInvite(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
+			return
+		}
+		if errors.Is(err, db.ErrWrapEpochStale) {
+			// The invitee rotated between the read above and the write.
+			h.writeInviteeKeysChanged(w, r, inviteID, userID)
 			return
 		}
 		if errors.Is(err, db.ErrInviteeDeleted) {
@@ -1022,4 +1045,16 @@ func (h *Handler) writeInviterNotEligible(w http.ResponseWriter, r *http.Request
 		return
 	}
 	WriteError(w, http.StatusForbidden, "must currently be an admin or ambassador of this group")
+}
+
+// writeInviteeKeysChanged answers a completion whose invitee has rotated their
+// keys since they accepted (#62). The admission and the wrap would name a key
+// they no longer hold, so the invite can never complete: clear its rows, as the
+// deleted-invitee branch does, and tell the inviter to invite them again.
+func (h *Handler) writeInviteeKeysChanged(w http.ResponseWriter, r *http.Request, inviteID, inviterID string) {
+	if err := h.db.CleanupAlreadyMemberInvite(r.Context(), inviteID, inviterID); err != nil {
+		WriteInternalError(w, r, err, "could not complete invite")
+		return
+	}
+	WriteErrorWithCode(w, http.StatusConflict, "the invited person changed their keys after accepting; invite them again", "invitee_keys_changed")
 }

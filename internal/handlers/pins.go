@@ -59,9 +59,23 @@ type pinEntry struct {
 	SignedDay              string   `json:"signedDay"`
 }
 
+// rosterEntry is the list behind one of the caller's own key rotations'
+// digest (#62): every PIN# and VERIFIED# row they held then, as
+// crypto.RosterEntryID values. A client accepts a pin or record signed under a
+// superseded key only if it is listed in that key's rotation.
+type rosterEntry struct {
+	KeyEpoch uint64   `json:"keyEpoch"`
+	Roster   []string `json:"roster"`
+}
+
 type listPinsResponse struct {
 	Pins       []pinEntry `json:"pins"`
 	NextCursor string     `json:"nextCursor,omitempty"`
+	// KeyChangeRosters is the caller's own rotation rosters, on the first page
+	// only (it is not paginated, and a later page would repeat it). Served to
+	// the owner and nobody else, since its length is how many people they have
+	// pinned or verified.
+	KeyChangeRosters []rosterEntry `json:"keyChangeRosters,omitempty"`
 }
 
 // putPin implements PUT /api/pins/{userId} -- issue #63. It stores the
@@ -216,5 +230,20 @@ func (h *Handler) listPins(w http.ResponseWriter, r *http.Request) {
 			SignedDay:              p.SignedDay,
 		})
 	}
-	WriteJSON(w, http.StatusOK, listPinsResponse{Pins: entries, NextCursor: next})
+	resp := listPinsResponse{Pins: entries, NextCursor: next}
+	if cursor == "" {
+		changes, err := h.db.ListKeyChanges(r.Context(), userID, true)
+		if err != nil {
+			WriteInternalError(w, r, err, "could not list pins")
+			return
+		}
+		for _, kc := range changes {
+			roster := make([]string, 0, len(kc.Roster))
+			for _, e := range kc.Roster {
+				roster = append(roster, enc(e))
+			}
+			resp.KeyChangeRosters = append(resp.KeyChangeRosters, rosterEntry{KeyEpoch: kc.KeyEpoch, Roster: roster})
+		}
+	}
+	WriteJSON(w, http.StatusOK, resp)
 }

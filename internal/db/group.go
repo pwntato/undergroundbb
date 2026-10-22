@@ -40,6 +40,11 @@ type CreateGroupInput struct {
 
 	CreatorUserID           string
 	CreatorSigningPublicKey []byte
+	// CreatorKeyEpoch is the creator's KeyEpoch as the handler read it (#62):
+	// stored as the membership's WrapEpoch and checked against PROFILE in the
+	// same transaction, so a creator who has just rotated cannot land a wrap to
+	// the key they replaced.
+	CreatorKeyEpoch uint64
 	// TrustAnchorSignature is the creator's signature (crypto.Sign under
 	// crypto.ContextTrustAnchor, over crypto.TrustAnchorPayload) proving
 	// CreatorUserID actually holds CreatorSigningPublicKey's private half.
@@ -166,6 +171,7 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 		Generation:      0,
 		WrappedGroupKey: in.GenerationKeyWrapped,
 		GrantSortKey:    in.RootGrantSortKey,
+		WrapEpoch:       in.CreatorKeyEpoch,
 	}
 
 	grant := models.RoleGrant{
@@ -218,19 +224,21 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 			// expires, and without this a stale cookie would make the
 			// tombstone the admin of a new group. CompleteInvite carries the
 			// same check; these are the only two writers of a MEMBER# row.
-			{ConditionCheck: &types.ConditionCheck{
-				TableName: aws.String(c.table),
-				Key: map[string]types.AttributeValue{
-					"PK": &types.AttributeValueMemberS{Value: "USER#" + in.CreatorUserID},
-					"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-				},
-				ConditionExpression: aws.String("attribute_not_exists(DeletedAt)"),
-			}},
+			// The same item holds the KeyEpoch the membership's WrapEpoch was
+			// taken from (#62).
+			c.keyEpochCheck(in.CreatorUserID, in.CreatorKeyEpoch),
 		},
 	})
 	if err != nil {
 		if isConditionalCheckFailure(err, creatorGoneIndex) {
-			return "", ErrCreatorDeleted
+			deleted, whyErr := c.whyProfileCheckFailed(ctx, in.CreatorUserID)
+			if whyErr != nil {
+				return "", whyErr
+			}
+			if deleted {
+				return "", ErrCreatorDeleted
+			}
+			return "", ErrWrapEpochStale
 		}
 		if isConditionalCheckFailure(err, groupItemIndex) {
 			// Before reporting a conflict, check whether this is the
