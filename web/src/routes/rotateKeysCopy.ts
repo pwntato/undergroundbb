@@ -43,7 +43,7 @@ export function failureMessage(
     case 'rejected':
       return `The server refused the rotation: ${failure.message} Nothing was rotated.`
     case 'expired':
-      return 'This attempt took too long and has expired. Your keys have not changed. Choose your new password again to start over.'
+      return "This attempt has expired, either because it sat for too long or because this device's date or time is wrong. Check that they are correct, then choose your new password again. Your keys have not changed."
     case 'unreachable':
       return "We couldn't reach the server, and your keys have not changed. Check your connection and try again."
     case 'unconfirmed':
@@ -63,7 +63,7 @@ export function stepText(step: KeyRotationStep): string {
     case 'signing':
       return 'Signing the change with your old and new keys…'
     case 'settling':
-      return 'Making sure the earlier attempt did not go through. This takes about a minute…'
+      return 'Making sure the earlier attempt did not go through. This takes about a minute; stay on this page…'
     case 'committing':
       return 'Saving your new keys…'
   }

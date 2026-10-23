@@ -25,14 +25,17 @@ import (
 var ErrCredentialVersionStale = errors.New("db: credential version is stale; the credentials were changed by another request")
 
 // GetUserByID reads a single user's PROFILE directly by uuid, unlike
-// LookupUserByUsername's two-step claim-then-profile lookup -- issue #131's
-// GET /api/account/credentials calls this from behind requireSession, which
-// has already turned a verified session cookie into a userID with no
-// username involved, so there is no claim to resolve first. Returns
+// LookupUserByUsername's two-step claim-then-profile lookup -- the
+// readers behind requireSession (which has already turned a verified session
+// cookie into a userID with no username involved) call this, so there is no
+// claim to resolve first. Returns
 // ErrUserNotFound if the PROFILE item is missing, the same sentinel
 // LookupUserByUsername uses, since a caller with a valid session pointing at
 // a nonexistent profile is exactly as anomalous as that function's own
 // claim-without-profile case.
+// The credentials handler (GET /api/account/credentials) must NOT use this
+// reader: the rotate-keys flow's "nothing committed" proof rests on its read
+// being strongly consistent. Use GetUserByIDConsistent there.
 func (c *Client) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
 	return c.getUserByID(ctx, userID, false)
 }
