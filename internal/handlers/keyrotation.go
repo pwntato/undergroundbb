@@ -180,7 +180,12 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validSignedDay(req.SignedDay) {
-		WriteError(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)")
+		// Coded because it is the one refusal that is permanent for this exact
+		// request: the day only moves forward, so a client holding a request
+		// whose send had an unknown outcome can read it as "this can never
+		// land" (the session check above already passed, so no earlier send of
+		// it has committed).
+		WriteErrorWithCode(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)", "signed_day_stale")
 		return
 	}
 	if req.ExpectedKeyEpoch != user.KeyEpoch {

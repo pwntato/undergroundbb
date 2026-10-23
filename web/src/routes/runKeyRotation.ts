@@ -38,6 +38,7 @@ import { GroupsConflictError, type PutHandoffRequest } from '@/lib/api/keyRotati
 import type { RotateKeysRequest, RotateKeysResponse } from '@/lib/api/keyRotation'
 import type { SentInvite } from '@/lib/api/invites'
 import type { UserProjection } from '@/lib/api/users'
+import { pendingSelfRekeys, type PendingHandoffDeps } from './pendingHandoffs'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { rosterEntryId } from '@/lib/crypto/key-rotation'
 import type { PinRecord } from '@/lib/crypto/pin'
@@ -61,13 +62,18 @@ export interface KeyRotationPreflight {
   readonly keyEpoch: number
   readonly credentialVersion: number
   readonly adminGroups: readonly AdminGroup[]
+  /**
+   * Groups where a committed rotation's self re-key has not run yet. The server
+   * refuses another rotation while any exists, so the screen offers none.
+   */
+  readonly pendingSelfRekeys: readonly string[]
   /** Sent invites nobody accepted; the flow revokes them. */
   readonly invitesToRevoke: readonly SentInvite[]
   /** Accepted invites still waiting on this user's step 3; they cannot be revoked and will not complete. */
   readonly invitesAwaitingCompletion: number
 }
 
-export interface KeyRotationDeps {
+export interface KeyRotationDeps extends PendingHandoffDeps {
   readonly hasLiveKeys: (userId: string) => Promise<boolean>
   readonly getCredentials: () => Promise<{ userId: string; credentialVersion: number }>
   readonly getUser: (userId: string) => Promise<UserProjection>
@@ -121,6 +127,13 @@ export type KeyRotationFailure =
   | { readonly kind: 'changedElsewhere' }
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
+  /**
+   * The signed day has passed. The server answers this only to a live session
+   * (a landed rotation ends them all), and the day only moves forward, so this
+   * request can never commit, even if an earlier send of it is still in flight.
+   * It is the one refusal that settles an unknown outcome as "nothing happened".
+   */
+  | { readonly kind: 'expired' }
   /** No answer before the request was sent, so the account's keys did not change. */
   | { readonly kind: 'unreachable' }
   /**
@@ -165,12 +178,14 @@ export async function preflightKeyRotation(deps: KeyRotationDeps): Promise<KeyRo
     deps.sentInvites(),
   ])
   const adminGroups = await adminGroupsOf(deps, list.groups)
+  const pending = await pendingSelfRekeys(deps, list.groups, user.wrappingPublicKey)
   return {
     userId,
     username: user.username,
     keyEpoch: user.keyEpoch,
     credentialVersion,
     adminGroups,
+    pendingSelfRekeys: pending,
     invitesToRevoke: sent.invites.filter((i) => !i.accepted),
     invitesAwaitingCompletion: sent.invites.filter((i) => i.accepted).length,
   }
@@ -355,6 +370,11 @@ export async function runKeyRotation(
           if (failure !== null) return halt(failure)
           hooks.onStep({ name: 'committing' })
           continue
+        }
+        if (err instanceof ApiError && err.status === 400 && err.code === 'signed_day_stale') {
+          // Final even after an unknown send, see the `expired` kind.
+          delete attempt.ambiguous
+          return halt({ kind: 'expired' }, err)
         }
         // The server's answer is final only if no earlier send is unaccounted
         // for. Otherwise even a 401 or a stale epoch may be the aftermath of

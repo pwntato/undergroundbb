@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router'
 import { ApiError, challenge, getAccountCredentials } from '@/lib/api/auth'
 import { getGroup, getKeychain, listGroups } from '@/lib/api/groups'
 import { sentInvites, revokeInvite } from '@/lib/api/invites'
-import { putHandoff, rotateKeys } from '@/lib/api/keyRotation'
+import { deleteHandoff, listHandoffs, putHandoff, rotateKeys } from '@/lib/api/keyRotation'
 import { listAllPins } from '@/lib/api/pins'
 import { getUser } from '@/lib/api/users'
 import { listAllVerifications } from '@/lib/api/verifications'
@@ -84,6 +84,8 @@ const deps: KeyRotationDeps = {
   beginKeyRotation,
   wrapHandoff,
   putHandoff,
+  listHandoffs,
+  deleteHandoff,
   signKeyRotation,
   rotateKeys,
   commitKeyRotation,
@@ -101,6 +103,29 @@ export function RotateKeysScreen() {
   // resends it rather than minting a second set of keys.
   const attempt = useRef<KeyRotationAttempt>({})
   const busy = step.name === 'running'
+
+  // The new keys are pending in the worker from beginKeyRotation until the
+  // rotation commits or is discarded, and while they are, signPin and
+  // signVerification refuse. A failure that leaves the attempt resumable but
+  // not sent ('unreachable') keeps them for the retry; leaving the screen ends
+  // that retry, so drop them. Not while a run is in flight (it carries on
+  // without this screen), and never once the send's outcome is unknown: those
+  // keys and the recovery code may be the only copy.
+  const stepName = useRef(step.name)
+  useEffect(() => {
+    stepName.current = step.name
+  }, [step.name])
+  useEffect(() => {
+    const held = attempt
+    return () => {
+      if (stepName.current === 'review' && held.current.begun !== undefined) {
+        if (held.current.ambiguous !== true) {
+          held.current = {}
+          void discardKeyRotation().catch(() => undefined)
+        }
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (step.name !== 'loading') {
@@ -249,15 +274,26 @@ export function RotateKeysScreen() {
               Log in again
             </Button>
           )}
-          <RotateKeysReview
-            groups={reviewGroups}
-            invitesToRevoke={step.pre.invitesToRevoke.length}
-            invitesAwaitingCompletion={step.pre.invitesAwaitingCompletion}
-            error={error}
-            onSubmit={(pw) => {
-              start(step.pre, pw)
-            }}
-          />
+          {step.pre.pendingSelfRekeys.length > 0 ? (
+            <Alert>
+              <AlertDescription>
+                {failureMessage(
+                  { kind: 'handoffPending', groups: step.pre.pendingSelfRekeys },
+                  labelFor,
+                )}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <RotateKeysReview
+              groups={reviewGroups}
+              invitesToRevoke={step.pre.invitesToRevoke.length}
+              invitesAwaitingCompletion={step.pre.invitesAwaitingCompletion}
+              error={error}
+              onSubmit={(pw) => {
+                start(step.pre, pw)
+              }}
+            />
+          )}
         </div>
       )
     case 'running': {

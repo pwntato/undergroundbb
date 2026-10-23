@@ -253,7 +253,7 @@ func TestRotateKeysRejections(t *testing.T) {
 		{name: "old signature from another key", opts: rotateOpts{oldSigner: otherPriv}, wantCode: 400},
 		{name: "signed against the wrong epoch", opts: rotateOpts{epoch: 0}, mutate: func(r *rotateKeysRequest) { r.ExpectedKeyEpoch = 1 }, wantCode: 409, wantErr: "key_epoch_stale"},
 		{name: "roster differs from the signed digest", opts: rotateOpts{roster: [][]byte{stranger}, signedRoster: [][]byte{}}, wantCode: 400},
-		{name: "day out of skew", opts: rotateOpts{day: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}, wantCode: 400},
+		{name: "day out of skew", opts: rotateOpts{day: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}, wantCode: 400, wantErr: "signed_day_stale"},
 		{name: "new wrapping key equals the old one", opts: rotateOpts{newWrap: user.wrapPub}, wantCode: 400},
 		{name: "new signing key equals the old one", opts: rotateOpts{newSignPub: user.signPub, newSignPriv: user.signPriv}, wantCode: 400},
 		{name: "second signature not made by the new key", opts: rotateOpts{newSigner: otherPriv}, wantCode: 400},

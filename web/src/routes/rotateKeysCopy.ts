@@ -42,6 +42,8 @@ export function failureMessage(
       return 'Your account changed while this was in progress, for example in another tab or by a password change. Nothing was rotated. Reload this page and try again.'
     case 'rejected':
       return `The server refused the rotation: ${failure.message} Nothing was rotated.`
+    case 'expired':
+      return 'This attempt took too long and has expired, so it can no longer be saved. Your keys have not changed. Choose your new password again to start over.'
     case 'unreachable':
       return "We couldn't reach the server, and your keys have not changed. Check your connection and try again."
     case 'unconfirmed':

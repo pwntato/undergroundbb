@@ -81,6 +81,8 @@ function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] 
       }),
     ),
     putHandoff: vi.fn().mockResolvedValue(undefined),
+    listHandoffs: vi.fn().mockResolvedValue([]),
+    deleteHandoff: vi.fn().mockResolvedValue(undefined),
     signKeyRotation: vi.fn().mockResolvedValue(SIGNED),
     rotateKeys: vi.fn().mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
     commitKeyRotation: vi.fn().mockResolvedValue(undefined),
@@ -99,6 +101,7 @@ function pre(over: Partial<KeyRotationPreflight> = {}): KeyRotationPreflight {
     adminGroups: [
       { groupId: 'g1', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
     ],
+    pendingSelfRekeys: [],
     invitesToRevoke: [],
     invitesAwaitingCompletion: 0,
     ...over,
@@ -151,6 +154,50 @@ describe('preflightKeyRotation', () => {
     expect(out.adminGroups.find((g) => g.groupId === 'pub1')?.visibility).toBe('public')
     expect(out.invitesToRevoke.map((i) => i.inviteId)).toEqual(['i1'])
     expect(out.invitesAwaitingCompletion).toBe(1)
+  })
+})
+
+describe('preflightKeyRotation and handoff rows', () => {
+  const row = (groupId: string, key: string) => ({
+    groupId,
+    generation: 0,
+    newWrappingPublicKey: key,
+    wrappedGroupKey: WRAP,
+  })
+
+  it('reports a row naming the current key as a pending self re-key, and leaves the others alone', async () => {
+    const deps = makeDeps(
+      {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: 'cur', username: 'a' }),
+        listHandoffs: vi.fn().mockResolvedValue([row('g1', 'cur'), row('g2', 'older')]),
+      },
+      [group('g1'), group('g2')],
+    )
+    const out = await preflightKeyRotation(deps)
+    expect(out.pendingSelfRekeys).toEqual(['g1'])
+    expect(deps.deleteHandoff).not.toHaveBeenCalled()
+  })
+
+  it('deletes a row for a group the caller no longer administers, and a failed delete is not an error', async () => {
+    const deps = makeDeps(
+      {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: 'cur', username: 'a' }),
+        listHandoffs: vi
+          .fn()
+          .mockResolvedValue([row('demoted', 'cur'), row('gone', 'cur'), row('g1', 'cur')]),
+        deleteHandoff: vi.fn().mockRejectedValue(new Error('offline')),
+      },
+      [group('g1'), group('demoted', { role: 'member' })],
+    )
+    const out = await preflightKeyRotation(deps)
+    expect(out.pendingSelfRekeys).toEqual(['g1'])
+    expect(deps.deleteHandoff).toHaveBeenCalledWith('demoted')
+    expect(deps.deleteHandoff).toHaveBeenCalledWith('gone')
+    expect(deps.deleteHandoff).not.toHaveBeenCalledWith('g1')
   })
 })
 
@@ -516,6 +563,40 @@ describe('runKeyRotation', () => {
       expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
       expect(vi.mocked(deps.signKeyRotation).mock.calls[0]?.[0].newPassword).toBe('a new password')
       expect(steps.map((s) => s.name)).toEqual(['committing'])
+    })
+  })
+
+  describe('a signed day that has passed', () => {
+    const stale = () => new ApiError(400, 'signedDay: must be today', 'signed_day_stale')
+
+    it('settles an unknown earlier send as "nothing happened": the request can never land', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(new TypeError('network'))
+          .mockRejectedValue(stale()),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      expect(attempt.ambiguous).toBe(true)
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'expired' } })
+      expect(attempt.ambiguous).toBeUndefined()
+      expect(attempt.request).toBeUndefined()
+    })
+
+    it('does not settle on a 401 or any other refusal: those stay unknown', async () => {
+      const deps = makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(new TypeError('network'))
+          .mockRejectedValue(new ApiError(400, 'something else')),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+      expect(attempt.ambiguous).toBe(true)
     })
   })
 

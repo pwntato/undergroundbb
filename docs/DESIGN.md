@@ -585,6 +585,15 @@ condition check that the counter is still that value. Any write in the window fa
 409 `handoff_changed`, which the flow retries from the top. The counter is never reset and is swept
 with the account.
 
+**A rotate-keys whose response was lost.** The commit ends every session, so a client that sent the
+request and never saw the answer cannot ask the server anything that needs one. It reads the
+unauthenticated login challenge instead: if the served `wrappedPrivateKeys` are this request's, it
+landed. That read is eventually consistent, so the old wraps prove nothing, and the client treats the
+attempt as unknown and keeps the new keys and the recovery code. One answer settles an unknown send
+as "nothing happened": 400 `signed_day_stale`. The session check runs before it, so it reaches only a
+live session (no earlier send committed), and the day only moves forward, so no earlier send of the
+same request can commit afterwards either. Every other refusal stays unknown.
+
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check
 fails and M lands in `blocked`: the server will not clear the marker while M is behind, so Y's
