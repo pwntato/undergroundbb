@@ -103,6 +103,8 @@ export interface KeyRotationDeps extends PendingHandoffDeps {
     onProgress: (event: SignupProgressEvent) => void,
   ) => Promise<SignedKeyRotation>
   readonly rotateKeys: (req: RotateKeysRequest) => Promise<RotateKeysResponse>
+  /** Resolves after `ms`; injected so the wait is not real in tests. */
+  readonly wait: (ms: number) => Promise<void>
   readonly commitKeyRotation: (userId: string) => Promise<void>
   readonly discardKeyRotation: () => Promise<void>
 }
@@ -112,6 +114,8 @@ export type KeyRotationStep =
   | { readonly name: 'handoffs'; readonly done: number; readonly total: number }
   | { readonly name: 'signing' }
   | { readonly name: 'committing' }
+  /** Waiting out an earlier send that may still be in flight, then checking the session. */
+  | { readonly name: 'settling' }
 
 export type KeyRotationFailure =
   /** The worker has no live keys (the tab was reloaded since login). */
@@ -128,10 +132,11 @@ export type KeyRotationFailure =
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
   /**
-   * The signed day has passed. The server answers this only to a live session
-   * (a landed rotation ends them all), and the day only moves forward, so this
-   * request can never commit, even if an earlier send of it is still in flight.
-   * It is the one refusal that settles an unknown outcome as "nothing happened".
+   * The signed day has passed, so this request cannot commit any more. After an
+   * unknown send that is only believed once the in-flight window has gone by
+   * and a session-authenticated read still succeeds (a committed rotation ends
+   * every session, and the session check reads strongly consistently): then
+   * nothing committed and nothing still can.
    */
   | { readonly kind: 'expired' }
   /** No answer before the request was sent, so the account's keys did not change. */
@@ -166,6 +171,13 @@ export interface KeyRotationAttempt {
   /** Set once the invites have been revoked, so a retry does not repeat it. */
   invitesRevoked?: boolean
 }
+
+/**
+ * Longer than a send can stay in flight: the Lambda timeout (10 s) plus the
+ * edge's retries. After this, a send that was running when the signed day
+ * passed has committed or died.
+ */
+const IN_FLIGHT_WAIT_MS = 60_000
 
 /** Handoff rewrites and restarts one run will make before giving up. */
 const MAX_ROUNDS = 4
@@ -372,8 +384,15 @@ export async function runKeyRotation(
           continue
         }
         if (err instanceof ApiError && err.status === 400 && err.code === 'signed_day_stale') {
-          // Final even after an unknown send, see the `expired` kind.
-          delete attempt.ambiguous
+          // With an earlier send unaccounted for, the 400 only says THIS request
+          // is too old. Wait that send out, then ask a question only a live
+          // session can answer; anything else leaves it unknown.
+          if (attempt.ambiguous === true) {
+            if (!(await sessionStillLive(deps, userId, hooks.onStep))) {
+              return settle(deps, pre, attempt, request, recoveryCode, err)
+            }
+            delete attempt.ambiguous
+          }
           return halt({ kind: 'expired' }, err)
         }
         // The server's answer is final only if no earlier send is unaccounted
@@ -408,6 +427,22 @@ export async function runKeyRotation(
       }
     }
     return halt(classify(err), err)
+  }
+}
+
+/** Waits out any send still in flight, then whether a session-authenticated read still works. */
+async function sessionStillLive(
+  deps: KeyRotationDeps,
+  userId: string,
+  onStep: (step: KeyRotationStep) => void,
+): Promise<boolean> {
+  onStep({ name: 'settling' })
+  await deps.wait(IN_FLIGHT_WAIT_MS)
+  try {
+    await deps.getUser(userId)
+    return true
+  } catch {
+    return false
   }
 }
 

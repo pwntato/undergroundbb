@@ -589,10 +589,15 @@ with the account.
 request and never saw the answer cannot ask the server anything that needs one. It reads the
 unauthenticated login challenge instead: if the served `wrappedPrivateKeys` are this request's, it
 landed. That read is eventually consistent, so the old wraps prove nothing, and the client treats the
-attempt as unknown and keeps the new keys and the recovery code. One answer settles an unknown send
-as "nothing happened": 400 `signed_day_stale`. The session check runs before it, so it reaches only a
-live session (no earlier send committed), and the day only moves forward, so no earlier send of the
-same request can commit afterwards either. Every other refusal stays unknown.
+attempt as unknown and keeps the new keys and the recovery code. One answer can settle an unknown
+send as "nothing happened", and only with a second step: 400 `signed_day_stale`, sent for a day that
+has **passed** (a future day stays uncoded, it becomes valid later). That 400 says only that *this*
+request is too old. An earlier send may have passed the day check just before the window closed and
+still be between the check and its commit (the Lambda timeout is 10 s and the edge retries), so the
+client waits longer than any send can stay in flight (60 s), then makes a session-authenticated read.
+The session check reads the session generation with a consistent read and a commit ends every
+session, so a read that succeeds proves nothing committed and nothing still can; a 401 or any error
+leaves the attempt unknown. Every other refusal stays unknown.
 
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check

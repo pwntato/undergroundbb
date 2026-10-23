@@ -4,24 +4,24 @@
 // refuses another rotation (409 handoff_pending) until it has, so the screen
 // says so up front instead of after the user typed a password.
 //
-// This only reads and tidies. A row is deleted here only when it can never be
-// used: the group is gone from the caller's list or they no longer administer
-// it. A row whose generation moved is not decided here (the list does not say
-// what the group's newest generation is); the start finds that out by being
-// refused, and deletes it then.
+// This only reads. It never deletes: a row naming the current key can be the
+// only copy of a group's key a sole admin can still reach, and "not in the
+// list" comes from an eventually consistent index, so it is not proof the
+// caller left. Rows for groups the caller no longer administers block nothing
+// (the server only counts administered groups), and the sweep after the next
+// rotation removes them. A row whose generation moved is found out by the
+// start being refused (slice 4), which deletes it then.
 
 import type { GroupListEntry } from '@/lib/api/groups'
 import type { HandoffEntry } from '@/lib/api/keyRotation'
 
 export interface PendingHandoffDeps {
   readonly listHandoffs: () => Promise<readonly HandoffEntry[]>
-  readonly deleteHandoff: (groupId: string) => Promise<void>
 }
 
 /**
- * The group ids with a self re-key waiting, after deleting the rows nothing can
- * use. A failed delete is not an error: the row stays, and the next visit tries
- * again.
+ * The group ids with a self re-key waiting: rows naming the current key for a
+ * group the caller (as far as the list says) administers.
  */
 export async function pendingSelfRekeys(
   deps: PendingHandoffDeps,
@@ -32,11 +32,7 @@ export async function pendingSelfRekeys(
   const adminOf = new Set(groups.filter((g) => g.role === 'admin').map((g) => g.groupId))
   const pending: string[] = []
   for (const row of rows) {
-    if (!adminOf.has(row.groupId)) {
-      await deps.deleteHandoff(row.groupId).catch(() => undefined)
-      continue
-    }
-    if (row.newWrappingPublicKey === currentWrappingPublicKey) {
+    if (adminOf.has(row.groupId) && row.newWrappingPublicKey === currentWrappingPublicKey) {
       pending.push(row.groupId)
     }
   }

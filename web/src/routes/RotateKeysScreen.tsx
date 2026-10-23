@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router'
 import { ApiError, challenge, getAccountCredentials } from '@/lib/api/auth'
 import { getGroup, getKeychain, listGroups } from '@/lib/api/groups'
 import { sentInvites, revokeInvite } from '@/lib/api/invites'
-import { deleteHandoff, listHandoffs, putHandoff, rotateKeys } from '@/lib/api/keyRotation'
+import { listHandoffs, putHandoff, rotateKeys } from '@/lib/api/keyRotation'
 import { listAllPins } from '@/lib/api/pins'
 import { getUser } from '@/lib/api/users'
 import { listAllVerifications } from '@/lib/api/verifications'
@@ -85,9 +85,9 @@ const deps: KeyRotationDeps = {
   wrapHandoff,
   putHandoff,
   listHandoffs,
-  deleteHandoff,
   signKeyRotation,
   rotateKeys,
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   commitKeyRotation,
   discardKeyRotation,
 }
@@ -111,13 +111,16 @@ export function RotateKeysScreen() {
   // that retry, so drop them. Not while a run is in flight (it carries on
   // without this screen), and never once the send's outcome is unknown: those
   // keys and the recovery code may be the only copy.
+  const mounted = useRef(true)
   const stepName = useRef(step.name)
   useEffect(() => {
     stepName.current = step.name
   }, [step.name])
   useEffect(() => {
     const held = attempt
+    mounted.current = true
     return () => {
+      mounted.current = false
       if (stepName.current === 'review' && held.current.begun !== undefined) {
         if (held.current.ambiguous !== true) {
           held.current = {}
@@ -223,6 +226,13 @@ export function RotateKeysScreen() {
         // the recovery code. Nothing here may be discarded.
         setError(failureMessage(failure, labelFor))
         setStep({ name: 'retry', pre, recoveryCode: failure.recoveryCode })
+        return
+      }
+      if (failure.kind === 'unreachable' && !mounted.current) {
+        // The screen was left mid-run: no retry will be made, so the pending
+        // keys must not outlive it (signPin/signVerification refuse while set).
+        attempt.current = {}
+        await discardKeyRotation().catch(() => undefined)
         return
       }
       if (failure.kind !== 'unreachable') {

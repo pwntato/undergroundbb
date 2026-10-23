@@ -249,11 +249,14 @@ func TestRotateKeysRejections(t *testing.T) {
 		mutate   func(*rotateKeysRequest)
 		wantCode int
 		wantErr  string
+		noCode   bool
 	}{
 		{name: "old signature from another key", opts: rotateOpts{oldSigner: otherPriv}, wantCode: 400},
 		{name: "signed against the wrong epoch", opts: rotateOpts{epoch: 0}, mutate: func(r *rotateKeysRequest) { r.ExpectedKeyEpoch = 1 }, wantCode: 409, wantErr: "key_epoch_stale"},
 		{name: "roster differs from the signed digest", opts: rotateOpts{roster: [][]byte{stranger}, signedRoster: [][]byte{}}, wantCode: 400},
 		{name: "day out of skew", opts: rotateOpts{day: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}, wantCode: 400, wantErr: "signed_day_stale"},
+		// A future day becomes valid later, so it must not read as expired.
+		{name: "day in the future", opts: rotateOpts{day: time.Now().UTC().AddDate(0, 0, 3).Format("2006-01-02")}, wantCode: 400, noCode: true},
 		{name: "new wrapping key equals the old one", opts: rotateOpts{newWrap: user.wrapPub}, wantCode: 400},
 		{name: "new signing key equals the old one", opts: rotateOpts{newSignPub: user.signPub, newSignPriv: user.signPriv}, wantCode: 400},
 		{name: "second signature not made by the new key", opts: rotateOpts{newSigner: otherPriv}, wantCode: 400},
@@ -274,6 +277,9 @@ func TestRotateKeysRejections(t *testing.T) {
 			rec := doRotateKeys(t, h, cookie, rot.req)
 			if rec.Code != tc.wantCode {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantCode, rec.Body.String())
+			}
+			if tc.noCode && errCode(t, rec) != "" {
+				t.Errorf("code = %q, want none", errCode(t, rec))
 			}
 			if tc.wantErr != "" && errCode(t, rec) != tc.wantErr {
 				t.Errorf("code = %q, want %q", errCode(t, rec), tc.wantErr)
