@@ -25,21 +25,38 @@ import (
 var ErrCredentialVersionStale = errors.New("db: credential version is stale; the credentials were changed by another request")
 
 // GetUserByID reads a single user's PROFILE directly by uuid, unlike
-// LookupUserByUsername's two-step claim-then-profile lookup -- issue #131's
-// GET /api/account/credentials calls this from behind requireSession, which
-// has already turned a verified session cookie into a userID with no
-// username involved, so there is no claim to resolve first. Returns
+// LookupUserByUsername's two-step claim-then-profile lookup -- the
+// readers behind requireSession (which has already turned a verified session
+// cookie into a userID with no username involved) call this, so there is no
+// claim to resolve first. Returns
 // ErrUserNotFound if the PROFILE item is missing, the same sentinel
 // LookupUserByUsername uses, since a caller with a valid session pointing at
 // a nonexistent profile is exactly as anomalous as that function's own
 // claim-without-profile case.
+// The credentials handler (GET /api/account/credentials) must NOT use this
+// reader: the rotate-keys flow's "nothing committed" proof rests on its read
+// being strongly consistent. Use GetUserByIDConsistent there.
 func (c *Client) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
+	return c.getUserByID(ctx, userID, false)
+}
+
+// GetUserByIDConsistent is GetUserByID with a strongly consistent read. A
+// caller that needs "no write of mine has landed yet" as a fact, not a likely
+// one, uses this (the client's check after a rotate-keys whose response was
+// lost reads the credentials this way: docs/DESIGN.md, "A rotate-keys whose
+// response was lost").
+func (c *Client) GetUserByIDConsistent(ctx context.Context, userID string) (*models.User, error) {
+	return c.getUserByID(ctx, userID, true)
+}
+
+func (c *Client) getUserByID(ctx context.Context, userID string, consistent bool) (*models.User, error) {
 	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
 			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
 		},
+		ConsistentRead: aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, err

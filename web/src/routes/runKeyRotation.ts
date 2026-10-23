@@ -38,6 +38,7 @@ import { GroupsConflictError, type PutHandoffRequest } from '@/lib/api/keyRotati
 import type { RotateKeysRequest, RotateKeysResponse } from '@/lib/api/keyRotation'
 import type { SentInvite } from '@/lib/api/invites'
 import type { UserProjection } from '@/lib/api/users'
+import { pendingSelfRekeys, type PendingHandoffDeps } from './pendingHandoffs'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { rosterEntryId } from '@/lib/crypto/key-rotation'
 import type { PinRecord } from '@/lib/crypto/pin'
@@ -61,15 +62,24 @@ export interface KeyRotationPreflight {
   readonly keyEpoch: number
   readonly credentialVersion: number
   readonly adminGroups: readonly AdminGroup[]
+  /**
+   * Groups where a committed rotation's self re-key has not run yet. The server
+   * refuses another rotation while any exists, so the screen offers none.
+   */
+  readonly pendingSelfRekeys: readonly string[]
   /** Sent invites nobody accepted; the flow revokes them. */
   readonly invitesToRevoke: readonly SentInvite[]
   /** Accepted invites still waiting on this user's step 3; they cannot be revoked and will not complete. */
   readonly invitesAwaitingCompletion: number
 }
 
-export interface KeyRotationDeps {
+export interface KeyRotationDeps extends PendingHandoffDeps {
   readonly hasLiveKeys: (userId: string) => Promise<boolean>
-  readonly getCredentials: () => Promise<{ userId: string; credentialVersion: number }>
+  readonly getCredentials: () => Promise<{
+    userId: string
+    credentialVersion: number
+    wrappedPrivateKeys: { nonce: string; ciphertext: string }
+  }>
   readonly getUser: (userId: string) => Promise<UserProjection>
   /** The unauthenticated login challenge; only the account's current wrapped keys are read from it. */
   readonly challenge: (username: string) => Promise<{
@@ -97,6 +107,8 @@ export interface KeyRotationDeps {
     onProgress: (event: SignupProgressEvent) => void,
   ) => Promise<SignedKeyRotation>
   readonly rotateKeys: (req: RotateKeysRequest) => Promise<RotateKeysResponse>
+  /** Resolves after `ms`; injected so the wait is not real in tests. */
+  readonly wait: (ms: number) => Promise<void>
   readonly commitKeyRotation: (userId: string) => Promise<void>
   readonly discardKeyRotation: () => Promise<void>
 }
@@ -106,6 +118,8 @@ export type KeyRotationStep =
   | { readonly name: 'handoffs'; readonly done: number; readonly total: number }
   | { readonly name: 'signing' }
   | { readonly name: 'committing' }
+  /** Waiting out an earlier send that may still be in flight, then checking the session. */
+  | { readonly name: 'settling' }
 
 export type KeyRotationFailure =
   /** The worker has no live keys (the tab was reloaded since login). */
@@ -121,6 +135,15 @@ export type KeyRotationFailure =
   | { readonly kind: 'changedElsewhere' }
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
+  /**
+   * The signed day has passed, so this request cannot commit any more. After an
+   * unknown send that is only believed once the in-flight window has gone by
+   * and a strongly consistent read of the account's credentials still shows the
+   * ones the flow started from: then nothing committed and nothing still can.
+   * (A session being valid proves nothing: the cookie jar may already hold one
+   * issued by the commit, or by a login with the new password in another tab.)
+   */
+  | { readonly kind: 'expired' }
   /** No answer before the request was sent, so the account's keys did not change. */
   | { readonly kind: 'unreachable' }
   /**
@@ -154,6 +177,13 @@ export interface KeyRotationAttempt {
   invitesRevoked?: boolean
 }
 
+/**
+ * Longer than a send can stay in flight: the Lambda timeout (10 s) plus the
+ * edge's retries. After this, a send that was running when the signed day
+ * passed has committed or died.
+ */
+const IN_FLIGHT_WAIT_MS = 60_000
+
 /** Handoff rewrites and restarts one run will make before giving up. */
 const MAX_ROUNDS = 4
 
@@ -165,12 +195,14 @@ export async function preflightKeyRotation(deps: KeyRotationDeps): Promise<KeyRo
     deps.sentInvites(),
   ])
   const adminGroups = await adminGroupsOf(deps, list.groups)
+  const pending = await pendingSelfRekeys(deps, list.groups, user.wrappingPublicKey)
   return {
     userId,
     username: user.username,
     keyEpoch: user.keyEpoch,
     credentialVersion,
     adminGroups,
+    pendingSelfRekeys: pending,
     invitesToRevoke: sent.invites.filter((i) => !i.accepted),
     invitesAwaitingCompletion: sent.invites.filter((i) => i.accepted).length,
   }
@@ -356,6 +388,19 @@ export async function runKeyRotation(
           hooks.onStep({ name: 'committing' })
           continue
         }
+        if (err instanceof ApiError && err.status === 400 && err.code === 'signed_day_stale') {
+          // With an earlier send unaccounted for, the 400 only says THIS request
+          // is too old. Wait that send out, then read the account's state.
+          if (attempt.ambiguous === true) {
+            const state = await stateAfterWait(deps, pre, request, hooks.onStep)
+            if (state === 'landed') return landed(deps, pre, recoveryCode)
+            if (state === 'unknown') {
+              return settle(deps, pre, attempt, request, recoveryCode, err)
+            }
+            delete attempt.ambiguous
+          }
+          return halt({ kind: 'expired' }, err)
+        }
         // The server's answer is final only if no earlier send is unaccounted
         // for. Otherwise even a 401 or a stale epoch may be the aftermath of
         // an earlier send that landed.
@@ -388,6 +433,35 @@ export async function runKeyRotation(
       }
     }
     return halt(classify(err), err)
+  }
+}
+
+/**
+ * Waits out any send still in flight, then reads the account's credentials
+ * (authenticated, strongly consistent on the server). They are still the ones
+ * the flow started from ('unchanged': nothing committed and nothing can), this
+ * request's wraps ('landed'), or anything else, including a failed read
+ * ('unknown').
+ */
+async function stateAfterWait(
+  deps: KeyRotationDeps,
+  pre: KeyRotationPreflight,
+  request: RotateKeysRequest,
+  onStep: (step: KeyRotationStep) => void,
+): Promise<'unchanged' | 'landed' | 'unknown'> {
+  onStep({ name: 'settling' })
+  await deps.wait(IN_FLIGHT_WAIT_MS)
+  try {
+    const served = await deps.getCredentials()
+    if (
+      served.wrappedPrivateKeys.nonce === request.wrappedPrivateKeys.nonce &&
+      served.wrappedPrivateKeys.ciphertext === request.wrappedPrivateKeys.ciphertext
+    ) {
+      return 'landed'
+    }
+    return served.credentialVersion === pre.credentialVersion ? 'unchanged' : 'unknown'
+  } catch {
+    return 'unknown'
   }
 }
 

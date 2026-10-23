@@ -169,7 +169,10 @@ func (h *Handler) getAccountCredentials(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := h.db.GetUserByID(r.Context(), userID)
+	// Consistent: the key-rotation flow reads this after a lost rotate-keys
+	// response to learn whether it committed, and a stale read would say it
+	// had not.
+	user, err := h.db.GetUserByIDConsistent(r.Context(), userID)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not read account credentials")
 		return

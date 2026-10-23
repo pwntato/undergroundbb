@@ -32,6 +32,7 @@ describe('failureMessage', () => {
     { kind: 'groupBusy', groups: [] },
     { kind: 'changedElsewhere' },
     { kind: 'rejected', message: 'bad signature.' },
+    { kind: 'expired' },
     { kind: 'unreachable' },
     { kind: 'unconfirmed', recoveryCode: 'ABCD' },
   ]

@@ -180,6 +180,16 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validSignedDay(req.SignedDay) {
+		// A day that has passed is coded: it never becomes valid again, so a
+		// client can stop resending the request. It does NOT prove an earlier
+		// send of it cannot still commit (that send may have passed this check
+		// just before the window closed and be mid-transaction), so the client
+		// confirms with a session read after the longest a send can stay in
+		// flight. A future day stays uncoded: it becomes valid later.
+		if signedDayPassed(req.SignedDay) {
+			WriteErrorWithCode(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)", "signed_day_stale")
+			return
+		}
 		WriteError(w, http.StatusBadRequest, "signedDay: must be today's UTC date (YYYY-MM-DD)")
 		return
 	}
@@ -546,4 +556,14 @@ func (h *Handler) listHandoffs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	WriteJSON(w, http.StatusOK, listHandoffsResponse{Handoffs: out})
+}
+
+// signedDayPassed reports whether a well-formed signed day is past the window
+// validSignedDay accepts, as opposed to ahead of it.
+func signedDayPassed(s string) bool {
+	day, err := time.Parse("2006-01-02", s)
+	if err != nil || day.Format("2006-01-02") != s {
+		return false
+	}
+	return time.Since(day.UTC()) > 24*time.Hour+grantDaySkewTolerance
 }

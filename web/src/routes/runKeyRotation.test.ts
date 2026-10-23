@@ -19,6 +19,7 @@ const WRAP = { ephemeralPub: 'ZXBo', nonce: 'bm9u', ciphertext: 'Y2lw' }
 const NEW_WRAP_PUB = 'bmV3d3JhcA=='
 const PARAMS = { memoryKiB: 1, iterations: 1, parallelism: 1 }
 const BLOB = { nonce: 'bg==', ciphertext: 'Yw==' }
+const OLD_BLOB = { nonce: 'old', ciphertext: 'old' }
 
 function group(id: string, over: Partial<GroupListEntry> = {}): GroupListEntry {
   return {
@@ -56,7 +57,9 @@ const SIGNED: SignedKeyRotation = {
 function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] = [group('g1')]) {
   const deps: KeyRotationDeps = {
     hasLiveKeys: vi.fn().mockResolvedValue(true),
-    getCredentials: vi.fn().mockResolvedValue({ userId: USER, credentialVersion: 4 }),
+    getCredentials: vi
+      .fn()
+      .mockResolvedValue({ userId: USER, credentialVersion: 4, wrappedPrivateKeys: OLD_BLOB }),
     getUser: vi
       .fn()
       .mockResolvedValue({ keyEpoch: 2, wrappingPublicKey: 'old', username: 'alice' }),
@@ -81,8 +84,10 @@ function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] 
       }),
     ),
     putHandoff: vi.fn().mockResolvedValue(undefined),
+    listHandoffs: vi.fn().mockResolvedValue([]),
     signKeyRotation: vi.fn().mockResolvedValue(SIGNED),
     rotateKeys: vi.fn().mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
+    wait: vi.fn().mockResolvedValue(undefined),
     commitKeyRotation: vi.fn().mockResolvedValue(undefined),
     discardKeyRotation: vi.fn().mockResolvedValue(undefined),
     ...over,
@@ -99,6 +104,7 @@ function pre(over: Partial<KeyRotationPreflight> = {}): KeyRotationPreflight {
     adminGroups: [
       { groupId: 'g1', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
     ],
+    pendingSelfRekeys: [],
     invitesToRevoke: [],
     invitesAwaitingCompletion: 0,
     ...over,
@@ -151,6 +157,46 @@ describe('preflightKeyRotation', () => {
     expect(out.adminGroups.find((g) => g.groupId === 'pub1')?.visibility).toBe('public')
     expect(out.invitesToRevoke.map((i) => i.inviteId)).toEqual(['i1'])
     expect(out.invitesAwaitingCompletion).toBe(1)
+  })
+})
+
+describe('preflightKeyRotation and handoff rows', () => {
+  const row = (groupId: string, key: string) => ({
+    groupId,
+    generation: 0,
+    newWrappingPublicKey: key,
+    wrappedGroupKey: WRAP,
+  })
+
+  it('reports a row naming the current key as a pending self re-key, and leaves the others alone', async () => {
+    const deps = makeDeps(
+      {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: 'cur', username: 'a' }),
+        listHandoffs: vi.fn().mockResolvedValue([row('g1', 'cur'), row('g2', 'older')]),
+      },
+      [group('g1'), group('g2')],
+    )
+    const out = await preflightKeyRotation(deps)
+    expect(out.pendingSelfRekeys).toEqual(['g1'])
+  })
+
+  it('counts only rows for groups the list shows as administered (it has no way to delete one)', async () => {
+    const listHandoffs = vi
+      .fn()
+      .mockResolvedValue([row('demoted', 'cur'), row('gone', 'cur'), row('g1', 'cur')])
+    const deps = makeDeps(
+      {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: 'cur', username: 'a' }),
+        listHandoffs,
+      },
+      [group('g1'), group('demoted', { role: 'member' })],
+    )
+    const out = await preflightKeyRotation(deps)
+    expect(out.pendingSelfRekeys).toEqual(['g1'])
   })
 })
 
@@ -516,6 +562,109 @@ describe('runKeyRotation', () => {
       expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
       expect(vi.mocked(deps.signKeyRotation).mock.calls[0]?.[0].newPassword).toBe('a new password')
       expect(steps.map((s) => s.name)).toEqual(['committing'])
+    })
+  })
+
+  describe('a signed day that has passed', () => {
+    const stale = () => new ApiError(400, 'signedDay: must be today', 'signed_day_stale')
+    const sentOnce = (second: () => unknown, over: Partial<KeyRotationDeps> = {}) =>
+      makeDeps({
+        rotateKeys: vi
+          .fn()
+          .mockRejectedValueOnce(new TypeError('network'))
+          .mockImplementation(() => {
+            throw second()
+          }),
+        ...over,
+      })
+
+    it('after an unknown send, waits out the in-flight window and settles only if the credentials are still the starting ones', async () => {
+      const order: string[] = []
+      const deps = sentOnce(stale, {
+        wait: vi.fn().mockImplementation((ms: number) => {
+          order.push(`wait ${ms}`)
+          return Promise.resolve()
+        }),
+        getCredentials: vi.fn().mockImplementation(() => {
+          order.push('getCredentials')
+          return Promise.resolve({
+            userId: USER,
+            credentialVersion: 4,
+            wrappedPrivateKeys: OLD_BLOB,
+          })
+        }),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      expect(attempt.ambiguous).toBe(true)
+      order.length = 0
+      const steps: KeyRotationStep[] = []
+      const result = await runKeyRotation(deps, pre(), 'pw', attempt, {
+        onStep: (x) => steps.push(x),
+        onProgress: () => {},
+      })
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'expired' } })
+      expect(order).toEqual(['wait 60000', 'getCredentials'])
+      expect(steps).toContainEqual({ name: 'settling' })
+      expect(attempt.ambiguous).toBeUndefined()
+      expect(attempt.request).toBeUndefined()
+    })
+
+    it('reports a landed rotation as landed when a session issued by the commit lets the read succeed', async () => {
+      // The read works (a post-commit cookie is in the jar) but shows THIS
+      // request's wraps: the rotation committed, so the keys must not be discarded.
+      const deps = sentOnce(stale, {
+        getCredentials: vi
+          .fn()
+          .mockResolvedValue({ userId: USER, credentialVersion: 5, wrappedPrivateKeys: BLOB }),
+      })
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      const { result } = await run(deps, attempt)
+      expect(result).toEqual({
+        ok: true,
+        recoveryCode: 'ABCD-EFGH',
+        keyEpoch: 3,
+        needsRelogin: true,
+      })
+      expect(deps.commitKeyRotation).toHaveBeenCalledWith(USER)
+      expect(attempt.ambiguous).toBe(true)
+    })
+
+    it('stays unconfirmed when the read after the wait fails, or shows credentials that are neither', async () => {
+      for (const read of [
+        vi.fn().mockRejectedValue(new ApiError(401, 'not authenticated')),
+        vi
+          .fn()
+          .mockResolvedValue({ userId: USER, credentialVersion: 9, wrappedPrivateKeys: OLD_BLOB }),
+      ]) {
+        const deps = sentOnce(stale, { getCredentials: read })
+        const attempt: KeyRotationAttempt = {}
+        await run(deps, attempt)
+        const { result } = await run(deps, attempt)
+        expect(result).toMatchObject({
+          ok: false,
+          failure: { kind: 'unconfirmed', recoveryCode: 'ABCD-EFGH' },
+        })
+        expect(attempt.ambiguous).toBe(true)
+        expect(attempt.request).toBeDefined()
+      }
+    })
+
+    it('needs no wait when nothing was sent before: the 400 is the only send', async () => {
+      const deps = makeDeps({ rotateKeys: vi.fn().mockRejectedValue(stale()) })
+      const { result } = await run(deps)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'expired' } })
+      expect(deps.wait).not.toHaveBeenCalled()
+    })
+
+    it('does not settle on a 400 without the code, or any other refusal: those stay unknown', async () => {
+      const deps = sentOnce(() => new ApiError(400, 'something else'))
+      const attempt: KeyRotationAttempt = {}
+      await run(deps, attempt)
+      const { result } = await run(deps, attempt)
+      expect(result).toMatchObject({ ok: false, failure: { kind: 'unconfirmed' } })
+      expect(deps.wait).not.toHaveBeenCalled()
     })
   })
 
