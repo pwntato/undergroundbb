@@ -34,12 +34,26 @@ var ErrCredentialVersionStale = errors.New("db: credential version is stale; the
 // a nonexistent profile is exactly as anomalous as that function's own
 // claim-without-profile case.
 func (c *Client) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
+	return c.getUserByID(ctx, userID, false)
+}
+
+// GetUserByIDConsistent is GetUserByID with a strongly consistent read. A
+// caller that needs "no write of mine has landed yet" as a fact, not a likely
+// one, uses this (the client's check after a rotate-keys whose response was
+// lost reads the credentials this way: docs/DESIGN.md, "A rotate-keys whose
+// response was lost").
+func (c *Client) GetUserByIDConsistent(ctx context.Context, userID string) (*models.User, error) {
+	return c.getUserByID(ctx, userID, true)
+}
+
+func (c *Client) getUserByID(ctx context.Context, userID string, consistent bool) (*models.User, error) {
 	out, err := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.table),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
 			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
 		},
+		ConsistentRead: aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, err

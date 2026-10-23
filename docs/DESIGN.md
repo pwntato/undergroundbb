@@ -594,10 +594,13 @@ send as "nothing happened", and only with a second step: 400 `signed_day_stale`,
 has **passed** (a future day stays uncoded, it becomes valid later). That 400 says only that *this*
 request is too old. An earlier send may have passed the day check just before the window closed and
 still be between the check and its commit (the Lambda timeout is 10 s and the edge retries), so the
-client waits longer than any send can stay in flight (60 s), then makes a session-authenticated read.
-The session check reads the session generation with a consistent read and a commit ends every
-session, so a read that succeeds proves nothing committed and nothing still can; a 401 or any error
-leaves the attempt unknown. Every other refusal stays unknown.
+client waits longer than any send can stay in flight (60 s), then reads the account's credentials
+(`GET /api/account/credentials`, a strongly consistent read of `PROFILE`). A session being valid
+proves nothing, because the cookie jar may already hold one issued by the commit itself (the lost
+response's `Set-Cookie`) or by a login with the new password in another tab. So the client settles
+on what the account holds: the credentials it started from (same `credentialVersion`) mean nothing
+committed and nothing still can, and the request's own wraps mean it landed. A failed read, or
+credentials that are neither, leave the attempt unknown. Every other refusal stays unknown.
 
 **Other admins after an approval.** Once admin X approves dormant member M, M is no longer
 dormant, so an ordinary rotation by admin Y includes M, and if Y pinned M's old keys the check

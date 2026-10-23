@@ -19,6 +19,7 @@ const WRAP = { ephemeralPub: 'ZXBo', nonce: 'bm9u', ciphertext: 'Y2lw' }
 const NEW_WRAP_PUB = 'bmV3d3JhcA=='
 const PARAMS = { memoryKiB: 1, iterations: 1, parallelism: 1 }
 const BLOB = { nonce: 'bg==', ciphertext: 'Yw==' }
+const OLD_BLOB = { nonce: 'old', ciphertext: 'old' }
 
 function group(id: string, over: Partial<GroupListEntry> = {}): GroupListEntry {
   return {
@@ -56,7 +57,9 @@ const SIGNED: SignedKeyRotation = {
 function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] = [group('g1')]) {
   const deps: KeyRotationDeps = {
     hasLiveKeys: vi.fn().mockResolvedValue(true),
-    getCredentials: vi.fn().mockResolvedValue({ userId: USER, credentialVersion: 4 }),
+    getCredentials: vi
+      .fn()
+      .mockResolvedValue({ userId: USER, credentialVersion: 4, wrappedPrivateKeys: OLD_BLOB }),
     getUser: vi
       .fn()
       .mockResolvedValue({ keyEpoch: 2, wrappingPublicKey: 'old', username: 'alice' }),
@@ -575,16 +578,20 @@ describe('runKeyRotation', () => {
         ...over,
       })
 
-    it('after an unknown send, waits out the in-flight window and settles only if a session read still works', async () => {
+    it('after an unknown send, waits out the in-flight window and settles only if the credentials are still the starting ones', async () => {
       const order: string[] = []
       const deps = sentOnce(stale, {
         wait: vi.fn().mockImplementation((ms: number) => {
           order.push(`wait ${ms}`)
           return Promise.resolve()
         }),
-        getUser: vi.fn().mockImplementation(() => {
-          order.push('getUser')
-          return Promise.resolve({ keyEpoch: 2, username: 'alice' })
+        getCredentials: vi.fn().mockImplementation(() => {
+          order.push('getCredentials')
+          return Promise.resolve({
+            userId: USER,
+            credentialVersion: 4,
+            wrappedPrivateKeys: OLD_BLOB,
+          })
         }),
       })
       const attempt: KeyRotationAttempt = {}
@@ -597,25 +604,51 @@ describe('runKeyRotation', () => {
         onProgress: () => {},
       })
       expect(result).toMatchObject({ ok: false, failure: { kind: 'expired' } })
-      expect(order).toEqual(['wait 60000', 'getUser'])
+      expect(order).toEqual(['wait 60000', 'getCredentials'])
       expect(steps).toContainEqual({ name: 'settling' })
       expect(attempt.ambiguous).toBeUndefined()
       expect(attempt.request).toBeUndefined()
     })
 
-    it('stays unconfirmed when the session read after the wait fails: the earlier send may have committed', async () => {
+    it('reports a landed rotation as landed when a session issued by the commit lets the read succeed', async () => {
+      // The read works (a post-commit cookie is in the jar) but shows THIS
+      // request's wraps: the rotation committed, so the keys must not be discarded.
       const deps = sentOnce(stale, {
-        getUser: vi.fn().mockRejectedValue(new ApiError(401, 'not authenticated')),
+        getCredentials: vi
+          .fn()
+          .mockResolvedValue({ userId: USER, credentialVersion: 5, wrappedPrivateKeys: BLOB }),
       })
       const attempt: KeyRotationAttempt = {}
       await run(deps, attempt)
       const { result } = await run(deps, attempt)
-      expect(result).toMatchObject({
-        ok: false,
-        failure: { kind: 'unconfirmed', recoveryCode: 'ABCD-EFGH' },
+      expect(result).toEqual({
+        ok: true,
+        recoveryCode: 'ABCD-EFGH',
+        keyEpoch: 3,
+        needsRelogin: true,
       })
+      expect(deps.commitKeyRotation).toHaveBeenCalledWith(USER)
       expect(attempt.ambiguous).toBe(true)
-      expect(attempt.request).toBeDefined()
+    })
+
+    it('stays unconfirmed when the read after the wait fails, or shows credentials that are neither', async () => {
+      for (const read of [
+        vi.fn().mockRejectedValue(new ApiError(401, 'not authenticated')),
+        vi
+          .fn()
+          .mockResolvedValue({ userId: USER, credentialVersion: 9, wrappedPrivateKeys: OLD_BLOB }),
+      ]) {
+        const deps = sentOnce(stale, { getCredentials: read })
+        const attempt: KeyRotationAttempt = {}
+        await run(deps, attempt)
+        const { result } = await run(deps, attempt)
+        expect(result).toMatchObject({
+          ok: false,
+          failure: { kind: 'unconfirmed', recoveryCode: 'ABCD-EFGH' },
+        })
+        expect(attempt.ambiguous).toBe(true)
+        expect(attempt.request).toBeDefined()
+      }
     })
 
     it('needs no wait when nothing was sent before: the 400 is the only send', async () => {

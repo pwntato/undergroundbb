@@ -75,7 +75,11 @@ export interface KeyRotationPreflight {
 
 export interface KeyRotationDeps extends PendingHandoffDeps {
   readonly hasLiveKeys: (userId: string) => Promise<boolean>
-  readonly getCredentials: () => Promise<{ userId: string; credentialVersion: number }>
+  readonly getCredentials: () => Promise<{
+    userId: string
+    credentialVersion: number
+    wrappedPrivateKeys: { nonce: string; ciphertext: string }
+  }>
   readonly getUser: (userId: string) => Promise<UserProjection>
   /** The unauthenticated login challenge; only the account's current wrapped keys are read from it. */
   readonly challenge: (username: string) => Promise<{
@@ -134,9 +138,10 @@ export type KeyRotationFailure =
   /**
    * The signed day has passed, so this request cannot commit any more. After an
    * unknown send that is only believed once the in-flight window has gone by
-   * and a session-authenticated read still succeeds (a committed rotation ends
-   * every session, and the session check reads strongly consistently): then
-   * nothing committed and nothing still can.
+   * and a strongly consistent read of the account's credentials still shows the
+   * ones the flow started from: then nothing committed and nothing still can.
+   * (A session being valid proves nothing: the cookie jar may already hold one
+   * issued by the commit, or by a login with the new password in another tab.)
    */
   | { readonly kind: 'expired' }
   /** No answer before the request was sent, so the account's keys did not change. */
@@ -385,10 +390,11 @@ export async function runKeyRotation(
         }
         if (err instanceof ApiError && err.status === 400 && err.code === 'signed_day_stale') {
           // With an earlier send unaccounted for, the 400 only says THIS request
-          // is too old. Wait that send out, then ask a question only a live
-          // session can answer; anything else leaves it unknown.
+          // is too old. Wait that send out, then read the account's state.
           if (attempt.ambiguous === true) {
-            if (!(await sessionStillLive(deps, userId, hooks.onStep))) {
+            const state = await stateAfterWait(deps, pre, request, hooks.onStep)
+            if (state === 'landed') return landed(deps, pre, recoveryCode)
+            if (state === 'unknown') {
               return settle(deps, pre, attempt, request, recoveryCode, err)
             }
             delete attempt.ambiguous
@@ -430,19 +436,32 @@ export async function runKeyRotation(
   }
 }
 
-/** Waits out any send still in flight, then whether a session-authenticated read still works. */
-async function sessionStillLive(
+/**
+ * Waits out any send still in flight, then reads the account's credentials
+ * (authenticated, strongly consistent on the server). They are still the ones
+ * the flow started from ('unchanged': nothing committed and nothing can), this
+ * request's wraps ('landed'), or anything else, including a failed read
+ * ('unknown').
+ */
+async function stateAfterWait(
   deps: KeyRotationDeps,
-  userId: string,
+  pre: KeyRotationPreflight,
+  request: RotateKeysRequest,
   onStep: (step: KeyRotationStep) => void,
-): Promise<boolean> {
+): Promise<'unchanged' | 'landed' | 'unknown'> {
   onStep({ name: 'settling' })
   await deps.wait(IN_FLIGHT_WAIT_MS)
   try {
-    await deps.getUser(userId)
-    return true
+    const served = await deps.getCredentials()
+    if (
+      served.wrappedPrivateKeys.nonce === request.wrappedPrivateKeys.nonce &&
+      served.wrappedPrivateKeys.ciphertext === request.wrappedPrivateKeys.ciphertext
+    ) {
+      return 'landed'
+    }
+    return served.credentialVersion === pre.credentialVersion ? 'unchanged' : 'unknown'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
