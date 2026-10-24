@@ -782,6 +782,13 @@ type GenerationKey struct {
 	RemoverUserID  string      `dynamodbav:"RemoverUserID,omitempty"`
 	RemovedUserID  string      `dynamodbav:"RemovedUserID,omitempty"`
 	StartSignature []byte      `dynamodbav:"StartSignature,omitempty"`
+	// RekeyedUserID and RekeyReason replace RemoverUserID/RemovedUserID for a
+	// link minted by a re-key, which removes no one (#62): RemoverUserID is the
+	// admin, RekeyedUserID the member whose entry it re-keyed, and
+	// StartSignature is under crypto.ContextRotationRekey over
+	// crypto.RotationRekeyPayload.
+	RekeyedUserID string `dynamodbav:"RekeyedUserID,omitempty"`
+	RekeyReason   string `dynamodbav:"RekeyReason,omitempty"`
 }
 
 // Rotation is the GROUP#<gid> / ROTATION marker: a key rotation that has
@@ -811,6 +818,11 @@ type Rotation struct {
 	// #178, which a client treats as unverifiable.
 	RemovedUserID  string `dynamodbav:"RemovedUserID,omitempty"`
 	StartSignature []byte `dynamodbav:"StartSignature,omitempty"`
+	// RekeyedUserID and RekeyReason mark a rotation that removed no one: a
+	// re-key of one member's entry (#62). Exclusive with RemovedUserID; the
+	// signature is then over crypto.RotationRekeyPayload.
+	RekeyedUserID string `dynamodbav:"RekeyedUserID,omitempty"`
+	RekeyReason   string `dynamodbav:"RekeyReason,omitempty"`
 }
 
 // Admission is the GROUP#<gid> / ADMISSION#<invitee uuid> item (#178,

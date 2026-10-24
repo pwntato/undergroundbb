@@ -265,6 +265,32 @@
       "signature_hex": "2e8aa20dfca65cc7a8129697004145ccde8ac375156265796cd6c59887ca686ed76b9a00dde3a4b7c058cebe8da045bd4c4a02c98f9cd113f3fc534b5b80f50d"
     }
   ],
+  "rotation_rekey": [
+    {
+      "name": "self",
+      "private_key_hex": "8b1b73f48e92858d7a4c45db1e7ea16d14555f37d9398a6c66b665b6b17d1d5100aeb711e60151d730a507434fb0bf99a27b621467694cd11b0017d1c6ed8b52",
+      "public_key_hex": "00aeb711e60151d730a507434fb0bf99a27b621467694cd11b0017d1c6ed8b52",
+      "group_id": "group-uuid-5",
+      "admin_uuid": "admin-uuid-1",
+      "member_uuid": "admin-uuid-1",
+      "generation": 4,
+      "reason": "self",
+      "payload_hex": "0000000c67726f75702d757569642d350000000c61646d696e2d757569642d310000000c61646d696e2d757569642d3100000001340000000473656c66",
+      "signature_hex": "17e8bf65583ae8ecdefa874982f1c9f57c69ff749d59310b758b06ee9c76554e03490c27340959ed27cf2e77d5751c1cd1ff1a972e86192b38e3eee8112d3606"
+    },
+    {
+      "name": "approval",
+      "private_key_hex": "8b1b73f48e92858d7a4c45db1e7ea16d14555f37d9398a6c66b665b6b17d1d5100aeb711e60151d730a507434fb0bf99a27b621467694cd11b0017d1c6ed8b52",
+      "public_key_hex": "00aeb711e60151d730a507434fb0bf99a27b621467694cd11b0017d1c6ed8b52",
+      "group_id": "group-uuid-5",
+      "admin_uuid": "admin-uuid-1",
+      "member_uuid": "member-uuid-1",
+      "generation": 4,
+      "reason": "approval",
+      "payload_hex": "0000000c67726f75702d757569642d350000000c61646d696e2d757569642d310000000d6d656d6265722d757569642d31000000013400000008617070726f76616c",
+      "signature_hex": "3e738a527beb03ae431da6a6c2b3ed9fd936a5b30bb78474085bb8a907b4e192dcf1ea8ccafe1d8fd7c03138fdc1fd8495f308265e684d14e0c88fd0e1766b03"
+    }
+  ],
   "admission": [
     {
       "name": "inviter holds a promoted grant",

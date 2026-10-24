@@ -28,6 +28,10 @@ type keychainLink struct {
 	RemoverUserID  string `json:"removerUserId,omitempty"`
 	RemovedUserID  string `json:"removedUserId,omitempty"`
 	StartSignature string `json:"startSignature,omitempty"`
+	// RekeyedUserID and RekeyReason mark a link a re-key minted (#62): the
+	// admin is RemoverUserID and StartSignature is over the re-key payload.
+	RekeyedUserID string `json:"rekeyedUserId,omitempty"`
+	RekeyReason   string `json:"rekeyReason,omitempty"`
 }
 
 type keychainResponse struct {
@@ -96,6 +100,8 @@ func (h *Handler) keychain(w http.ResponseWriter, r *http.Request) {
 			Wrapped:       encodeWrappedBlob(l.Wrapped),
 			RemoverUserID: l.RemoverUserID,
 			RemovedUserID: l.RemovedUserID,
+			RekeyedUserID: l.RekeyedUserID,
+			RekeyReason:   l.RekeyReason,
 		}
 		if len(l.StartSignature) > 0 {
 			link.StartSignature = base64.StdEncoding.EncodeToString(l.StartSignature)

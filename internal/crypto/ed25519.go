@@ -45,6 +45,11 @@ const (
 	// ContextRotationStart signs the start of a key rotation, naming the
 	// member whose removal began it (#178).
 	ContextRotationStart SigningContext = "underground-bb:rotation-start:v1"
+	// ContextRotationRekey signs the start of a re-key: a rotation that
+	// removes no one and exists to bring one member's entry to a new X25519
+	// key (#62). It is its own context, not a field of ContextRotationStart's
+	// payload, so no signature made for a removal can be read as a re-key.
+	ContextRotationRekey SigningContext = "underground-bb:rotation-rekey:v1"
 	// ContextAdmission signs the admission of an invitee into a group, by the
 	// admin or ambassador who invited them (#178).
 	ContextAdmission SigningContext = "underground-bb:admission:v1"

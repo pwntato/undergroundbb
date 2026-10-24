@@ -94,6 +94,10 @@ why.
   payload`, plus the Ed25519 signature over it — pinning
   `RotationStartPayload` (#178), what the admin who starts a rotation signs
   to name the removed member.
+- `rotation_rekey`: `(group id, admin uuid, member uuid, generation, reason)
+  -> payload`, plus the Ed25519 signature over it — pinning
+  `RotationRekeyPayload` (#62), what an admin signs to start a rotation that
+  removes no one. The `self` and `approval` cases differ in member and reason.
 - `admission`: `(group id, inviter uuid, invitee uuid, invitee ed25519 key,
   invitee x25519 key, invite id, inviter grant ref, day, generation) ->
   payload`, plus

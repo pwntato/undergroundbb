@@ -40,6 +40,7 @@ export const SigningContext = {
   SuccessorDesignation: 'underground-bb:successor-designation:v1',
   SuccessorClaim: 'underground-bb:successor-claim:v1',
   RotationStart: 'underground-bb:rotation-start:v1',
+  RotationRekey: 'underground-bb:rotation-rekey:v1',
   Admission: 'underground-bb:admission:v1',
   KeyRotation: 'underground-bb:key-rotation:v1',
 } as const

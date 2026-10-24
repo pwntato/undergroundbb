@@ -180,6 +180,35 @@ export function rotationStartPayload(
   ])
 }
 
+export type RekeyReason = 'self' | 'approval'
+
+/**
+ * Builds the bytes an admin signs (under ed25519.SigningContext.RotationRekey)
+ * when they start a rotation that removes no one: the group, the admin, the
+ * member whose entry it re-keys (the admin for 'self'), the generation rotated
+ * to and the reason. Must match internal/crypto/group.go's RotationRekeyPayload
+ * byte for byte, and never change once a real rotation has been signed under it.
+ */
+export function rotationRekeyPayload(
+  groupId: string,
+  adminUUID: string,
+  memberUUID: string,
+  generation: number,
+  reason: RekeyReason,
+): Uint8Array {
+  if (!Number.isSafeInteger(generation)) {
+    throw new Error('generation must be an integer')
+  }
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(adminUUID),
+    encoder.encode(memberUUID),
+    encoder.encode(String(generation)),
+    encoder.encode(reason),
+  ])
+}
+
 /**
  * Builds the bytes an admin signs (under ed25519.SigningContext.SuccessorDesignation)
  * to name the member who takes over if they go inactive (#161). An empty
