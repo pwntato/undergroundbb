@@ -2,7 +2,9 @@
 // out of the component so they can be tested and so oxlint's
 // only-export-components rule has nothing to object to.
 
+import { describeRotation } from './runRotation'
 import type { KeyRotationFailure, KeyRotationStep } from './runKeyRotation'
+import type { SelfRekeyOutcome } from './runSelfRekey'
 
 /** Same floor as signup and change-password: it only stops an accidental empty submit. */
 export const MIN_PASSWORD_LENGTH = 8
@@ -66,5 +68,37 @@ export function stepText(step: KeyRotationStep): string {
       return 'Making sure the earlier attempt did not go through. This takes about a minute; stay on this page…'
     case 'committing':
       return 'Saving your new keys…'
+  }
+}
+
+/** The line above "Finish key changes": what the button can and cannot do yet. */
+export function pendingRekeyText(
+  groups: readonly string[],
+  labelFor: (groupId: string) => string,
+): string {
+  return `A key change you started earlier still has to re-key ${groupList(groups, labelFor)}. Finishing works for groups where you are the only member; groups with other members finish in a later update. Keys cannot be rotated again until then.`
+}
+
+/** One line per group for the result of finishing a key change (#62). */
+export function selfRekeyText(
+  outcome: SelfRekeyOutcome,
+  label: string,
+  userLabel: (userId: string) => string,
+): string {
+  switch (outcome.status) {
+    case 'rekeyed': {
+      const note = describeRotation(outcome.rotation, userLabel)
+      return note === null ? `${label}: your new keys are in place.` : `${label}: ${note.text}`
+    }
+    case 'stale':
+      return `${label}: the group moved on before this finished, so the saved key was no longer needed. Another admin can approve your new keys there.`
+    case 'not-admin':
+      return `${label}: you are no longer an admin there, so there is nothing to finish.`
+    case 'open':
+      return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
+    case 'waiting':
+      return `${label}: this group has other members, and finishing it for them is not available yet. Nothing was changed; it will finish in a later update.`
+    case 'incomplete':
+      return `${label}: stopped (${outcome.reason}). Try again.`
   }
 }

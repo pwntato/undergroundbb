@@ -22,6 +22,7 @@ import type { GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import {
   admissionPayload,
   roleGrantPayload,
+  rotationRekeyPayload,
   rotationStartPayload,
   trustAnchorPayload,
 } from '@/lib/crypto/group'
@@ -155,6 +156,83 @@ function removalLink(
     removerUserId: remover,
     removedUserId: removed,
     startSignature: b64(sign(o.signer ?? me, SigningContext.RotationStart, payload)),
+  }
+}
+
+/**
+ * The marker of a self re-key (#62): `startedBy` signed, under the rekey
+ * context, that they re-keyed their own entry. Overrides model a forgery.
+ */
+function rekeyMarker(
+  generation: number,
+  o: {
+    startedBy?: string
+    signer?: SigningKey
+    rekeyed?: string
+    reason?: string
+    context?: SigningContext
+    signedFor?: { rekeyed?: string; generation?: number; reason?: string }
+    unsigned?: boolean
+    alsoRemoved?: string
+  } = {},
+): Marker {
+  const startedBy = o.startedBy ?? ME
+  const rekeyed = o.rekeyed ?? startedBy
+  const base = {
+    generation,
+    startedAt: 't',
+    startedBy,
+    rekeyedUserId: rekeyed,
+    rekeyReason: o.reason ?? 'self',
+    ...(o.alsoRemoved !== undefined && { removedUserId: o.alsoRemoved }),
+  }
+  if (o.unsigned) return base
+  const payload = rotationRekeyPayload(
+    GROUP,
+    startedBy,
+    o.signedFor?.rekeyed ?? rekeyed,
+    o.signedFor?.generation ?? generation,
+    (o.signedFor?.reason ?? 'self') as 'self',
+  )
+  return {
+    ...base,
+    startSignature: b64(sign(o.signer ?? me, o.context ?? SigningContext.RotationRekey, payload)),
+  }
+}
+
+/** The chain link a self re-key left for `generation` (#62). */
+function rekeyLink(
+  generation: number,
+  o: {
+    admin?: string
+    signer?: SigningKey
+    rekeyed?: string
+    reason?: string
+    signedFor?: { rekeyed?: string; generation?: number; reason?: string }
+    unsigned?: boolean
+    noSignature?: boolean
+  } = {},
+): KeychainLink {
+  const admin = o.admin ?? ME
+  const rekeyed = o.rekeyed ?? admin
+  const base = { generation, wrapped: { nonce: 'n', ciphertext: 'c' } }
+  if (o.unsigned) return base
+  const payload = rotationRekeyPayload(
+    GROUP,
+    admin,
+    o.signedFor?.rekeyed ?? rekeyed,
+    o.signedFor?.generation ?? generation + 1,
+    (o.signedFor?.reason ?? 'self') as 'self',
+  )
+  if (o.noSignature) {
+    return { ...base, removerUserId: admin, rekeyedUserId: rekeyed, rekeyReason: 'self' }
+  }
+  return {
+    ...base,
+    removerUserId: admin,
+    rekeyedUserId: rekeyed,
+    rekeyReason: o.reason ?? 'self',
+    startSignature: b64(sign(o.signer ?? me, SigningContext.RotationRekey, payload)),
   }
 }
 
@@ -2325,6 +2403,143 @@ describe('re-admitting a member', () => {
       )
       expect(onlyReadmittable?.text).toContain('Re-admit')
       expect(onlyReadmittable?.text).not.toContain('fresh invitation')
+    })
+  })
+})
+
+describe('a self re-key rotation (#62)', () => {
+  it('resumes from a verified re-key marker and wraps the members who are behind', async () => {
+    const f = new Fake()
+    const m = f.add(person())
+    f.marker = rekeyMarker(1)
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+    expect(f.cryptoRecipients.flat()).toEqual([m.id])
+    expect(f.completed).toEqual([1])
+  })
+
+  it('removes no one: a member the marker does not name is never excluded', async () => {
+    const f = new Fake()
+    const a = f.add(person())
+    const b = f.add(person())
+    f.marker = rekeyMarker(1)
+    await runRotation(f.deps(), GROUP)
+    expect(f.cryptoRecipients.flat().sort()).toEqual([a.id, b.id].sort())
+  })
+
+  const refused: [string, () => Marker, string][] = [
+    [
+      'signed by another key',
+      () => rekeyMarker(1, { signer: generateSigningKey() }),
+      'does not verify',
+    ],
+    [
+      'signed under the removal context',
+      () => rekeyMarker(1, { context: SigningContext.RotationStart }),
+      'does not verify',
+    ],
+    [
+      'signed for another generation',
+      () => rekeyMarker(1, { signedFor: { generation: 2 } }),
+      'does not verify',
+    ],
+    [
+      'signed for another member',
+      () => rekeyMarker(1, { signedFor: { rekeyed: 'someone-else' } }),
+      'does not verify',
+    ],
+    ['carrying no signature', () => rekeyMarker(1, { unsigned: true }), 'missing or malformed'],
+    [
+      'for a reason this app cannot check',
+      () => rekeyMarker(1, { reason: 'approval' }),
+      'kind this app cannot check',
+    ],
+    [
+      'naming a member other than its signer',
+      () => rekeyMarker(1, { rekeyed: REMOVED }),
+      'kind this app cannot check',
+    ],
+    [
+      'that also names a removed member',
+      () => rekeyMarker(1, { alsoRemoved: REMOVED }),
+      'missing or malformed',
+    ],
+  ]
+  for (const [name, marker, reason] of refused) {
+    it(`wraps to no one when the marker is ${name}`, async () => {
+      const f = new Fake()
+      f.add(person())
+      f.marker = marker()
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out.status).toBe('incomplete')
+      expect(JSON.stringify(out)).toContain(reason)
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.completed).toEqual([])
+    })
+  }
+
+  it('is not mistaken for a leave: no takeover is attempted', async () => {
+    const f = new Fake()
+    f.add(person())
+    f.marker = rekeyMarker(1)
+    await runRotation(f.deps(), GROUP)
+    expect(f.takeOvers).toEqual([])
+    expect(f.mints).toBe(0)
+  })
+
+  describe('in the key chain below the caller', () => {
+    it('is accepted when its record verifies', async () => {
+      const f = new Fake()
+      const m = f.add(person())
+      f.marker = undefined
+      f.links = [rekeyLink(0)]
+      f.members.get(m.id)!.generation = 0
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'caught-up', rewrapped: 1 })
+    })
+
+    const stops: [string, () => KeychainLink, string][] = [
+      ['forged', () => rekeyLink(0, { signer: generateSigningKey() }), 'does not verify'],
+      ['blanked', () => rekeyLink(0, { unsigned: true }), 'without a signed record'],
+      [
+        'stripped of its signature',
+        () => rekeyLink(0, { noSignature: true }),
+        'malformed re-key record',
+      ],
+      [
+        'replayed at another generation',
+        () => rekeyLink(0, { signedFor: { generation: 2 } }),
+        'does not verify',
+      ],
+      [
+        'of a kind this app cannot check',
+        () => rekeyLink(0, { reason: 'approval' }),
+        'cannot check',
+      ],
+    ]
+    for (const [name, link, reason] of stops) {
+      it(`stops when the link is ${name}`, async () => {
+        const f = new Fake()
+        f.add(person())
+        f.marker = undefined
+        f.links = [link()]
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out.status).toBe('incomplete')
+        expect(JSON.stringify(out)).toContain(reason)
+        expect(f.cryptoRecipients).toEqual([])
+      })
+    }
+
+    it('records nobody as removed', async () => {
+      // A re-key link sits beside a real removal; only the removal is a removal.
+      const f = new Fake()
+      f.ownGeneration = 2
+      f.members.get(ME)!.generation = 2
+      f.marker = undefined
+      const removed = f.add(person(), 'member', 1)
+      f.links = [rekeyLink(0), removalLink(1, { removed: removed.id })]
+      const out = await runRotation(f.deps(), GROUP)
+      expect(JSON.stringify(out)).not.toContain('malformed')
     })
   })
 })

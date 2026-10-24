@@ -192,6 +192,13 @@ export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
      */
     readonly removedUserId?: string
     readonly startSignature?: string
+    /**
+     * Set instead of removedUserId when the rotation removed no one and
+     * re-keyed one member's entry (#62); startSignature is then under
+     * SigningContext.RotationRekey over rotationRekeyPayload.
+     */
+    readonly rekeyedUserId?: string
+    readonly rekeyReason?: string
   }
 }
 
@@ -393,8 +400,11 @@ export interface KeychainLink {
    */
   readonly removerUserId?: string
   readonly removedUserId?: string
-  /** Base64 signature under SigningContext.RotationStart. */
+  /** Base64 signature under SigningContext.RotationStart (RotationRekey for a re-key). */
   readonly startSignature?: string
+  /** Set instead of removedUserId for a link a re-key minted (#62); removerUserId is the admin. */
+  readonly rekeyedUserId?: string
+  readonly rekeyReason?: string
 }
 
 export interface KeychainResponse {
@@ -642,6 +652,19 @@ export interface TakeOverRotationRequest {
   readonly wrappedKey: WireWrappedKey
   /** The caller's base64 signature over rotationStartPayload naming the leaver. */
   readonly startSignature: string
+}
+
+/**
+ * POST /api/groups/{id}/rotation/rekey -- #62. An admin who rotated their
+ * account keys starts the rotation that brings their own entry to the new key,
+ * from their handoff row; the same body as a takeover, and the row is consumed in
+ * the same transaction. 409 codes: `handoff_stale` (the row is missing, names
+ * another key, or the group moved past it: delete it), `rotation_in_progress`,
+ * `key_epoch_stale`, `rotation_caller_behind`, `conflict_retry`. 400
+ * `bad_signature`, `rotation_not_applicable` (an Open group).
+ */
+export function selfRekey(groupId: string, req: TakeOverRotationRequest): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/rekey`, req)
 }
 
 /**

@@ -20,7 +20,7 @@
 
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
-import { rotationStartPayload } from './group.js'
+import { rotationRekeyPayload, rotationStartPayload } from './group.js'
 
 /** One chain link as served by GET /api/groups/{id}/keychain. */
 export interface RemovalLink {
@@ -28,8 +28,14 @@ export interface RemovalLink {
   readonly generation: number
   readonly removerUserId?: string
   readonly removedUserId?: string
-  /** Base64 Ed25519 signature under SigningContext.RotationStart. */
+  /** Base64 Ed25519 signature under SigningContext.RotationStart (RotationRekey for a re-key). */
   readonly startSignature?: string
+  /**
+   * Set instead of removedUserId when the link was minted by a re-key, which
+   * removed no one (#62). removerUserId is then the admin who re-keyed.
+   */
+  readonly rekeyedUserId?: string
+  readonly rekeyReason?: string
 }
 
 export type RemovalVerdict =
@@ -90,7 +96,14 @@ export function verifyRemovals(input: VerifyRemovalsInput): RemovalVerdict {
     if (link === undefined) {
       return fail(`the key chain is missing the removal that created generation ${String(n + 1)}`)
     }
-    const { removerUserId, removedUserId, startSignature } = link
+    const { removerUserId, removedUserId, startSignature, rekeyedUserId } = link
+    if (rekeyedUserId !== undefined) {
+      // A re-key removed no one, so it adds nothing to removedAt; its record
+      // still has to verify, or a withheld removal could hide behind it.
+      const rekey = verifyRekeyLink(input, n + 1, link)
+      if (rekey !== null) return rekey
+      continue
+    }
     if (
       removerUserId === undefined ||
       removedUserId === undefined ||
@@ -119,4 +132,54 @@ export function verifyRemovals(input: VerifyRemovalsInput): RemovalVerdict {
     removedAt.set(removedUserId, n + 1) // ascending n, so the newest wins
   }
   return { ok: true, removedAt }
+}
+
+/**
+ * The record on a link a re-key minted (#62), or null when it verifies. Only the
+ * "self" reason exists so far: the admin re-keyed their own entry, so the member
+ * re-keyed must be the admin and a mismatch is a forgery. Any other reason is
+ * refused rather than guessed at.
+ */
+function verifyRekeyLink(
+  input: VerifyRemovalsInput,
+  generation: number,
+  link: RemovalLink,
+): RemovalVerdict | null {
+  const { removerUserId, rekeyedUserId, rekeyReason, startSignature, removedUserId } = link
+  if (
+    removerUserId === undefined ||
+    rekeyedUserId === undefined ||
+    startSignature === undefined ||
+    removedUserId !== undefined
+  ) {
+    return fail(`generation ${String(generation)} has a malformed re-key record`)
+  }
+  if (rekeyReason !== 'self' || rekeyedUserId !== removerUserId) {
+    return fail(
+      `generation ${String(generation)} has a re-key record of a kind this app cannot check`,
+    )
+  }
+  let signature: Uint8Array
+  try {
+    signature = base64ToBytes(startSignature)
+  } catch {
+    return fail(`the signed re-key record for generation ${String(generation)} is malformed`)
+  }
+  const keys = input.keysFor(removerUserId)
+  if (keys === null) {
+    return fail(
+      `could not read the keys of ${removerUserId}, who re-keyed at generation ${String(generation)}`,
+    )
+  }
+  const payload = rotationRekeyPayload(
+    input.groupId,
+    removerUserId,
+    rekeyedUserId,
+    generation,
+    rekeyReason,
+  )
+  if (!keys.some((k) => verify(k, SigningContext.RotationRekey, payload, signature))) {
+    return fail(`the signed re-key record for generation ${String(generation)} does not verify`)
+  }
+  return null
 }

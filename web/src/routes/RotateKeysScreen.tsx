@@ -33,10 +33,12 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { groupLabel } from './groupLabel'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
-import { failureMessage, stepText } from './rotateKeysCopy'
+import { failureMessage, pendingRekeyText, selfRekeyText, stepText } from './rotateKeysCopy'
 import { RotateKeysRetry } from './RotateKeysRetry'
 import { RotateKeysReview } from './RotateKeysReview'
 import { runListGroups } from './runListGroups'
+import { makeSelfRekeyDeps } from './rotationDeps'
+import { runSelfRekey } from './runSelfRekey'
 import {
   preflightKeyRotation,
   runKeyRotation,
@@ -58,6 +60,8 @@ type Step =
       readonly step: KeyRotationStep
       readonly progress: SignupProgressEvent | null
     }
+  | { readonly name: 'rekeying' }
+  | { readonly name: 'rekeyDone'; readonly lines: readonly string[] }
   | {
       readonly name: 'retry'
       readonly pre: KeyRotationPreflight
@@ -171,7 +175,12 @@ export function RotateKeysScreen() {
   // A rotation in flight, or a recovery code not yet written down, is lost on
   // reload (the new keys live only in the worker).
   useEffect(() => {
-    if (step.name !== 'running' && step.name !== 'recoveryCode' && step.name !== 'retry') {
+    if (
+      step.name !== 'running' &&
+      step.name !== 'recoveryCode' &&
+      step.name !== 'retry' &&
+      step.name !== 'rekeying'
+    ) {
       return
     }
     const handleBeforeUnload = (e: BeforeUnloadEvent): void => {
@@ -196,6 +205,33 @@ export function RotateKeysScreen() {
         : [],
     [step, labels],
   )
+
+  // Finishes the key changes a rotation left waiting (#62): the self re-key of
+  // each group from its handoff row. It carries on if the screen is left (it
+  // resumes from server state), so the outcome is shown only when still here.
+  const finishRekeys = (pre: KeyRotationPreflight) => {
+    setError(null)
+    setStep({ name: 'rekeying' })
+    void (async () => {
+      const lines: string[] = []
+      try {
+        const rows = await listHandoffs()
+        const rekeyDeps = makeSelfRekeyDeps(pre.userId)
+        for (const groupId of pre.pendingSelfRekeys) {
+          const row = rows.find((r) => r.groupId === groupId)
+          if (row === undefined) {
+            lines.push(`${labelFor(groupId)}: nothing left to finish.`)
+            continue
+          }
+          const outcome = await runSelfRekey(rekeyDeps, row)
+          lines.push(selfRekeyText(outcome, labelFor(groupId), () => 'a member'))
+        }
+      } catch (err) {
+        lines.push(`Stopped: ${err instanceof Error ? err.message : String(err)} Try again.`)
+      }
+      if (mounted.current) setStep({ name: 'rekeyDone', lines })
+    })()
+  }
 
   // Runs the flow. A retry passes no password: the request it resends was
   // signed under the one chosen the first time.
@@ -285,14 +321,20 @@ export function RotateKeysScreen() {
             </Button>
           )}
           {step.pre.pendingSelfRekeys.length > 0 ? (
-            <Alert>
-              <AlertDescription>
-                {failureMessage(
-                  { kind: 'handoffPending', groups: step.pre.pendingSelfRekeys },
-                  labelFor,
-                )}
-              </AlertDescription>
-            </Alert>
+            <>
+              <Alert>
+                <AlertDescription>
+                  {pendingRekeyText(step.pre.pendingSelfRekeys, labelFor)}
+                </AlertDescription>
+              </Alert>
+              <Button
+                onClick={() => {
+                  finishRekeys(step.pre)
+                }}
+              >
+                Finish key changes
+              </Button>
+            </>
           ) : (
             <RotateKeysReview
               groups={reviewGroups}
@@ -324,6 +366,34 @@ export function RotateKeysScreen() {
         </div>
       )
     }
+    case 'rekeying':
+      return (
+        <div className="flex w-full max-w-sm flex-col gap-3" aria-busy>
+          <h1 className="text-xl font-semibold">Finishing your key changes</h1>
+          <p className="text-sm">Re-keying your groups…</p>
+          <p className="text-xs text-muted-foreground">
+            Keep this tab open until this finishes. If you leave, it picks up where it stopped.
+          </p>
+        </div>
+      )
+    case 'rekeyDone':
+      return (
+        <div className="flex w-full max-w-lg flex-col gap-4">
+          <h1 className="text-xl font-semibold">Key changes</h1>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {step.lines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <Button
+            onClick={() => {
+              setStep({ name: 'loading' })
+            }}
+          >
+            Continue
+          </Button>
+        </div>
+      )
     case 'retry':
       return (
         <RotateKeysRetry

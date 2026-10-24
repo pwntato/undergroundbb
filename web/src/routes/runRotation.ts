@@ -60,7 +60,7 @@ import type { UserProjection } from '@/lib/api/users'
 import { verifyAdmission, type AdmissionRecord } from '@/lib/crypto/admission'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, verify } from '@/lib/crypto/ed25519'
-import { rotationStartPayload } from '@/lib/crypto/group'
+import { rotationRekeyPayload, rotationStartPayload } from '@/lib/crypto/group'
 import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import type {
@@ -326,7 +326,10 @@ async function runOnce(
     if (!started.ok) {
       return { status: 'incomplete', reason: started.reason, rewrapped: carried }
     }
-    exclude = new Set([...exclude, started.removedUserId])
+    // A re-key removed no one, so it names no one to exclude.
+    if (started.removedUserId !== undefined) {
+      exclude = new Set([...exclude, started.removedUserId])
+    }
   }
 
   const blocked = new Set<string>()
@@ -514,6 +517,7 @@ async function takeOverLeave(
   }
   const started = await verifyRotationStart(deps, own, groupId, marker)
   if (!started.ok) return incomplete(started.reason)
+  if (started.removedUserId === undefined) return incomplete('the rotation names no one who left')
 
   // The start only proves the leaver's key signed it, and the leaver's key is
   // whatever the server serves. This path turns the marker into the CALLER'S
@@ -858,7 +862,7 @@ async function loadRemovals(
 }
 
 type RotationStartCheck =
-  | { readonly ok: true; readonly removedUserId: string }
+  | { readonly ok: true; readonly removedUserId?: string }
   | { readonly ok: false; readonly reason: string }
 
 /**
@@ -876,7 +880,8 @@ async function verifyRotationStart(
   groupId: string,
   marker: NonNullable<GroupDetail['rotation']>,
 ): Promise<RotationStartCheck> {
-  const { removedUserId, startSignature } = marker
+  const { removedUserId, startSignature, rekeyedUserId } = marker
+  if (rekeyedUserId !== undefined) return verifyRekeyStart(deps, own, groupId, marker)
   if (removedUserId === undefined || startSignature === undefined) {
     return {
       ok: false,
@@ -907,6 +912,60 @@ async function verifyRotationStart(
     return { ok: false, reason: "the rotation's signed start record does not verify" }
   }
   return { ok: true, removedUserId }
+}
+
+/**
+ * The marker of a re-key (#62): the admin in `startedBy` signed, under the
+ * rekey context, that they re-keyed their own entry. It removes no one, so the
+ * record only has to verify: carrying on without it would resume a rotation
+ * nobody vouched for. Only the "self" reason exists so far, where the admin and
+ * the member re-keyed are the same account; anything else is refused.
+ */
+async function verifyRekeyStart(
+  deps: RotationDeps,
+  own: Uint8Array,
+  groupId: string,
+  marker: NonNullable<GroupDetail['rotation']>,
+): Promise<RotationStartCheck> {
+  const { rekeyedUserId, rekeyReason, startSignature } = marker
+  if (
+    rekeyedUserId === undefined ||
+    startSignature === undefined ||
+    marker.removedUserId !== undefined
+  ) {
+    return { ok: false, reason: "the rotation's signed re-key record is missing or malformed" }
+  }
+  if (rekeyReason !== 'self' || rekeyedUserId !== marker.startedBy) {
+    return { ok: false, reason: "the rotation's re-key record is of a kind this app cannot check" }
+  }
+  let signature: Uint8Array
+  try {
+    signature = base64ToBytes(startSignature)
+  } catch {
+    return { ok: false, reason: "the rotation's signed re-key record is malformed" }
+  }
+  const payload = rotationRekeyPayload(
+    groupId,
+    marker.startedBy,
+    rekeyedUserId,
+    marker.generation,
+    rekeyReason,
+  )
+  const resolved = await resolveSignerKeys(
+    deps,
+    own,
+    [marker.startedBy],
+    'the admin who started this rotation',
+  )
+  if (!resolved.ok) return resolved
+  const keys = resolved.keys.get(marker.startedBy) ?? null
+  if (
+    keys === null ||
+    !keys.some((k) => verify(k, SigningContext.RotationRekey, payload, signature))
+  ) {
+    return { ok: false, reason: "the rotation's signed re-key record does not verify" }
+  }
+  return { ok: true }
 }
 
 type RecipientCheck =

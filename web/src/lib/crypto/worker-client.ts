@@ -48,6 +48,8 @@ import type {
   SignLeaveRotationStartResponse,
   SignLeaveRotationStartResult,
   StartGroupRotationRequest,
+  StartSelfRekeyRequest,
+  StartSelfRekeyResponse,
   StartGroupRotationResponse,
   StartGroupRotationResult,
   SignGroupCreationRequest,
@@ -724,6 +726,17 @@ export function startGroupRotation(
   return workerCall<StartGroupRotationResponse, StartGroupRotationResult>(
     (id) => ({ kind: 'startGroupRotation', id, ...req }) satisfies StartGroupRotationRequest,
     'startGroupRotationDone',
+    (res) => res.result,
+  )
+}
+
+/** #62: mints an admin's self re-key from their handoff row (see startSelfRekey in credential-material.ts). */
+export function startSelfRekey(
+  req: Omit<StartSelfRekeyRequest, 'kind' | 'id'>,
+): Promise<StartGroupRotationResult> {
+  return workerCall<StartSelfRekeyResponse, StartGroupRotationResult>(
+    (id) => ({ kind: 'startSelfRekey', id, ...req }) satisfies StartSelfRekeyRequest,
+    'startSelfRekeyDone',
     (res) => res.result,
   )
 }

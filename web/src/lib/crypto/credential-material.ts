@@ -20,11 +20,13 @@ import {
   roleGrantPayload,
   successorClaimPayload,
   admissionPayload,
+  rotationRekeyPayload,
   rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
 } from './group.js'
 import { fingerprint } from './fingerprint.js'
+import { handoffWrapAAD } from './key-rotation.js'
 import {
   computeInviteMAC,
   deriveInviteMACKey,
@@ -837,6 +839,57 @@ export async function startGroupRotation(
     generation,
     link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
     removerWrappedKey: toWireWrapped(removerWrapped),
+    startSignature: bytesToBase64(startSignature),
+  }
+}
+
+/**
+ * #62: mints the next generation's group key for the self re-key of an admin who
+ * rotated their account keys. Same minting as startGroupRotation, but the old
+ * key comes from the HANDOFF# row (the group key wrapped to the caller's NEW
+ * X25519 key under handoffWrapAAD), because the caller's MEMBER# entry is still
+ * wrapped to the key they rotated away from and only that old key opens it. The
+ * link is the handed-off key under the new one, so the chain stays unbroken.
+ * Removes no one: the start is signed under the rekey context, naming the
+ * caller as the member re-keyed, with reason "self".
+ */
+export async function startSelfRekey(
+  keys: LiveKeys,
+  groupId: string,
+  handoffGeneration: number,
+  handoffWrappedKey: Wrapped,
+): Promise<{
+  generation: number
+  link: { nonce: string; ciphertext: string }
+  removerWrappedKey: WireWrapped
+  startSignature: string
+}> {
+  const oldKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    handoffWrappedKey,
+    handoffWrapAAD(keys.userId, groupId, handoffGeneration, keys.wrappingKey.publicKey),
+  )
+  if (oldKey.length !== KEY_SIZE) {
+    throw new Error('crypto: handed-off group key has the wrong length')
+  }
+  const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
+  const generation = handoffGeneration + 1
+
+  const link = await encrypt(newKey, oldKey, genKeyAAD(groupId, handoffGeneration))
+  const ownWrapped = await wrap(
+    keys.wrappingKey.publicKey,
+    newKey,
+    memberWrapAAD(groupId, keys.userId, generation),
+  )
+  const startSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RotationRekey,
+    rotationRekeyPayload(groupId, keys.userId, keys.userId, generation, 'self'),
+  )
+  return {
+    generation,
+    link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
+    removerWrappedKey: toWireWrapped(ownWrapped),
     startSignature: bytesToBase64(startSignature),
   }
 }
