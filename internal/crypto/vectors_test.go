@@ -32,6 +32,7 @@ type vectorFile struct {
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
+	RotationRekey        []rotationRekeyVector        `json:"rotation_rekey"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
@@ -189,6 +190,19 @@ type rotationStartVector struct {
 	RemoverUUID  string `json:"remover_uuid"`
 	SubjectUUID  string `json:"subject_uuid"`
 	Generation   int64  `json:"generation"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+type rotationRekeyVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	AdminUUID    string `json:"admin_uuid"`
+	MemberUUID   string `json:"member_uuid"`
+	Generation   int64  `json:"generation"`
+	Reason       string `json:"reason"`
 	PayloadHex   string `json:"payload_hex"`
 	SignatureHex string `json:"signature_hex"`
 }
@@ -857,6 +871,45 @@ func TestVectorRotationStart(t *testing.T) {
 				t.Fatal("rotation-start signature verified under another context")
 			}
 		})
+	}
+}
+
+// TestVectorRotationRekey pins RotationRekeyPayload's exact encoding (#62).
+func TestVectorRotationRekey(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.RotationRekey) < 2 {
+		t.Fatalf("expected at least 2 rotation_rekey vectors, got %d", len(v.RotationRekey))
+	}
+	seen := map[string]bool{}
+	for _, tc := range v.RotationRekey {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := RotationRekeyPayload(tc.GroupID, tc.AdminUUID, tc.MemberUUID, tc.Generation, tc.Reason)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("RotationRekeyPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			seen[tc.PayloadHex] = true
+			gotSig, err := Sign(priv, ContextRotationRekey, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextRotationRekey, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			if Verify(pub, ContextRotationStart, wantPayload, wantSig) || Verify(pub, ContextRoleGrant, wantPayload, wantSig) {
+				t.Fatal("rotation-rekey signature verified under another context")
+			}
+		})
+	}
+	if len(seen) != len(v.RotationRekey) {
+		t.Fatal("rekey vectors with different members or reasons must produce different payloads")
 	}
 }
 

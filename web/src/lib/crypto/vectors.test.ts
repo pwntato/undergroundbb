@@ -23,6 +23,7 @@ import {
   memberWrapAAD,
   roleGrantPayload,
   successorClaimPayload,
+  rotationRekeyPayload,
   rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
@@ -192,6 +193,18 @@ interface VectorFile {
     remover_uuid: string
     subject_uuid: string
     generation: number
+    payload_hex: string
+    signature_hex: string
+  }[]
+  rotation_rekey: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    admin_uuid: string
+    member_uuid: string
+    generation: number
+    reason: 'self' | 'approval'
     payload_hex: string
     signature_hex: string
   }[]
@@ -640,6 +653,28 @@ describe('rotation start vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RotationStart, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins rotationRekeyPayload's exact encoding (#62).
+describe('rotation rekey vectors', () => {
+  for (const tc of vectors.rotation_rekey) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = rotationRekeyPayload(
+        tc.group_id,
+        tc.admin_uuid,
+        tc.member_uuid,
+        tc.generation,
+        tc.reason,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.RotationRekey, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

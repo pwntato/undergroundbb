@@ -127,6 +127,32 @@ func RotationStartPayload(groupID, removerUUID, subjectUUID string, generation i
 	return lengthPrefixedConcat(fields)
 }
 
+// Rekey reasons: why the rotation was started. They are signed, so a record
+// cannot be replayed as the other kind.
+const (
+	// RekeyReasonSelf: an admin re-keys their own entry after rotating their keys.
+	RekeyReasonSelf = "self"
+	// RekeyReasonApproval: an admin approves another member's new keys.
+	RekeyReasonApproval = "approval"
+)
+
+// RotationRekeyPayload builds the bytes an admin signs (under
+// ContextRotationRekey) when they start a rotation that removes no one: the
+// group, the admin, the member whose entry the rotation re-keys (the admin
+// themself for RekeyReasonSelf), the generation rotated to and the reason.
+// Same encoding as RotationStartPayload, and the same warning: it must never
+// change once a real rotation has been signed under it.
+func RotationRekeyPayload(groupID, adminUUID, memberUUID string, generation int64, reason string) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(adminUUID),
+		[]byte(memberUUID),
+		[]byte(strconv.FormatInt(generation, 10)),
+		[]byte(reason),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
 // AdmissionPayload builds the bytes the inviter signs (under ContextAdmission)
 // when they complete an invite -- docs/DESIGN.md, "The recipient set is taken
 // from the server" (#178). It is the durable record that this inviter admitted

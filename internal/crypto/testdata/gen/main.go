@@ -199,6 +199,20 @@ type successorDesignationVector struct {
 	SignatureHex       string `json:"signature_hex"`
 }
 
+// rotationRekeyVector proves RotationRekeyPayload's exact encoding (#62).
+type rotationRekeyVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	AdminUUID    string `json:"admin_uuid"`
+	MemberUUID   string `json:"member_uuid"`
+	Generation   int64  `json:"generation"`
+	Reason       string `json:"reason"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
 // rotationStartVector proves RotationStartPayload's exact encoding (#178).
 type rotationStartVector struct {
 	Name         string `json:"name"`
@@ -415,6 +429,7 @@ type vectorFile struct {
 	SuccessorDesignation []successorDesignationVector `json:"successor_designation"`
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
+	RotationRekey        []rotationRekeyVector        `json:"rotation_rekey"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
@@ -943,6 +958,36 @@ func main() {
 			PayloadHex:   hex.EncodeToString(payload),
 			SignatureHex: hex.EncodeToString(sig),
 		})
+	}
+
+	// --- Rotation re-key (#62) ---
+	{
+		adminPub, adminPriv := fixedEd25519Key("rotation-rekey-admin-1")
+		groupID := "group-uuid-5"
+		adminUUID := "admin-uuid-1"
+		memberUUID := "member-uuid-1"
+		for _, tc := range []struct{ name, member, reason string }{
+			{"self", adminUUID, crypto.RekeyReasonSelf},
+			{"approval", memberUUID, crypto.RekeyReasonApproval},
+		} {
+			payload := crypto.RotationRekeyPayload(groupID, adminUUID, tc.member, 4, tc.reason)
+			sig, err := crypto.Sign(adminPriv, crypto.ContextRotationRekey, payload)
+			if err != nil {
+				panic(err)
+			}
+			out.RotationRekey = append(out.RotationRekey, rotationRekeyVector{
+				Name:         tc.name,
+				PrivateHex:   hex.EncodeToString(adminPriv),
+				PublicHex:    hex.EncodeToString(adminPub),
+				GroupID:      groupID,
+				AdminUUID:    adminUUID,
+				MemberUUID:   tc.member,
+				Generation:   4,
+				Reason:       tc.reason,
+				PayloadHex:   hex.EncodeToString(payload),
+				SignatureHex: hex.EncodeToString(sig),
+			})
+		}
 	}
 
 	// --- Admission (#178) ---
