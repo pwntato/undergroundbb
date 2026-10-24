@@ -37,7 +37,7 @@ export function failureMessage(
     case 'cooldown':
       return 'You rotated your keys recently. Keys can be rotated once a day, so try again tomorrow.'
     case 'handoffPending':
-      return `A key change you started earlier still has to re-key ${groupList(failure.groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
+      return `A key change you started earlier is still waiting to finish re-keying ${groupList(failure.groups, labelFor)}. That step is not available in this version yet and will finish in a later update; nothing needs doing now, and keys cannot be rotated again until then.`
     case 'groupBusy':
       return `Another admin's key change is still under way in ${groupList(failure.groups, labelFor)}. Wait for it to finish, then try again.`
     case 'changedElsewhere':

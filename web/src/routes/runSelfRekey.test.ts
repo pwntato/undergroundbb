@@ -13,12 +13,6 @@ const GROUP = 'g0000000-0000-4000-8000-000000000009'
 
 const OTHER = 'a0000000-0000-4000-8000-000000000002'
 
-function served(over: { signingPublicKey?: string; supersededSigningKeys?: string[] }) {
-  return new Map([
-    [ME, { signingPublicKey: 'key-now', supersededSigningKeys: [], ...over }],
-  ]) as unknown as ReturnType<SelfRekeyDeps['getUsers']> extends Promise<infer M> ? M : never
-}
-
 const ROW: HandoffEntry = {
   groupId: GROUP,
   generation: 2,
@@ -48,8 +42,7 @@ const DONE: RotationOutcome = { status: 'completed', rewrapped: 2 }
 function setup(group: GroupDetail | Error = detail()) {
   const calls = {
     mint: vi.fn(() => Promise.resolve(MINTED)),
-    members: vi.fn(() => Promise.resolve([{ userId: ME }, { userId: OTHER }])),
-    users: vi.fn(() => Promise.resolve(served({}))),
+    members: vi.fn(() => Promise.resolve([{ userId: ME }])),
     selfRekey: vi.fn((): Promise<void> => Promise.resolve()),
     deleteHandoff: vi.fn((): Promise<void> => Promise.resolve()),
   }
@@ -59,8 +52,6 @@ function setup(group: GroupDetail | Error = detail()) {
       group instanceof Error ? Promise.reject(group) : Promise.resolve(group),
     ),
     listAllMembers: calls.members,
-    getUsers: calls.users,
-    ownSigningKey: vi.fn(() => Promise.resolve('key-now')),
     startSelfRekeyCrypto: calls.mint,
     selfRekey: calls.selfRekey,
     deleteHandoff: calls.deleteHandoff,
@@ -176,13 +167,10 @@ describe('runSelfRekey', () => {
     expect(t.deleteHandoff).not.toHaveBeenCalled()
   })
 
-  describe('when the signing key has changed', () => {
-    it.each([
-      ['a superseded key is on record', { supersededSigningKeys: ['old'] }],
-      ["the served key is not the worker's", { signingPublicKey: 'other' }],
-    ])('sends nothing with other members and %s', async (_n, over) => {
+  describe('when the group has other members', () => {
+    it('sends nothing and keeps the row', async () => {
       const t = setup()
-      t.users.mockResolvedValue(served(over))
+      t.members.mockResolvedValue([{ userId: ME }, { userId: OTHER }])
       const out = await runSelfRekey(t.deps, ROW)
       expect(out).toMatchObject({ status: 'incomplete' })
       expect(t.mint).not.toHaveBeenCalled()
@@ -193,8 +181,6 @@ describe('runSelfRekey', () => {
 
     it('still runs when the caller is the only member', async () => {
       const t = setup()
-      t.members.mockResolvedValue([{ userId: ME }])
-      t.users.mockResolvedValue(served({ supersededSigningKeys: ['old'] }))
       expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'rekeyed' })
     })
 
@@ -207,7 +193,7 @@ describe('runSelfRekey', () => {
 
     it('does not block resuming a rotation that is already running', async () => {
       const t = setup(detail({ rotation: {} as never }))
-      t.users.mockResolvedValue(served({ supersededSigningKeys: ['old'] }))
+      t.members.mockResolvedValue([{ userId: ME }, { userId: OTHER }])
       expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'rekeyed' })
     })
   })

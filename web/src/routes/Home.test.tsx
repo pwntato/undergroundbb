@@ -65,7 +65,6 @@ describe('Home', () => {
     expect(html).toContain('Loading your groups')
     expect(html).toContain('Create a group')
     expect(html).toContain('Change password')
-    expect(html).toContain('Rotate keys')
     expect(html).toContain('Log out')
     expect(html).not.toContain('Frontend scaffold')
   })

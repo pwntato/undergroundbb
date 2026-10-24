@@ -189,9 +189,6 @@ export function Home() {
           <Link to="/account/password">Change password</Link>
         </Button>
         <Button asChild variant="outline">
-          <Link to="/account/rotate-keys">Rotate keys</Link>
-        </Button>
-        <Button asChild variant="outline">
           <Link to="/account/delete">Delete account</Link>
         </Button>
         <Button variant="outline" disabled={loggingOut} onClick={() => void onLogout()}>
