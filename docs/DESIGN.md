@@ -597,7 +597,9 @@ records nobody as removed. It runs the start from the handoff row (`runSelfRekey
 with the new key, and is deleted by the client only when the server answers `handoff_stale` or the
 caller's own entry has already moved past it, never for a failed read, a failed unwrap, a missing
 list entry or an `Open` group, whose self-wrap has no endpoint yet (the row is kept and reported).
-"Finish key changes" on the Rotate keys screen runs it for every pending group.
+"Finish key changes" on the Rotate keys screen runs it for every pending group. Until the superseded-key
+acceptance lands, the client refuses the start, sending nothing and keeping the row, when the group has any
+other member: the job that follows cannot yet verify the caller's own records under the superseded signing key.
 
 **A handoff change during a rotation.** `rotate-keys` checks the handoff rows before it commits, and
 the commit alone cannot see them (a transaction of this size cannot condition on one row per group). A

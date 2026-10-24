@@ -71,6 +71,14 @@ export function stepText(step: KeyRotationStep): string {
   }
 }
 
+/** The line above "Finish key changes": what the button can and cannot do yet. */
+export function pendingRekeyText(
+  groups: readonly string[],
+  labelFor: (groupId: string) => string,
+): string {
+  return `A key change you started earlier still has to re-key ${groupList(groups, labelFor)}. Finishing works for groups where you are the only member; groups with other members finish in a later update. Keys cannot be rotated again until then.`
+}
+
 /** One line per group for the result of finishing a key change (#62). */
 export function selfRekeyText(
   outcome: SelfRekeyOutcome,
@@ -88,6 +96,8 @@ export function selfRekeyText(
       return `${label}: you are no longer an admin there, so there is nothing to finish.`
     case 'open':
       return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
+    case 'waiting':
+      return `${label}: this group has other members, and finishing it for them is not available yet. Nothing was changed; it will finish in a later update.`
     case 'incomplete':
       return `${label}: stopped (${outcome.reason}). Try again.`
   }

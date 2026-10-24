@@ -42,6 +42,8 @@ export type SelfRekeyOutcome =
   | { readonly status: 'not-admin' }
   /** An Open group: its self-wrap is not built yet; the row is kept. */
   | { readonly status: 'open' }
+  /** The group has other members; finishing for it waits for slice 4c. The row is kept. */
+  | { readonly status: 'waiting' }
   | { readonly status: 'incomplete'; readonly reason: string }
 
 function describe(err: unknown): string {
@@ -53,20 +55,22 @@ function codeOf(err: unknown): string | undefined {
 }
 
 /**
- * A reason when the start must not run yet, null when it may. Fails closed.
+ * Whether the start may run: 'ok', 'waiting' when another member would be
+ * stranded, or the reason the check could not run. Fails closed.
  *
  * Any other member blocks it: the start only exists after a key rotation, which
  * always leaves the caller's old signing key superseded, so the job that follows
  * cannot verify the caller's own pins and records (slice 4c).
  */
-async function otherMembersBlock(deps: SelfRekeyDeps, groupId: string): Promise<string | null> {
+async function otherMembersBlock(
+  deps: SelfRekeyDeps,
+  groupId: string,
+): Promise<'ok' | 'waiting' | { readonly reason: string }> {
   try {
     const members = await deps.listAllMembers(groupId)
-    return members.some((m) => m.userId !== deps.selfUserId)
-      ? 'this group has other members, and finishing key changes for it is not supported yet; nothing was changed'
-      : null
+    return members.some((m) => m.userId !== deps.selfUserId) ? 'waiting' : 'ok'
   } catch (err) {
-    return `could not check whether the key change can be finished: ${describe(err)}`
+    return { reason: `could not check whether the key change can be finished: ${describe(err)}` }
   }
 }
 
@@ -107,7 +111,8 @@ export async function runSelfRekey(
 
   // Checked before anything is sent: once the start commits the row is used up.
   const blocked = await otherMembersBlock(deps, groupId)
-  if (blocked !== null) return { status: 'incomplete', reason: blocked }
+  if (blocked === 'waiting') return { status: 'waiting' }
+  if (blocked !== 'ok') return { status: 'incomplete', reason: blocked.reason }
 
   let minted: StartGroupRotationResult
   try {

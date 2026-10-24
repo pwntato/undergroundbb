@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failureMessage,
+  pendingRekeyText,
   MIN_PASSWORD_LENGTH,
   selfRekeyText,
   stepText,
@@ -93,6 +94,7 @@ describe('selfRekeyText', () => {
     { status: 'rekeyed', rotation: { status: 'none' } },
     { status: 'rekeyed', rotation: { status: 'incomplete', reason: 'offline', rewrapped: 0 } },
     { status: 'stale' },
+    { status: 'waiting' },
     { status: 'not-admin' },
     { status: 'open' },
     { status: 'incomplete', reason: 'offline' },
@@ -111,5 +113,17 @@ describe('selfRekeyText', () => {
       'in place',
     )
     expect(selfRekeyText({ status: 'open' }, 'G', user)).not.toContain('in place')
+    expect(selfRekeyText({ status: 'waiting' }, 'G', user)).not.toContain('in place')
+    expect(selfRekeyText({ status: 'waiting' }, 'G', user)).not.toContain('Try again')
+  })
+})
+
+describe('pendingRekeyText', () => {
+  it('names the groups and says what finishing covers, with no dash as punctuation', () => {
+    const line = pendingRekeyText(['a'], label)
+    expect(line).toContain('Group a')
+    expect(line).toContain('only member')
+    expect(line).not.toContain('not available in this version')
+    expect(line).not.toMatch(/—|--/)
   })
 })

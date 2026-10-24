@@ -171,8 +171,7 @@ describe('runSelfRekey', () => {
     it('sends nothing and keeps the row', async () => {
       const t = setup()
       t.members.mockResolvedValue([{ userId: ME }, { userId: OTHER }])
-      const out = await runSelfRekey(t.deps, ROW)
-      expect(out).toMatchObject({ status: 'incomplete' })
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'waiting' })
       expect(t.mint).not.toHaveBeenCalled()
       expect(t.selfRekey).not.toHaveBeenCalled()
       expect(t.deleteHandoff).not.toHaveBeenCalled()

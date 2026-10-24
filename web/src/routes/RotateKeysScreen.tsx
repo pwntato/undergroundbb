@@ -33,7 +33,7 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { groupLabel } from './groupLabel'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
-import { failureMessage, selfRekeyText, stepText } from './rotateKeysCopy'
+import { failureMessage, pendingRekeyText, selfRekeyText, stepText } from './rotateKeysCopy'
 import { RotateKeysRetry } from './RotateKeysRetry'
 import { RotateKeysReview } from './RotateKeysReview'
 import { runListGroups } from './runListGroups'
@@ -324,10 +324,7 @@ export function RotateKeysScreen() {
             <>
               <Alert>
                 <AlertDescription>
-                  {failureMessage(
-                    { kind: 'handoffPending', groups: step.pre.pendingSelfRekeys },
-                    labelFor,
-                  )}
+                  {pendingRekeyText(step.pre.pendingSelfRekeys, labelFor)}
                 </AlertDescription>
               </Alert>
               <Button
