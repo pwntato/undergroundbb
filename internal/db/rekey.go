@@ -14,8 +14,10 @@ import (
 )
 
 // ErrHandoffStale: the caller's handoff row for the group is missing, names a
-// key other than the account's current one, or holds an older generation than
-// the caller's own entry point. Nothing was written; the client deletes the row.
+// key other than the account's current one, holds a generation other than the
+// caller's own entry point's, or the group has moved past the generation the row
+// was written at (a dormant admin's row still equals their entry). Nothing was
+// written; the client deletes the row.
 var ErrHandoffStale = errors.New("db: the handoff row is missing or stale")
 
 // SelfRekeyInput is the rotation an admin starts to bring their own entry

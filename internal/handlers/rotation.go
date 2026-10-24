@@ -278,8 +278,9 @@ type selfRekeyRequest struct {
 // admin who rotated their account keys starts the rotation that brings their
 // own entry point to the new key, from the group key their handoff row holds.
 // It removes no one. The start consumes the handoff row in its own transaction;
-// a row that is missing, names another key or holds an older generation is 409
-// handoff_stale, which tells the client to delete it. Only a Rotating group
+// a row that is missing, names another key, holds another generation or
+// belongs to a group that has moved past it is 409 handoff_stale, which tells
+// the client to delete it. Only a Rotating group
 // has a rotation to start.
 func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)

@@ -569,7 +569,9 @@ re-key's below; the `Open` self-wrap has no endpoint yet.) A thief gets nothing 
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
-conditioned on the generation, so a stale row fails the condition and is treated as not handed off;
+conditioned on the generation (the row's must equal the caller's entry, and the group's link for that
+generation must not exist yet, which is how a dormant admin's row is caught: its generation still
+equals their entry's), so a stale row fails the condition and is treated as not handed off;
 the group then has another admin to approve, by construction. Other than that, no group the user administers depends on a tab staying open.
 
 **The self re-key start.** `POST /api/groups/{gid}/rotation/rekey` is the start for an admin who
@@ -583,7 +585,8 @@ the server fixes the reason to `self` here, so a signature made for another reas
 (both carry `RekeyedUserID`, `RekeyReason` and the signature, and no `RemovedUserID`, so a resuming
 admin or a takeover never reads a re-key as a removal), moves the caller's entry to the new key and
 sets its `WrapEpoch`, checks the caller's `KeyEpoch`, and **deletes the handoff row, requiring that it
-exist, name the account's current wrapping key and hold the generation the caller's entry is at**.
+exist, name the account's current wrapping key and hold the generation the caller's entry is at, with the
+group not yet past it (no `GENKEY#` link for that generation)**.
 Otherwise 409 `handoff_stale` and nothing is written, which is the signal for the client to delete the
 row. A rotation already in progress is 409 `rotation_in_progress`, as for any start. The record is
 served on the group's `rotation` and on keychain links as `rekeyedUserId` and `rekeyReason`. The
