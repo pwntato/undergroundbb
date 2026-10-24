@@ -18,10 +18,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type { TakeOverRotationRequest } from '@/lib/api/groups'
 import type { HandoffEntry } from '@/lib/api/keyRotation'
-import type {
-  StartGroupRotationResult,
-  StartSelfRekeyRequest,
-} from '@/lib/crypto/worker-protocol'
+import type { StartGroupRotationResult, StartSelfRekeyRequest } from '@/lib/crypto/worker-protocol'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 
 export interface SelfRekeyDeps extends RotationDeps {

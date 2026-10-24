@@ -155,7 +155,9 @@ function verifyRekeyLink(
     return fail(`generation ${String(generation)} has a malformed re-key record`)
   }
   if (rekeyReason !== 'self' || rekeyedUserId !== removerUserId) {
-    return fail(`generation ${String(generation)} has a re-key record of a kind this app cannot check`)
+    return fail(
+      `generation ${String(generation)} has a re-key record of a kind this app cannot check`,
+    )
   }
   let signature: Uint8Array
   try {

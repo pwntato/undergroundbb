@@ -95,8 +95,9 @@ export function RotateKeysReview({
         )}
         {groups.length > 0 && (
           <p className="text-muted-foreground">
-            In these groups your new keys take over right away, with no one else needed. This works
-            from your new keys after the change, even if you close this tab.
+            In these groups your new keys take over without anyone else. After the change, log in
+            with your new password and finish the key change from this page; that works even if you
+            close this tab first.
           </p>
         )}
       </div>

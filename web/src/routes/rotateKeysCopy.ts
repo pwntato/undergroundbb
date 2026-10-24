@@ -2,7 +2,9 @@
 // out of the component so they can be tested and so oxlint's
 // only-export-components rule has nothing to object to.
 
+import { describeRotation } from './runRotation'
 import type { KeyRotationFailure, KeyRotationStep } from './runKeyRotation'
+import type { SelfRekeyOutcome } from './runSelfRekey'
 
 /** Same floor as signup and change-password: it only stops an accidental empty submit. */
 export const MIN_PASSWORD_LENGTH = 8
@@ -35,7 +37,7 @@ export function failureMessage(
     case 'cooldown':
       return 'You rotated your keys recently. Keys can be rotated once a day, so try again tomorrow.'
     case 'handoffPending':
-      return `A key change you started earlier is still waiting to finish re-keying ${groupList(failure.groups, labelFor)}. That step is not available in this version yet and will finish in a later update; nothing needs doing now, and keys cannot be rotated again until then.`
+      return `A key change you started earlier still has to re-key ${groupList(failure.groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
     case 'groupBusy':
       return `Another admin's key change is still under way in ${groupList(failure.groups, labelFor)}. Wait for it to finish, then try again.`
     case 'changedElsewhere':
@@ -66,5 +68,27 @@ export function stepText(step: KeyRotationStep): string {
       return 'Making sure the earlier attempt did not go through. This takes about a minute; stay on this page…'
     case 'committing':
       return 'Saving your new keys…'
+  }
+}
+
+/** One line per group for the result of finishing a key change (#62). */
+export function selfRekeyText(
+  outcome: SelfRekeyOutcome,
+  label: string,
+  userLabel: (userId: string) => string,
+): string {
+  switch (outcome.status) {
+    case 'rekeyed': {
+      const note = describeRotation(outcome.rotation, userLabel)
+      return note === null ? `${label}: your new keys are in place.` : `${label}: ${note.text}`
+    }
+    case 'stale':
+      return `${label}: the group moved on before this finished, so the saved key was no longer needed. Another admin can approve your new keys there.`
+    case 'not-admin':
+      return `${label}: you are no longer an admin there, so there is nothing to finish.`
+    case 'open':
+      return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
+    case 'incomplete':
+      return `${label}: stopped (${outcome.reason}). Try again.`
   }
 }

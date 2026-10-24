@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   failureMessage,
   MIN_PASSWORD_LENGTH,
+  selfRekeyText,
   stepText,
   validateNewPassword,
 } from './rotateKeysCopy'
 import type { KeyRotationFailure, KeyRotationStep } from './runKeyRotation'
+import type { SelfRekeyOutcome } from './runSelfRekey'
 
 const label = (id: string) => `Group ${id}`
 
@@ -81,5 +83,33 @@ describe('stepText', () => {
     for (const name of ['preparing', 'signing', 'committing'] as const) {
       expect(stepText({ name })).toMatch(/…$/)
     }
+  })
+})
+
+describe('selfRekeyText', () => {
+  const user = () => 'a member'
+  const outcomes: SelfRekeyOutcome[] = [
+    { status: 'rekeyed', rotation: { status: 'completed', rewrapped: 2 } },
+    { status: 'rekeyed', rotation: { status: 'none' } },
+    { status: 'rekeyed', rotation: { status: 'incomplete', reason: 'offline', rewrapped: 0 } },
+    { status: 'stale' },
+    { status: 'not-admin' },
+    { status: 'open' },
+    { status: 'incomplete', reason: 'offline' },
+  ]
+
+  it('has a line for every outcome, naming the group, with no dash as punctuation', () => {
+    for (const o of outcomes) {
+      const line = selfRekeyText(o, 'Group a', user)
+      expect(line.startsWith('Group a: ')).toBe(true)
+      expect(line).not.toMatch(/—|--/)
+    }
+  })
+
+  it('never claims the keys are in place unless the start ran', () => {
+    expect(selfRekeyText({ status: 'incomplete', reason: 'x' }, 'G', user)).not.toContain(
+      'in place',
+    )
+    expect(selfRekeyText({ status: 'open' }, 'G', user)).not.toContain('in place')
   })
 })

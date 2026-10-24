@@ -35,6 +35,7 @@ import {
   signSuccessorDesignation,
   signLeaveRotationStart,
   startGroupRotation,
+  startSelfRekey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import {
@@ -43,6 +44,7 @@ import {
   groupNameAAD,
   memberWrapAAD,
   roleGrantPayload,
+  rotationRekeyPayload,
   rotationStartPayload,
   successorClaimPayload,
   successorDesignationPayload,
@@ -55,9 +57,10 @@ import {
   inviteCreationPayload,
 } from './invite.js'
 import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
+import { handoffWrapAAD } from './key-rotation.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { evaluatePin } from './pin.js'
-import { unwrap } from './x25519.js'
+import { unwrap, wrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -1281,6 +1284,75 @@ describe('group key rotation (#58)', () => {
         memberWrapAAD(GROUP_ID, ADMIN_ID, 0),
       ),
     ).rejects.toThrow()
+  })
+
+  it('self re-key: opens the handoff row, mints generation+1 and signs the rekey record (#62)', async () => {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-rekey')
+    const oldKey = new Uint8Array(32).fill(7)
+    // The row is the old group key wrapped to the account's (new) wrapping key.
+    const row = await wrap(
+      admin.wrappingKey.publicKey,
+      oldKey,
+      handoffWrapAAD(ADMIN_ID, GROUP_ID, 3, admin.wrappingKey.publicKey),
+    )
+    const started = await startSelfRekey(admin, GROUP_ID, 3, row)
+    expect(started.generation).toBe(4)
+
+    // The caller's entry at the new generation yields the NEW key, and the link
+    // holds the handed-off key under it, bound to generation 3.
+    const newKey = await unwrap(
+      admin.wrappingKey.privateKey,
+      wire(started.removerWrappedKey),
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 4),
+    )
+    expect(newKey).not.toEqual(oldKey)
+    const walked = await decrypt(
+      newKey,
+      base64ToBytes(started.link.nonce),
+      base64ToBytes(started.link.ciphertext),
+      genKeyAAD(GROUP_ID, 3),
+    )
+    expect(walked).toEqual(oldKey)
+
+    // Signed under the rekey context for reason "self", naming the caller, and
+    // not as a removal.
+    const sig = base64ToBytes(started.startSignature)
+    const pub = admin.signingKey.publicKey
+    const payload = rotationRekeyPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 4, 'self')
+    expect(ed25519.verify(pub, ed25519.SigningContext.RotationRekey, payload, sig)).toBe(true)
+    for (const other of [
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 4, 'approval'),
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, 'someone-else', 4, 'self'),
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 3, 'self'),
+      rotationRekeyPayload('other-group', ADMIN_ID, ADMIN_ID, 4, 'self'),
+    ]) {
+      expect(ed25519.verify(pub, ed25519.SigningContext.RotationRekey, other, sig)).toBe(false)
+    }
+    expect(
+      ed25519.verify(
+        pub,
+        ed25519.SigningContext.RotationStart,
+        rotationStartPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 4),
+        sig,
+      ),
+    ).toBe(false)
+  })
+
+  it('self re-key: a row for another group, generation or key does not open', async () => {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-rekey2')
+    const oldKey = new Uint8Array(32).fill(7)
+    const aad = (group: string, gen: number) =>
+      handoffWrapAAD(ADMIN_ID, group, gen, admin.wrappingKey.publicKey)
+    const swapped = await wrap(admin.wrappingKey.publicKey, oldKey, aad('other-group', 3))
+    await expect(startSelfRekey(admin, GROUP_ID, 3, swapped)).rejects.toThrow()
+    const wrongGen = await wrap(admin.wrappingKey.publicKey, oldKey, aad(GROUP_ID, 2))
+    await expect(startSelfRekey(admin, GROUP_ID, 3, wrongGen)).rejects.toThrow()
+    const memberEntry = await wrap(
+      admin.wrappingKey.publicKey,
+      oldKey,
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 3),
+    )
+    await expect(startSelfRekey(admin, GROUP_ID, 3, memberEntry)).rejects.toThrow()
   })
 
   it('signs the rotation start naming the removed member, under the RotationStart context', async () => {
