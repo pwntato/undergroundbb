@@ -564,13 +564,31 @@ admin or a member, is deleted by the client with an ordinary delete
 rows with `GET /api/account/rotation-handoff` (the caller's own, ciphertext only). The delete on
 success is not a separate call: the row is in the caller's partition at a known key, so the start's
 (or self-wrap's) own transaction deletes it, and a crash cannot leave a used row behind to block
-`rotate-keys`. (Built for the two starts that exist, a removal's and a leave takeover's; the `Open`
-self-wrap has no endpoint yet.) A thief gets nothing from these rows: only the holder of the new
+`rotate-keys`. (Built for the three starts that exist, a removal's, a leave takeover's and the self
+re-key's below; the `Open` self-wrap has no endpoint yet.) A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
 conditioned on the generation, so a stale row fails the condition and is treated as not handed off;
 the group then has another admin to approve, by construction. Other than that, no group the user administers depends on a tab staying open.
+
+**The self re-key start.** `POST /api/groups/{gid}/rotation/rekey` is the start for an admin who
+rotated their account keys: a rotation that removes no one, run from the group key the handoff row
+holds. It is admin only and refused for an `Open` group and a direct message (400
+`rotation_not_applicable`). The body is the next generation, the chain link, the caller's own wrap of
+the new key and a signature. The signature is under its own context, `underground-bb:rotation-rekey:v1`,
+over `RotationRekeyPayload` (group, admin, **member re-keyed**, generation rotated to, **reason**);
+the server fixes the reason to `self` here, so a signature made for another reason or for a removal
+(`rotation-start:v1`) does not verify. The transaction writes the marker and the `GENKEY#` link
+(both carry `RekeyedUserID`, `RekeyReason` and the signature, and no `RemovedUserID`, so a resuming
+admin or a takeover never reads a re-key as a removal), moves the caller's entry to the new key and
+sets its `WrapEpoch`, checks the caller's `KeyEpoch`, and **deletes the handoff row, requiring that it
+exist, name the account's current wrapping key and hold the generation the caller's entry is at**.
+Otherwise 409 `handoff_stale` and nothing is written, which is the signal for the client to delete the
+row. A rotation already in progress is 409 `rotation_in_progress`, as for any start. The record is
+served on the group's `rotation` and on keychain links as `rekeyedUserId` and `rekeyReason`. The
+clients do not read it yet: a verifier or resumer that finds a marker or link with a re-key record
+treats it as unverifiable, which is why the client for this start ships with it.
 
 **A handoff change during a rotation.** `rotate-keys` checks the handoff rows before it commits, and
 the commit alone cannot see them (a transaction of this size cannot condition on one row per group). A
