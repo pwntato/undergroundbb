@@ -585,6 +585,26 @@ export interface StartGroupRotationResponse {
 }
 
 /**
+ * #62: mints the next key for an admin's self re-key after rotating their
+ * account keys, from the HANDOFF# row (the old group key wrapped to the new
+ * wrapping key). See credential-material.ts's startSelfRekey.
+ */
+export interface StartSelfRekeyRequest {
+  readonly kind: 'startSelfRekey'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly handoffGeneration: number
+  readonly handoffWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+export interface StartSelfRekeyResponse {
+  readonly kind: 'startSelfRekeyDone'
+  readonly id: string
+  readonly result: StartGroupRotationResult
+}
+
+/**
  * #178: signs the rotation start a LEAVE carries, naming the caller as the
  * member removed. No key is minted. See credential-material.ts's
  * signLeaveRotationStart.
@@ -857,6 +877,7 @@ export type WorkerRequest =
   | CompleteInviteRequest
   | SignReadmissionRequest
   | StartGroupRotationRequest
+  | StartSelfRekeyRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
   | BeginKeyRotationRequest
@@ -888,6 +909,7 @@ export type WorkerResponse =
   | CompleteInviteResponse
   | SignReadmissionResponse
   | StartGroupRotationResponse
+  | StartSelfRekeyResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse
   | BeginKeyRotationResponse

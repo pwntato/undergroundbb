@@ -30,6 +30,7 @@ import {
   rewrapGroupKey as rewrapGroupKeyPure,
   signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
+  startSelfRekey as startSelfRekeyPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
@@ -70,6 +71,7 @@ import type {
   RewrapGroupKeyRequest,
   SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
+  StartSelfRekeyRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
@@ -184,6 +186,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
+      return
+    case 'startSelfRekey':
+      await startSelfRekey(req)
       return
     case 'signLeaveRotationStart':
       signLeaveRotationStart(req)
@@ -514,6 +519,18 @@ async function startGroupRotation(req: StartGroupRotationRequest): Promise<void>
     req.subjectUserId,
   )
   post({ kind: 'startGroupRotationDone', id: req.id, result })
+}
+
+/** #62: mints the key of an admin's self re-key from their handoff row. */
+async function startSelfRekey(req: StartSelfRekeyRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 're-key a group')
+  const result = await startSelfRekeyPure(
+    keys,
+    req.groupId,
+    req.handoffGeneration,
+    wrappedFromWire(req.handoffWrappedKey),
+  )
+  post({ kind: 'startSelfRekeyDone', id: req.id, result })
 }
 
 /** #178: signs the rotation start a leave carries; mints nothing. */

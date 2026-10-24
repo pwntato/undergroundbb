@@ -13,9 +13,11 @@ import {
   listGrants,
   listMembers,
   readmitMember,
+  selfRekey,
   takeOverRotation,
   rewrapMembers,
 } from '@/lib/api/groups'
+import { deleteHandoff } from '@/lib/api/keyRotation'
 import { getUsers } from '@/lib/api/users'
 import {
   getOwnSigningKey,
@@ -23,12 +25,14 @@ import {
   signPin,
   signReadmission,
   startGroupRotation,
+  startSelfRekey,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
 import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
+import type { SelfRekeyDeps } from './runSelfRekey'
 
 /** Signs a pin of someone's served keys with the caller's key and stores it. */
 export function makePinKeys(userId: string): RotationDeps['pinKeys'] {
@@ -64,6 +68,16 @@ export function makeRotationDeps(userId: string): RotationDeps {
     completeRotation,
     takeOverCrypto: startGroupRotation,
     takeOverRotation,
+  }
+}
+
+/** The rotation wiring plus what the self re-key from a handoff row needs (#62). */
+export function makeSelfRekeyDeps(userId: string): SelfRekeyDeps {
+  return {
+    ...makeRotationDeps(userId),
+    startSelfRekeyCrypto: startSelfRekey,
+    selfRekey,
+    deleteHandoff,
   }
 }
 
