@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { base64ToBytes, bytesToBase64 } from './base64.js'
-import { completeLogin, type LiveKeys } from './credential-material.js'
+import { completeLogin, startSelfRekey, type LiveKeys } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
 import { memberWrapAAD } from './group.js'
 import { handoffWrapAAD, keyRotationPayload, rosterDigest, rosterEntryId } from './key-rotation.js'
@@ -85,6 +85,37 @@ describe('wrapHandoff', () => {
           pending.wrappingKey.publicKey,
         ),
       ),
+    ).rejects.toThrow()
+  })
+
+  it('is what the self re-key opens: the row written before the rotation starts the one after it', async () => {
+    const oldKeys = liveKeys()
+    const groupKey = crypto.getRandomValues(new Uint8Array(32))
+    const { pending } = beginKeyRotation(oldKeys)
+    const out = await wrapHandoff(oldKeys, pending, {
+      groupId: GROUP,
+      ownWrappedGroupKey: await ownEntry(oldKeys, groupKey, 3),
+      generation: 3,
+    })
+    // After the rotation commits, the account holds the pending keys.
+    const newKeys: LiveKeys = {
+      userId: USER,
+      signingKey: pending.signingKey,
+      wrappingKey: pending.wrappingKey,
+    }
+    const started = await startSelfRekey(newKeys, GROUP, out.generation, {
+      ephemeralPub: base64ToBytes(out.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(out.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(out.wrappedGroupKey.ciphertext),
+    })
+    expect(started.generation).toBe(4)
+    // The old keys cannot start it: the row is not wrapped to them.
+    await expect(
+      startSelfRekey(oldKeys, GROUP, out.generation, {
+        ephemeralPub: base64ToBytes(out.wrappedGroupKey.ephemeralPub),
+        nonce: base64ToBytes(out.wrappedGroupKey.nonce),
+        ciphertext: base64ToBytes(out.wrappedGroupKey.ciphertext),
+      }),
     ).rejects.toThrow()
   })
 
