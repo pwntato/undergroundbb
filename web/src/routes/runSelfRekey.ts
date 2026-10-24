@@ -12,6 +12,11 @@
 //     consistent index, and a row can be the only copy of a key.
 //   - An unreadable row (unwrap fails) is reported and kept: it may be a swapped
 //     row, but deleting on a decrypt error would also delete the last copy.
+//   - The start is refused while the caller's signing key has changed and other
+//     members would be left behind: the job that follows cannot yet verify the
+//     caller's own pins and records under a superseded key (slice 4c), so it
+//     would consume the row and strand everyone at the old generation. Nothing
+//     is sent; the row is kept.
 //   - Open groups wait for the self-wrap, which has no endpoint yet; they are
 //     reported and left alone.
 
@@ -48,6 +53,27 @@ function codeOf(err: unknown): string | undefined {
   return err instanceof ApiError ? err.code : undefined
 }
 
+/** A reason when the start must not run yet, null when it may. Fails closed. */
+async function keyChangeStrandsMembers(
+  deps: SelfRekeyDeps,
+  groupId: string,
+): Promise<string | null> {
+  try {
+    const members = await deps.listAllMembers(groupId)
+    if (!members.some((m) => m.userId !== deps.selfUserId)) return null
+    const served = (await deps.getUsers([deps.selfUserId])).get(deps.selfUserId)
+    if (served === undefined) return 'could not check your own key history'
+    const changed =
+      served.supersededSigningKeys.length > 0 ||
+      served.signingPublicKey !== (await deps.ownSigningKey())
+    return changed
+      ? 'this group has other members, and finishing key changes with a changed signing key is not supported yet; nothing was changed'
+      : null
+  } catch (err) {
+    return `could not check whether the key change can be finished: ${describe(err)}`
+  }
+}
+
 export async function runSelfRekey(
   deps: SelfRekeyDeps,
   row: HandoffEntry,
@@ -82,6 +108,10 @@ export async function runSelfRekey(
   if (detail.rotation !== undefined) return continueJob()
   // The caller's own entry already moved past the row: nothing can use it.
   if (detail.generation !== row.generation) return staleRow()
+
+  // Checked before anything is sent: once the start commits the row is used up.
+  const blocked = await keyChangeStrandsMembers(deps, groupId)
+  if (blocked !== null) return { status: 'incomplete', reason: blocked }
 
   let minted: StartGroupRotationResult
   try {
