@@ -369,8 +369,6 @@ func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "your handoff for this group is missing or out of date; delete it", "handoff_stale")
 	case errors.Is(err, db.ErrRotationInProgress):
 		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; finish it first", "rotation_in_progress")
-	case errors.Is(err, db.ErrRotationStaleGeneration):
-		WriteErrorWithCode(w, http.StatusConflict, "your key is behind the group's current generation; reload and try again", "rotation_stale_generation")
 	case errors.Is(err, db.ErrWrapEpochStale):
 		WriteErrorWithCode(w, http.StatusConflict, "your keys were rotated by another request; reload and try again", "key_epoch_stale")
 	default:

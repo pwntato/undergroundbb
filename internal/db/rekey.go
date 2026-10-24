@@ -136,7 +136,11 @@ func (c *Client) SelfRekey(ctx context.Context, in SelfRekeyInput) error {
 		case isConditionalCheckFailure(err, markerIndex):
 			return ErrRotationInProgress
 		case isConditionalCheckFailure(err, linkIndex):
-			return ErrRotationStaleGeneration
+			// With no marker, a link at the caller's generation means the group
+			// moved past it while the caller was dormant: the row holds a key
+			// that is no longer current ("One window remains", DESIGN.md), the
+			// same answer as a row at another generation.
+			return ErrHandoffStale
 		case isConditionalCheckFailure(err, callerIndex):
 			return ErrRewrapCallerBehind
 		case isConditionalCheckFailure(err, epochIndex):

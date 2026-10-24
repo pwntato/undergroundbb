@@ -180,6 +180,33 @@ func setHandoff(t *testing.T, userID, gid, attr string, v types.AttributeValue) 
 	}
 }
 
+// The reachable stale row: an admin rotated and went dormant, then the group
+// moved past their generation without them. Their row is at the old generation,
+// still names their current key, and the group's link for it already exists.
+// That must read as a stale row (so the client deletes it), not as a generation
+// the caller could reload past.
+func TestSelfRekeyByADormantAdminWhoseGroupMovedOnIsAStaleRow(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, owner, bob, carol, ownerCookie, bobCookie, _ := rotatingGroupWith(t, h)
+	bobNext, bobNextCookie := rotateUser(t, h, bob, bobCookie, gid)
+	if rec := doRemove(t, h, ownerCookie, gid, carol.userID, &removeMemberRequest{Rotation: rotationBody(t, owner, gid, carol.userID, 1)}); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRotationCall(t, h, ownerCookie, http.MethodPost, gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
+		t.Fatalf("complete around the dormant admin: %d %s", rec.Code, rec.Body.String())
+	}
+	if g := numAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID), "Generation"); g != "0" {
+		t.Fatalf("bob generation = %s, want 0 (dormant)", g)
+	}
+	rec := doRotationCall(t, h, bobNextCookie, http.MethodPost, gid, "rekey", selfRekeyBody(t, bobNext, gid, 1))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "handoff_stale" {
+		t.Fatalf("re-key: %d %s, want 409 handoff_stale", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "GROUP#"+gid, "ROTATION") != nil {
+		t.Fatal("a refused re-key wrote a marker")
+	}
+}
+
 // An Open group has no way to re-key, by its own definition; its self-wrap is a
 // different endpoint.
 func TestSelfRekeyRefusesAnOpenGroup(t *testing.T) {
