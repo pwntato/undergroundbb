@@ -122,7 +122,7 @@ func TestSelfRekeyStartsARotationThatRemovesNoOneAndConsumesTheRow(t *testing.T)
 	}
 
 	// One rotation at a time.
-	if rec := doRotationCall(t, h, nextCookie, http.MethodPost, gid, "rekey", selfRekeyBody(t, next, gid, 2)); rec.Code != http.StatusConflict {
+	if rec := doRotationCall(t, h, nextCookie, http.MethodPost, gid, "rekey", selfRekeyBody(t, next, gid, 2)); rec.Code != http.StatusConflict || errCode(t, rec) != "rotation_in_progress" {
 		t.Errorf("second start: %d %s", rec.Code, rec.Body.String())
 	}
 }
