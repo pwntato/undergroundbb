@@ -650,6 +650,11 @@ type rotationState struct {
 	// removal began the rotation (#178); absent on a marker from before it.
 	RemovedUserID  string `json:"removedUserId,omitempty"`
 	StartSignature string `json:"startSignature,omitempty"`
+	// RekeyedUserID and RekeyReason say the rotation removed no one and
+	// re-keyed one member's entry (#62); StartSignature is then over the
+	// re-key payload.
+	RekeyedUserID string `json:"rekeyedUserId,omitempty"`
+	RekeyReason   string `json:"rekeyReason,omitempty"`
 }
 
 // currentGrantRef is a member's own current grant address: the one recorded
@@ -756,6 +761,8 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 				StartedAt:     rot.StartedAt,
 				StartedBy:     rot.StartedBy,
 				RemovedUserID: rot.RemovedUserID,
+				RekeyedUserID: rot.RekeyedUserID,
+				RekeyReason:   rot.RekeyReason,
 			}
 			if len(rot.StartSignature) > 0 {
 				resp.Rotation.StartSignature = base64.StdEncoding.EncodeToString(rot.StartSignature)

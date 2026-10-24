@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
 	"github.com/pwntato/undergroundbb/internal/models"
@@ -262,4 +263,119 @@ func (h *Handler) writeRotationErr(w http.ResponseWriter, r *http.Request, err e
 		WriteInternalError(w, r, err, fallback)
 	}
 	return true
+}
+
+// selfRekeyRequest is the body of POST /api/groups/{groupId}/rotation/rekey.
+type selfRekeyRequest struct {
+	Generation int64       `json:"generation"`
+	Link       wrappedBlob `json:"link"`
+	// WrappedKey is the new key wrapped for the caller (their only copy).
+	WrappedKey     wrappedKey `json:"wrappedKey"`
+	StartSignature string     `json:"startSignature"`
+}
+
+// selfRekey implements POST /api/groups/{groupId}/rotation/rekey (#62): an
+// admin who rotated their account keys starts the rotation that brings their
+// own entry point to the new key, from the group key their handoff row holds.
+// It removes no one. The start consumes the handoff row in its own transaction;
+// a row that is missing, names another key or holds an older generation is 409
+// handoff_stale, which tells the client to delete it. Only a Rotating group
+// has a rotation to start.
+func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRewrapBodyBytes)
+	var req selfRekeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	// Same rule as getGroup: every read happens before any 404 branch.
+	caller, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not start the re-key")
+		return
+	}
+	group, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not start the re-key")
+		return
+	}
+	if caller == nil || group == nil {
+		groupNotFound(w)
+		return
+	}
+	if caller.Role != models.RoleAdmin {
+		WriteError(w, http.StatusForbidden, "only a group admin can re-key")
+		return
+	}
+	if group.GroupType == "dm" || group.RevocationMode == models.RevocationOpen {
+		WriteErrorWithCode(w, http.StatusBadRequest, "this group does not rotate keys", "rotation_not_applicable")
+		return
+	}
+	if req.Generation != caller.Generation+1 {
+		WriteError(w, http.StatusBadRequest, fmt.Sprintf("generation: must be %d (one past your own key generation)", caller.Generation+1))
+		return
+	}
+	link, err := decodeWrappedBlob(req.Link)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "link: "+err.Error())
+		return
+	}
+	wrapped, err := decodeWrappedKey(req.WrappedKey)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, "wrappedKey: "+err.Error())
+		return
+	}
+	sig, err := decodeBase64Field(req.StartSignature, ed25519SignatureSize, maxSignatureLen)
+	if err != nil {
+		WriteErrorWithCode(w, http.StatusBadRequest, "startSignature: "+err.Error(), "bad_signature")
+		return
+	}
+	// The strongly consistent read: the key epoch and the wrapping key below
+	// are re-checked by the transaction, but a stale read would send an honest
+	// client a spurious refusal.
+	self, err := h.db.GetUserByIDConsistent(r.Context(), userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not start the re-key")
+		return
+	}
+	payload := crypto.RotationRekeyPayload(groupID, userID, userID, req.Generation, crypto.RekeyReasonSelf)
+	if !crypto.Verify(self.SigningPublicKey, crypto.ContextRotationRekey, payload, sig) {
+		WriteErrorWithCode(w, http.StatusBadRequest, "startSignature: does not verify against the caller's current signing key", "bad_signature")
+		return
+	}
+	err = h.db.SelfRekey(r.Context(), db.SelfRekeyInput{
+		GroupID:           groupID,
+		CallerUserID:      userID,
+		CurrentGeneration: caller.Generation,
+		Link:              link,
+		CallerWrappedKey:  wrapped,
+		CallerKeyEpoch:    self.KeyEpoch,
+		CallerWrappingKey: self.WrappingPublicKey,
+		Reason:            crypto.RekeyReasonSelf,
+		StartSignature:    sig,
+	})
+	switch {
+	case errors.Is(err, db.ErrHandoffStale):
+		WriteErrorWithCode(w, http.StatusConflict, "your handoff for this group is missing or out of date; delete it", "handoff_stale")
+	case errors.Is(err, db.ErrRotationInProgress):
+		WriteErrorWithCode(w, http.StatusConflict, "a key rotation is already in progress; finish it first", "rotation_in_progress")
+	case errors.Is(err, db.ErrRotationStaleGeneration):
+		WriteErrorWithCode(w, http.StatusConflict, "your key is behind the group's current generation; reload and try again", "rotation_stale_generation")
+	case errors.Is(err, db.ErrWrapEpochStale):
+		WriteErrorWithCode(w, http.StatusConflict, "your keys were rotated by another request; reload and try again", "key_epoch_stale")
+	default:
+		if !h.writeRotationErr(w, r, err, "could not start the re-key") {
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
 }
