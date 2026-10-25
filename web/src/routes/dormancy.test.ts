@@ -39,44 +39,57 @@ const usersOf = (...us: UserProjection[]) => new Map(us.map((u) => [u.userId, u]
 
 describe('findDormant', () => {
   it('reports a member whose entry is wrapped before their latest rotation', () => {
-    const out = findDormant([member(BOB, 0)], usersOf(user(BOB, 1)), ME, 0)
+    const out = findDormant([member(BOB, 0)], usersOf(user(BOB, 1)), ME, 0, 'rotating')
     expect(out.map((d) => [d.userId, d.keyEpoch, d.wrapEpoch])).toEqual([[BOB, 1, 0]])
     expect(out[0]?.fingerprint).toMatch(/\S/)
   })
 
   it('does not report a member whose entry matches or is past their epoch', () => {
     const members = [member(BOB, 1), member(CAROL, 2)]
-    expect(findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 0)).toEqual([])
+    expect(findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 0, 'rotating')).toEqual(
+      [],
+    )
   })
 
   it('does not report a member who never rotated', () => {
-    expect(findDormant([member(BOB, 0)], usersOf(user(BOB, 0)), ME, 0)).toEqual([])
+    expect(findDormant([member(BOB, 0)], usersOf(user(BOB, 0)), ME, 0, 'rotating')).toEqual([])
   })
 
   it('leaves out the caller, a deleted account, a missing projection and an unknown wrapEpoch', () => {
     const members = [member(ME, 0), member(BOB, 0), member(CAROL, 0), member(DAVE, undefined)]
     const users = usersOf(user(ME, 1), user(BOB, 1, { deleted: true }), user(DAVE, 1))
-    expect(findDormant(members, users, ME, 0)).toEqual([])
+    expect(findDormant(members, users, ME, 0, 'rotating')).toEqual([])
   })
 
   it('says whether the entry is behind the caller’s generation or at it', () => {
     const members = [member(BOB, 0, 1), member(CAROL, 0, 2)]
-    const out = findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 2)
+    const out = findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 2, 'rotating')
     expect(out.map((d) => [d.userId, d.entry])).toEqual([
       [BOB, 'behind'],
       [CAROL, 'current'],
     ])
   })
 
+  it('calls every dormant member in an Open group a plain wrap, whatever their generation', () => {
+    const members = [member(BOB, 0, 1), member(CAROL, 0, 2)]
+    const out = findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 2, 'open')
+    expect(out.map((d) => [d.userId, d.entry])).toEqual([
+      [BOB, 'open'],
+      [CAROL, 'open'],
+    ])
+  })
+
   it('keeps roster order', () => {
     const members = [member(CAROL, 0), member(BOB, 0)]
-    const out = findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 0)
+    const out = findDormant(members, usersOf(user(BOB, 1), user(CAROL, 1)), ME, 0, 'rotating')
     expect(out.map((d) => d.userId)).toEqual([CAROL, BOB])
   })
 
   it('has no fingerprint when the served keys are malformed', () => {
     const bad = user(BOB, 1, { signingPublicKey: '!!' })
-    expect(findDormant([member(BOB, 0)], usersOf(bad), ME, 0)[0]?.fingerprint).toBeNull()
+    expect(
+      findDormant([member(BOB, 0)], usersOf(bad), ME, 0, 'rotating')[0]?.fingerprint,
+    ).toBeNull()
   })
 })
 
@@ -87,6 +100,7 @@ describe('loadDormancy', () => {
       { getUsers, selfUserId: ME },
       [member(ME, 0), member(BOB, 0), member(CAROL, 0)],
       0,
+      'rotating',
     )
     expect(getUsers.mock.calls[0]?.[0]).toEqual([BOB, CAROL])
     expect(out.state === 'ready' && out.dormant.map((d) => d.userId)).toEqual([BOB])
@@ -101,13 +115,14 @@ describe('loadDormancy', () => {
       { getUsers, selfUserId: ME },
       [member(BOB, 0), member(CAROL, 0)],
       0,
+      'rotating',
     )
     expect(out).toEqual({ state: 'unavailable' })
   })
 
   it('asks for nobody when the caller is the whole roster', async () => {
     const getUsers = vi.fn()
-    const out = await loadDormancy({ getUsers, selfUserId: ME }, [member(ME, 0)], 0)
+    const out = await loadDormancy({ getUsers, selfUserId: ME }, [member(ME, 0)], 0, 'rotating')
     expect(out).toEqual({ state: 'ready', dormant: [] })
     expect(getUsers).not.toHaveBeenCalled()
   })

@@ -11,7 +11,8 @@ const ENTRY_NOTE: Record<DormantMember['entry'], string> = {
   behind:
     'The group has moved on to a newer key since they changed theirs, so approving them wraps the current key to their new one.',
   current:
-    'They are still on the group’s current key, so the keys they replaced can still read it. Approving them means a new key for the whole group.',
+    'They are still on the group’s current key, so the keys they replaced can still read it. Approving them means a new key for the whole group, which only an admin can do.',
+  open: 'Approving them wraps the group’s key to their new keys, replacing the copy wrapped to the keys they replaced. The old keys can still read the group, as in any open group.',
 }
 
 export function DormantMembersNotice({

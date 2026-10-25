@@ -139,7 +139,10 @@ export function GroupMembersPanel({
           </AlertDescription>
         </Alert>
       )}
-      <DormantMembersNotice dormancy={dormancy} usernames={usernames} />
+      {/* Only an admin or ambassador can approve, so a member keeps just the row badge. */}
+      {(isAdmin || view.myRole === 'ambassador') && (
+        <DormantMembersNotice dormancy={dormancy} usernames={usernames} />
+      )}
       <ul className="flex flex-col gap-2">
         {rows.map((m) => {
           const isSelf = m.userId === userId

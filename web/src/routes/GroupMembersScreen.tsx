@@ -201,6 +201,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         { getUsers, selfUserId: userId },
         view.members,
         view.myGeneration,
+        view.revocationMode,
       )
       if (!cancelled) {
         setDormancyFor({ view, dormancy })

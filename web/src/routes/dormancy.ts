@@ -17,9 +17,10 @@ import { servedFingerprint } from './runMemberVerification'
  * a generation was minted since they rotated, so a plain wrap of the current
  * key approves them. 'current': the old keys still hold the current key, so
  * approving needs a new key for everyone (the server decides; this only sets
- * the expectation).
+ * the expectation). 'open': an Open group has no re-key, so either way a plain
+ * wrap at the approver's generation approves them.
  */
-export type DormantEntry = 'behind' | 'current'
+export type DormantEntry = 'behind' | 'current' | 'open'
 
 export interface DormantMember {
   readonly userId: string
@@ -53,6 +54,7 @@ export function findDormant(
   users: ReadonlyMap<string, UserProjection>,
   selfUserId: string,
   myGeneration: GroupDetail['generation'],
+  revocationMode: GroupDetail['revocationMode'],
 ): DormantMember[] {
   const out: DormantMember[] = []
   for (const m of members) {
@@ -67,7 +69,8 @@ export function findDormant(
       keyEpoch: user.keyEpoch,
       wrapEpoch: m.wrapEpoch,
       fingerprint: servedFingerprint(user),
-      entry: m.generation < myGeneration ? 'behind' : 'current',
+      entry:
+        revocationMode === 'open' ? 'open' : m.generation < myGeneration ? 'behind' : 'current',
     })
   }
   return out
@@ -82,6 +85,7 @@ export async function loadDormancy(
   deps: LoadDormancyDeps,
   members: readonly MemberEntry[],
   myGeneration: GroupDetail['generation'],
+  revocationMode: GroupDetail['revocationMode'],
 ): Promise<Dormancy> {
   const others = members.filter((m) => m.userId !== deps.selfUserId).map((m) => m.userId)
   if (others.length === 0) return { state: 'ready', dormant: [] }
@@ -90,5 +94,8 @@ export async function loadDormancy(
     failed = true
   })
   if (failed) return { state: 'unavailable' }
-  return { state: 'ready', dormant: findDormant(members, users, deps.selfUserId, myGeneration) }
+  return {
+    state: 'ready',
+    dormant: findDormant(members, users, deps.selfUserId, myGeneration, revocationMode),
+  }
 }

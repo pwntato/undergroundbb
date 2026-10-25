@@ -479,6 +479,26 @@ describe('GroupMembersPanel dormant members (#62)', () => {
     )
   })
 
+  it('says approving in an Open group is a plain wrap, not a new key', () => {
+    const open: Dormancy = { state: 'ready', dormant: [{ ...bob, entry: 'open' }] }
+    const html = render({}, { dormancy: open, usernames: names })
+    expect(html).toContain('wraps the group’s key to their new keys')
+    expect(html).not.toContain('a new key for the whole group')
+  })
+
+  it('tells an ambassador that only an admin can mint the new key', () => {
+    const current: Dormancy = { state: 'ready', dormant: [{ ...bob, entry: 'current' }] }
+    const html = render({ myRole: 'ambassador' }, { dormancy: current, usernames: names })
+    expect(html).toContain('which only an admin can do')
+  })
+
+  it('shows a plain member the row badge but not the notice', () => {
+    const html = render({ myRole: 'member' }, { dormancy: dormantBob, usernames: names })
+    expect(html).toContain('Keys changed, awaiting approval')
+    expect(html).not.toContain('changed their keys')
+    expect(html).not.toContain('AAAA BBBB CCCC')
+  })
+
   it('lists dormant members first', () => {
     const CAROL = 'cccccccc-3333-4333-8333-333333333333'
     const html = render(
