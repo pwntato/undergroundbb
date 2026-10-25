@@ -665,8 +665,8 @@ ambassador of the group. It is a conditional update of the member's wrap, its ge
 to, and, in a `Rotating` group, the member's entry is **behind** the group's current generation.
 Otherwise it answers 409 `rekey_required`, which sends the caller to the re-key: without that
 condition a buggy or old client, or an ambassador, could "approve" with a plain wrap of the current
-generation while the old keys still hold it, and the roster would then show the member as current. The minting case and the self re-key are written
-by the rotation endpoints the group already has.
+generation while the old keys still hold it, and the roster would then show the member as current. The self re-key is `POST rotation/rekey`; the minting
+case has its own endpoint, below.
 
 As built: the body is `{generation, wrappedKey, keyEpoch}`, with no signature, as for the rotation re-wrap.
 `generation` must be the approver's own and, when a marker exists, the marker's; the approver's entry is
@@ -677,6 +677,20 @@ needs the member strictly behind. An `Open` group has no re-key, so there the me
 approver's generation and the wrap replaces the copy the old keys hold.
 A retry after a lost 204 answers `member_not_dormant` too, since the first call set `WrapEpoch`; the approve
 UI treats it as already approved and re-reads the roster.
+
+The minting case is `POST /api/groups/{id}/rotation/approve/{uid}`, admin only, a `Rotating` group only
+(400 `rotation_not_applicable` otherwise), no marker (409 `rotation_in_progress`). The body is the
+self re-key's plus `memberWrappedKey` and `memberKeyEpoch`; the start signature is
+`RotationRekeyPayload(group, admin, member, generation, "approval")` and the server fixes the reason. One
+transaction writes the marker (`RekeyedUserID` = the member, no `RemovedUserID`), the `GENKEY#` link, the
+admin's entry, and **the approved member's entry** at the new generation, because the ordinary re-wrap
+refuses a dormant member and the job could never reach them. The member must be dormant and at exactly the
+admin's generation; behind it, 409 `rekey_not_required` sends the admin to the plain wrap above (the
+two endpoints partition the cases), and a caught-up or never-rotated member is 409 `member_not_dormant`.
+`wrap_epoch_stale` is the member's keys, `key_epoch_stale` the admin's own.
+A retry after a lost 204 does not answer `member_not_dormant` here: while the rotation runs it is
+409 `rotation_in_progress`, and after completion the admin is past the generation, so 400. The approve UI
+re-reads the roster on either answer instead of showing an error.
 
 #### The Ed25519 half and the key history
 
