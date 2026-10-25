@@ -66,6 +66,11 @@ export interface ApproveDeps extends RotationDeps {
 export type ApproveFailure =
   /** The keys the server serves for them differ from your saved copy. */
   | { readonly kind: 'pinMismatch' }
+  /**
+   * They changed keys since you saved theirs: the expected state of a dormant
+   * member, not tampering. Accepting the change is not built yet (4c-4c).
+   */
+  | { readonly kind: 'keysRotated' }
   /** The fingerprint you confirmed is not the one their served keys give now. */
   | { readonly kind: 'keysChanged' }
   | { readonly kind: 'forbidden' }
@@ -101,7 +106,12 @@ export type ApproveResult =
 
 type Fail = { readonly ok: false } & ApproveFailure
 
-const STALE_CODES = new Set(['conflict_retry', 'rotation_caller_behind', 'key_epoch_stale'])
+const STALE_CODES = new Set([
+  'conflict_retry',
+  'rotation_caller_behind',
+  'key_epoch_stale',
+  'rotation_not_active',
+])
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -188,7 +198,18 @@ async function inspect(
     served,
   })
   // An allowlist, so a verdict added later (rollback was) cannot fall through.
-  if (verdict !== 'match' && verdict !== 'first-sight') return { ok: false, kind: 'pinMismatch' }
+  if (verdict !== 'match' && verdict !== 'first-sight') {
+    // A pin from before their latest rotation is the normal case for a dormant
+    // member; a pin at the same or a later epoch with other keys is not.
+    const pinned = pins.find((p) => p.pinnedUserId === subjectUserId)
+    return {
+      ok: false,
+      kind:
+        verdict === 'mismatch' && pinned !== undefined && pinned.keyEpoch < served.keyEpoch
+          ? 'keysRotated'
+          : 'pinMismatch',
+    }
+  }
 
   return {
     ok: true,
@@ -334,12 +355,14 @@ async function tryRewrap(ctx: Context): Promise<Attempt> {
         return { ok: false, kind: 'keysChanged' }
     }
     // A code-less 400 is the generation no longer matching the caller's entry:
-    // a resend after the first request landed looks the same, so look.
+    // either it moved between the read and this write (nothing written) or an
+    // earlier request of ours landed and moved it. Look; if the member is still
+    // dormant it is the first, so the roster is stale.
     if (err instanceof ApiError && err.status === 400 && err.code === undefined) {
-      return settle(ctx)
+      return settle(ctx, 'stale')
     }
     const failure = failureOf(err)
-    return failure.kind === 'ambiguous' ? settle(ctx) : failure
+    return failure.kind === 'ambiguous' ? settle(ctx, 'ambiguous') : failure
   }
 }
 
@@ -380,13 +403,14 @@ async function tryRekey(ctx: Context): Promise<Attempt> {
       case 'rotation_in_progress':
         return { ok: false, kind: 'rotationRunning' }
     }
-    // A resent start is a code-less 400 on the generation (the first one moved
-    // the caller's own entry), whether its rotation is running or done.
+    // A code-less 400 on the generation: the caller's entry moved between the
+    // read and this write (nothing written), or an earlier start of ours moved
+    // it, whether its rotation is running or done. Look, as for the plain wrap.
     if (err instanceof ApiError && err.status === 400 && err.code === undefined) {
-      return settle(ctx)
+      return settle(ctx, 'stale')
     }
     const failure = failureOf(err)
-    return failure.kind === 'ambiguous' ? settle(ctx) : failure
+    return failure.kind === 'ambiguous' ? settle(ctx, 'ambiguous') : failure
   }
 }
 
@@ -399,9 +423,9 @@ function signFailure(err: unknown): Fail {
 /**
  * A write whose outcome is unknown: read the member's entry again. Approved
  * means their entry now carries a wrap epoch at or past the keyEpoch served;
- * anything else, including a failed read, stays ambiguous.
+ * anything else stays `unsettled`, and a failed read is always ambiguous.
  */
-async function settle(ctx: Context): Promise<Attempt> {
+async function settle(ctx: Context, unsettled: 'ambiguous' | 'stale'): Promise<Attempt> {
   const { deps, groupId, subjectUserId } = ctx
   try {
     const members = await deps.listAllMembers(groupId)
@@ -409,9 +433,7 @@ async function settle(ctx: Context): Promise<Attempt> {
     if (entry === undefined) return { ok: false, kind: 'notFound' }
     const served = (await deps.getUsers([subjectUserId])).get(subjectUserId)
     if (served === undefined) return { ok: false, kind: 'ambiguous' }
-    return isDormant(entry, served)
-      ? { ok: false, kind: 'ambiguous' }
-      : { ok: true, how: 'already' }
+    return isDormant(entry, served) ? { ok: false, kind: unsettled } : { ok: true, how: 'already' }
   } catch {
     return { ok: false, kind: 'ambiguous' }
   }
@@ -421,6 +443,8 @@ const FAILURE_MESSAGES: Record<
   Exclude<ApproveFailure['kind'], 'rejected' | 'unchecked'>,
   string
 > = {
+  keysRotated:
+    "They changed their keys since you saved theirs, so this browser can't vouch for the new ones yet. Accepting a key change isn't available yet.",
   pinMismatch:
     "The keys the server shows for them don't match the copy you saved earlier, so nothing was approved. Check with them another way.",
   keysChanged:

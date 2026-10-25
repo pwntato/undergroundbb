@@ -606,7 +606,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       if (approve.ok) {
         const what =
           approve.how === 'already'
-            ? `${label} was already approved.`
+            ? `${label} is approved.`
             : `${label} was approved.${approve.how === 'rekey' ? ' The group now has a new key.' : ''}`
         setMessage(`${what}${note?.kind === 'info' ? ` ${note.text}` : ''}`)
       } else {

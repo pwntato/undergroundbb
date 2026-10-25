@@ -3028,9 +3028,7 @@ describe('approving a dormant member (#62)', () => {
 
     it('stays ambiguous when the roster shows it did not land', async () => {
       for (const [gen, opts] of [
-        [0, { rewrapError: api(400) }],
         [0, { rewrapError: new TypeError('network') }],
-        [1, { rekeyError: api(400) }],
         [1, { rekeyError: api(503) }],
       ] as const) {
         const { f, x } = setup({ memberGeneration: gen })
@@ -3038,6 +3036,20 @@ describe('approving a dormant member (#62)', () => {
         expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
           ok: false,
           kind: 'ambiguous',
+        })
+      }
+    })
+
+    it('calls a code-less 400 stale, not unconfirmed, when the member is still dormant', async () => {
+      for (const [gen, opts] of [
+        [0, { rewrapError: api(400) }],
+        [1, { rekeyError: api(400) }],
+      ] as const) {
+        const { f, x } = setup({ memberGeneration: gen })
+        const { deps } = approveDeps(f, opts)
+        expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+          ok: false,
+          kind: 'stale',
         })
       }
     })
@@ -3061,8 +3073,8 @@ describe('approving a dormant member (#62)', () => {
   })
 
   describe('pins and the fingerprint', () => {
-    it('blocks on a pin mismatch or rollback, before showing a fingerprint or writing', async () => {
-      for (const epoch of [0, 2]) {
+    it('blocks on other keys at the served epoch or a rollback, before showing a fingerprint or writing', async () => {
+      for (const epoch of [1, 2]) {
         const { f, x } = setup({ memberGeneration: 0 })
         f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251), epoch))
         const { deps, calls } = approveDeps(f)
@@ -3073,6 +3085,19 @@ describe('approving a dormant member (#62)', () => {
         })
         expect(calls.order).toEqual([])
       }
+    })
+
+    it('says a member changed keys since the pin, which is not a tampering warning', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251), 0))
+      const { deps, calls } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'keysRotated' })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'keysRotated',
+      })
+      expect(calls.order).toEqual([])
+      expect(approveFailureMessage({ ok: false, kind: 'keysRotated' })).not.toMatch(/another way/)
     })
 
     it('goes ahead on a pin that already matches, without re-pinning', async () => {
@@ -3185,6 +3210,7 @@ describe('approving a dormant member (#62)', () => {
       ['rotation_in_progress', 'rotationRunning'],
       ['key_epoch_stale', 'stale'],
       ['conflict_retry', 'stale'],
+      ['rotation_not_active', 'stale'],
     ] as const) {
       const { f, x } = setup({ memberGeneration: 1 })
       const { deps } = approveDeps(f, { rekeyError: api(409, code) })
@@ -3195,6 +3221,7 @@ describe('approving a dormant member (#62)', () => {
   it('has a message for every failure, and the ambassador one names an admin', () => {
     const kinds = [
       'pinMismatch',
+      'keysRotated',
       'keysChanged',
       'forbidden',
       'authRequired',
