@@ -280,9 +280,8 @@ export async function runApprove(
   const second = mustMint ? tryRewrap : tryRekey
   const result = await first(ctx)
   if (result === 'fallback') {
-    // The server disagrees with the roster about which write applies. An
-    // ambassador cannot mint, so they are told to ask an admin.
-    if (second === tryRekey && detail.role !== 'admin') return { ok: false, kind: 'askAdmin' }
+    // The server disagrees with the roster about which write applies. (An
+    // ambassador sent to the re-key is told to ask an admin by tryRekey.)
     const again = await second(ctx)
     return again === 'fallback' ? { ok: false, kind: 'stale' } : again
   }

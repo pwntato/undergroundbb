@@ -2829,8 +2829,8 @@ describe('approving a dormant member (#62)', () => {
       open?: boolean
       rewrapError?: Error
       rekeyError?: Error
-      /** Throw even though the write is stored, like a lost response. */
-      landThenThrow?: boolean
+      /** Throw this even though the write is stored, like a lost response. */
+      landThenThrow?: Error
     } = {},
   ): { deps: ApproveDeps; calls: Calls } {
     const calls: Calls = { order: [], rewraps: [], rekeys: [], minted: [] }
@@ -2856,7 +2856,7 @@ describe('approving a dormant member (#62)', () => {
         calls.rewraps.push({ userId, body })
         if (o.rewrapError) throw o.rewrapError
         land(userId, body.generation, body.keyEpoch)
-        if (o.landThenThrow === true) throw new TypeError('network')
+        if (o.landThenThrow) throw o.landThenThrow
       },
       startApprovalCrypto: async (req) => {
         calls.order.push('mint')
@@ -2877,7 +2877,7 @@ describe('approving a dormant member (#62)', () => {
         calls.rekeys.push({ userId, body })
         if (o.rekeyError) throw o.rekeyError
         land(userId, body.generation, body.memberKeyEpoch)
-        if (o.landThenThrow === true) throw api(400)
+        if (o.landThenThrow) throw o.landThenThrow
       },
     }
     return { deps, calls }
@@ -2993,27 +2993,37 @@ describe('approving a dormant member (#62)', () => {
   })
 
   it('reports their keys changing under the write as a changed fingerprint', async () => {
-    const { f, x } = setup({ memberGeneration: 0 })
-    const { deps } = approveDeps(f, { rewrapError: api(409, 'wrap_epoch_stale') })
-    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
-      ok: false,
-      kind: 'keysChanged',
-    })
+    for (const [gen, opts] of [
+      [0, { rewrapError: api(409, 'wrap_epoch_stale') }],
+      [1, { rekeyError: api(409, 'wrap_epoch_stale') }],
+    ] as const) {
+      const { f, x } = setup({ memberGeneration: gen })
+      const { deps } = approveDeps(f, opts)
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'keysChanged',
+      })
+    }
   })
 
   describe('a write whose outcome is unknown', () => {
-    it('settles as approved when the roster then shows it landed (rewrap, lost response)', async () => {
-      const { f, x } = setup({ memberGeneration: 0 })
-      const { deps, calls } = approveDeps(f, { landThenThrow: true })
-      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'already' })
-      expect(calls.rewraps).toHaveLength(1) // read, not resent
-    })
-
-    it('settles a code-less 400 on a resent re-key as approved when it landed', async () => {
-      const { f, x } = setup({ memberGeneration: 1 })
-      const { deps, calls } = approveDeps(f, { landThenThrow: true })
-      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'already' })
-      expect(calls.rekeys).toHaveLength(1)
+    it('settles as approved when the roster then shows it landed, whatever the lost reply was', async () => {
+      for (const [gen, lost] of [
+        [0, new TypeError('network')],
+        [0, api(400)],
+        [0, api(503)],
+        [1, new TypeError('network')],
+        [1, api(400)],
+        [1, api(503)],
+      ] as const) {
+        const { f, x } = setup({ memberGeneration: gen })
+        const { deps, calls } = approveDeps(f, { landThenThrow: lost })
+        expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+          ok: true,
+          how: 'already',
+        })
+        expect(calls.rewraps.length + calls.rekeys.length).toBe(1) // read, not resent
+      }
     })
 
     it('stays ambiguous when the roster shows it did not land', async () => {
