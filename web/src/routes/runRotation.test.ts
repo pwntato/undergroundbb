@@ -2643,6 +2643,11 @@ describe('a self re-key rotation (#62)', () => {
         'does not verify',
       ],
       [
+        'a self re-key naming another member',
+        () => rekeyLink(0, { rekeyed: REMOVED }),
+        'cannot check',
+      ],
+      [
         'an approval of the signer themself',
         () => rekeyLink(0, { reason: 'approval' }),
         'cannot check',
