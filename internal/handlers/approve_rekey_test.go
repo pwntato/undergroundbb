@@ -63,8 +63,8 @@ func TestApproveRekeyStartsARotationAndWrapsTheApprovedMember(t *testing.T) {
 
 	selfReason := approveRekeyBody(t, owner, gid, carol.userID, 1, crypto.RekeyReasonSelf, 1)
 	otherMember := approveRekeyBody(t, owner, gid, dave.userID, 1, crypto.RekeyReasonApproval, 1)
-	wrongGen := ok
-	wrongGen.Generation = 2
+	// Signed for 2, so only the generation check can refuse it.
+	wrongGen := approveRekeyBody(t, owner, gid, carol.userID, 2, crypto.RekeyReasonApproval, 1)
 	staleEpoch := approveRekeyBody(t, owner, gid, carol.userID, 1, crypto.RekeyReasonApproval, 0)
 	badKey := ok
 	badKey.MemberWrappedKey.Nonce = "AA=="
@@ -79,6 +79,9 @@ func TestApproveRekeyStartsARotationAndWrapsTheApprovedMember(t *testing.T) {
 	// Dave never rotated: nothing to approve.
 	wantApproveRekey(t, doApproveRekey(t, h, ownerCookie, gid, dave.userID, approveRekeyBody(t, owner, gid, dave.userID, 1, crypto.RekeyReasonApproval, 0)), http.StatusConflict, "member_not_dormant")
 	wantApproveRekey(t, doApproveRekey(t, h, ownerCookie, gid, "not-a-uuid", ok), http.StatusNotFound, "")
+	// A real account that is not a member.
+	stranger := registerTestUser(t, h)
+	wantApproveRekey(t, doApproveRekey(t, h, ownerCookie, gid, stranger.userID, approveRekeyBody(t, owner, gid, stranger.userID, 1, crypto.RekeyReasonApproval, 0)), http.StatusNotFound, "")
 	// A plain member cannot start a rotation.
 	daveCookie := loginCookie(t, h, dave)
 	wantApproveRekey(t, doApproveRekey(t, h, daveCookie, gid, carol.userID, approveRekeyBody(t, dave, gid, carol.userID, 1, crypto.RekeyReasonApproval, 1)), http.StatusForbidden, "")
