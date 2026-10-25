@@ -40,6 +40,18 @@ describe('keyChangeEvidence', () => {
     ).toBe('signed-rotation')
   })
 
+  it('does not depend on the order of the pinned keys', () => {
+    const pin = { signingPublicKeys: [b64(k2.publicKey), b64(k1.publicKey)], keyEpoch: 1 }
+    expect(
+      keyChangeEvidence({
+        userId: USER,
+        pin,
+        served: servedOf(k2),
+        changes: [link(k0, k1, 1), link(k1, k2, 2)],
+      }),
+    ).toBe('signed-rotation')
+  })
+
   it('has no link when the keys changed without a signature from the saved ones', () => {
     // The saved key is k0 but the chain only ever left k1.
     expect(

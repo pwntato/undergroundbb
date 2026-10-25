@@ -33,11 +33,10 @@ export function keyChangeEvidence(input: {
   readonly changes: readonly WireKeyChange[]
 }): KeyChangeEvidence {
   let servedCurrent: Uint8Array
-  let pinnedCurrent: Uint8Array | undefined
+  let pinned: Uint8Array[]
   try {
     servedCurrent = base64ToBytes(input.served.signingPublicKey)
-    const first = input.pin.signingPublicKeys[0]
-    pinnedCurrent = first === undefined ? undefined : base64ToBytes(first)
+    pinned = input.pin.signingPublicKeys.map((k) => base64ToBytes(k))
   } catch {
     return 'unverified'
   }
@@ -51,9 +50,10 @@ export function keyChangeEvidence(input: {
     rosters: [],
   })
   if (history === null) return 'unverified'
-  if (pinnedCurrent === undefined) return 'no-link'
+  // The order of the pin's key list is not signed, so the link is matched
+  // against the whole pinned set; chain continuity still decides.
   const next = history.links.find((l) => l.epoch === input.pin.keyEpoch + 1)
-  return next !== undefined && sameBytes(next.oldSigning, pinnedCurrent)
+  return next !== undefined && pinned.some((k) => sameBytes(next.oldSigning, k))
     ? 'signed-rotation'
     : 'no-link'
 }

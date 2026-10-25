@@ -35,6 +35,8 @@ export interface AcceptKeyChangeDeps {
   readonly ownSigningKey: () => Promise<string>
   readonly listPins: () => Promise<readonly PinRecord[]>
   readonly loadOwnKeyHistory?: (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>
+  /** Why that history could not be loaded, or null when it did (lib/session/ownKeyHistory). */
+  readonly ownKeyHistoryFailure?: (ownSigningKey: Uint8Array) => Promise<string | null>
   /** Signs and stores a pin of the keys served, replacing the saved one. */
   readonly pinKeys: (
     pinnedUserId: string,
@@ -114,7 +116,19 @@ async function inspect(deps: AcceptKeyChangeDeps, subjectUserId: string): Promis
   // An allowlist: only a mismatch is a key change. A verdict added later must
   // not become acceptable by falling through.
   if (verdict === 'rollback') return { ok: false, kind: 'rollback' }
-  if (verdict === 'bad-signature') return { ok: false, kind: 'pinUnverifiable' }
+  if (verdict === 'bad-signature') {
+    // A pin the caller signed before rotating fails the same way when their own
+    // key history could not be read: that is a failed read, not tampering.
+    const failure = await deps.ownKeyHistoryFailure?.(own)
+    if (failure !== null && failure !== undefined) {
+      return {
+        ok: false,
+        kind: 'unchecked',
+        reason: `could not load your key history: ${failure}`,
+      }
+    }
+    return { ok: false, kind: 'pinUnverifiable' }
+  }
   if (verdict !== 'mismatch' || pin === undefined) return { ok: false, kind: 'notChanged' }
   return {
     ok: true,

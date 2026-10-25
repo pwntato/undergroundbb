@@ -112,12 +112,14 @@ export function makeApproveDeps(userId: string): ApproveDeps {
 
 /** What accepting another user's key change needs: their served keys and chain, your pins, and a pin write. */
 export function makeAcceptDeps(userId: string): AcceptKeyChangeDeps {
+  const ownKeyHistory = makeOwnKeyHistoryLoader(userId)
   return {
     selfUserId: userId,
     getUserDetail,
     ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
     listPins: listAllPins,
-    loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
+    loadOwnKeyHistory: ownKeyHistory,
+    ownKeyHistoryFailure: ownKeyHistory.failure,
     pinKeys: makePinKeys(userId),
   }
 }

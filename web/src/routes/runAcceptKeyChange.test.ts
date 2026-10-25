@@ -135,6 +135,20 @@ describe('accepting a key change', () => {
     expect(pinned).toEqual([])
   })
 
+  it('reports a failed read of your own key history, not tampering, when a pin does not verify', async () => {
+    const forged = pinOf(k0, WRAP_OLD, 0, generateSigningKey())
+    const { deps } = setup({ pin: forged })
+    const failing: AcceptKeyChangeDeps = { ...deps, ownKeyHistoryFailure: async () => 'offline' }
+    expect(await prepareAcceptKeyChange(failing, X)).toEqual({
+      ok: false,
+      kind: 'unchecked',
+      reason: 'could not load your key history: offline',
+    })
+    // The history loaded and the pin still does not verify: that is tampering.
+    const loaded: AcceptKeyChangeDeps = { ...deps, ownKeyHistoryFailure: async () => null }
+    expect(await prepareAcceptKeyChange(loaded, X)).toEqual({ ok: false, kind: 'pinUnverifiable' })
+  })
+
   it('has nothing to accept when the keys match the pin or there is no pin', async () => {
     const same = setup({
       pin: pinOf(k1, WRAP_NEW, 1),

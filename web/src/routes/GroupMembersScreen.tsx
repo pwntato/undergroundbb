@@ -587,7 +587,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         if (prepared.kind === 'coldKeys') {
           setReauthAction('accept key changes')
         }
-        if (prepared.kind === 'notChanged' || prepared.kind === 'stale') {
+        if (prepared.kind === 'notChanged') {
           await reload(() => false)
         }
       }
