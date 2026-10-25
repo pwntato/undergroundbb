@@ -3100,6 +3100,15 @@ describe('approving a dormant member (#62)', () => {
       expect(approveFailureMessage({ ok: false, kind: 'keysRotated' })).not.toMatch(/another way/)
     })
 
+    it('does not call a pin with a bad signature a key change, whatever its epoch', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const pin = pinFor(x, new Uint8Array(32).fill(251), 0)
+      f.pins.set(x.id, { ...pin, signature: b64(new Uint8Array(64).fill(7)) })
+      const { deps, calls } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'pinMismatch' })
+      expect(calls.order).toEqual([])
+    })
+
     it('goes ahead on a pin that already matches, without re-pinning', async () => {
       const { f, x } = setup({ memberGeneration: 0, pin: null })
       f.pins.set(x.id, pinFor(x, undefined, 1))
