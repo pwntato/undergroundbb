@@ -140,7 +140,11 @@ export function verifyRemovals(input: VerifyRemovalsInput): RemovalVerdict {
  * an admin approving someone else's new keys (never the signer). Any other
  * reason is refused rather than guessed at.
  */
-export function rekeyKindOk(reason: string | undefined, signer: string, rekeyed: string): reason is RekeyReason {
+export function rekeyKindOk(
+  reason: string | undefined,
+  signer: string,
+  rekeyed: string,
+): reason is RekeyReason {
   if (reason === 'self') return rekeyed === signer
   if (reason === 'approval') return rekeyed !== signer
   return false

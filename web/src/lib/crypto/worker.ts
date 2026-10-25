@@ -72,6 +72,7 @@ import type {
   RewrapGroupKeyRequest,
   SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
+  StartApprovalRekeyRequest,
   StartSelfRekeyRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,

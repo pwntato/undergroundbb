@@ -227,7 +227,12 @@ function rekeyLink(
     (o.signedFor?.reason ?? o.reason ?? 'self') as 'self',
   )
   if (o.noSignature) {
-    return { ...base, removerUserId: admin, rekeyedUserId: rekeyed, rekeyReason: o.reason ?? 'self' }
+    return {
+      ...base,
+      removerUserId: admin,
+      rekeyedUserId: rekeyed,
+      rekeyReason: o.reason ?? 'self',
+    }
   }
   return {
     ...base,
