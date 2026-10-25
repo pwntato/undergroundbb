@@ -19,6 +19,7 @@ import {
   type RotationNeed,
   rotationNeededAfter,
 } from './runRemoveMember'
+import { runApprove, type ApproveDeps, type ApproveResult } from './runApprove'
 import { runReadmit, type ReadmitDeps, type ReadmitResult } from './runReadmit'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 
@@ -189,6 +190,45 @@ export async function readmitAndRotate(
       return { busy: false, readmit, rotation: await runRotation(deps.readmit, groupId) }
     }
     return { busy: false, readmit }
+  } finally {
+    release()
+  }
+}
+
+export type ApproveAndRotateResult =
+  /** Another rotation job is running; nothing was read, signed or sent. */
+  | { readonly busy: true }
+  | {
+      readonly busy: false
+      readonly approve: ApproveResult
+      /** Present when an approval re-key started a rotation and the job carried it on. */
+      readonly rotation?: RotationOutcome
+    }
+
+/**
+ * Approves a dormant member's new keys (#62) and, when that started a re-key,
+ * runs the rotation job that re-wraps everyone else, holding the guard for
+ * both. A plain wrap starts no rotation. An ambiguous outcome runs the job too,
+ * since the re-key may have started; runRotation reads the real state and says
+ * 'none' when there is nothing to do.
+ */
+export async function approveAndRotate(
+  deps: { readonly guard: RotationGuard; readonly approve: ApproveDeps },
+  groupId: string,
+  subjectUserId: string,
+  confirmedFingerprint: string,
+): Promise<ApproveAndRotateResult> {
+  const release = deps.guard.tryAcquire()
+  if (release === null) {
+    return { busy: true }
+  }
+  try {
+    const approve = await runApprove(deps.approve, groupId, subjectUserId, confirmedFingerprint)
+    const mayHaveStarted = approve.ok ? approve.how !== 'rewrap' : approve.kind === 'ambiguous'
+    if (mayHaveStarted) {
+      return { busy: false, approve, rotation: await runRotation(deps.approve, groupId) }
+    }
+    return { busy: false, approve }
   } finally {
     release()
   }

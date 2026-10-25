@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  approveAndRotate,
   catchUpRotation,
   readmitAndRotate,
   createRotationGuard,
   removeAndRotate,
   rotationGuardFor,
 } from './rotationJobs'
+import { runApprove, type ApproveDeps } from './runApprove'
 import { runReadmit, type ReadmitDeps } from './runReadmit'
 import { rotationNeededAfter, runRemoveMember, type RemoveResult } from './runRemoveMember'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
@@ -14,6 +16,10 @@ import type { RemoveDeps } from './runRemoveMember'
 vi.mock('./runRemoveMember', async (orig) => ({
   ...(await orig<typeof import('./runRemoveMember')>()),
   runRemoveMember: vi.fn(),
+}))
+vi.mock('./runApprove', async (orig) => ({
+  ...(await orig<typeof import('./runApprove')>()),
+  runApprove: vi.fn(),
 }))
 vi.mock('./runReadmit', async (orig) => ({
   ...(await orig<typeof import('./runReadmit')>()),
@@ -28,6 +34,8 @@ const remove = vi.mocked(runRemoveMember)
 const rotate = vi.mocked(runRotation)
 const readmit = vi.mocked(runReadmit)
 const readmitDeps = {} as ReadmitDeps
+const approve = vi.mocked(runApprove)
+const approveDeps = {} as ApproveDeps
 
 const GROUP = 'g1'
 const SUBJECT = 'u-subject'
@@ -47,6 +55,7 @@ beforeEach(() => {
   remove.mockReset()
   rotate.mockReset()
   readmit.mockReset()
+  approve.mockReset()
 })
 
 describe('createRotationGuard', () => {
@@ -331,5 +340,55 @@ describe('readmitAndRotate', () => {
       readmitAndRotate({ guard, readmit: readmitDeps }, GROUP, SUBJECT, 'print'),
     ).rejects.toThrow('boom')
     expect(guard.held).toBe(false)
+  })
+})
+
+describe('approveAndRotate', () => {
+  const run = (guard = createRotationGuard()) =>
+    approveAndRotate({ guard, approve: approveDeps }, GROUP, SUBJECT, 'print')
+
+  it('runs the rotation job after a re-key, and releases the guard', async () => {
+    approve.mockResolvedValue({ ok: true, how: 'rekey' })
+    rotate.mockResolvedValue(DONE)
+    const guard = createRotationGuard()
+    expect(await run(guard)).toEqual({
+      busy: false,
+      approve: { ok: true, how: 'rekey' },
+      rotation: DONE,
+    })
+    expect(rotate).toHaveBeenCalledWith(approveDeps, GROUP)
+    expect(guard.held).toBe(false)
+  })
+
+  it('starts no rotation job after a plain wrap', async () => {
+    approve.mockResolvedValue({ ok: true, how: 'rewrap' })
+    expect(await run()).toEqual({ busy: false, approve: { ok: true, how: 'rewrap' } })
+    expect(rotate).not.toHaveBeenCalled()
+  })
+
+  it('runs the job after an ambiguous outcome and after "already", since a re-key may be running', async () => {
+    rotate.mockResolvedValue(DONE)
+    for (const outcome of [
+      { ok: false, kind: 'ambiguous' },
+      { ok: true, how: 'already' },
+    ] as const) {
+      rotate.mockClear()
+      approve.mockResolvedValue(outcome)
+      await run()
+      expect(rotate).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('does not run the job after a refusal', async () => {
+    approve.mockResolvedValue({ ok: false, kind: 'askAdmin' })
+    await run()
+    expect(rotate).not.toHaveBeenCalled()
+  })
+
+  it('does nothing while another job holds the guard', async () => {
+    const guard = createRotationGuard()
+    guard.tryAcquire()
+    expect(await run(guard)).toEqual({ busy: true })
+    expect(approve).not.toHaveBeenCalled()
   })
 })

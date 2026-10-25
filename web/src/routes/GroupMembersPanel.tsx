@@ -49,6 +49,10 @@ export function GroupMembersPanel({
   onStartReadmit,
   onCancelReadmit,
   onConfirmReadmit,
+  approvePrompt = null,
+  onStartApprove,
+  onCancelApprove,
+  onConfirmApprove,
   usernames,
   check,
   verification,
@@ -78,6 +82,11 @@ export function GroupMembersPanel({
   readonly onStartReadmit?: (subjectUserId: string) => void
   readonly onCancelReadmit?: () => void
   readonly onConfirmReadmit?: (subjectUserId: string) => void
+  /** The dormant member whose fingerprint is awaiting confirmation before approval (#62). */
+  readonly approvePrompt?: { readonly userId: string; readonly fingerprint: string } | null
+  readonly onStartApprove?: (subjectUserId: string) => void
+  readonly onCancelApprove?: () => void
+  readonly onConfirmApprove?: (subjectUserId: string) => void
   /** userId to username; anything missing renders as a short id. */
   readonly usernames: ReadonlyMap<string, string>
   /**
@@ -95,6 +104,9 @@ export function GroupMembersPanel({
   const dormantIds = new Set(
     dormancy?.state === 'ready' ? dormancy.dormant.map((d) => d.userId) : [],
   )
+  const dormantEntry = new Map(
+    dormancy?.state === 'ready' ? dormancy.dormant.map((d) => [d.userId, d.entry] as const) : [],
+  )
   const rows = [
     ...view.members.filter((m) => dormantIds.has(m.userId)),
     ...view.members.filter((m) => !dormantIds.has(m.userId)),
@@ -109,6 +121,7 @@ export function GroupMembersPanel({
     (isAdmin || view.myRole === 'ambassador') &&
     view.myGrantSortKey !== undefined &&
     view.myGrantSortKey !== ''
+  const canApprove = isAdmin || view.myRole === 'ambassador'
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
@@ -238,6 +251,58 @@ export function GroupMembersPanel({
                   </Button>
                 </span>
               )}
+              {canApprove &&
+                !isSelf &&
+                dormantIds.has(m.userId) &&
+                // An ambassador cannot mint, so a member on the group's current key
+                // is an admin's to approve; the notice says so.
+                !(view.myRole !== 'admin' && dormantEntry.get(m.userId) === 'current') &&
+                (approvePrompt?.userId === m.userId ? (
+                  <span className="flex w-full flex-col gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      Approving signs that the keys below are {memberLabel(m.userId, usernames)}
+                      &apos;s, so first check this fingerprint with them in person or on a call you
+                      know is them. They can read theirs under &quot;Your key fingerprint&quot; on
+                      this page. Do not take it from the group or from a message.
+                    </span>
+                    <span className="font-mono text-xs break-all">{approvePrompt.fingerprint}</span>
+                    <span className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onConfirmApprove?.(m.userId)
+                        }}
+                      >
+                        {busyUserId === m.userId ? 'Approving…' : 'It matches, approve'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onCancelApprove?.()
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </span>
+                  </span>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busyUserId !== null || locked}
+                    onClick={() => {
+                      onStartApprove?.(m.userId)
+                    }}
+                  >
+                    {busyUserId === m.userId ? 'Checking…' : 'Approve'}
+                  </Button>
+                ))}
               {canReadmit &&
                 !isSelf &&
                 readmittableIds?.has(m.userId) === true &&

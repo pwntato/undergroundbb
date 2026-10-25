@@ -51,13 +51,15 @@ import {
   verifyMember,
   type MemberVerifications,
 } from './runMemberVerification'
-import { makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
+import { makeApproveDeps, makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
 import {
   catchUpRotation,
+  approveAndRotate,
   readmitAndRotate,
   removeAndRotate,
   rotationGuardFor,
 } from './rotationJobs'
+import { approveFailureMessage, prepareApprove, shouldReloadAfterApprove } from './runApprove'
 import {
   prepareReadmit,
   readmitFailureMessage,
@@ -130,6 +132,11 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   // The on-load rotation stopped only because this tab's keys were cold.
   const [rotationNeedsPassword, setRotationNeedsPassword] = useState(false)
   const [readmitPrompt, setReadmitPrompt] = useState<{
+    readonly userId: string
+    readonly fingerprint: string
+  } | null>(null)
+  // The dormant member whose fingerprint is awaiting the approver's confirmation (#62).
+  const [approvePrompt, setApprovePrompt] = useState<{
     readonly userId: string
     readonly fingerprint: string
   } | null>(null)
@@ -532,6 +539,92 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
+  const handleStartApprove = (subjectUserId: string) => {
+    if (load.status !== 'ready' || userId === null || busyUserId !== null || guard.held) {
+      return
+    }
+    const { groupId: gid } = load.view
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const prepared = await prepareApprove(makeApproveDeps(userId), gid, subjectUserId)
+      if (prepared.ok) {
+        setApprovePrompt({ userId: subjectUserId, fingerprint: prepared.fingerprint })
+      } else {
+        setApprovePrompt(null)
+        setError(approveFailureMessage(prepared))
+        if (prepared.kind === 'coldKeys') {
+          setReauthAction('approve key changes')
+        }
+        if (shouldReloadAfterApprove(prepared)) {
+          await reload(() => false)
+        }
+      }
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleConfirmApprove = (subjectUserId: string) => {
+    if (
+      load.status !== 'ready' ||
+      userId === null ||
+      busyUserId !== null ||
+      guard.held ||
+      approvePrompt?.userId !== subjectUserId
+    ) {
+      return
+    }
+    const { groupId: gid } = load.view
+    const confirmed = approvePrompt.fingerprint
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const result = await approveAndRotate(
+        { guard, approve: makeApproveDeps(userId) },
+        gid,
+        subjectUserId,
+        confirmed,
+      )
+      setApprovePrompt(null)
+      if (result.busy) {
+        setError('A key rotation is still running. Wait for it to finish, then try again.')
+        setBusyUserId(null)
+        return
+      }
+      const { approve, rotation } = result
+      if (rotation !== undefined) {
+        setCatchUpStatus(rotation.status)
+        setReadmittable((prev) => readmittableAfter(rotation, prev))
+      }
+      const note =
+        rotation === undefined
+          ? null
+          : describeRotation(rotation, (id) => memberLabel(id, usernamesRef.current))
+      if (approve.ok) {
+        const what =
+          approve.how === 'already'
+            ? `${label} is approved.`
+            : `${label} was approved.${approve.how === 'rekey' ? ' The group now has a new key.' : ''}`
+        setMessage(`${what}${note?.kind === 'info' ? ` ${note.text}` : ''}`)
+      } else {
+        setError(approveFailureMessage(approve))
+        if (approve.kind === 'coldKeys') {
+          setReauthAction('approve key changes')
+        }
+      }
+      if (note?.kind === 'error') {
+        setError(approve.ok ? note.text : `${approveFailureMessage(approve)} ${note.text}`)
+      }
+      if (shouldReloadAfterApprove(approve)) {
+        await reload(() => false)
+      }
+      setBusyUserId(null)
+    })()
+  }
+
   const handleStartVerify = (subjectUserId: string) => {
     if (busyUserId !== null || guard.held) {
       return
@@ -725,6 +818,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             setReadmitPrompt(null)
           }}
           onConfirmReadmit={handleConfirmReadmit}
+          approvePrompt={approvePrompt}
+          onStartApprove={handleStartApprove}
+          onCancelApprove={() => {
+            setApprovePrompt(null)
+          }}
+          onConfirmApprove={handleConfirmApprove}
           check={checkForView(grantCheck, load.view)}
           dormancy={dormancyFor?.view === load.view ? dormancyFor.dormancy : null}
           usernames={usernames}

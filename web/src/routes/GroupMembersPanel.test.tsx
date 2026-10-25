@@ -29,6 +29,7 @@ function render(
     readmittableIds?: ReadonlySet<string>
     readmitPrompt?: { userId: string; fingerprint: string } | null
     dormancy?: Dormancy | null
+    approvePrompt?: { userId: string; fingerprint: string } | null
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -57,6 +58,10 @@ function render(
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       usernames: extra.usernames ?? new Map(),
       ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
+      onStartApprove: () => undefined,
+      onCancelApprove: () => undefined,
+      onConfirmApprove: () => undefined,
+      ...(extra.approvePrompt !== undefined && { approvePrompt: extra.approvePrompt }),
     }),
   )
 }
@@ -536,5 +541,41 @@ describe('GroupMembersPanel dormant members (#62)', () => {
       dormant: [{ ...bob, fingerprint: null }],
     }
     expect(render({}, { dormancy: noFp, usernames: names })).toContain('no fingerprint to check')
+  })
+
+  describe('Approve', () => {
+    const current: Dormancy = { state: 'ready', dormant: [{ ...bob, entry: 'current' }] }
+
+    it('is offered on a dormant row to an admin and an ambassador', () => {
+      for (const myRole of ['admin', 'ambassador'] as const) {
+        const html = render({ myRole }, { dormancy: dormantBob, usernames: names })
+        expect(html).toContain('>Approve<')
+      }
+    })
+
+    it('is not offered to a plain member, on a row that is not dormant, or for the caller', () => {
+      expect(render({ myRole: 'member' }, { dormancy: dormantBob })).not.toContain('>Approve<')
+      expect(render({}, { dormancy: { state: 'ready', dormant: [] } })).not.toContain('>Approve<')
+      expect(render({}, { dormancy: null })).not.toContain('>Approve<')
+    })
+
+    it('is hidden from an ambassador for a member on the current key, who needs a new group key', () => {
+      expect(render({ myRole: 'ambassador' }, { dormancy: current })).not.toContain('>Approve<')
+      expect(render({ myRole: 'admin' }, { dormancy: current })).toContain('>Approve<')
+    })
+
+    it('shows the fingerprint to compare and the confirm button once started', () => {
+      const html = render(
+        {},
+        {
+          dormancy: dormantBob,
+          usernames: names,
+          approvePrompt: { userId: BOB, fingerprint: 'XXXX YYYY' },
+        },
+      )
+      expect(html).toContain('XXXX YYYY')
+      expect(html).toContain('It matches, approve')
+      expect(html).not.toContain('>Approve<')
+    })
   })
 })
