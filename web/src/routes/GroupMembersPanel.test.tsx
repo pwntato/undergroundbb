@@ -491,7 +491,9 @@ describe('GroupMembersPanel dormant members (#62)', () => {
         ]),
       },
     )
-    expect(html.indexOf('>bob<')).toBeLessThan(html.indexOf('>carol<'))
+    // The row's name carries the id as its title; the notice above does not.
+    expect(html.indexOf(`title="${BOB}"`)).toBeGreaterThan(-1)
+    expect(html.indexOf(`title="${BOB}"`)).toBeLessThan(html.indexOf(`title="${CAROL}"`))
   })
 
   it('shows no flag for nobody dormant, and nothing while loading', () => {
