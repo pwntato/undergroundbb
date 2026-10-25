@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type {
+  ApproveRekeyRequest,
+  ApproveRewrapRequest,
   GroupDetail,
   KeychainLink,
   MemberEntry,
@@ -39,6 +41,7 @@ import {
   type ReadmitDeps,
 } from './runReadmit'
 import { fingerprint } from '@/lib/crypto/fingerprint'
+import { approveFailureMessage, prepareApprove, runApprove, type ApproveDeps } from './runApprove'
 import { base64ToBytes } from '@/lib/crypto/base64'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
@@ -320,6 +323,8 @@ class Fake {
   servedCaller: UserProjection | undefined
   pinKeysError: Error | undefined
   listPinsError: Error | undefined
+  /** Per-member dormancy inputs (#62): the keyEpoch served and the entry's wrapEpoch. */
+  epochs = new Map<string, { key: number; wrap?: number }>()
 
   // The group's signed history: ME created it, so ME's root grant anchors the
   // chain, and every member `add`ed is admitted by ME unless a test says not.
@@ -533,6 +538,9 @@ class Fake {
           userId: r.person.id,
           role: r.role,
           generation: r.generation,
+          ...(this.epochs.get(r.person.id)?.wrap !== undefined && {
+            wrapEpoch: this.epochs.get(r.person.id)!.wrap!,
+          }),
         })),
       getUsers: async (ids) => {
         this.userReads.push([...ids])
@@ -540,7 +548,10 @@ class Fake {
           ids.flatMap((id) => {
             const r = this.members.get(id)
             if (id === ME && this.servedCaller) return [[id, this.servedCaller] as const]
-            if (r) return [[id, served(r.person)] as const]
+            if (r) {
+              const keyEpoch = this.epochs.get(id)?.key ?? 0
+              return [[id, { ...served(r.person), keyEpoch }] as const]
+            }
             const o = this.outsiders.get(id)
             if (!o) return []
             const extra = this.fabricatedSuperseded.get(id)
@@ -2784,5 +2795,414 @@ describe('a rotation job by an admin whose own keys rotated (#62)', () => {
     const out = await runRotation(f.deps(), GROUP)
     expect(out.status).toBe('incomplete')
     expect(f.gen(m)).toBe(0)
+  })
+})
+
+describe('approving a dormant member (#62)', () => {
+  interface Calls {
+    order: string[]
+    rewraps: { userId: string; body: ApproveRewrapRequest }[]
+    rekeys: { userId: string; body: ApproveRekeyRequest }[]
+    minted: { memberUserId: string; memberWrappingPublicKey: string }[]
+  }
+
+  const printOf = (p: Person) => fingerprint(p.signing.publicKey, p.wrapping)
+  const api = (status: number, code?: string) => new ApiError(status, 'nope', code)
+
+  /**
+   * A group at generation 1 with the caller as `role`, and one member `x`
+   * whose keys changed (served keyEpoch 1, entry wrapped at epoch 0).
+   */
+  function setup(o: { memberGeneration?: number; pin?: PinRecord | null; open?: boolean } = {}) {
+    const f = new Fake()
+    f.marker = undefined
+    const x = person()
+    f.add(x, 'member', o.memberGeneration ?? 0, o.pin === undefined ? null : o.pin, 'auto')
+    f.epochs.set(x.id, { key: 1, wrap: 0 })
+    return { f, x, open: o.open ?? false }
+  }
+
+  function approveDeps(
+    f: Fake,
+    o: {
+      role?: GroupDetail['role']
+      open?: boolean
+      rewrapError?: Error
+      rekeyError?: Error
+      /** Throw even though the write is stored, like a lost response. */
+      landThenThrow?: boolean
+    } = {},
+  ): { deps: ApproveDeps; calls: Calls } {
+    const calls: Calls = { order: [], rewraps: [], rekeys: [], minted: [] }
+    const base = f.deps()
+    const land = (userId: string, generation: number, keyEpoch: number) => {
+      f.members.get(userId)!.generation = generation
+      f.epochs.set(userId, { key: f.epochs.get(userId)!.key, wrap: keyEpoch })
+    }
+    const deps: ApproveDeps = {
+      ...base,
+      getGroup: async (g) => ({
+        ...(await base.getGroup(g)),
+        role: o.role ?? 'admin',
+        revocationMode: o.open === true ? 'open' : 'rotating',
+        ...(o.open === true && { visibility: 'public' as const }),
+      }),
+      pinKeys: async (...args) => {
+        calls.order.push('pin')
+        await base.pinKeys(...args)
+      },
+      approveRewrap: async (_g, userId, body) => {
+        calls.order.push('rewrap')
+        calls.rewraps.push({ userId, body })
+        if (o.rewrapError) throw o.rewrapError
+        land(userId, body.generation, body.keyEpoch)
+        if (o.landThenThrow === true) throw new TypeError('network')
+      },
+      startApprovalCrypto: async (req) => {
+        calls.order.push('mint')
+        calls.minted.push({
+          memberUserId: req.memberUserId,
+          memberWrappingPublicKey: req.memberWrappingPublicKey,
+        })
+        return {
+          generation: req.ownGeneration + 1,
+          link: { nonce: 'ln', ciphertext: 'lc' },
+          removerWrappedKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'own' },
+          startSignature: 'sig',
+          memberWrappedKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: 'member' },
+        }
+      },
+      approveRekey: async (_g, userId, body) => {
+        calls.order.push('rekey')
+        calls.rekeys.push({ userId, body })
+        if (o.rekeyError) throw o.rekeyError
+        land(userId, body.generation, body.memberKeyEpoch)
+        if (o.landThenThrow === true) throw api(400)
+      },
+    }
+    return { deps, calls }
+  }
+
+  it('wraps plainly to a member behind the caller, after pinning what was confirmed', async () => {
+    const { f, x } = setup({ memberGeneration: 0 })
+    const { deps, calls } = approveDeps(f)
+    expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: true, fingerprint: printOf(x) })
+    expect(calls.order).toEqual([]) // showing a fingerprint writes nothing
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+    expect(calls.order).toEqual(['pin', 'rewrap'])
+    expect(calls.rewraps).toEqual([
+      {
+        userId: x.id,
+        body: {
+          generation: 1,
+          wrappedKey: { ephemeralPub: 'e', nonce: 'n', ciphertext: `for-${x.id}` },
+          keyEpoch: 1,
+        },
+      },
+    ])
+    expect(calls.rekeys).toEqual([])
+  })
+
+  it('mints a new key for a member on the current key, with the epoch they were read at', async () => {
+    const { f, x } = setup({ memberGeneration: 1 })
+    const { deps, calls } = approveDeps(f)
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rekey' })
+    expect(calls.order).toEqual(['pin', 'mint', 'rekey'])
+    expect(calls.minted).toEqual([{ memberUserId: x.id, memberWrappingPublicKey: b64(x.wrapping) }])
+    expect(calls.rekeys[0]!.body).toMatchObject({ generation: 2, memberKeyEpoch: 1 })
+    expect(calls.rewraps).toEqual([])
+  })
+
+  it('tells an ambassador to ask an admin when approving needs a new key, before writing anything', async () => {
+    const { f, x } = setup({ memberGeneration: 1 })
+    const { deps, calls } = approveDeps(f, { role: 'ambassador' })
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+      ok: false,
+      kind: 'askAdmin',
+    })
+    expect(calls.order).toEqual([])
+  })
+
+  it('lets an ambassador wrap plainly to a member who is behind', async () => {
+    const { f, x } = setup({ memberGeneration: 0 })
+    const { deps, calls } = approveDeps(f, { role: 'ambassador' })
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+    expect(calls.rewraps).toHaveLength(1)
+  })
+
+  it('wraps plainly in an Open group whatever the member generation', async () => {
+    const { f, x } = setup({ memberGeneration: 1 })
+    const { deps, calls } = approveDeps(f, { open: true })
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+    expect(calls.rekeys).toEqual([])
+  })
+
+  describe('when the server disagrees with the roster', () => {
+    it('re-keys after rekey_required', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f, { rewrapError: api(409, 'rekey_required') })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rekey' })
+      expect(calls.order).toEqual(['pin', 'rewrap', 'mint', 'rekey'])
+    })
+
+    it('tells an ambassador to ask an admin after rekey_required', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f, {
+        role: 'ambassador',
+        rewrapError: api(409, 'rekey_required'),
+      })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'askAdmin',
+      })
+      expect(calls.rekeys).toEqual([])
+      expect(calls.minted).toEqual([])
+    })
+
+    it('wraps plainly after rekey_not_required', async () => {
+      const { f, x } = setup({ memberGeneration: 1 })
+      const { deps, calls } = approveDeps(f, { rekeyError: api(409, 'rekey_not_required') })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+      expect(calls.order).toEqual(['pin', 'mint', 'rekey', 'rewrap'])
+    })
+
+    it('is stale, not a loop, when both endpoints send it to the other', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f, {
+        rewrapError: api(409, 'rekey_required'),
+        rekeyError: api(409, 'rekey_not_required'),
+      })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'stale',
+      })
+      expect(calls.rewraps).toHaveLength(1)
+      expect(calls.rekeys).toHaveLength(1)
+    })
+  })
+
+  it('treats member_not_dormant as already approved, on either endpoint', async () => {
+    for (const [gen, opts] of [
+      [0, { rewrapError: api(409, 'member_not_dormant') }],
+      [1, { rekeyError: api(409, 'member_not_dormant') }],
+    ] as const) {
+      const { f, x } = setup({ memberGeneration: gen })
+      const { deps } = approveDeps(f, opts)
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'already' })
+    }
+  })
+
+  it('reports their keys changing under the write as a changed fingerprint', async () => {
+    const { f, x } = setup({ memberGeneration: 0 })
+    const { deps } = approveDeps(f, { rewrapError: api(409, 'wrap_epoch_stale') })
+    expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+      ok: false,
+      kind: 'keysChanged',
+    })
+  })
+
+  describe('a write whose outcome is unknown', () => {
+    it('settles as approved when the roster then shows it landed (rewrap, lost response)', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f, { landThenThrow: true })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'already' })
+      expect(calls.rewraps).toHaveLength(1) // read, not resent
+    })
+
+    it('settles a code-less 400 on a resent re-key as approved when it landed', async () => {
+      const { f, x } = setup({ memberGeneration: 1 })
+      const { deps, calls } = approveDeps(f, { landThenThrow: true })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'already' })
+      expect(calls.rekeys).toHaveLength(1)
+    })
+
+    it('stays ambiguous when the roster shows it did not land', async () => {
+      for (const [gen, opts] of [
+        [0, { rewrapError: api(400) }],
+        [0, { rewrapError: new TypeError('network') }],
+        [1, { rekeyError: api(400) }],
+        [1, { rekeyError: api(503) }],
+      ] as const) {
+        const { f, x } = setup({ memberGeneration: gen })
+        const { deps } = approveDeps(f, opts)
+        expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+          ok: false,
+          kind: 'ambiguous',
+        })
+      }
+    })
+
+    it('stays ambiguous when the settling read itself fails', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps: base } = approveDeps(f, { rewrapError: api(400) })
+      let reads = 0
+      const deps: ApproveDeps = {
+        ...base,
+        listAllMembers: async (g) => {
+          if (++reads > 1) throw new Error('503')
+          return base.listAllMembers(g)
+        },
+      }
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'ambiguous',
+      })
+    })
+  })
+
+  describe('pins and the fingerprint', () => {
+    it('blocks on a pin mismatch or rollback, before showing a fingerprint or writing', async () => {
+      for (const epoch of [0, 2]) {
+        const { f, x } = setup({ memberGeneration: 0 })
+        f.pins.set(x.id, pinFor(x, new Uint8Array(32).fill(251), epoch))
+        const { deps, calls } = approveDeps(f)
+        expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'pinMismatch' })
+        expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+          ok: false,
+          kind: 'pinMismatch',
+        })
+        expect(calls.order).toEqual([])
+      }
+    })
+
+    it('goes ahead on a pin that already matches, without re-pinning', async () => {
+      const { f, x } = setup({ memberGeneration: 0, pin: null })
+      f.pins.set(x.id, pinFor(x, undefined, 1))
+      const { deps, calls } = approveDeps(f)
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+      expect(calls.order).toEqual(['rewrap'])
+    })
+
+    it('writes nothing when the keys served now are not the ones whose fingerprint was confirmed', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f)
+      for (const confirmed of [printOf(person()), '']) {
+        expect(await runApprove(deps, GROUP, x.id, confirmed)).toEqual({
+          ok: false,
+          kind: 'keysChanged',
+        })
+      }
+      expect(calls.order).toEqual([]) // not even a pin
+    })
+
+    it('does not approve when the pin cannot be saved', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      f.pinKeysError = new Error('503')
+      const { deps, calls } = approveDeps(f)
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+      expect(calls.rewraps).toEqual([])
+    })
+  })
+
+  describe('who and when', () => {
+    it('is not for a plain member', async () => {
+      const { f, x } = setup()
+      const { deps, calls } = approveDeps(f, { role: 'member' })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'forbidden',
+      })
+      expect(calls.order).toEqual([])
+    })
+
+    it('refuses to approve the caller', async () => {
+      const { f } = setup()
+      const { deps } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, ME)).toMatchObject({ ok: false, kind: 'rejected' })
+    })
+
+    it('has nothing to approve for a member whose entry is current', async () => {
+      const { f, x } = setup()
+      f.epochs.set(x.id, { key: 1, wrap: 1 })
+      const { deps, calls } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'notDormant' })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'notDormant',
+      })
+      expect(calls.order).toEqual([])
+    })
+
+    it('waits for a running rotation', async () => {
+      const { f, x } = setup()
+      f.marker = startMarker(2)
+      const { deps, calls } = approveDeps(f)
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'rotationRunning',
+      })
+      expect(calls.order).toEqual([])
+    })
+
+    it('says a deleted account or a departed member is gone', async () => {
+      const { f, x } = setup()
+      f.members.delete(x.id)
+      const { deps } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, x.id)).toEqual({ ok: false, kind: 'notFound' })
+    })
+
+    it('reports a failed key read as unchecked, never as clean', async () => {
+      const { f, x } = setup()
+      f.listPinsError = new Error('503')
+      const { deps } = approveDeps(f)
+      expect(await prepareApprove(deps, GROUP, x.id)).toMatchObject({
+        ok: false,
+        kind: 'unchecked',
+      })
+    })
+
+    it('maps a cold worker to a password prompt', async () => {
+      const { f, x } = setup({ memberGeneration: 1 })
+      const { deps: base } = approveDeps(f)
+      const deps: ApproveDeps = {
+        ...base,
+        startApprovalCrypto: async () => {
+          throw new Error('crypto: no live keys cached')
+        },
+      }
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({
+        ok: false,
+        kind: 'coldKeys',
+      })
+    })
+  })
+
+  it('maps in-progress and stale conflicts', async () => {
+    for (const [code, kind] of [
+      ['rotation_in_progress', 'rotationRunning'],
+      ['key_epoch_stale', 'stale'],
+      ['conflict_retry', 'stale'],
+    ] as const) {
+      const { f, x } = setup({ memberGeneration: 1 })
+      const { deps } = approveDeps(f, { rekeyError: api(409, code) })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: false, kind })
+    }
+  })
+
+  it('has a message for every failure, and the ambassador one names an admin', () => {
+    const kinds = [
+      'pinMismatch',
+      'keysChanged',
+      'forbidden',
+      'authRequired',
+      'notFound',
+      'deleted',
+      'coldKeys',
+      'notDormant',
+      'askAdmin',
+      'rotationRunning',
+      'stale',
+      'ambiguous',
+    ] as const
+    for (const kind of kinds) {
+      expect(approveFailureMessage({ ok: false, kind })).toMatch(/\S/)
+    }
+    expect(approveFailureMessage({ ok: false, kind: 'askAdmin' })).toContain('Ask an admin')
+    expect(approveFailureMessage({ ok: false, kind: 'unchecked', reason: 'boom' })).toContain(
+      'boom',
+    )
   })
 })
