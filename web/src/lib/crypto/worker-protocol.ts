@@ -605,6 +605,33 @@ export interface StartSelfRekeyResponse {
 }
 
 /**
+ * #62: mints the next key for an admin's approval of a dormant member's new
+ * keys, wrapping it to the member's new wrapping key as well. See
+ * credential-material.ts's startApprovalRekey.
+ */
+export interface StartApprovalRekeyRequest {
+  readonly kind: 'startApprovalRekey'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly ownWrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly ownGeneration: number
+  readonly memberUserId: string
+  /** Base64 X25519 public key the caller approved for the member. */
+  readonly memberWrappingPublicKey: string
+}
+
+export interface StartApprovalRekeyResult extends StartGroupRotationResult {
+  readonly memberWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+export interface StartApprovalRekeyResponse {
+  readonly kind: 'startApprovalRekeyDone'
+  readonly id: string
+  readonly result: StartApprovalRekeyResult
+}
+
+/**
  * #178: signs the rotation start a LEAVE carries, naming the caller as the
  * member removed. No key is minted. See credential-material.ts's
  * signLeaveRotationStart.
@@ -878,6 +905,7 @@ export type WorkerRequest =
   | SignReadmissionRequest
   | StartGroupRotationRequest
   | StartSelfRekeyRequest
+  | StartApprovalRekeyRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
   | BeginKeyRotationRequest
@@ -910,6 +938,7 @@ export type WorkerResponse =
   | SignReadmissionResponse
   | StartGroupRotationResponse
   | StartSelfRekeyResponse
+  | StartApprovalRekeyResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse
   | BeginKeyRotationResponse

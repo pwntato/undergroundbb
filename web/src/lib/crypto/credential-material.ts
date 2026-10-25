@@ -895,6 +895,69 @@ export async function startSelfRekey(
 }
 
 /**
+ * #62: mints the next generation's key for an admin's approval of a dormant
+ * member's new keys, when the member's entry is still at the admin's
+ * generation (so the old keys hold the current key and approving must mint).
+ * Same minting as startGroupRotation, plus the new key wrapped to the member's
+ * NEW X25519 key under their entry's AAD at the new generation. Removes no one:
+ * the start is signed under the rekey context naming the member, with reason
+ * "approval".
+ *
+ * `memberWrappingPublicKey` arrives from the caller, which has ALREADY approved
+ * it against the member's pin (this function has no pins; wrapping to a
+ * substituted key would hand the server the group key). The caller's own id is
+ * refused: that is the self re-key.
+ */
+export async function startApprovalRekey(
+  keys: LiveKeys,
+  groupId: string,
+  ownWrappedGroupKey: Wrapped,
+  ownGeneration: number,
+  memberUserId: string,
+  memberWrappingPublicKey: Uint8Array,
+): Promise<{
+  generation: number
+  link: { nonce: string; ciphertext: string }
+  removerWrappedKey: WireWrapped
+  memberWrappedKey: WireWrapped
+  startSignature: string
+}> {
+  if (memberUserId === keys.userId) {
+    throw new Error('crypto: refusing to approve the caller with a re-key; use the self re-key')
+  }
+  if (memberWrappingPublicKey.length !== X25519_KEY_LEN) {
+    throw new Error('crypto: member X25519 public key must be 32 bytes')
+  }
+  const oldKey = await unwrapOwnGroupKey(keys, groupId, ownWrappedGroupKey, ownGeneration)
+  const newKey = crypto.getRandomValues(new Uint8Array(KEY_SIZE))
+  const generation = ownGeneration + 1
+
+  const link = await encrypt(newKey, oldKey, genKeyAAD(groupId, ownGeneration))
+  const ownWrapped = await wrap(
+    keys.wrappingKey.publicKey,
+    newKey,
+    memberWrapAAD(groupId, keys.userId, generation),
+  )
+  const memberWrapped = await wrap(
+    memberWrappingPublicKey,
+    newKey,
+    memberWrapAAD(groupId, memberUserId, generation),
+  )
+  const startSignature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.RotationRekey,
+    rotationRekeyPayload(groupId, keys.userId, memberUserId, generation, 'approval'),
+  )
+  return {
+    generation,
+    link: { nonce: bytesToBase64(link.nonce), ciphertext: bytesToBase64(link.ciphertext) },
+    removerWrappedKey: toWireWrapped(ownWrapped),
+    memberWrappedKey: toWireWrapped(memberWrapped),
+    startSignature: bytesToBase64(startSignature),
+  }
+}
+
+/**
  * #178: the one thing a LEAVING member contributes to the rotation their leave
  * starts: a signature over the rotation start naming THEMSELVES as the member
  * removed, for the generation after their own. They mint no key and wrap
