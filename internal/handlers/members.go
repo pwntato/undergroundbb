@@ -32,6 +32,11 @@ type memberEntry struct {
 	UserID     string `json:"userId"`
 	Role       string `json:"role"`
 	Generation int64  `json:"generation"`
+	// WrapEpoch is the member's KeyEpoch when their entry point was wrapped
+	// (0 when absent). A member is dormant when it is behind the KeyEpoch the
+	// client reads from their projection; the server serves it unsigned and the
+	// client derives dormancy itself (docs/DESIGN.md, "Dormancy is derived").
+	WrapEpoch uint64 `json:"wrapEpoch"`
 }
 
 // listMembersResponse is the wire shape of GET /api/groups/{id}/members.
@@ -93,6 +98,7 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 			UserID:     strings.TrimPrefix(mem.SK, "MEMBER#"),
 			Role:       mem.Role,
 			Generation: mem.Generation,
+			WrapEpoch:  mem.WrapEpoch,
 		})
 	}
 	WriteJSON(w, http.StatusOK, listMembersResponse{Members: entries, NextCursor: next})

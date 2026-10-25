@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -499,5 +500,43 @@ func TestChangeRoleRefusesToElevateADeletedMember(t *testing.T) {
 	}
 	if got := strAttr(getRow(t, "GROUP#"+gid, "MEMBER#"+carol.userID), "Role"); got != "member" {
 		t.Errorf("deleted admin's role = %q after demotion", got)
+	}
+}
+
+// The roster serves each member's WrapEpoch so the client can derive dormancy
+// (WrapEpoch behind the member's KeyEpoch) itself. Absent reads as 0.
+func TestListMembersServesWrapEpoch(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	second := registerTestUser(t, h)
+	addMember(t, gid, second, "member")
+	setMemberWrapEpoch(t, gid, second.userID, 3)
+
+	var resp listMembersResponse
+	if err := json.Unmarshal(doListMembers(t, h, ownerCookie, gid, "").Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]uint64{}
+	for _, m := range resp.Members {
+		got[m.UserID] = m.WrapEpoch
+	}
+	if len(got) != 2 || got[owner.userID] != 0 || got[second.userID] != 3 {
+		t.Fatalf("wrapEpoch by member = %v, want owner 0 and second 3", got)
+	}
+}
+
+func setMemberWrapEpoch(t *testing.T, gid, userID string, epoch int) {
+	t.Helper()
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+			"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+		UpdateExpression:          aws.String("SET WrapEpoch = :v"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberN{Value: strconv.Itoa(epoch)}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
