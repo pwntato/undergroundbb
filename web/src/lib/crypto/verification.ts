@@ -26,6 +26,7 @@
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { lengthPrefixedConcat } from './payload.js'
+import { ownSignerAccepted, type OwnKeyHistory } from './own-history.js'
 import { isUtcDay } from './pin.js'
 
 const encoder = new TextEncoder()
@@ -81,6 +82,8 @@ export interface EvaluateVerificationInput {
   /** The caller's own user id and CURRENT signing public key. */
   readonly verifierUserId: string
   readonly verifierSigningPublicKey: Uint8Array
+  /** The caller's verified key history; see EvaluatePinInput.pinnerHistory. */
+  readonly verifierHistory?: OwnKeyHistory
   readonly verifiedUserId: string
   /** The caller's stored record for verifiedUserId, if the server returned one. */
   readonly record: VerificationRecord | undefined
@@ -100,11 +103,23 @@ export function evaluateVerification(input: EvaluateVerificationInput): Verifica
   const signer = decode(record.verifierSigningPublicKey)
   const signature = decode(record.signature)
   if (!signer || !signature) return 'bad-signature'
-  // The recorded signer is untrusted input: only the caller's own current key
-  // may verify a record, whatever the row claims.
-  if (!bytesEqual(signer, verifierSigningPublicKey)) return 'bad-signature'
-
   if (!isUtcDay(record.signedDay)) return 'bad-signature'
+  // The recorded signer is untrusted input: only the caller's own current key,
+  // or a superseded one their verified history lists this very row under, may
+  // verify a record, whatever the row claims.
+  if (!bytesEqual(signer, verifierSigningPublicKey)) {
+    const listed =
+      input.verifierHistory !== undefined &&
+      bytesEqual(input.verifierHistory.current, verifierSigningPublicKey) &&
+      ownSignerAccepted(
+        input.verifierHistory,
+        signer,
+        record.signedDay,
+        `VERIFIED#${verifiedUserId}`,
+        signature,
+      )
+    if (!listed) return 'bad-signature'
+  }
 
   const payload = verificationPayload(
     verifierUserId,

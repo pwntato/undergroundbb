@@ -38,6 +38,7 @@
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { lengthPrefixedConcat } from './payload.js'
+import { ownSignerAccepted, type OwnKeyHistory } from './own-history.js'
 
 const encoder = new TextEncoder()
 const KEY_SIZE = 32
@@ -156,6 +157,12 @@ export interface EvaluatePinInput {
   /** The caller's own user id and CURRENT signing public key. */
   readonly pinnerUserId: string
   readonly pinnerSigningPublicKey: Uint8Array
+  /**
+   * The caller's verified key history (lib/crypto/own-history). Without it only
+   * a pin signed under the current key counts; with it, a pin signed under a
+   * superseded key counts when its day, interval and roster entry check out.
+   */
+  readonly pinnerHistory?: OwnKeyHistory
   readonly pinnedUserId: string
   /** The caller's stored pin for pinnedUserId, if the server returned one. */
   readonly pin: PinRecord | undefined
@@ -177,9 +184,22 @@ export function evaluatePin(input: EvaluatePinInput): PinVerdict {
   if (!Number.isSafeInteger(pin.keyEpoch) || pin.keyEpoch < 0 || !isUtcDay(pin.signedDay)) {
     return 'bad-signature'
   }
-  // The recorded signer is untrusted input: only the caller's own current key
-  // may verify a pin, whatever the row claims.
-  if (!bytesEqual(signer, pinnerSigningPublicKey)) return 'bad-signature'
+  // The recorded signer is untrusted input: only the caller's own current key,
+  // or a superseded one their verified history lists this very row under, may
+  // verify a pin, whatever the row claims.
+  if (!bytesEqual(signer, pinnerSigningPublicKey)) {
+    const listed =
+      input.pinnerHistory !== undefined &&
+      bytesEqual(input.pinnerHistory.current, pinnerSigningPublicKey) &&
+      ownSignerAccepted(
+        input.pinnerHistory,
+        signer,
+        pin.signedDay,
+        `PIN#${pinnedUserId}`,
+        signature,
+      )
+    if (!listed) return 'bad-signature'
+  }
 
   const payload = pinPayload(
     pinnerUserId,
