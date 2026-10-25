@@ -728,12 +728,14 @@ A pin or verification record signed under a superseded key then counts only if t
 old key, the signed day is no later than that link's day and no earlier than the previous link's
 (both keys are candidates on the rotation day), and the row's id is in that link's roster. The
 interval comes from the signed link days, not from the served `SupersededSigningKeys` intervals,
-which are unsigned. For grants and removals the caller's own history is built from the chain (each
+which are unsigned. For grants the caller's own history is built from the chain (each
 old key from the previous link's day to its own link's day), never from the served projection, which
 must still agree with the chain (the same superseded keys, `KeyEpoch` equal to the chain length)
 before it is used at all; otherwise a server holding a leaked old key could widen its served interval
-past the rotation and have later-dated grants verify under it. When the history cannot be built, only the current key is accepted, so a failed read
-blocks rather than accepts.
+past the rotation and have later-dated grants verify under it. Removal links carry no day, so any key
+in the verified chain is accepted for them (a forged removal record can only exclude someone). When
+the history cannot be built, only the current key is accepted, so a failed read blocks rather than
+accepts.
 
 #### What a key change looks like to others
 

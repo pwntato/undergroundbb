@@ -751,12 +751,13 @@ type SignerKeys =
 
 /**
  * The signing keys to try for each signer of a record the rotation relies on,
- * fetched in one batch. The caller's own key is its current one, with no fetch
- * (#62: only the CURRENT key. Once signing keys can rotate, a signer who
- * rotated mid-rotation signed under a superseded key, and as the only admin at
- * this generation nobody could resume; take the served set, as for anyone
- * else, before that ships; this now also covers every removal the caller ever
- * signed, which live forever, so the fix is not scoped to resuming a rotation).
+ * fetched in one batch. The caller's own keys need no fetch of their own
+ * record: they are every key in their verified history (lib/crypto/own-history),
+ * or only the current one when there is none. Removal links carry no day, so any
+ * key in the verified chain is accepted for them, which is safe because a forged
+ * record can only exclude someone (removal.ts), and it covers every removal the
+ * caller ever signed, which live forever, so this is not only about resuming a
+ * rotation.
  * Anyone else's come from the server, checked against
  * the caller's pin: a mismatch stops the run, a first sighting is accepted (as
  * in the roster: a forged signature can only ever shrink the recipient set). A
