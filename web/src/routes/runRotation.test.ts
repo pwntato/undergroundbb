@@ -2036,6 +2036,20 @@ describe('re-admitting a member', () => {
 
   const printOf = (p: Person) => fingerprint(p.signing.publicKey, p.wrapping)
 
+  it('checks the pin the caller signed under the key they have since rotated away from', async () => {
+    const f = new Fake()
+    const x = unadmitted(f)
+    f.rotateCaller(generateSigningKey())
+    const { deps } = readmitDeps(f)
+    expect(await prepareReadmit(deps, GROUP, x.id)).toEqual({ ok: true, fingerprint: printOf(x) })
+    f.ownHistory = undefined
+    const { deps: bare } = readmitDeps(f)
+    expect(await prepareReadmit(bare, GROUP, x.id)).toMatchObject({
+      ok: false,
+      kind: 'pinMismatch',
+    })
+  })
+
   it('offers Re-admit for an unadmitted member, signs over their served keys, and the rotation then finishes', async () => {
     const f = new Fake()
     const x = unadmitted(f)
@@ -2618,6 +2632,34 @@ describe('a rotation job by an admin whose own keys rotated (#62)', () => {
     expect(out).toEqual({ status: 'completed', rewrapped: 1 })
     expect(f.gen(m)).toBe(1)
     expect(f.completed).toEqual([1])
+  })
+
+  it('trusts the key of a member who left by their pin, which was signed under the old key', async () => {
+    const { f, m } = world()
+    const leaver = person()
+    f.outsiders.set(leaver.id, leaver)
+    f.pins.set(leaver.id, pinFor(leaver))
+    f.ownGeneration = 1
+    f.members.get(ME)!.generation = 1
+    f.marker = startMarker(2, { startedBy: leaver.id, signer: leaver.signing, removed: leaver.id })
+    f.links = [removalLink(0)]
+    f.members.get(m.id)!.generation = 1
+    f.rotateCaller(newMe)
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+    expect(f.takeOvers).toHaveLength(1)
+  })
+
+  it("checks another admin's removal record against the pin the caller signed under the old key", async () => {
+    const f = new Fake()
+    const eve = f.add(person(), 'admin')
+    const x = person()
+    f.add(x, 'member', 0, 'auto', admissionOf(x, { generation: 0 }))
+    f.links = [removalLink(0, { remover: eve.id, signer: eve.signing, removed: x.id })]
+    f.rotateCaller(newMe)
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toMatchObject({ status: 'blocked', unadmitted: [x.id] })
+    expect(f.cryptoRecipients.flat()).toEqual([eve.id])
   })
 
   it('wraps to nobody when the rotation did not list the pins it signed under the old key', async () => {

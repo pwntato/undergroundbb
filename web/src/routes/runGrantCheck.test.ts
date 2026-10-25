@@ -17,7 +17,7 @@ import {
 } from '@/lib/crypto/group'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import { buildOwnKeyHistory } from '@/lib/crypto/own-history'
-import { makeKeyChange } from '@/lib/crypto/own-history.testkit'
+import { makeKeyChange, rowId } from '@/lib/crypto/own-history.testkit'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { checkForView, checkGrants, type GrantCheck, type GrantCheckDeps } from './runGrantCheck'
 
@@ -728,6 +728,49 @@ describe('checkGrants when the caller rotated their keys (#62)', () => {
     if (r.state !== 'checked') throw new Error('expected checked')
     expect(r.blockedKeyUsers).toEqual([])
     expect(r.statuses.get(EVE)).toEqual({ status: 'verified' })
+  })
+
+  it('checks pins the caller signed under the old key, when the rotation listed them', async () => {
+    const { w, pages } = rotatedWorld()
+    // Pins taken before the rotation, under the old key.
+    const before = deps(w, { pages })
+    await checkGrants(before, GROUP, members)
+    const kc = makeKeyChange({
+      userId: SELF,
+      from: w.selfKey,
+      to: newKey,
+      epoch: 1,
+      day: '2026-10-22',
+      listed: [...before.keyPins.values()].map((p) =>
+        rowId(`PIN#${p.pinnedUserId}`, base64ToBytes(p.signature)),
+      ),
+    })
+    const history = buildOwnKeyHistory({
+      userId: SELF,
+      ownSigningKey: newKey.publicKey,
+      changes: [kc.change],
+      rosters: [kc.roster],
+    })
+    w.users.set(SELF, {
+      ...w.users.get(SELF)!,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.selfKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2026-10-22T00:00:00Z',
+        },
+      ],
+    })
+    const after = deps(w, {
+      pages,
+      listPins: before.listPins,
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(after, GROUP, members)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.blockedKeyUsers).toEqual([])
+    expect(r.keys).toBe('pinned')
   })
 
   it('blocks the caller (and what rests on their old key) without a verified history', async () => {
