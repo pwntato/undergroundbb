@@ -675,6 +675,8 @@ every account that never rotated, answers 409 `member_not_dormant`. A stale `key
 `wrap_epoch_stale`, a member past the approver's generation or gone answers 404, and a `Rotating` group
 needs the member strictly behind. An `Open` group has no re-key, so there the member may sit at the
 approver's generation and the wrap replaces the copy the old keys hold.
+A retry after a lost 204 answers `member_not_dormant` too, since the first call set `WrapEpoch`; the approve
+UI treats it as already approved and re-reads the roster.
 
 #### The Ed25519 half and the key history
 
