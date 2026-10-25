@@ -81,6 +81,11 @@ func TestApproveRekeyRefusals(t *testing.T) {
 		t.Fatalf("caught up: %v, want ErrMemberNotDormant", err)
 	}
 	setWrapEpoch(t, c, g, "m1", 0)
+	// An account that never rotated is not dormant, whatever its WrapEpoch.
+	putTestMember(t, c, g, "m4", "member")
+	if err := c.ApproveRekey(ctx, approveRekeyInput(g, "a1", "m4", 0, 2, 0)); !errors.Is(err, ErrMemberNotDormant) {
+		t.Fatalf("never rotated: %v, want ErrMemberNotDormant", err)
+	}
 	// A plain member as the admin, and an admin at another generation.
 	putTestMember(t, c, g, "m2", "member")
 	if err := c.ApproveRekey(ctx, approveRekeyInput(g, "m2", "m1", 0, 0, 1)); !errors.Is(err, ErrRewrapCallerBehind) {
