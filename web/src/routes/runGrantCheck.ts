@@ -25,6 +25,7 @@ import type { ListDesignationsResponse, ListGrantsResponse } from '@/lib/api/gro
 import type { UserProjection } from '@/lib/api/users'
 import type { PinRecord } from '@/lib/crypto/pin'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
+import { ownHistoryMatchesServed, type OwnKeyHistory } from '@/lib/crypto/own-history'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import {
   checkMemberRole,
@@ -105,6 +106,12 @@ export interface GrantCheckDeps {
   readonly selfUserId: string
   /** The caller's own CURRENT signing public key (base64), from the worker. */
   readonly ownSigningKey: () => Promise<string>
+  /**
+   * The caller's verified key history (lib/crypto/own-history), given the key
+   * they hold. Null when it could not be built or does not verify. Absent in
+   * deps that predate rotation: only the current key is then accepted.
+   */
+  readonly loadOwnKeyHistory?: (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>
   /** Every pin the caller has stored. */
   readonly listPins: () => Promise<readonly PinRecord[]>
   /** Signs and stores a pin (base64 keys). Rejects if it could not be saved. */
@@ -318,9 +325,11 @@ async function checkServedKeys(
 }> {
   let own: Uint8Array | null = null
   let pins: Map<string, PinRecord> | null = null
+  let ownHistory: OwnKeyHistory | null = null
   try {
     own = base64ToBytes(await deps.ownSigningKey())
     pins = new Map((await deps.listPins()).map((p) => [p.pinnedUserId, p]))
+    ownHistory = (await deps.loadOwnKeyHistory?.(own)) ?? null
   } catch {
     // Handled below: histories pass through, reported as unchecked.
   }
@@ -341,10 +350,16 @@ async function checkServedKeys(
       // Your own key comes from the worker, or the copy of it cached in
       // sessionStorage at login (lib/session/ownSigningKey.ts) when a reload
       // dropped the worker's keys -- so sessionStorage is in this trust path;
-      // a tampered cache fails closed. Not from the server. No rotation
-      // exists yet, so a served history that differs at all is not yours.
+      // a tampered cache fails closed. Not from the server. The served history
+      // is yours only if it agrees with the chain of rotations you signed that
+      // ends at that key (lib/crypto/own-history); with no chain to check it
+      // against, a served history with any superseded key is not yours.
       const current = base64ToBytes(u.signingPublicKey)
-      if (sameBytes(current, own) && u.supersededSigningKeys.length === 0) {
+      const agrees =
+        ownHistory !== null
+          ? ownHistoryMatchesServed(ownHistory, u)
+          : sameBytes(current, own) && u.supersededSigningKeys.length === 0
+      if (agrees) {
         keyHistories.set(id, historyOf(u))
       } else {
         blockedKeyUsers.push(id)
@@ -354,6 +369,7 @@ async function checkServedKeys(
     const verdict = evaluatePin({
       pinnerUserId: deps.selfUserId,
       pinnerSigningPublicKey: own,
+      pinnerHistory: ownHistory ?? undefined,
       pinnedUserId: id,
       pin: pins.get(id),
       served: u,

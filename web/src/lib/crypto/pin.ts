@@ -162,7 +162,7 @@ export interface EvaluatePinInput {
    * a pin signed under the current key counts; with it, a pin signed under a
    * superseded key counts when its day, interval and roster entry check out.
    */
-  readonly pinnerHistory?: OwnKeyHistory
+  readonly pinnerHistory?: OwnKeyHistory | undefined
   readonly pinnedUserId: string
   /** The caller's stored pin for pinnedUserId, if the server returned one. */
   readonly pin: PinRecord | undefined

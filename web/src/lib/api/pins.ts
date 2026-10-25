@@ -2,12 +2,15 @@
 // internal/handlers/pins.go. The server stores and serves pins but verifies
 // nothing on read: the client must check every signature (evaluatePin).
 
+import type { WireKeyChangeRoster } from '@/lib/crypto/own-history'
 import type { PinRecord } from '@/lib/crypto/pin'
 import { ApiError } from './auth.js'
 
 export interface ListPinsResponse {
   readonly pins: readonly PinRecord[]
   readonly nextCursor?: string
+  /** The caller's own rotation rosters, on the first page only (#62). */
+  readonly keyChangeRosters?: readonly WireKeyChangeRoster[]
 }
 
 async function fail(res: Response): Promise<never> {
@@ -47,6 +50,11 @@ export async function listAllPins(): Promise<PinRecord[]> {
     cursor = res.nextCursor
   }
   throw new Error('pin pagination did not terminate')
+}
+
+/** The caller's own rotation rosters: the first page of GET /api/pins carries them. */
+export async function listKeyChangeRosters(): Promise<readonly WireKeyChangeRoster[]> {
+  return (await listPins()).keyChangeRosters ?? []
 }
 
 export interface PutPinRequest {

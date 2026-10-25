@@ -20,6 +20,7 @@ import {
   removeMember,
   type MemberRole,
 } from '@/lib/api/groups'
+import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import {
   getOwnFingerprint,
@@ -234,6 +235,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           writePin: (g, pin) => writeAnchorPin(userId, g, pin),
           selfUserId: userId,
           ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+          loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
           listPins: listAllPins,
           pinKeys: makePinKeys(userId),
         },
@@ -260,6 +262,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           getUsers,
           listVerifications: listAllVerifications,
           ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+          loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
           selfUserId: userId,
         },
         loadedView.members.map((m) => m.userId),

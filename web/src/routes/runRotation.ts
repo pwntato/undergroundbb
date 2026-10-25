@@ -63,6 +63,7 @@ import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationRekeyPayload, rotationStartPayload } from '@/lib/crypto/group'
 import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
+import { ownHistoryFor, ownSigningKeysFor } from './ownHistory'
 import type {
   RewrapGroupKeyResult,
   StartGroupRotationRequest,
@@ -614,6 +615,7 @@ async function checkLeaverKey(
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
+    pinnerHistory: await ownHistoryFor(deps, own),
     pinnedUserId: leaverId,
     pin: pins.find((p) => p.pinnedUserId === leaverId),
     served,
@@ -769,7 +771,9 @@ async function resolveSignerKeys(
 ): Promise<SignerKeys> {
   const keys = new Map<string, Uint8Array[] | null>()
   const others = signers.filter((id) => id !== deps.selfUserId)
-  if (signers.includes(deps.selfUserId)) keys.set(deps.selfUserId, [own])
+  if (signers.includes(deps.selfUserId)) {
+    keys.set(deps.selfUserId, await ownSigningKeysFor(deps, own))
+  }
   if (others.length === 0) return { ok: true, keys }
 
   const failure: { err?: unknown } = {}
@@ -796,6 +800,7 @@ async function resolveSignerKeys(
     const verdict = evaluatePin({
       pinnerUserId: deps.selfUserId,
       pinnerSigningPublicKey: own,
+      pinnerHistory: await ownHistoryFor(deps, own),
       pinnedUserId: id,
       pin: pins.find((p) => p.pinnedUserId === id),
       served: projection,
@@ -1002,6 +1007,7 @@ async function checkRecipient(
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
+    pinnerHistory: await ownHistoryFor(deps, own),
     pinnedUserId: userId,
     pin: pins.get(userId),
     served,

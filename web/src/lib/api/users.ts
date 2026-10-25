@@ -3,6 +3,7 @@
 // the username and public keys, nothing that could be used to attack a
 // password offline. Keys cross the wire as standard-padded base64.
 
+import type { WireKeyChange } from '@/lib/crypto/own-history'
 import { ApiError } from './auth.js'
 
 export interface WireSupersededKey {
@@ -46,6 +47,21 @@ export async function getUser(userId: string): Promise<UserProjection> {
     credentials: 'same-origin',
   })
   return (await readJSON(res)) as UserProjection
+}
+
+/** The single-user read also serves the user's whole KEYCHANGE# chain (empty if they never rotated). */
+export interface UserDetail extends UserProjection {
+  readonly keyChanges: readonly WireKeyChange[]
+}
+
+/** GET /api/users/{id} with its key-change chain; a response without the chain is malformed. */
+export async function getUserDetail(userId: string): Promise<UserDetail> {
+  const res = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+    credentials: 'same-origin',
+  })
+  const data = (await readJSON(res)) as UserDetail
+  if (!Array.isArray(data.keyChanges)) throw new ApiError(res.status, 'malformed response')
+  return data
 }
 
 /** Ids per POST /api/users:batch; the server refuses more (db.MaxBatchUsers). */

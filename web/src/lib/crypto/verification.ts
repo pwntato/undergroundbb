@@ -83,7 +83,7 @@ export interface EvaluateVerificationInput {
   readonly verifierUserId: string
   readonly verifierSigningPublicKey: Uint8Array
   /** The caller's verified key history; see EvaluatePinInput.pinnerHistory. */
-  readonly verifierHistory?: OwnKeyHistory
+  readonly verifierHistory?: OwnKeyHistory | undefined
   readonly verifiedUserId: string
   /** The caller's stored record for verifiedUserId, if the server returned one. */
   readonly record: VerificationRecord | undefined

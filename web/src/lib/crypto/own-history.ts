@@ -190,3 +190,29 @@ export function ownSignerAccepted(
     return link.roster?.some((e) => sameBytes(e, id)) === true
   })
 }
+
+/**
+ * Whether the projection the server serves for the caller agrees with the
+ * verified history: the same current key, the same set of superseded keys, and
+ * a KeyEpoch equal to the number of rotations. The served superseded list is
+ * unsigned, so this is what ties it to the signed chain.
+ */
+export function ownHistoryMatchesServed(
+  history: OwnKeyHistory,
+  served: {
+    readonly signingPublicKey: string
+    readonly supersededSigningKeys: readonly { readonly publicKey: string }[]
+    readonly keyEpoch: number
+  },
+): boolean {
+  const current = decode(served.signingPublicKey, KEY_SIZE)
+  if (current === null || !sameBytes(current, history.current)) return false
+  if (served.keyEpoch !== history.links.length) return false
+  if (served.supersededSigningKeys.length !== history.links.length) return false
+  return history.links.every((link) =>
+    served.supersededSigningKeys.some((k) => {
+      const key = decode(k.publicKey, KEY_SIZE)
+      return key !== null && sameBytes(key, link.oldSigning)
+    }),
+  )
+}
