@@ -131,6 +131,12 @@ func TestApproveRewrapChecksTheMemberTheEpochAndTheApprover(t *testing.T) {
 	}
 	setWrapEpoch(t, c, g, "a2", 0)
 
+	// An account that never rotated has nothing to approve.
+	putTestMember(t, c, g, "m4", "member")
+	if err := c.ApproveRewrap(ctx, approveInput(g, "a1", "m4", 1, 0)); !errors.Is(err, ErrMemberNotDormant) {
+		t.Fatalf("epoch 0: %v, want ErrMemberNotDormant", err)
+	}
+
 	// The marker names another generation.
 	if err := c.ApproveRewrap(ctx, approveInput(g, "a1", "a2", 2, 1)); !errors.Is(err, ErrRotationNotActive) {
 		t.Fatalf("wrong generation: %v, want ErrRotationNotActive", err)

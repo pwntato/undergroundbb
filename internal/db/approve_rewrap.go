@@ -94,13 +94,17 @@ func (c *Client) ApproveRewrap(ctx context.Context, in ApproveRewrapInput) error
 			TableName:        aws.String(c.table),
 			Key:              memberKey(in.GroupID, in.MemberUserID),
 			UpdateExpression: aws.String("SET #gen = :gen, #wrapped = :wrapped, WrapEpoch = :kep"),
+			// An account that never rotated (KeyEpoch 0) cannot be dormant,
+			// which is what ":kep > :zero" keeps an absent WrapEpoch from
+			// reading as.
 			ConditionExpression: aws.String("attribute_exists(PK) AND " + genCond +
-				" AND (attribute_not_exists(WrapEpoch) OR WrapEpoch < :kep)"),
+				" AND ((attribute_not_exists(WrapEpoch) AND :kep > :zero) OR WrapEpoch < :kep)"),
 			ExpressionAttributeNames: map[string]string{"#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":gen":     genAttr(in.Generation),
 				":wrapped": wrapped,
 				":kep":     epochAttr(in.KeyEpoch),
+				":zero":    epochAttr(0),
 			},
 		}},
 		c.keyEpochCheck(in.MemberUserID, in.KeyEpoch),
