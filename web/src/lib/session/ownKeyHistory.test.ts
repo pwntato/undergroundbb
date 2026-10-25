@@ -74,3 +74,27 @@ describe('makeOwnKeyHistoryLoader', () => {
     expect(a.getUserDetail).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('OwnKeyHistoryLoader.failure', () => {
+  it('is null when the history loaded, and asks only once', async () => {
+    const a = api()
+    const load = makeOwnKeyHistoryLoader(ME, a)
+    expect(await load.failure(k1.publicKey)).toBeNull()
+    expect(await load(k1.publicKey)).not.toBeNull()
+    expect(a.getUserDetail).toHaveBeenCalledTimes(1)
+  })
+
+  it('says what failed when a read rejects', async () => {
+    const load = makeOwnKeyHistoryLoader(
+      ME,
+      api({ listKeyChangeRosters: vi.fn(() => Promise.reject(new Error('offline'))) }),
+    )
+    expect(await load.failure(k1.publicKey)).toBe('offline')
+    expect(await load(k1.publicKey)).toBeNull()
+  })
+
+  it('says the history does not verify when the chain does not end at the key held', async () => {
+    const load = makeOwnKeyHistoryLoader(ME, api())
+    expect(await load.failure(generateSigningKey().publicKey)).toMatch(/does not verify/)
+  })
+})

@@ -32,6 +32,7 @@ import {
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUsers } from '@/lib/api/users'
+import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
 import { loadDormancy, type Dormancy } from './dormancy'
 import { listAllPins } from '@/lib/api/pins'
 import { deleteVerification, listAllVerifications, putVerification } from '@/lib/api/verifications'
@@ -51,7 +52,13 @@ import {
   verifyMember,
   type MemberVerifications,
 } from './runMemberVerification'
-import { makeApproveDeps, makePinKeys, makeReadmitDeps, makeRotationDeps } from './rotationDeps'
+import {
+  makeAcceptDeps,
+  makeApproveDeps,
+  makePinKeys,
+  makeReadmitDeps,
+  makeRotationDeps,
+} from './rotationDeps'
 import {
   catchUpRotation,
   approveAndRotate,
@@ -59,6 +66,11 @@ import {
   removeAndRotate,
   rotationGuardFor,
 } from './rotationJobs'
+import {
+  acceptFailureMessage,
+  prepareAcceptKeyChange,
+  runAcceptKeyChange,
+} from './runAcceptKeyChange'
 import { approveFailureMessage, prepareApprove, shouldReloadAfterApprove } from './runApprove'
 import {
   prepareReadmit,
@@ -140,6 +152,13 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     readonly userId: string
     readonly fingerprint: string
   } | null>(null)
+  // The member whose changed keys await the caller's fingerprint check before the
+  // pin is replaced (#62), with what the server's own history says about the change.
+  const [acceptPrompt, setAcceptPrompt] = useState<{
+    readonly userId: string
+    readonly fingerprint: string
+    readonly evidence: KeyChangeEvidence
+  } | null>(null)
   // How this tab's most recent rotation job (on-load catch-up or a removal's)
   // ended; null until one has. The stale-rotation banner's advice depends on it
   // (see rotationNotice).
@@ -205,7 +224,15 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     let cancelled = false
     void (async () => {
       const dormancy = await loadDormancy(
-        { getUsers, selfUserId: userId },
+        {
+          getUsers,
+          selfUserId: userId,
+          pins: {
+            ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+            listPins: listAllPins,
+            loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
+          },
+        },
         view.members,
         view.myGeneration,
         view.revocationMode,
@@ -539,6 +566,67 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     })()
   }
 
+  const handleStartAccept = (subjectUserId: string) => {
+    if (load.status !== 'ready' || userId === null || busyUserId !== null || guard.held) {
+      return
+    }
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const prepared = await prepareAcceptKeyChange(makeAcceptDeps(userId), subjectUserId)
+      if (prepared.ok) {
+        setAcceptPrompt({
+          userId: subjectUserId,
+          fingerprint: prepared.fingerprint,
+          evidence: prepared.evidence,
+        })
+      } else {
+        setAcceptPrompt(null)
+        setError(acceptFailureMessage(prepared))
+        if (prepared.kind === 'coldKeys') {
+          setReauthAction('accept key changes')
+        }
+        if (prepared.kind === 'notChanged') {
+          await reload(() => false)
+        }
+      }
+      setBusyUserId(null)
+    })()
+  }
+
+  const handleConfirmAccept = (subjectUserId: string) => {
+    if (
+      load.status !== 'ready' ||
+      userId === null ||
+      busyUserId !== null ||
+      guard.held ||
+      acceptPrompt?.userId !== subjectUserId
+    ) {
+      return
+    }
+    const confirmed = acceptPrompt.fingerprint
+    const label = memberLabel(subjectUserId, usernames)
+    setBusyUserId(subjectUserId)
+    setMessage(null)
+    setError(null)
+    void (async () => {
+      const result = await runAcceptKeyChange(makeAcceptDeps(userId), subjectUserId, confirmed)
+      setAcceptPrompt(null)
+      if (result.ok) {
+        setMessage(`${label}'s new keys are saved.`)
+      } else {
+        setError(acceptFailureMessage(result))
+        if (result.kind === 'coldKeys') {
+          setReauthAction('accept key changes')
+        }
+      }
+      // The roster's marks come from the pins, so read them again either way.
+      await reload(() => false)
+      setBusyUserId(null)
+    })()
+  }
+
   const handleStartApprove = (subjectUserId: string) => {
     if (load.status !== 'ready' || userId === null || busyUserId !== null || guard.held) {
       return
@@ -824,6 +912,12 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
             setApprovePrompt(null)
           }}
           onConfirmApprove={handleConfirmApprove}
+          acceptPrompt={acceptPrompt}
+          onStartAccept={handleStartAccept}
+          onCancelAccept={() => {
+            setAcceptPrompt(null)
+          }}
+          onConfirmAccept={handleConfirmAccept}
           check={checkForView(grantCheck, load.view)}
           dormancy={dormancyFor?.view === load.view ? dormancyFor.dormancy : null}
           usernames={usernames}

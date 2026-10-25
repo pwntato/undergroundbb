@@ -1337,6 +1337,37 @@ describe('runRotation', () => {
     })
   })
 
+  describe("the caller's key history", () => {
+    it('stops with the reason when it could not be loaded, before any grant is read', async () => {
+      const f = new Fake()
+      f.add(person())
+      let grantReads = 0
+      const base = f.deps()
+      const deps: RotationDeps = {
+        ...base,
+        ownKeyHistoryFailure: async () => 'offline',
+        listGrants: async (...args) => {
+          grantReads++
+          return base.listGrants(...args)
+        },
+      }
+      const out = await runRotation(deps, GROUP)
+      expect(out).toMatchObject({ status: 'incomplete' })
+      expect(out.status === 'incomplete' && out.reason).toBe(
+        'could not load your key history: offline; try again',
+      )
+      expect(grantReads).toBe(0)
+      expect(f.completed).toEqual([])
+    })
+
+    it('carries on when it loaded', async () => {
+      const f = new Fake()
+      f.add(person())
+      const out = await runRotation({ ...f.deps(), ownKeyHistoryFailure: async () => null }, GROUP)
+      expect(out.status).toBe('completed')
+    })
+  })
+
   describe('key reads', () => {
     it('reads each batch of recipients in one call, not one per member', async () => {
       const f = new Fake()

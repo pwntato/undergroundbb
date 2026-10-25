@@ -10,6 +10,10 @@
 
 import type { GroupDetail, MemberEntry } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
+import { base64ToBytes } from '@/lib/crypto/base64'
+import type { OwnKeyHistory } from '@/lib/crypto/own-history'
+import { evaluatePin, type PinRecord } from '@/lib/crypto/pin'
+import { ownHistoryFor } from './ownHistory'
 import { servedFingerprint } from './runMemberVerification'
 
 /**
@@ -34,7 +38,17 @@ export interface DormantMember {
 
 export type Dormancy =
   | { readonly state: 'unavailable' }
-  | { readonly state: 'ready'; readonly dormant: readonly DormantMember[] }
+  | {
+      readonly state: 'ready'
+      readonly dormant: readonly DormantMember[]
+      /**
+       * Members whose served keys fail the viewer's pin with the `changed`
+       * (mismatch) verdict, dormant or not: the ones an "accept key change" is
+       * offered for. Empty when the pins could not be read, which only means no
+       * offer: accepting re-checks everything itself.
+       */
+      readonly changed?: ReadonlySet<string>
+    }
 
 export interface LoadDormancyDeps {
   readonly getUsers: (
@@ -42,6 +56,12 @@ export interface LoadDormancyDeps {
     onError?: (err: unknown) => void,
   ) => Promise<ReadonlyMap<string, UserProjection>>
   readonly selfUserId: string
+  /** The caller's pins and keys, for finding who changed keys since they were saved. */
+  readonly pins?: {
+    readonly ownSigningKey: () => Promise<string>
+    readonly listPins: () => Promise<readonly PinRecord[]>
+    readonly loadOwnKeyHistory?: (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>
+  }
 }
 
 /**
@@ -77,6 +97,55 @@ export function findDormant(
 }
 
 /**
+ * The members whose served keys fail the caller's pin with the `mismatch`
+ * verdict, in roster order. Not `rollback`, `bad-signature`, first sight or a
+ * match: only a changed key set is something to accept.
+ */
+export function findChanged(
+  members: readonly MemberEntry[],
+  users: ReadonlyMap<string, UserProjection>,
+  selfUserId: string,
+  ctx: {
+    readonly own: Uint8Array
+    readonly pins: readonly PinRecord[]
+    readonly history: OwnKeyHistory | undefined
+  },
+): Set<string> {
+  const out = new Set<string>()
+  for (const m of members) {
+    if (m.userId === selfUserId) continue
+    const user = users.get(m.userId)
+    if (user === undefined || user.deleted === true) continue
+    const verdict = evaluatePin({
+      pinnerUserId: selfUserId,
+      pinnerSigningPublicKey: ctx.own,
+      pinnerHistory: ctx.history,
+      pinnedUserId: m.userId,
+      pin: ctx.pins.find((p) => p.pinnedUserId === m.userId),
+      served: user,
+    })
+    if (verdict === 'mismatch') out.add(m.userId)
+  }
+  return out
+}
+
+async function loadChanged(
+  deps: LoadDormancyDeps,
+  members: readonly MemberEntry[],
+  users: ReadonlyMap<string, UserProjection>,
+): Promise<Set<string>> {
+  if (deps.pins === undefined) return new Set()
+  try {
+    const own = base64ToBytes(await deps.pins.ownSigningKey())
+    const pins = await deps.pins.listPins()
+    const history = await ownHistoryFor(deps.pins, own)
+    return findChanged(members, users, deps.selfUserId, { own, pins, history })
+  } catch {
+    return new Set()
+  }
+}
+
+/**
  * Reads every member's projection and derives who is dormant. A failed read is
  * 'unavailable' rather than "nobody is dormant": silence here would look like a
  * clean group.
@@ -97,5 +166,6 @@ export async function loadDormancy(
   return {
     state: 'ready',
     dormant: findDormant(members, users, deps.selfUserId, myGeneration, revocationMode),
+    changed: await loadChanged(deps, members, users),
   }
 }

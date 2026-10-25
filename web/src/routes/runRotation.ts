@@ -92,6 +92,11 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
   readonly ownSigningKey: () => Promise<string>
   /** Every pin the caller holds, following nextCursor. A missing pin reads as first-sight, so a partial list is unsafe. */
   readonly listPins: () => Promise<readonly PinRecord[]>
+  /**
+   * Why the caller's verified key history could not be loaded, or null when it
+   * did (lib/session/ownKeyHistory). Absent means no way to say, as in tests.
+   */
+  readonly ownKeyHistoryFailure?: (ownSigningKey: Uint8Array) => Promise<string | null>
   /** Signs and stores a first-sight pin, as the roster's grant check does. */
   readonly pinKeys: (
     pinnedUserId: string,
@@ -666,6 +671,13 @@ export async function loadAdmissions(
   | { readonly ok: true; readonly context: AdmissionContext }
   | { readonly ok: false; readonly reason: string }
 > {
+  // Before the grant check: without the caller's key history their own records
+  // (the root grant of an admin who rotated) fail to verify, and "the root grant
+  // could not be verified" would send them looking in the wrong place.
+  const historyFailure = await deps.ownKeyHistoryFailure?.(own)
+  if (historyFailure !== null && historyFailure !== undefined) {
+    return { ok: false, reason: `could not load your key history: ${historyFailure}; try again` }
+  }
   try {
     const records: AdmissionRecord[] = []
     let cursor: string | undefined

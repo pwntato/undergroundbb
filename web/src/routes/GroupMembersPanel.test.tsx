@@ -30,6 +30,11 @@ function render(
     readmitPrompt?: { userId: string; fingerprint: string } | null
     dormancy?: Dormancy | null
     approvePrompt?: { userId: string; fingerprint: string } | null
+    acceptPrompt?: {
+      userId: string
+      fingerprint: string
+      evidence: 'signed-rotation' | 'no-link' | 'unverified'
+    } | null
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -62,6 +67,10 @@ function render(
       onCancelApprove: () => undefined,
       onConfirmApprove: () => undefined,
       ...(extra.approvePrompt !== undefined && { approvePrompt: extra.approvePrompt }),
+      onStartAccept: () => undefined,
+      onCancelAccept: () => undefined,
+      onConfirmAccept: () => undefined,
+      ...(extra.acceptPrompt !== undefined && { acceptPrompt: extra.acceptPrompt }),
     }),
   )
 }
@@ -576,6 +585,51 @@ describe('GroupMembersPanel dormant members (#62)', () => {
       expect(html).toContain('XXXX YYYY')
       expect(html).toContain('It matches, approve')
       expect(html).not.toContain('>Approve<')
+    })
+  })
+
+  describe('Accept key change', () => {
+    const changed: Dormancy = { state: 'ready', dormant: [], changed: new Set([BOB]) }
+    const changedAndDormant: Dormancy = { state: 'ready', dormant: [bob], changed: new Set([BOB]) }
+
+    it('is offered on a changed row to an admin and an ambassador, with a badge', () => {
+      for (const myRole of ['admin', 'ambassador'] as const) {
+        const html = render({ myRole }, { dormancy: changed, usernames: names })
+        expect(html).toContain('>Accept key change<')
+        expect(html).toContain('Keys changed since you saved them')
+      }
+    })
+
+    it('is not offered to a plain member, for an unchanged row, or while loading', () => {
+      expect(render({ myRole: 'member' }, { dormancy: changed })).not.toContain('Accept key change')
+      expect(render({}, { dormancy: { state: 'ready', dormant: [] } })).not.toContain(
+        'Accept key change',
+      )
+      expect(render({}, { dormancy: null })).not.toContain('Accept key change')
+    })
+
+    it('replaces Approve on a dormant row whose keys changed, so the pin is renewed first', () => {
+      const html = render({}, { dormancy: changedAndDormant, usernames: names })
+      expect(html).toContain('>Accept key change<')
+      expect(html).not.toContain('>Approve<')
+      expect(html).toContain('Keys changed, awaiting approval')
+      // One badge for the row, not two.
+      expect(html).not.toContain('Keys changed since you saved them')
+    })
+
+    it('shows the fingerprint and the evidence to compare once started', () => {
+      const html = render(
+        {},
+        {
+          dormancy: changed,
+          usernames: names,
+          acceptPrompt: { userId: BOB, fingerprint: 'XXXX YYYY', evidence: 'no-link' },
+        },
+      )
+      expect(html).toContain('XXXX YYYY')
+      expect(html).toContain('It matches, accept')
+      expect(html).toContain('Only accept if they confirm')
+      expect(html).not.toContain('>Accept key change<')
     })
   })
 })
