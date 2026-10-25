@@ -22,7 +22,7 @@
 // Pure and never throws; a history that does not verify is null, and callers
 // then accept only the caller's current key, which fails closed.
 
-import { base64ToBytes } from './base64.js'
+import { base64ToBytes, bytesToBase64 } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { keyRotationPayload, rosterDigest, rosterEntryId } from './key-rotation.js'
 
@@ -215,4 +215,32 @@ export function ownHistoryMatchesServed(
       return key !== null && sameBytes(key, link.oldSigning)
     }),
   )
+}
+
+/**
+ * The caller's key history as the grant and removal verifiers read it
+ * (grant-chain's UserKeyHistory), built from the verified chain and not from
+ * the served projection: the served `from`/`until` intervals are unsigned, so a
+ * server holding a leaked old key could widen its interval past the rotation
+ * and have grants dated afterwards verify under it (and push the current key
+ * out of those days). Each old key ends on its link's signed day and starts on
+ * the previous link's; the first key has no signed start, so it is open below,
+ * as ownSignerAccepted treats it.
+ */
+export function ownKeyHistoryForVerifiers(history: OwnKeyHistory): {
+  readonly signingPublicKey: string
+  readonly supersededSigningKeys: readonly {
+    readonly publicKey: string
+    readonly from: string
+    readonly until: string
+  }[]
+} {
+  return {
+    signingPublicKey: bytesToBase64(history.current),
+    supersededSigningKeys: history.links.map((link, i) => ({
+      publicKey: bytesToBase64(link.oldSigning),
+      from: i > 0 ? history.links[i - 1]!.day : '1970-01-01',
+      until: link.day,
+    })),
+  }
 }

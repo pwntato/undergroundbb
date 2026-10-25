@@ -730,6 +730,40 @@ describe('checkGrants when the caller rotated their keys (#62)', () => {
     expect(r.statuses.get(EVE)).toEqual({ status: 'verified' })
   })
 
+  it("takes the old key's interval from the signed chain, not from what the server serves", async () => {
+    const { w, history } = rotatedWorld()
+    const selfGrant = grant(w.creatorKey, SELF, 'admin', CREATOR, '2026-03-02', w.root.sortKey)
+    // Dated after the rotation (2026-10-01) but signed by the key rotated away from.
+    const forged = grant(w.selfKey, EVE, 'ambassador', SELF, '2026-12-01', selfGrant.sortKey)
+    // Dated after the rotation and signed by the key they hold now.
+    const honest = grant(newKey, BOB, 'ambassador', SELF, '2026-12-02', selfGrant.sortKey)
+    // The server widens the old key's served interval far past the rotation.
+    w.users.set(SELF, {
+      ...w.users.get(SELF)!,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.selfKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2099-01-01T00:00:00Z',
+        },
+      ],
+    })
+    const d = deps(w, {
+      pages: [[w.root, selfGrant, forged, honest]],
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(d, GROUP, [
+      { userId: CREATOR, role: 'admin' },
+      { userId: SELF, role: 'admin' },
+      { userId: EVE, role: 'ambassador' },
+      { userId: BOB, role: 'ambassador' },
+    ])
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.statuses.get(EVE)?.status).toBe('unverified')
+    expect(r.statuses.get(BOB)).toEqual({ status: 'verified' })
+  })
+
   it('checks pins the caller signed under the old key, when the rotation listed them', async () => {
     const { w, pages } = rotatedWorld()
     // Pins taken before the rotation, under the old key.

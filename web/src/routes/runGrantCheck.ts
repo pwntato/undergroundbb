@@ -25,7 +25,11 @@ import type { ListDesignationsResponse, ListGrantsResponse } from '@/lib/api/gro
 import type { UserProjection } from '@/lib/api/users'
 import type { PinRecord } from '@/lib/crypto/pin'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
-import { ownHistoryMatchesServed, type OwnKeyHistory } from '@/lib/crypto/own-history'
+import {
+  ownHistoryMatchesServed,
+  ownKeyHistoryForVerifiers,
+  type OwnKeyHistory,
+} from '@/lib/crypto/own-history'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import {
   checkMemberRole,
@@ -360,7 +364,12 @@ async function checkServedKeys(
           ? ownHistoryMatchesServed(ownHistory, u)
           : sameBytes(current, own) && u.supersededSigningKeys.length === 0
       if (agrees) {
-        keyHistories.set(id, historyOf(u))
+        // From the signed chain, never the served intervals (unsigned): see
+        // ownKeyHistoryForVerifiers. With no chain the served set is empty.
+        keyHistories.set(
+          id,
+          ownHistory !== null ? ownKeyHistoryForVerifiers(ownHistory) : historyOf(u),
+        )
       } else {
         blockedKeyUsers.push(id)
       }

@@ -38,24 +38,39 @@ describe('makeOwnKeyHistoryLoader', () => {
     expect(a.getUserDetail).toHaveBeenCalledTimes(1)
   })
 
-  it('is null when the chain does not end at the key the caller holds, and does not cache it', async () => {
+  it('is null when the chain does not end at the key the caller holds, and asks only once', async () => {
     const a = api()
     const load = makeOwnKeyHistoryLoader(ME, a)
-    expect(await load(generateSigningKey().publicKey)).toBeNull()
-    expect(await load(generateSigningKey().publicKey)).toBeNull()
-    expect(a.getUserDetail).toHaveBeenCalledTimes(2)
+    const other = generateSigningKey().publicKey
+    expect(await load(other)).toBeNull()
+    expect(await load(other)).toBeNull()
+    expect(a.getUserDetail).toHaveBeenCalledTimes(1)
   })
 
-  it('is null, not a throw, when either read fails, and tries again next time', async () => {
+  it('is null, not a throw, when either read fails, and does not ask again within the job', async () => {
+    const a = api({ listKeyChangeRosters: vi.fn(() => Promise.reject(new Error('offline'))) })
+    const load = makeOwnKeyHistoryLoader(ME, a)
+    expect(await load(k1.publicKey)).toBeNull()
+    expect(await load(k1.publicKey)).toBeNull()
+    expect(a.listKeyChangeRosters).toHaveBeenCalledTimes(1)
+  })
+
+  it('a new loader (a retry) asks again', async () => {
     let fail = true
     const a = api({
       listKeyChangeRosters: vi.fn(() =>
         fail ? Promise.reject(new Error('offline')) : Promise.resolve([]),
       ),
     })
-    const load = makeOwnKeyHistoryLoader(ME, a)
-    expect(await load(k1.publicKey)).toBeNull()
+    expect(await makeOwnKeyHistoryLoader(ME, a)(k1.publicKey)).toBeNull()
     fail = false
-    expect((await load(k1.publicKey))?.links).toHaveLength(1)
+    expect((await makeOwnKeyHistoryLoader(ME, a)(k1.publicKey))?.links).toHaveLength(1)
+  })
+
+  it('asks once when several pin checks ask at the same time', async () => {
+    const a = api()
+    const load = makeOwnKeyHistoryLoader(ME, a)
+    await Promise.all([load(k1.publicKey), load(k1.publicKey), load(k1.publicKey)])
+    expect(a.getUserDetail).toHaveBeenCalledTimes(1)
   })
 })

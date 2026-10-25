@@ -11,7 +11,13 @@ import {
   verificationPayload,
   type VerificationRecord,
 } from './verification.js'
-import { buildOwnKeyHistory, ownKeys, ownSignerAccepted } from './own-history.js'
+import {
+  buildOwnKeyHistory,
+  ownKeyHistoryForVerifiers,
+  ownKeys,
+  ownSignerAccepted,
+} from './own-history.js'
+import { keysOnDay } from './grant-chain.js'
 import { makeKeyChange, rowId } from './own-history.testkit.js'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
@@ -416,5 +422,32 @@ describe('ownSignerAccepted', () => {
     expect(ownSignerAccepted(h, k0.publicKey, '2026-10-01', `PIN#${BOB}`, new Uint8Array(64))).toBe(
       true,
     )
+  })
+})
+
+describe('ownKeyHistoryForVerifiers', () => {
+  const day = (d: string) => Date.parse(`${d}T00:00:00Z`)
+  const a = makeKeyChange({ userId: ME, from: k0, to: k1, epoch: 1, day: '2026-10-01' })
+  const b = makeKeyChange({ userId: ME, from: k1, to: k2, epoch: 2, day: '2026-10-10' })
+  const h = buildOwnKeyHistory({
+    userId: ME,
+    ownSigningKey: k2.publicKey,
+    changes: [a.change, b.change],
+    rosters: [],
+  })!
+  const keyIdsOn = (d: string) =>
+    keysOnDay(ownKeyHistoryForVerifiers(h), day(d)).map((k) =>
+      [k0, k1, k2].findIndex((x) => b64(x.publicKey) === b64(k)),
+    )
+
+  it('puts each key on the days of its signed interval and the current key after', () => {
+    expect(keyIdsOn('2026-01-01')).toEqual([0])
+    expect(keyIdsOn('2026-10-05')).toEqual([1])
+    expect(keyIdsOn('2026-12-01')).toEqual([2])
+  })
+
+  it('has both keys on a rotation day', () => {
+    expect(keyIdsOn('2026-10-01').sort()).toEqual([0, 1])
+    expect(keyIdsOn('2026-10-10').sort()).toEqual([1, 2])
   })
 })
