@@ -12,10 +12,10 @@
 //     consistent index, and a row can be the only copy of a key.
 //   - An unreadable row (unwrap fails) is reported and kept: it may be a swapped
 //     row, but deleting on a decrypt error would also delete the last copy.
-//   - The start is refused while the group has other members: the job that
-//     follows cannot yet verify the caller's own pins and records under their
-//     superseded signing key (slice 4c), so it would consume the row and strand
-//     everyone at the old generation. Nothing is sent; the row is kept.
+//   - The job that follows the start checks the caller's own pins, records and
+//     removal links under the signing key they rotated away from, through their
+//     verified key history (lib/crypto/own-history). When that history cannot
+//     be built the job stops and reports, and resumes once it can.
 //   - Open groups wait for the self-wrap, which has no endpoint yet; they are
 //     reported and left alone.
 
@@ -42,8 +42,6 @@ export type SelfRekeyOutcome =
   | { readonly status: 'not-admin' }
   /** An Open group: its self-wrap is not built yet; the row is kept. */
   | { readonly status: 'open' }
-  /** The group has other members; finishing for it waits for slice 4c. The row is kept. */
-  | { readonly status: 'waiting' }
   | { readonly status: 'incomplete'; readonly reason: string }
 
 function describe(err: unknown): string {
@@ -52,26 +50,6 @@ function describe(err: unknown): string {
 
 function codeOf(err: unknown): string | undefined {
   return err instanceof ApiError ? err.code : undefined
-}
-
-/**
- * Whether the start may run: 'ok', 'waiting' when another member would be
- * stranded, or the reason the check could not run. Fails closed.
- *
- * Any other member blocks it: the start only exists after a key rotation, which
- * always leaves the caller's old signing key superseded, so the job that follows
- * cannot verify the caller's own pins and records (slice 4c).
- */
-async function otherMembersBlock(
-  deps: SelfRekeyDeps,
-  groupId: string,
-): Promise<'ok' | 'waiting' | { readonly reason: string }> {
-  try {
-    const members = await deps.listAllMembers(groupId)
-    return members.some((m) => m.userId !== deps.selfUserId) ? 'waiting' : 'ok'
-  } catch (err) {
-    return { reason: `could not check whether the key change can be finished: ${describe(err)}` }
-  }
 }
 
 export async function runSelfRekey(
@@ -108,11 +86,6 @@ export async function runSelfRekey(
   if (detail.rotation !== undefined) return continueJob()
   // The caller's own entry already moved past the row: nothing can use it.
   if (detail.generation !== row.generation) return staleRow()
-
-  // Checked before anything is sent: once the start commits the row is used up.
-  const blocked = await otherMembersBlock(deps, groupId)
-  if (blocked === 'waiting') return { status: 'waiting' }
-  if (blocked !== 'ok') return { status: 'incomplete', reason: blocked.reason }
 
   let minted: StartGroupRotationResult
   try {

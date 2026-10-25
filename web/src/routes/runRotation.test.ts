@@ -28,6 +28,8 @@ import {
 } from '@/lib/crypto/group'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
+import { buildOwnKeyHistory, type OwnKeyHistory } from '@/lib/crypto/own-history'
+import { makeKeyChange, rowId } from '@/lib/crypto/own-history.testkit'
 import { describeRotation, runRotation, type RotationDeps } from './runRotation'
 import {
   prepareReadmit,
@@ -305,6 +307,12 @@ class Fake {
   role: GroupDetail['role'] = 'admin'
   visibility: GroupDetail['visibility'] = 'private'
   pins = new Map<string, PinRecord>()
+  /** The key the worker holds for the caller; `me` until a test rotates them. */
+  ownKey: SigningKey = me
+  /** What loadOwnKeyHistory returns; undefined leaves the dep out, as before rotation existed. */
+  ownHistory: OwnKeyHistory | null | undefined
+  /** Set by rotateCaller: how the server now serves the caller. */
+  servedCaller: UserProjection | undefined
   pinKeysError: Error | undefined
   listPinsError: Error | undefined
 
@@ -448,6 +456,51 @@ class Fake {
     return { creator, myGrant, creatorKey }
   }
 
+  /**
+   * The caller rotated their account keys (#62): everything they signed before
+   * (pins, the root grant, the admission, removal links) is under `me`, the
+   * key they rotated away from, and the worker now holds `to`. The server
+   * serves `to` with `me` superseded. `listed` says which of their pins the
+   * rotation put in its roster; by default all of them, as a real rotation does.
+   */
+  rotateCaller(
+    to: SigningKey,
+    o: { day?: string; listed?: 'all' | 'none'; chainTo?: SigningKey } = {},
+  ): void {
+    const day = o.day ?? '2026-10-22'
+    const ids =
+      o.listed === 'none'
+        ? []
+        : [...this.pins.values()].map((p) =>
+            rowId(`PIN#${p.pinnedUserId}`, base64ToBytes(p.signature)),
+          )
+    const kc = makeKeyChange({
+      userId: ME,
+      from: me,
+      to: o.chainTo ?? to,
+      epoch: 1,
+      day,
+      listed: ids,
+    })
+    this.ownKey = to
+    this.ownHistory = buildOwnKeyHistory({
+      userId: ME,
+      ownSigningKey: to.publicKey,
+      changes: [kc.change],
+      rosters: [kc.roster],
+    })
+    this.servedCaller = {
+      userId: ME,
+      username: ME,
+      signingPublicKey: b64(to.publicKey),
+      wrappingPublicKey: b64(new Uint8Array(32)),
+      supersededSigningKeys: [
+        { publicKey: b64(me.publicKey), from: '2026-01-01T00:00:00Z', until: `${day}T00:00:00Z` },
+      ],
+      keyEpoch: 1,
+    }
+  }
+
   gen(p: Person): number {
     return this.members.get(p.id)!.generation
   }
@@ -481,6 +534,7 @@ class Fake {
         return new Map(
           ids.flatMap((id) => {
             const r = this.members.get(id)
+            if (id === ME && this.servedCaller) return [[id, this.servedCaller] as const]
             if (r) return [[id, served(r.person)] as const]
             const o = this.outsiders.get(id)
             if (!o) return []
@@ -528,7 +582,10 @@ class Fake {
         this.anchorPin = pin
         return true
       },
-      ownSigningKey: async () => b64(me.publicKey),
+      ownSigningKey: async () => b64(this.ownKey.publicKey),
+      ...(this.ownHistory !== undefined && {
+        loadOwnKeyHistory: async () => this.ownHistory ?? null,
+      }),
       listPins: async () => {
         if (this.listPinsError) throw this.listPinsError
         return [...this.pins.values()]
@@ -2541,5 +2598,67 @@ describe('a self re-key rotation (#62)', () => {
       const out = await runRotation(f.deps(), GROUP)
       expect(JSON.stringify(out)).not.toContain('malformed')
     })
+  })
+})
+
+describe('a rotation job by an admin whose own keys rotated (#62)', () => {
+  const newMe = generateSigningKey()
+
+  function world(): { f: Fake; m: Person } {
+    const f = new Fake()
+    const m = f.add(person())
+    f.marker = rekeyMarker(1, { signer: newMe })
+    return { f, m }
+  }
+
+  it('re-wraps the members behind: old pins, root grant, admission and removal links still verify', async () => {
+    const { f, m } = world()
+    f.rotateCaller(newMe)
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+    expect(f.gen(m)).toBe(1)
+    expect(f.completed).toEqual([1])
+  })
+
+  it('wraps to nobody when the rotation did not list the pins it signed under the old key', async () => {
+    const { f, m } = world()
+    f.rotateCaller(newMe, { listed: 'none' })
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out.status).toBe('blocked')
+    expect(f.gen(m)).toBe(0)
+    expect(f.cryptoRecipients).toEqual([])
+  })
+
+  it('wraps to nobody without a verified history (the failure a gate used to hide)', async () => {
+    const { f, m } = world()
+    f.rotateCaller(newMe)
+    f.ownHistory = undefined
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out.status).toBe('incomplete')
+    expect(f.gen(m)).toBe(0)
+  })
+
+  it('wraps to nobody when the history cannot be built (a chain that ends at another key)', async () => {
+    const { f, m } = world()
+    f.rotateCaller(newMe, { chainTo: generateSigningKey() })
+    expect(f.ownHistory).toBeNull()
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out.status).toBe('incomplete')
+    expect(f.gen(m)).toBe(0)
+  })
+
+  it('wraps to nobody when the server serves a superseded key the chain does not contain', async () => {
+    const { f, m } = world()
+    f.rotateCaller(newMe)
+    f.servedCaller = {
+      ...f.servedCaller!,
+      supersededSigningKeys: [
+        ...f.servedCaller!.supersededSigningKeys,
+        { publicKey: b64(generateSigningKey().publicKey), from: '2026-01-01', until: '2026-02-01' },
+      ],
+    }
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out.status).toBe('incomplete')
+    expect(f.gen(m)).toBe(0)
   })
 })
