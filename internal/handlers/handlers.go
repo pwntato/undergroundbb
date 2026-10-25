@@ -77,6 +77,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/complete", h.requireSession(h.completeRotation))
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/takeover", h.requireSession(h.takeOverRotation))
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/rekey", h.requireSession(h.selfRekey))
+	mux.HandleFunc("POST /api/groups/{groupId}/rewrap/{userId}", h.requireSession(h.approveRewrap))
 	mux.HandleFunc("POST /api/groups/{groupId}/leave", h.requireSession(h.leaveGroup))
 	mux.HandleFunc("GET /api/users/{userId}", h.requireSession(h.getUser))
 	mux.HandleFunc("POST /api/users:batch", h.requireSession(h.batchUsers))

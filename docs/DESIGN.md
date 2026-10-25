@@ -668,6 +668,16 @@ condition a buggy or old client, or an ambassador, could "approve" with a plain 
 generation while the old keys still hold it, and the roster would then show the member as current. The minting case and the self re-key are written
 by the rotation endpoints the group already has.
 
+As built: the body is `{generation, wrappedKey, keyEpoch}`, with no signature, as for the rotation re-wrap.
+`generation` must be the approver's own and, when a marker exists, the marker's; the approver's entry is
+checked at it in the same transaction. A member whose `WrapEpoch` is not behind their `KeyEpoch`, including
+every account that never rotated, answers 409 `member_not_dormant`. A stale `keyEpoch` answers 409
+`wrap_epoch_stale`, a member past the approver's generation or gone answers 404, and a `Rotating` group
+needs the member strictly behind. An `Open` group has no re-key, so there the member may sit at the
+approver's generation and the wrap replaces the copy the old keys hold.
+A retry after a lost 204 answers `member_not_dormant` too, since the first call set `WrapEpoch`; the approve
+UI treats it as already approved and re-reads the roster.
+
 #### The Ed25519 half and the key history
 
 Replacing a signing key does not merely affect what the user signs next. It would invalidate every
