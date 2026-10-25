@@ -20,7 +20,7 @@ import {
   rewrapMembers,
 } from '@/lib/api/groups'
 import { deleteHandoff } from '@/lib/api/keyRotation'
-import { getUsers } from '@/lib/api/users'
+import { getUserDetail, getUsers } from '@/lib/api/users'
 import {
   getOwnSigningKey,
   rewrapGroupKey,
@@ -34,6 +34,7 @@ import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
+import type { AcceptKeyChangeDeps } from './runAcceptKeyChange'
 import type { ApproveDeps } from './runApprove'
 import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
@@ -106,5 +107,17 @@ export function makeApproveDeps(userId: string): ApproveDeps {
     approveRewrap,
     approveRekey,
     startApprovalCrypto: startApprovalRekey,
+  }
+}
+
+/** What accepting another user's key change needs: their served keys and chain, your pins, and a pin write. */
+export function makeAcceptDeps(userId: string): AcceptKeyChangeDeps {
+  return {
+    selfUserId: userId,
+    getUserDetail,
+    ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+    listPins: listAllPins,
+    loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
+    pinKeys: makePinKeys(userId),
   }
 }

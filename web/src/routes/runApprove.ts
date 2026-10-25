@@ -444,7 +444,7 @@ const FAILURE_MESSAGES: Record<
   string
 > = {
   keysRotated:
-    "They changed their keys since you saved theirs, so this browser can't vouch for the new ones yet. Accepting a key change isn't available yet.",
+    'They changed their keys since you saved theirs. Accept their key change on their row first, then approve them.',
   pinMismatch:
     "The keys the server shows for them don't match the copy you saved earlier, so nothing was approved. Check with them another way.",
   keysChanged:

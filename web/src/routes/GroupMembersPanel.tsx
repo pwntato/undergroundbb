@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
 import type { RoleStatus } from '@/lib/crypto/grant-chain'
+import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
 import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
 import {
   MemberVerificationBadge,
@@ -23,6 +24,7 @@ import {
 import { DormantMembersNotice } from './DormantMembersNotice'
 import type { Dormancy } from './dormancy'
 import type { GrantCheck } from './runGrantCheck'
+import { evidenceText } from './runAcceptKeyChange'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
 
@@ -53,6 +55,10 @@ export function GroupMembersPanel({
   onStartApprove,
   onCancelApprove,
   onConfirmApprove,
+  acceptPrompt = null,
+  onStartAccept,
+  onCancelAccept,
+  onConfirmAccept,
   usernames,
   check,
   verification,
@@ -87,6 +93,15 @@ export function GroupMembersPanel({
   readonly onStartApprove?: (subjectUserId: string) => void
   readonly onCancelApprove?: () => void
   readonly onConfirmApprove?: (subjectUserId: string) => void
+  /** The member whose changed keys await a fingerprint check before the pin is replaced (#62). */
+  readonly acceptPrompt?: {
+    readonly userId: string
+    readonly fingerprint: string
+    readonly evidence: KeyChangeEvidence
+  } | null
+  readonly onStartAccept?: (subjectUserId: string) => void
+  readonly onCancelAccept?: () => void
+  readonly onConfirmAccept?: (subjectUserId: string) => void
   /** userId to username; anything missing renders as a short id. */
   readonly usernames: ReadonlyMap<string, string>
   /**
@@ -122,6 +137,9 @@ export function GroupMembersPanel({
     view.myGrantSortKey !== undefined &&
     view.myGrantSortKey !== ''
   const canApprove = isAdmin || view.myRole === 'ambassador'
+  // Keys that changed since the caller saved them, dormant or not (#62).
+  const changedIds =
+    dormancy?.state === 'ready' ? (dormancy.changed ?? new Set<string>()) : new Set<string>()
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <h1 className="text-2xl font-semibold">Members</h1>
@@ -180,6 +198,14 @@ export function GroupMembersPanel({
                     title="Their keys changed, and their entry in this group is still wrapped to the old ones."
                   >
                     Keys changed, awaiting approval
+                  </span>
+                )}
+                {changedIds.has(m.userId) && !dormantIds.has(m.userId) && (
+                  <span
+                    className="text-xs text-amber-700 dark:text-amber-400"
+                    title="The keys the server shows for them are not the ones you saved earlier."
+                  >
+                    Keys changed since you saved them
                   </span>
                 )}
                 {verification !== undefined && !isSelf && !isDeletedUser(m.userId, usernames) && (
@@ -253,7 +279,60 @@ export function GroupMembersPanel({
               )}
               {canApprove &&
                 !isSelf &&
+                changedIds.has(m.userId) &&
+                (acceptPrompt?.userId === m.userId ? (
+                  <span className="flex w-full flex-col gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      Accepting saves the keys below as {memberLabel(m.userId, usernames)}
+                      &apos;s, replacing the ones you saved earlier. First check this fingerprint
+                      with them in person or on a call you know is them. They can read theirs under
+                      &quot;Your key fingerprint&quot; on this page. Do not take it from the group
+                      or from a message.
+                    </span>
+                    <span className="text-xs">{evidenceText(acceptPrompt.evidence)}</span>
+                    <span className="font-mono text-xs break-all">{acceptPrompt.fingerprint}</span>
+                    <span className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onConfirmAccept?.(m.userId)
+                        }}
+                      >
+                        {busyUserId === m.userId ? 'Saving…' : 'It matches, accept'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busyUserId !== null || locked}
+                        onClick={() => {
+                          onCancelAccept?.()
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </span>
+                  </span>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busyUserId !== null || locked}
+                    onClick={() => {
+                      onStartAccept?.(m.userId)
+                    }}
+                  >
+                    {busyUserId === m.userId ? 'Checking…' : 'Accept key change'}
+                  </Button>
+                ))}
+              {canApprove &&
+                !isSelf &&
                 dormantIds.has(m.userId) &&
+                // Their keys changed since you saved them: accept that first.
+                !changedIds.has(m.userId) &&
                 // An ambassador cannot mint, so a member on the group's current key
                 // is an admin's to approve; the notice says so.
                 !(view.myRole !== 'admin' && dormantEntry.get(m.userId) === 'current') &&
