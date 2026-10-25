@@ -19,17 +19,13 @@
 //     invents a "superseded" key for someone would look exactly like that, so
 //     an extension is not accepted on the pin alone. Accepting a legitimate
 //     rotation needs a signed continuity link from the old key (#62).
-//   - bad-signature: the pin does not verify under the caller's own current
-//     key, or is not a well-formed pin for this user pair. Treated as
-//     tampering; NEVER as first-sight, or the server could reset any pin by
-//     corrupting it. That includes a pin whose recorded signer is not the
-//     caller's current key: pinnerSigningPublicKey is a server-served field,
-//     so a distinct verdict for it would be a reset the server can forge for
-//     free. No code path rotates a signing key yet, so every such pin is
-//     tampering today. #62 brings a signer-rotated verdict back, together
-//     with the continuity link that makes it trustworthy (recorded signer
-//     must be in the caller's own key history and the signature must verify
-//     under it).
+//   - bad-signature: the pin does not verify under the caller's own key, or is
+//     not a well-formed pin for this user pair. Treated as tampering; NEVER as
+//     first-sight, or the server could reset any pin by corrupting it. The
+//     recorded signer (pinnerSigningPublicKey) is a server-served field, so it
+//     counts only if it is the caller's current key, or a superseded key that
+//     the caller's verified key history lists this very row under, signed on a
+//     day inside that key's interval (lib/crypto/own-history, #62).
 //
 // Absence is indistinguishable from first contact: the server can delete a pin
 // and this returns first-sight. DESIGN.md states that limit; it is not closed
