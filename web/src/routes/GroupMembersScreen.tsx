@@ -32,6 +32,7 @@ import {
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUsers } from '@/lib/api/users'
+import { loadDormancy, type Dormancy } from './dormancy'
 import { listAllPins } from '@/lib/api/pins'
 import { deleteVerification, listAllVerifications, putVerification } from '@/lib/api/verifications'
 import { useSession } from '@/lib/session/useSession'
@@ -181,6 +182,35 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
         ]
       : [],
   )
+
+  // Who changed their keys and is awaiting approval (#62), derived from the
+  // roster's wrapEpoch and each member's served keyEpoch. Stored with the
+  // roster it was computed from, so a stale answer never shows on a newer one.
+  const [dormancyFor, setDormancyFor] = useState<{
+    readonly view: MembersView
+    readonly dormancy: Dormancy
+  } | null>(null)
+  useEffect(() => {
+    if (load.status !== 'ready' || userId === null) {
+      return
+    }
+    const { view } = load
+    let cancelled = false
+    void (async () => {
+      const dormancy = await loadDormancy(
+        { getUsers, selfUserId: userId },
+        view.members,
+        view.myGeneration,
+        view.revocationMode,
+      )
+      if (!cancelled) {
+        setDormancyFor({ view, dormancy })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [load, userId])
 
   const usernamesRef = useRef(usernames)
   const loadRef = useRef(load)
@@ -696,6 +726,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           }}
           onConfirmReadmit={handleConfirmReadmit}
           check={checkForView(grantCheck, load.view)}
+          dormancy={dormancyFor?.view === load.view ? dormancyFor.dormancy : null}
           usernames={usernames}
           verification={{
             state: memberVerifications,
