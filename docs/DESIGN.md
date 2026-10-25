@@ -688,9 +688,11 @@ refuses a dormant member and the job could never reach them. The member must be 
 admin's generation; behind it, 409 `rekey_not_required` sends the admin to the plain wrap above (the
 two endpoints partition the cases), and a caught-up or never-rotated member is 409 `member_not_dormant`.
 `wrap_epoch_stale` is the member's keys, `key_epoch_stale` the admin's own.
-A retry after a lost 204 does not answer `member_not_dormant` here: while the rotation runs it is
-409 `rotation_in_progress`, and after completion the admin is past the generation, so 400. The approve UI
-re-reads the roster on either answer instead of showing an error.
+A retry after a lost 204 does not answer `member_not_dormant` here: the start moved the admin's own entry
+to the new generation, so a resent body fails the generation check with a code-less 400, whether the
+rotation is still running or done (`rotation_in_progress` only comes back for a body rebuilt one generation
+higher). The approve UI treats that 400 as "maybe it already landed" and re-reads the roster instead of
+showing an error.
 
 #### The Ed25519 half and the key history
 

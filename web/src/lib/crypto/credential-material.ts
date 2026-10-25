@@ -905,8 +905,10 @@ export async function startSelfRekey(
  *
  * `memberWrappingPublicKey` arrives from the caller, which has ALREADY approved
  * it against the member's pin (this function has no pins; wrapping to a
- * substituted key would hand the server the group key). The caller's own id is
- * refused: that is the self re-key.
+ * substituted key would hand the server the group key). The caller must send
+ * the member's keyEpoch from that same pin-checked projection: the server
+ * stamps it as the entry's WrapEpoch and nothing ties it to this key. The
+ * caller's own id is refused: that is the self re-key.
  */
 export async function startApprovalRekey(
   keys: LiveKeys,

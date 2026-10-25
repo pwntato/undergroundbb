@@ -671,9 +671,12 @@ export interface ApproveRekeyRequest extends TakeOverRotationRequest {
  * generation: use the plain rewrap endpoint), `member_not_dormant`, `wrap_epoch_stale` (the
  * member's keys), `key_epoch_stale` (the caller's), `rotation_in_progress`,
  * `rotation_caller_behind`, `conflict_retry`; 400 `bad_signature`,
- * `rotation_not_applicable` (an Open group). A retry after a lost response
- * answers `rotation_in_progress`, or 400 once the rotation is done: re-read the
- * roster on either.
+ * `rotation_not_applicable` (an Open group); 404 (not a member, or the member
+ * left). A retry after a lost response is a code-less 400 on the generation
+ * (the start moved the caller's own entry), whether the rotation is running or
+ * done: treat it as "maybe already landed" and re-read the roster.
+ * `memberKeyEpoch` must come from the same pin-checked projection as the key
+ * the member copy was wrapped to.
  */
 export function approveRekey(
   groupId: string,

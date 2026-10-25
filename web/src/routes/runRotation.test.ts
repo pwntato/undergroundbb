@@ -2568,7 +2568,7 @@ describe('a self re-key rotation (#62)', () => {
     ],
     ['carrying no signature', () => rekeyMarker(1, { unsigned: true }), 'missing or malformed'],
     [
-      'for a reason this app cannot check',
+      'an approval naming its own signer',
       () => rekeyMarker(1, { reason: 'approval' }),
       'kind this app cannot check',
     ],
