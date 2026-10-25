@@ -19,23 +19,42 @@ export interface OwnKeyHistoryApi {
   readonly listKeyChangeRosters: typeof listKeyChangeRosters
 }
 
+/** A history, or why there is none: a read failed, or what was served did not verify. */
+type Loaded = { readonly history: OwnKeyHistory | null; readonly failure: string | null }
+
+export type OwnKeyHistoryLoader = ((ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>) & {
+  /**
+   * Why the history could not be loaded, or null when it loaded. Answers from
+   * the same cached read as the loader itself, so asking costs nothing.
+   */
+  readonly failure: (ownSigningKey: Uint8Array) => Promise<string | null>
+}
+
 export function makeOwnKeyHistoryLoader(
   userId: string,
   api: OwnKeyHistoryApi = { getUserDetail, listKeyChangeRosters },
-): (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null> {
-  const cache = new Map<string, Promise<OwnKeyHistory | null>>()
-  const load = async (ownSigningKey: Uint8Array): Promise<OwnKeyHistory | null> => {
+): OwnKeyHistoryLoader {
+  const cache = new Map<string, Promise<Loaded>>()
+  const load = async (ownSigningKey: Uint8Array): Promise<Loaded> => {
     try {
       const [detail, rosters] = await Promise.all([
         api.getUserDetail(userId),
         api.listKeyChangeRosters(),
       ])
-      return buildOwnKeyHistory({ userId, ownSigningKey, changes: detail.keyChanges, rosters })
-    } catch {
-      return null
+      const history = buildOwnKeyHistory({
+        userId,
+        ownSigningKey,
+        changes: detail.keyChanges,
+        rosters,
+      })
+      return history === null
+        ? { history, failure: 'the history the server served does not verify' }
+        : { history, failure: null }
+    } catch (err) {
+      return { history: null, failure: err instanceof Error ? err.message : String(err) }
     }
   }
-  return (ownSigningKey) => {
+  const loaded = (ownSigningKey: Uint8Array): Promise<Loaded> => {
     const cacheKey = bytesToBase64(ownSigningKey)
     let hit = cache.get(cacheKey)
     if (hit === undefined) {
@@ -44,4 +63,7 @@ export function makeOwnKeyHistoryLoader(
     }
     return hit
   }
+  return Object.assign(async (ownSigningKey: Uint8Array) => (await loaded(ownSigningKey)).history, {
+    failure: async (ownSigningKey: Uint8Array) => (await loaded(ownSigningKey)).failure,
+  })
 }

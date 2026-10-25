@@ -54,6 +54,7 @@ export function makePinKeys(userId: string): RotationDeps['pinKeys'] {
 }
 
 export function makeRotationDeps(userId: string): RotationDeps {
+  const ownKeyHistory = makeOwnKeyHistoryLoader(userId)
   return {
     selfUserId: userId,
     getGroup,
@@ -66,7 +67,8 @@ export function makeRotationDeps(userId: string): RotationDeps {
     readPin: (g) => readAnchorPin(userId, g),
     writePin: (g, pin) => writeAnchorPin(userId, g, pin),
     ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
-    loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
+    loadOwnKeyHistory: ownKeyHistory,
+    ownKeyHistoryFailure: ownKeyHistory.failure,
     listPins: listAllPins,
     pinKeys: makePinKeys(userId),
     rewrapCrypto: rewrapGroupKey,

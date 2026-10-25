@@ -178,7 +178,7 @@ export function Home() {
         }}
       />
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-center gap-2">
         <Button asChild>
           <Link to="/groups/new">Create a group</Link>
         </Button>
@@ -187,6 +187,9 @@ export function Home() {
         </Button>
         <Button asChild variant="outline">
           <Link to="/account/password">Change password</Link>
+        </Button>
+        <Button asChild variant="outline">
+          <Link to="/account/rotate-keys">Rotate keys</Link>
         </Button>
         <Button asChild variant="outline">
           <Link to="/account/delete">Delete account</Link>
