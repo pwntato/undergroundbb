@@ -253,6 +253,13 @@ export interface MemberEntry {
   readonly userId: string
   readonly role: MemberRole
   readonly generation: number
+  /**
+   * The member's keyEpoch when their entry was wrapped (0 when never
+   * rotated). Behind the keyEpoch their projection serves means dormant
+   * (#62); see routes/dormancy. Absent only from a server that predates it,
+   * and then nobody is reported dormant.
+   */
+  readonly wrapEpoch?: number
 }
 
 export interface ListMembersResponse {

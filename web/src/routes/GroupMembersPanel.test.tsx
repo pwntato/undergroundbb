@@ -6,6 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MemberEntry } from '@/lib/api/groups'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
+import type { Dormancy, DormantMember } from './dormancy'
 import { memberLabel } from './memberLabel'
 import type { MembersView } from './runGroupMembers'
 
@@ -27,6 +28,7 @@ function render(
     locked?: boolean
     readmittableIds?: ReadonlySet<string>
     readmitPrompt?: { userId: string; fingerprint: string } | null
+    dormancy?: Dormancy | null
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -54,6 +56,7 @@ function render(
       ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       usernames: extra.usernames ?? new Map(),
+      ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
     }),
   )
 }
@@ -443,5 +446,73 @@ describe('RotationBanner', () => {
     ] as const) {
       expect(html({ kind, startedBy: 'u1', ageMs: 3_600_000 })).not.toContain('Keep this page open')
     }
+  })
+})
+
+describe('GroupMembersPanel dormant members (#62)', () => {
+  const bob: DormantMember = {
+    userId: BOB,
+    role: 'member',
+    keyEpoch: 1,
+    wrapEpoch: 0,
+    fingerprint: 'AAAA BBBB CCCC',
+    entry: 'behind',
+  }
+  const dormantBob: Dormancy = { state: 'ready', dormant: [bob] }
+  const names = new Map([[BOB, 'bob']])
+
+  it('flags a dormant member with their fingerprint and what approving does', () => {
+    const html = render({}, { dormancy: dormantBob, usernames: names })
+    expect(html).toContain('1 member changed their keys')
+    expect(html).toContain('AAAA BBBB CCCC')
+    expect(html).toContain('Keys changed, awaiting approval')
+    expect(html).toContain('wraps the current key to their new one')
+  })
+
+  it('says approving a member on the current key means a new key for the group', () => {
+    const current: Dormancy = {
+      state: 'ready',
+      dormant: [{ ...bob, entry: 'current' }],
+    }
+    expect(render({}, { dormancy: current, usernames: names })).toContain(
+      'a new key for the whole group',
+    )
+  })
+
+  it('lists dormant members first', () => {
+    const CAROL = 'cccccccc-3333-4333-8333-333333333333'
+    const html = render(
+      { members: [member(ME, 'admin'), member(CAROL, 'member'), member(BOB, 'member')] },
+      {
+        dormancy: dormantBob,
+        usernames: new Map([
+          [BOB, 'bob'],
+          [CAROL, 'carol'],
+        ]),
+      },
+    )
+    expect(html.indexOf('>bob<')).toBeLessThan(html.indexOf('>carol<'))
+  })
+
+  it('shows no flag for nobody dormant, and nothing while loading', () => {
+    for (const dormancy of [{ state: 'ready', dormant: [] } as Dormancy, null]) {
+      const html = render({}, { dormancy })
+      expect(html).not.toContain('changed their keys')
+      expect(html).not.toContain('awaiting approval')
+    }
+  })
+
+  it('says so when it could not check, rather than showing a clean roster', () => {
+    const html = render({}, { dormancy: { state: 'unavailable' } })
+    expect(html).toContain('check which members changed their keys')
+    expect(html).not.toContain('awaiting approval')
+  })
+
+  it('says there is no fingerprint to check when their keys could not be read', () => {
+    const noFp: Dormancy = {
+      state: 'ready',
+      dormant: [{ ...bob, fingerprint: null }],
+    }
+    expect(render({}, { dormancy: noFp, usernames: names })).toContain('no fingerprint to check')
   })
 })

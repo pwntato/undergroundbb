@@ -20,6 +20,8 @@ import {
   MemberVerificationControls,
   type MemberVerificationProps,
 } from './MemberVerificationControls'
+import { DormantMembersNotice } from './DormantMembersNotice'
+import type { Dormancy } from './dormancy'
 import type { GrantCheck } from './runGrantCheck'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
@@ -50,6 +52,7 @@ export function GroupMembersPanel({
   usernames,
   check,
   verification,
+  dormancy = null,
 }: {
   readonly view: MembersView
   /** The signed-in user's own id. */
@@ -84,8 +87,18 @@ export function GroupMembersPanel({
   readonly check?: GrantCheck | null | undefined
   /** Fingerprint verification (#65); absent shows no verification controls. */
   readonly verification?: MemberVerificationProps | undefined
+  /** Members who changed their keys and await approval (#62); null while loading. */
+  readonly dormancy?: Dormancy | null
 }) {
   const checked = check?.state === 'checked' ? check : null
+  // Dormant members are listed first: they are the ones waiting on someone.
+  const dormantIds = new Set(
+    dormancy?.state === 'ready' ? dormancy.dormant.map((d) => d.userId) : [],
+  )
+  const rows = [
+    ...view.members.filter((m) => dormantIds.has(m.userId)),
+    ...view.members.filter((m) => !dormantIds.has(m.userId)),
+  ]
   const isAdmin = view.myRole === 'admin'
   // Without our own grant on record a change can't be signed, so the buttons
   // would only fail; the note below the list says why they are absent.
@@ -126,8 +139,9 @@ export function GroupMembersPanel({
           </AlertDescription>
         </Alert>
       )}
+      <DormantMembersNotice dormancy={dormancy} usernames={usernames} />
       <ul className="flex flex-col gap-2">
-        {view.members.map((m) => {
+        {rows.map((m) => {
           const isSelf = m.userId === userId
           return (
             <li
@@ -144,6 +158,14 @@ export function GroupMembersPanel({
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>
                 <RoleMark status={checked?.statuses.get(m.userId)} verified={isVerified(checked)} />
+                {dormantIds.has(m.userId) && (
+                  <span
+                    className="text-xs text-amber-700 dark:text-amber-400"
+                    title="Their keys changed, and their entry in this group is still wrapped to the old ones."
+                  >
+                    Keys changed, awaiting approval
+                  </span>
+                )}
                 {verification !== undefined && !isSelf && !isDeletedUser(m.userId, usernames) && (
                   <MemberVerificationBadge state={verification.state} userId={m.userId} />
                 )}
