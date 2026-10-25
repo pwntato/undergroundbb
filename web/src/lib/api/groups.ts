@@ -661,6 +661,37 @@ export interface TakeOverRotationRequest {
   readonly startSignature: string
 }
 
+/** A dormant member's entry point re-wrapped to their new key at the approver's generation. */
+export interface ApproveRewrapRequest {
+  /** The approver's own entry generation; the wrap is for that generation. */
+  readonly generation: number
+  readonly wrappedKey: WireWrappedKey
+  /** The member's keyEpoch (as served by GET /api/users) the key was wrapped to. */
+  readonly keyEpoch: number
+}
+
+/**
+ * POST /api/groups/{id}/rewrap/{uid} -- #62. An admin or ambassador approves a
+ * dormant member's new keys with a plain wrap of the current group key. In a
+ * Rotating group the member's entry must be behind the approver's generation;
+ * otherwise 409 `rekey_required` sends an admin to approveRekey. Other 409 codes:
+ * `member_not_dormant` (already approved, or a retry after a lost 204),
+ * `wrap_epoch_stale` (their keys changed since they were read), `conflict_retry`.
+ * 400 with no code is a generation that no longer matches the caller's own entry.
+ * 404: not a member, or the member left.
+ */
+export function approveRewrap(
+  groupId: string,
+  memberUserId: string,
+  req: ApproveRewrapRequest,
+): Promise<void> {
+  return sendNoContent(
+    'POST',
+    `/api/groups/${encodeURIComponent(groupId)}/rewrap/${encodeURIComponent(memberUserId)}`,
+    req,
+  )
+}
+
 /** An admin's approval re-key start (#62): the self re-key's body plus the member's copy. */
 export interface ApproveRekeyRequest extends TakeOverRotationRequest {
   /** The new key wrapped to the member's new wrapping key. */

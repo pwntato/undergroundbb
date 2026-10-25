@@ -13,6 +13,8 @@ import {
   listGrants,
   listMembers,
   readmitMember,
+  approveRekey,
+  approveRewrap,
   selfRekey,
   takeOverRotation,
   rewrapMembers,
@@ -24,6 +26,7 @@ import {
   rewrapGroupKey,
   signPin,
   signReadmission,
+  startApprovalRekey,
   startGroupRotation,
   startSelfRekey,
 } from '@/lib/crypto/worker-client'
@@ -31,6 +34,7 @@ import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
+import type { ApproveDeps } from './runApprove'
 import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
 import type { SelfRekeyDeps } from './runSelfRekey'
@@ -90,5 +94,15 @@ export function makeReadmitDeps(userId: string): ReadmitDeps {
     signReadmission,
     readmitMember,
     newInviteId: () => crypto.randomUUID(),
+  }
+}
+
+/** The rotation wiring plus what approving a dormant member's new keys needs (#62). */
+export function makeApproveDeps(userId: string): ApproveDeps {
+  return {
+    ...makeRotationDeps(userId),
+    approveRewrap,
+    approveRekey,
+    startApprovalCrypto: startApprovalRekey,
   }
 }
