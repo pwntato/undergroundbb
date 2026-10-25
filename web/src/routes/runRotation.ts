@@ -63,6 +63,7 @@ import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationRekeyPayload, rotationStartPayload } from '@/lib/crypto/group'
 import { removersOf, verifyRemovals } from '@/lib/crypto/removal'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
+import { ownHistoryFor, ownSigningKeysFor } from './ownHistory'
 import type {
   RewrapGroupKeyResult,
   StartGroupRotationRequest,
@@ -614,6 +615,7 @@ async function checkLeaverKey(
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
+    pinnerHistory: await ownHistoryFor(deps, own),
     pinnedUserId: leaverId,
     pin: pins.find((p) => p.pinnedUserId === leaverId),
     served,
@@ -749,12 +751,13 @@ type SignerKeys =
 
 /**
  * The signing keys to try for each signer of a record the rotation relies on,
- * fetched in one batch. The caller's own key is its current one, with no fetch
- * (#62: only the CURRENT key. Once signing keys can rotate, a signer who
- * rotated mid-rotation signed under a superseded key, and as the only admin at
- * this generation nobody could resume; take the served set, as for anyone
- * else, before that ships; this now also covers every removal the caller ever
- * signed, which live forever, so the fix is not scoped to resuming a rotation).
+ * fetched in one batch. The caller's own keys need no fetch of their own
+ * record: they are every key in their verified history (lib/crypto/own-history),
+ * or only the current one when there is none. Removal links carry no day, so any
+ * key in the verified chain is accepted for them, which is safe because a forged
+ * record can only exclude someone (removal.ts), and it covers every removal the
+ * caller ever signed, which live forever, so this is not only about resuming a
+ * rotation.
  * Anyone else's come from the server, checked against
  * the caller's pin: a mismatch stops the run, a first sighting is accepted (as
  * in the roster: a forged signature can only ever shrink the recipient set). A
@@ -769,7 +772,9 @@ async function resolveSignerKeys(
 ): Promise<SignerKeys> {
   const keys = new Map<string, Uint8Array[] | null>()
   const others = signers.filter((id) => id !== deps.selfUserId)
-  if (signers.includes(deps.selfUserId)) keys.set(deps.selfUserId, [own])
+  if (signers.includes(deps.selfUserId)) {
+    keys.set(deps.selfUserId, await ownSigningKeysFor(deps, own))
+  }
   if (others.length === 0) return { ok: true, keys }
 
   const failure: { err?: unknown } = {}
@@ -796,6 +801,7 @@ async function resolveSignerKeys(
     const verdict = evaluatePin({
       pinnerUserId: deps.selfUserId,
       pinnerSigningPublicKey: own,
+      pinnerHistory: await ownHistoryFor(deps, own),
       pinnedUserId: id,
       pin: pins.find((p) => p.pinnedUserId === id),
       served: projection,
@@ -1002,6 +1008,7 @@ async function checkRecipient(
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
+    pinnerHistory: await ownHistoryFor(deps, own),
     pinnedUserId: userId,
     pin: pins.get(userId),
     served,

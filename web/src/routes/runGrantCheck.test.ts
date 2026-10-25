@@ -16,6 +16,8 @@ import {
   trustAnchorPayload,
 } from '@/lib/crypto/group'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
+import { buildOwnKeyHistory } from '@/lib/crypto/own-history'
+import { makeKeyChange, rowId } from '@/lib/crypto/own-history.testkit'
 import type { StoredAnchorPin } from '@/lib/groups/anchorPin'
 import { checkForView, checkGrants, type GrantCheck, type GrantCheckDeps } from './runGrantCheck'
 
@@ -671,5 +673,168 @@ describe('checkGrants: successor claims (#161)', () => {
     })
     await checkGrants(d, GROUP, members)
     expect(getUsers.mock.calls.flatMap(([ids]) => [...ids]).sort()).toEqual([CREATOR, EVE].sort())
+  })
+})
+
+describe('checkGrants when the caller rotated their keys (#62)', () => {
+  const newKey = generateSigningKey()
+  const members = [
+    { userId: CREATOR, role: 'admin' },
+    { userId: SELF, role: 'admin' },
+    { userId: EVE, role: 'ambassador' },
+  ]
+
+  // SELF is an admin the creator promoted, signed a grant under the key they
+  // have since rotated away from, and is served with that key superseded.
+  function rotatedWorld() {
+    const w = world()
+    const selfGrant = grant(w.creatorKey, SELF, 'admin', CREATOR, '2026-03-02', w.root.sortKey)
+    const eveGrant = grant(w.selfKey, EVE, 'ambassador', SELF, '2026-03-06', selfGrant.sortKey)
+    w.users.set(SELF, {
+      ...user(SELF, newKey),
+      keyEpoch: 1,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.selfKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2026-10-01T00:00:00Z',
+        },
+      ],
+    })
+    const kc = makeKeyChange({
+      userId: SELF,
+      from: w.selfKey,
+      to: newKey,
+      epoch: 1,
+      day: '2026-10-01',
+    })
+    const history = buildOwnKeyHistory({
+      userId: SELF,
+      ownSigningKey: newKey.publicKey,
+      changes: [kc.change],
+      rosters: [kc.roster],
+    })
+    return { w, history, pages: [[w.root, w.alice, selfGrant, eveGrant]] }
+  }
+
+  it('trusts the served history and verifies what they signed under the old key', async () => {
+    const { w, history, pages } = rotatedWorld()
+    const d = deps(w, {
+      pages,
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(d, GROUP, members)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.blockedKeyUsers).toEqual([])
+    expect(r.statuses.get(EVE)).toEqual({ status: 'verified' })
+  })
+
+  it("takes the old key's interval from the signed chain, not from what the server serves", async () => {
+    const { w, history } = rotatedWorld()
+    const selfGrant = grant(w.creatorKey, SELF, 'admin', CREATOR, '2026-03-02', w.root.sortKey)
+    // Dated after the rotation (2026-10-01) but signed by the key rotated away from.
+    const forged = grant(w.selfKey, EVE, 'ambassador', SELF, '2026-12-01', selfGrant.sortKey)
+    // Dated after the rotation and signed by the key they hold now.
+    const honest = grant(newKey, BOB, 'ambassador', SELF, '2026-12-02', selfGrant.sortKey)
+    // The server widens the old key's served interval far past the rotation.
+    w.users.set(SELF, {
+      ...w.users.get(SELF)!,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.selfKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2099-01-01T00:00:00Z',
+        },
+      ],
+    })
+    const d = deps(w, {
+      pages: [[w.root, selfGrant, forged, honest]],
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(d, GROUP, [
+      { userId: CREATOR, role: 'admin' },
+      { userId: SELF, role: 'admin' },
+      { userId: EVE, role: 'ambassador' },
+      { userId: BOB, role: 'ambassador' },
+    ])
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.statuses.get(EVE)?.status).toBe('unverified')
+    expect(r.statuses.get(BOB)).toEqual({ status: 'verified' })
+  })
+
+  it('checks pins the caller signed under the old key, when the rotation listed them', async () => {
+    const { w, pages } = rotatedWorld()
+    // Pins taken before the rotation, under the old key.
+    const before = deps(w, { pages })
+    await checkGrants(before, GROUP, members)
+    const kc = makeKeyChange({
+      userId: SELF,
+      from: w.selfKey,
+      to: newKey,
+      epoch: 1,
+      day: '2026-10-22',
+      listed: [...before.keyPins.values()].map((p) =>
+        rowId(`PIN#${p.pinnedUserId}`, base64ToBytes(p.signature)),
+      ),
+    })
+    const history = buildOwnKeyHistory({
+      userId: SELF,
+      ownSigningKey: newKey.publicKey,
+      changes: [kc.change],
+      rosters: [kc.roster],
+    })
+    w.users.set(SELF, {
+      ...w.users.get(SELF)!,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(w.selfKey.publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2026-10-22T00:00:00Z',
+        },
+      ],
+    })
+    const after = deps(w, {
+      pages,
+      listPins: before.listPins,
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(after, GROUP, members)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.blockedKeyUsers).toEqual([])
+    expect(r.keys).toBe('pinned')
+  })
+
+  it('blocks the caller (and what rests on their old key) without a verified history', async () => {
+    const { w, pages } = rotatedWorld()
+    const d = deps(w, { pages, ownSigningKey: async () => b64(newKey.publicKey) })
+    const r = await checkGrants(d, GROUP, members)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.blockedKeyUsers).toEqual([SELF])
+    expect(r.statuses.get(EVE)?.status).toBe('unverified')
+  })
+
+  it("blocks the caller when the served superseded keys are not the chain's", async () => {
+    const { w, history, pages } = rotatedWorld()
+    w.users.set(SELF, {
+      ...w.users.get(SELF)!,
+      supersededSigningKeys: [
+        {
+          publicKey: b64(generateSigningKey().publicKey),
+          from: '2026-01-01T00:00:00Z',
+          until: '2026-10-01T00:00:00Z',
+        },
+      ],
+    })
+    const d = deps(w, {
+      pages,
+      ownSigningKey: async () => b64(newKey.publicKey),
+      loadOwnKeyHistory: async () => history,
+    })
+    const r = await checkGrants(d, GROUP, members)
+    if (r.state !== 'checked') throw new Error('expected checked')
+    expect(r.blockedKeyUsers).toEqual([SELF])
   })
 })

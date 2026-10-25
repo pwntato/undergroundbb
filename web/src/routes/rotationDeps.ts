@@ -28,6 +28,7 @@ import {
   startSelfRekey,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
+import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
 import type { ReadmitDeps } from './runReadmit'
@@ -61,6 +62,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
     readPin: (g) => readAnchorPin(userId, g),
     writePin: (g, pin) => writeAnchorPin(userId, g, pin),
     ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
+    loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
     listPins: listAllPins,
     pinKeys: makePinKeys(userId),
     rewrapCrypto: rewrapGroupKey,

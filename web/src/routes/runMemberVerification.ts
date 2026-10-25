@@ -26,6 +26,8 @@ import {
   type VerificationVerdict,
 } from '@/lib/crypto/verification'
 import type { SignVerificationResult } from '@/lib/crypto/worker-protocol'
+import type { OwnKeyHistory } from '@/lib/crypto/own-history'
+import { ownHistoryFor } from './ownHistory'
 import { isLiveKeysError } from './runListGroups'
 
 export interface MemberVerification {
@@ -43,6 +45,8 @@ export interface LoadVerificationsDeps {
   readonly listVerifications: () => Promise<readonly VerificationRecord[]>
   /** The caller's own CURRENT signing public key, base64. Throws when it cannot be read. */
   readonly ownSigningKey: () => Promise<string>
+  /** The caller's verified key history, for records signed before a rotation. */
+  readonly loadOwnKeyHistory?: (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>
   readonly selfUserId: string
 }
 
@@ -75,6 +79,7 @@ export async function loadMemberVerifications(
   } catch {
     return { state: 'unavailable' }
   }
+  const verifierHistory = await ownHistoryFor(deps, ownKey)
   const recordFor = new Map(records.map((r) => [r.verifiedUserId, r]))
   const byUser = new Map<string, MemberVerification>()
   for (const id of others) {
@@ -84,6 +89,7 @@ export async function loadMemberVerifications(
       verdict: evaluateVerification({
         verifierUserId: deps.selfUserId,
         verifierSigningPublicKey: ownKey,
+        verifierHistory,
         verifiedUserId: id,
         record: recordFor.get(id),
         servedFingerprint: served,

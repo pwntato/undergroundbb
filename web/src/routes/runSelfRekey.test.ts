@@ -11,8 +11,6 @@ vi.mock('./runRotation', () => rotation)
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const GROUP = 'g0000000-0000-4000-8000-000000000009'
 
-const OTHER = 'a0000000-0000-4000-8000-000000000002'
-
 const ROW: HandoffEntry = {
   groupId: GROUP,
   generation: 2,
@@ -42,7 +40,6 @@ const DONE: RotationOutcome = { status: 'completed', rewrapped: 2 }
 function setup(group: GroupDetail | Error = detail()) {
   const calls = {
     mint: vi.fn(() => Promise.resolve(MINTED)),
-    members: vi.fn(() => Promise.resolve([{ userId: ME }])),
     selfRekey: vi.fn((): Promise<void> => Promise.resolve()),
     deleteHandoff: vi.fn((): Promise<void> => Promise.resolve()),
   }
@@ -51,7 +48,6 @@ function setup(group: GroupDetail | Error = detail()) {
     getGroup: vi.fn(() =>
       group instanceof Error ? Promise.reject(group) : Promise.resolve(group),
     ),
-    listAllMembers: calls.members,
     startSelfRekeyCrypto: calls.mint,
     selfRekey: calls.selfRekey,
     deleteHandoff: calls.deleteHandoff,
@@ -165,35 +161,5 @@ describe('runSelfRekey', () => {
     const t = setup(new Error('offline'))
     expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'incomplete' })
     expect(t.deleteHandoff).not.toHaveBeenCalled()
-  })
-
-  describe('when the group has other members', () => {
-    it('sends nothing and keeps the row', async () => {
-      const t = setup()
-      t.members.mockResolvedValue([{ userId: ME }, { userId: OTHER }])
-      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'waiting' })
-      expect(t.mint).not.toHaveBeenCalled()
-      expect(t.selfRekey).not.toHaveBeenCalled()
-      expect(t.deleteHandoff).not.toHaveBeenCalled()
-      expect(rotation.runRotation).not.toHaveBeenCalled()
-    })
-
-    it('still runs when the caller is the only member', async () => {
-      const t = setup()
-      expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'rekeyed' })
-    })
-
-    it('fails closed when the check itself cannot run', async () => {
-      const t = setup()
-      t.members.mockRejectedValue(new Error('offline'))
-      expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'incomplete' })
-      expect(t.selfRekey).not.toHaveBeenCalled()
-    })
-
-    it('does not block resuming a rotation that is already running', async () => {
-      const t = setup(detail({ rotation: {} as never }))
-      t.members.mockResolvedValue([{ userId: ME }, { userId: OTHER }])
-      expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'rekeyed' })
-    })
   })
 })

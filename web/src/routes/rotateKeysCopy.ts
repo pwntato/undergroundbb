@@ -37,7 +37,7 @@ export function failureMessage(
     case 'cooldown':
       return 'You rotated your keys recently. Keys can be rotated once a day, so try again tomorrow.'
     case 'handoffPending':
-      return `A key change you started earlier is still waiting to finish re-keying ${groupList(failure.groups, labelFor)}. That step is not available in this version yet and will finish in a later update; nothing needs doing now, and keys cannot be rotated again until then.`
+      return `A key change you started earlier still has to re-key ${groupList(failure.groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
     case 'groupBusy':
       return `Another admin's key change is still under way in ${groupList(failure.groups, labelFor)}. Wait for it to finish, then try again.`
     case 'changedElsewhere':
@@ -71,12 +71,12 @@ export function stepText(step: KeyRotationStep): string {
   }
 }
 
-/** The line above "Finish key changes": what the button can and cannot do yet. */
+/** The line above "Finish key changes". */
 export function pendingRekeyText(
   groups: readonly string[],
   labelFor: (groupId: string) => string,
 ): string {
-  return `A key change you started earlier still has to re-key ${groupList(groups, labelFor)}. Finishing works for groups where you are the only member; groups with other members finish in a later update. Keys cannot be rotated again until then.`
+  return `A key change you started earlier still has to re-key ${groupList(groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
 }
 
 /** One line per group for the result of finishing a key change (#62). */
@@ -96,8 +96,6 @@ export function selfRekeyText(
       return `${label}: you are no longer an admin there, so there is nothing to finish.`
     case 'open':
       return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
-    case 'waiting':
-      return `${label}: this group has other members, and finishing it for them is not available yet. Nothing was changed; it will finish in a later update.`
     case 'incomplete':
       return `${label}: stopped (${outcome.reason}). Try again.`
   }

@@ -597,9 +597,10 @@ records nobody as removed. It runs the start from the handoff row (`runSelfRekey
 with the new key, and is deleted by the client only when the server answers `handoff_stale` or the
 caller's own entry has already moved past it, never for a failed read, a failed unwrap, a missing
 list entry or an `Open` group, whose self-wrap has no endpoint yet (the row is kept and reported).
-"Finish key changes" on the Rotate keys screen runs it for every pending group. Until the superseded-key
-acceptance lands, the client refuses the start, sending nothing and keeping the row, when the group has any
-other member: the job that follows cannot yet verify the caller's own records under the superseded signing key.
+"Finish key changes" on the Rotate keys screen runs it for every pending group. The job that follows
+the start checks the caller's own pins, records and removal links through their verified key history
+(see "As built: the caller's verified key history" under Key rotation), so a rotated admin can re-wrap
+the other members.
 
 **A handoff change during a rotation.** `rotate-keys` checks the handoff rows before it commits, and
 the commit alone cannot see them (a transaction of this size cannot condition on one row per group). A
@@ -716,6 +717,25 @@ keys are candidates (day resolution), which is accepted.
 covers every removal record the caller has ever signed, which are permanent. Once keys rotate, an
 admin who ever removed anyone under an older key would have their own rotations stop on "does not
 verify". The fix covers removal history, not only resuming a rotation.
+
+**As built: the caller's verified key history.** The client builds it once per job from the
+`KEYCHANGE#` chain on `GET /api/users/{self}` and the rosters on the first page of `GET /api/pins`
+(`lib/crypto/own-history.ts`). It is trusted only if every link verifies under both keys it names
+(the payload carries the epoch before the rotation), epochs run 1..n with none missing, each link's
+old key is the previous link's new key, days do not go backwards, and the last link's new key is the
+key the worker holds. Each roster is kept only if its entries hash to the digest the link signed.
+A pin or verification record signed under a superseded key then counts only if that key is a link's
+old key, the signed day is no later than that link's day and no earlier than the previous link's
+(both keys are candidates on the rotation day), and the row's id is in that link's roster. The
+interval comes from the signed link days, not from the served `SupersededSigningKeys` intervals,
+which are unsigned. For grants the caller's own history is built from the chain (each
+old key from the previous link's day to its own link's day), never from the served projection, which
+must still agree with the chain (the same superseded keys, `KeyEpoch` equal to the chain length)
+before it is used at all; otherwise a server holding a leaked old key could widen its served interval
+past the rotation and have later-dated grants verify under it. Removal links carry no day, so any key
+in the verified chain is accepted for them (a forged removal record can only exclude someone). When
+the history cannot be built, only the current key is accepted, so a failed read blocks rather than
+accepts.
 
 #### What a key change looks like to others
 

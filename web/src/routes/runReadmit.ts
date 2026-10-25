@@ -28,6 +28,7 @@ import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { fingerprint } from '@/lib/crypto/fingerprint'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type { SignReadmissionRequest, SignReadmissionResult } from '@/lib/crypto/worker-protocol'
+import { ownHistoryFor } from './ownHistory'
 import { isLiveKeysError } from './runListGroups'
 import { isAdmitted, loadAdmissions, type RotationDeps, type RotationOutcome } from './runRotation'
 
@@ -147,6 +148,7 @@ async function inspect(
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
+    pinnerHistory: await ownHistoryFor(deps, own),
     pinnedUserId: subjectUserId,
     pin: pins.find((p) => p.pinnedUserId === subjectUserId),
     served,

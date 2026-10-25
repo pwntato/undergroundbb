@@ -19,17 +19,13 @@
 //     invents a "superseded" key for someone would look exactly like that, so
 //     an extension is not accepted on the pin alone. Accepting a legitimate
 //     rotation needs a signed continuity link from the old key (#62).
-//   - bad-signature: the pin does not verify under the caller's own current
-//     key, or is not a well-formed pin for this user pair. Treated as
-//     tampering; NEVER as first-sight, or the server could reset any pin by
-//     corrupting it. That includes a pin whose recorded signer is not the
-//     caller's current key: pinnerSigningPublicKey is a server-served field,
-//     so a distinct verdict for it would be a reset the server can forge for
-//     free. No code path rotates a signing key yet, so every such pin is
-//     tampering today. #62 brings a signer-rotated verdict back, together
-//     with the continuity link that makes it trustworthy (recorded signer
-//     must be in the caller's own key history and the signature must verify
-//     under it).
+//   - bad-signature: the pin does not verify under the caller's own key, or is
+//     not a well-formed pin for this user pair. Treated as tampering; NEVER as
+//     first-sight, or the server could reset any pin by corrupting it. The
+//     recorded signer (pinnerSigningPublicKey) is a server-served field, so it
+//     counts only if it is the caller's current key, or a superseded key that
+//     the caller's verified key history lists this very row under, signed on a
+//     day inside that key's interval (lib/crypto/own-history, #62).
 //
 // Absence is indistinguishable from first contact: the server can delete a pin
 // and this returns first-sight. DESIGN.md states that limit; it is not closed
@@ -38,6 +34,7 @@
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { lengthPrefixedConcat } from './payload.js'
+import { ownSignerAccepted, type OwnKeyHistory } from './own-history.js'
 
 const encoder = new TextEncoder()
 const KEY_SIZE = 32
@@ -156,6 +153,12 @@ export interface EvaluatePinInput {
   /** The caller's own user id and CURRENT signing public key. */
   readonly pinnerUserId: string
   readonly pinnerSigningPublicKey: Uint8Array
+  /**
+   * The caller's verified key history (lib/crypto/own-history). Without it only
+   * a pin signed under the current key counts; with it, a pin signed under a
+   * superseded key counts when its day, interval and roster entry check out.
+   */
+  readonly pinnerHistory?: OwnKeyHistory | undefined
   readonly pinnedUserId: string
   /** The caller's stored pin for pinnedUserId, if the server returned one. */
   readonly pin: PinRecord | undefined
@@ -177,9 +180,22 @@ export function evaluatePin(input: EvaluatePinInput): PinVerdict {
   if (!Number.isSafeInteger(pin.keyEpoch) || pin.keyEpoch < 0 || !isUtcDay(pin.signedDay)) {
     return 'bad-signature'
   }
-  // The recorded signer is untrusted input: only the caller's own current key
-  // may verify a pin, whatever the row claims.
-  if (!bytesEqual(signer, pinnerSigningPublicKey)) return 'bad-signature'
+  // The recorded signer is untrusted input: only the caller's own current key,
+  // or a superseded one their verified history lists this very row under, may
+  // verify a pin, whatever the row claims.
+  if (!bytesEqual(signer, pinnerSigningPublicKey)) {
+    const listed =
+      input.pinnerHistory !== undefined &&
+      bytesEqual(input.pinnerHistory.current, pinnerSigningPublicKey) &&
+      ownSignerAccepted(
+        input.pinnerHistory,
+        signer,
+        pin.signedDay,
+        `PIN#${pinnedUserId}`,
+        signature,
+      )
+    if (!listed) return 'bad-signature'
+  }
 
   const payload = pinPayload(
     pinnerUserId,
