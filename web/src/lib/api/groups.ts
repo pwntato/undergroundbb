@@ -654,6 +654,42 @@ export interface TakeOverRotationRequest {
   readonly startSignature: string
 }
 
+/** An admin's approval re-key start (#62): the self re-key's body plus the member's copy. */
+export interface ApproveRekeyRequest extends TakeOverRotationRequest {
+  /** The new key wrapped to the member's new wrapping key. */
+  readonly memberWrappedKey: WireWrappedKey
+  /** The member's keyEpoch the key was wrapped to (as served by GET /api/users). */
+  readonly memberKeyEpoch: number
+}
+
+/**
+ * POST /api/groups/{id}/rotation/approve/{uid} -- #62. An admin approves a
+ * dormant member's new keys by starting a rotation that removes no one, when the
+ * member's entry is still at the admin's generation; the start also writes the
+ * member's entry. startSignature is over rotationRekeyPayload with reason
+ * "approval". 409 codes: `rekey_not_required` (the member is behind the
+ * generation: use the plain rewrap endpoint), `member_not_dormant`, `wrap_epoch_stale` (the
+ * member's keys), `key_epoch_stale` (the caller's), `rotation_in_progress`,
+ * `rotation_caller_behind`, `conflict_retry`; 400 `bad_signature`,
+ * `rotation_not_applicable` (an Open group); 404 (not a member, or the member
+ * left). A retry after a lost response is a code-less 400 on the generation
+ * (the start moved the caller's own entry), whether the rotation is running or
+ * done: treat it as "maybe already landed" and re-read the roster.
+ * `memberKeyEpoch` must come from the same pin-checked projection as the key
+ * the member copy was wrapped to.
+ */
+export function approveRekey(
+  groupId: string,
+  memberUserId: string,
+  req: ApproveRekeyRequest,
+): Promise<void> {
+  return sendNoContent(
+    'POST',
+    `/api/groups/${encodeURIComponent(groupId)}/rotation/approve/${encodeURIComponent(memberUserId)}`,
+    req,
+  )
+}
+
 /**
  * POST /api/groups/{id}/rotation/rekey -- #62. An admin who rotated their
  * account keys starts the rotation that brings their own entry to the new key,

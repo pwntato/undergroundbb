@@ -35,6 +35,7 @@ import {
   signSuccessorDesignation,
   signLeaveRotationStart,
   startGroupRotation,
+  startApprovalRekey,
   startSelfRekey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -1336,6 +1337,95 @@ describe('group key rotation (#58)', () => {
         sig,
       ),
     ).toBe(false)
+  })
+
+  it('approval re-key: mints generation+1 for the admin and the member and signs reason "approval" (#62)', async () => {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-approve')
+    const member = await realUserKeys(CAROL_ID, 'carol-password-approve')
+    const oldKey = new Uint8Array(32).fill(7)
+    const created = await signGroupCreation(admin, GROUP_ID, oldKey)
+    const started = await startApprovalRekey(
+      admin,
+      GROUP_ID,
+      wire(created.groupKeyWrapped),
+      0,
+      CAROL_ID,
+      member.wrappingKey.publicKey,
+    )
+    expect(started.generation).toBe(1)
+
+    // Both copies hold the same NEW key, each bound to its own owner and generation.
+    const adminKey = await unwrap(
+      admin.wrappingKey.privateKey,
+      wire(started.removerWrappedKey),
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+    )
+    const memberKey = await unwrap(
+      member.wrappingKey.privateKey,
+      wire(started.memberWrappedKey),
+      memberWrapAAD(GROUP_ID, CAROL_ID, 1),
+    )
+    expect(memberKey).toEqual(adminKey)
+    expect(memberKey).not.toEqual(oldKey)
+    await expect(
+      unwrap(
+        member.wrappingKey.privateKey,
+        wire(started.memberWrappedKey),
+        memberWrapAAD(GROUP_ID, CAROL_ID, 0),
+      ),
+    ).rejects.toThrow()
+    await expect(
+      unwrap(
+        member.wrappingKey.privateKey,
+        wire(started.memberWrappedKey),
+        memberWrapAAD(GROUP_ID, ADMIN_ID, 1),
+      ),
+    ).rejects.toThrow()
+    // The link holds the old key under the new one.
+    const walked = await decrypt(
+      memberKey,
+      base64ToBytes(started.link.nonce),
+      base64ToBytes(started.link.ciphertext),
+      genKeyAAD(GROUP_ID, 0),
+    )
+    expect(walked).toEqual(oldKey)
+
+    // Signed by the admin under the rekey context, naming the member, reason "approval".
+    const sig = base64ToBytes(started.startSignature)
+    const pub = admin.signingKey.publicKey
+    expect(
+      ed25519.verify(
+        pub,
+        ed25519.SigningContext.RotationRekey,
+        rotationRekeyPayload(GROUP_ID, ADMIN_ID, CAROL_ID, 1, 'approval'),
+        sig,
+      ),
+    ).toBe(true)
+    for (const other of [
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, CAROL_ID, 1, 'self'),
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, ADMIN_ID, 1, 'approval'),
+      rotationRekeyPayload(GROUP_ID, ADMIN_ID, CAROL_ID, 2, 'approval'),
+      rotationRekeyPayload('other-group', ADMIN_ID, CAROL_ID, 1, 'approval'),
+    ]) {
+      expect(ed25519.verify(pub, ed25519.SigningContext.RotationRekey, other, sig)).toBe(false)
+    }
+  })
+
+  it('approval re-key: refuses the caller as the member, a short key, and a foreign entry', async () => {
+    const admin = await realUserKeys(ADMIN_ID, 'admin-password-approve2')
+    const member = await realUserKeys(CAROL_ID, 'carol-password-approve2')
+    const created = await signGroupCreation(admin, GROUP_ID, new Uint8Array(32).fill(7))
+    const entry = wire(created.groupKeyWrapped)
+    await expect(
+      startApprovalRekey(admin, GROUP_ID, entry, 0, ADMIN_ID, admin.wrappingKey.publicKey),
+    ).rejects.toThrow()
+    await expect(
+      startApprovalRekey(admin, GROUP_ID, entry, 0, CAROL_ID, new Uint8Array(31)),
+    ).rejects.toThrow()
+    // An entry at another generation does not open as the caller's own.
+    await expect(
+      startApprovalRekey(admin, GROUP_ID, entry, 1, CAROL_ID, member.wrappingKey.publicKey),
+    ).rejects.toThrow()
   })
 
   it('self re-key: a row for another group, generation or key does not open', async () => {

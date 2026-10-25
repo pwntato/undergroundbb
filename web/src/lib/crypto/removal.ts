@@ -20,7 +20,7 @@
 
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
-import { rotationRekeyPayload, rotationStartPayload } from './group.js'
+import { rotationRekeyPayload, rotationStartPayload, type RekeyReason } from './group.js'
 
 /** One chain link as served by GET /api/groups/{id}/keychain. */
 export interface RemovalLink {
@@ -135,10 +135,24 @@ export function verifyRemovals(input: VerifyRemovalsInput): RemovalVerdict {
 }
 
 /**
- * The record on a link a re-key minted (#62), or null when it verifies. Only the
- * "self" reason exists so far: the admin re-keyed their own entry, so the member
- * re-keyed must be the admin and a mismatch is a forgery. Any other reason is
- * refused rather than guessed at.
+ * True when a re-key record's reason and parties agree: "self" is an admin
+ * re-keying their own entry (the member re-keyed is the signer), "approval" is
+ * an admin approving someone else's new keys (never the signer). Any other
+ * reason is refused rather than guessed at.
+ */
+export function rekeyKindOk(
+  reason: string | undefined,
+  signer: string,
+  rekeyed: string,
+): reason is RekeyReason {
+  if (reason === 'self') return rekeyed === signer
+  if (reason === 'approval') return rekeyed !== signer
+  return false
+}
+
+/**
+ * The record on a link a re-key minted (#62), or null when it verifies. The
+ * reason and parties must agree (rekeyKindOk); a mismatch is a forgery.
  */
 function verifyRekeyLink(
   input: VerifyRemovalsInput,
@@ -154,7 +168,7 @@ function verifyRekeyLink(
   ) {
     return fail(`generation ${String(generation)} has a malformed re-key record`)
   }
-  if (rekeyReason !== 'self' || rekeyedUserId !== removerUserId) {
+  if (!rekeyKindOk(rekeyReason, removerUserId, rekeyedUserId)) {
     return fail(
       `generation ${String(generation)} has a re-key record of a kind this app cannot check`,
     )

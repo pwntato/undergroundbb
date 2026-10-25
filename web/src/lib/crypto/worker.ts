@@ -30,6 +30,7 @@ import {
   rewrapGroupKey as rewrapGroupKeyPure,
   signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
+  startApprovalRekey as startApprovalRekeyPure,
   startSelfRekey as startSelfRekeyPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
@@ -71,6 +72,7 @@ import type {
   RewrapGroupKeyRequest,
   SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
+  StartApprovalRekeyRequest,
   StartSelfRekeyRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
@@ -186,6 +188,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
+      return
+    case 'startApprovalRekey':
+      await startApprovalRekey(req)
       return
     case 'startSelfRekey':
       await startSelfRekey(req)
@@ -531,6 +536,20 @@ async function startSelfRekey(req: StartSelfRekeyRequest): Promise<void> {
     wrappedFromWire(req.handoffWrappedKey),
   )
   post({ kind: 'startSelfRekeyDone', id: req.id, result })
+}
+
+/** #62: mints the key of an admin's approval re-key and wraps it to the approved member. */
+async function startApprovalRekey(req: StartApprovalRekeyRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 'approve a key change')
+  const result = await startApprovalRekeyPure(
+    keys,
+    req.groupId,
+    wrappedFromWire(req.ownWrappedGroupKey),
+    req.ownGeneration,
+    req.memberUserId,
+    base64ToBytes(req.memberWrappingPublicKey),
+  )
+  post({ kind: 'startApprovalRekeyDone', id: req.id, result })
 }
 
 /** #178: signs the rotation start a leave carries; mints nothing. */

@@ -48,6 +48,9 @@ import type {
   SignLeaveRotationStartResponse,
   SignLeaveRotationStartResult,
   StartGroupRotationRequest,
+  StartApprovalRekeyRequest,
+  StartApprovalRekeyResponse,
+  StartApprovalRekeyResult,
   StartSelfRekeyRequest,
   StartSelfRekeyResponse,
   StartGroupRotationResponse,
@@ -737,6 +740,17 @@ export function startSelfRekey(
   return workerCall<StartSelfRekeyResponse, StartGroupRotationResult>(
     (id) => ({ kind: 'startSelfRekey', id, ...req }) satisfies StartSelfRekeyRequest,
     'startSelfRekeyDone',
+    (res) => res.result,
+  )
+}
+
+/** #62: mints an admin's approval re-key and wraps it to the approved member (see startApprovalRekey in credential-material.ts). */
+export function startApprovalRekey(
+  req: Omit<StartApprovalRekeyRequest, 'kind' | 'id'>,
+): Promise<StartApprovalRekeyResult> {
+  return workerCall<StartApprovalRekeyResponse, StartApprovalRekeyResult>(
+    (id) => ({ kind: 'startApprovalRekey', id, ...req }) satisfies StartApprovalRekeyRequest,
+    'startApprovalRekeyDone',
     (res) => res.result,
   )
 }

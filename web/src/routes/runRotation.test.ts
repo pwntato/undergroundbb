@@ -194,7 +194,7 @@ function rekeyMarker(
     startedBy,
     o.signedFor?.rekeyed ?? rekeyed,
     o.signedFor?.generation ?? generation,
-    (o.signedFor?.reason ?? 'self') as 'self',
+    (o.signedFor?.reason ?? o.reason ?? 'self') as 'self',
   )
   return {
     ...base,
@@ -224,10 +224,15 @@ function rekeyLink(
     admin,
     o.signedFor?.rekeyed ?? rekeyed,
     o.signedFor?.generation ?? generation + 1,
-    (o.signedFor?.reason ?? 'self') as 'self',
+    (o.signedFor?.reason ?? o.reason ?? 'self') as 'self',
   )
   if (o.noSignature) {
-    return { ...base, removerUserId: admin, rekeyedUserId: rekeyed, rekeyReason: 'self' }
+    return {
+      ...base,
+      removerUserId: admin,
+      rekeyedUserId: rekeyed,
+      rekeyReason: o.reason ?? 'self',
+    }
   }
   return {
     ...base,
@@ -2498,7 +2503,49 @@ describe('a self re-key rotation (#62)', () => {
     expect(f.cryptoRecipients.flat().sort()).toEqual([a.id, b.id].sort())
   })
 
+  it('resumes from a verified approval marker: the approved member is already current', async () => {
+    const f = new Fake()
+    const approved = f.add(person(), 'member', 1) // the start wrote their entry at the new generation
+    const behind = f.add(person())
+    f.marker = rekeyMarker(1, { reason: 'approval', rekeyed: approved.id })
+    const out = await runRotation(f.deps(), GROUP)
+    expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+    expect(f.cryptoRecipients.flat()).toEqual([behind.id])
+    expect(f.takeOvers).toEqual([])
+    expect(f.mints).toBe(0)
+  })
+
   const refused: [string, () => Marker, string][] = [
+    [
+      'an approval signed as a self re-key',
+      () => rekeyMarker(1, { reason: 'approval', rekeyed: REMOVED, signedFor: { reason: 'self' } }),
+      'does not verify',
+    ],
+    [
+      'an approval naming another member than the one signed',
+      () => rekeyMarker(1, { reason: 'approval', rekeyed: REMOVED, signedFor: { rekeyed: 'x' } }),
+      'does not verify',
+    ],
+    [
+      'an approval signed by another key',
+      () => rekeyMarker(1, { reason: 'approval', rekeyed: REMOVED, signer: generateSigningKey() }),
+      'does not verify',
+    ],
+    [
+      'an approval signed for another generation',
+      () => rekeyMarker(1, { reason: 'approval', rekeyed: REMOVED, signedFor: { generation: 2 } }),
+      'does not verify',
+    ],
+    [
+      'a self re-key signed as an approval',
+      () => rekeyMarker(1, { signedFor: { reason: 'approval' } }),
+      'does not verify',
+    ],
+    [
+      'of an unknown reason',
+      () => rekeyMarker(1, { reason: 'other', rekeyed: REMOVED }),
+      'kind this app cannot check',
+    ],
     [
       'signed by another key',
       () => rekeyMarker(1, { signer: generateSigningKey() }),
@@ -2521,7 +2568,7 @@ describe('a self re-key rotation (#62)', () => {
     ],
     ['carrying no signature', () => rekeyMarker(1, { unsigned: true }), 'missing or malformed'],
     [
-      'for a reason this app cannot check',
+      'an approval naming its own signer',
       () => rekeyMarker(1, { reason: 'approval' }),
       'kind this app cannot check',
     ],
@@ -2569,7 +2616,47 @@ describe('a self re-key rotation (#62)', () => {
       expect(out).toEqual({ status: 'caught-up', rewrapped: 1 })
     })
 
+    it('is accepted as an approval when its record verifies', async () => {
+      const f = new Fake()
+      const m = f.add(person())
+      f.marker = undefined
+      f.links = [rekeyLink(0, { reason: 'approval', rekeyed: REMOVED })]
+      f.members.get(m.id)!.generation = 0
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'caught-up', rewrapped: 1 })
+    })
+
     const stops: [string, () => KeychainLink, string][] = [
+      [
+        'an approval forged',
+        () => rekeyLink(0, { reason: 'approval', rekeyed: REMOVED, signer: generateSigningKey() }),
+        'does not verify',
+      ],
+      [
+        'an approval signed as a self re-key',
+        () => rekeyLink(0, { reason: 'approval', rekeyed: REMOVED, signedFor: { reason: 'self' } }),
+        'does not verify',
+      ],
+      [
+        'an approval signed for another member',
+        () => rekeyLink(0, { reason: 'approval', rekeyed: REMOVED, signedFor: { rekeyed: 'x' } }),
+        'does not verify',
+      ],
+      [
+        'a self re-key naming another member',
+        () => rekeyLink(0, { rekeyed: REMOVED }),
+        'cannot check',
+      ],
+      [
+        'an approval of the signer themself',
+        () => rekeyLink(0, { reason: 'approval' }),
+        'cannot check',
+      ],
+      [
+        'of an unknown reason',
+        () => rekeyLink(0, { reason: 'other', rekeyed: REMOVED }),
+        'cannot check',
+      ],
       ['forged', () => rekeyLink(0, { signer: generateSigningKey() }), 'does not verify'],
       ['blanked', () => rekeyLink(0, { unsigned: true }), 'without a signed record'],
       [
@@ -2581,11 +2668,6 @@ describe('a self re-key rotation (#62)', () => {
         'replayed at another generation',
         () => rekeyLink(0, { signedFor: { generation: 2 } }),
         'does not verify',
-      ],
-      [
-        'of a kind this app cannot check',
-        () => rekeyLink(0, { reason: 'approval' }),
-        'cannot check',
       ],
     ]
     for (const [name, link, reason] of stops) {
