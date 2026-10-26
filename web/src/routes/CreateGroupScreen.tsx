@@ -234,7 +234,7 @@ export function CreateGroupScreen() {
  * Go side writes the creator's MEMBER# item with exactly those values (see
  * db.CreateGroup), so this isn't a guess.
  */
-function buildGroupListEntry(
+export function buildGroupListEntry(
   groupId: string,
   form: GroupFormInput,
   result: Extract<CreateGroupResult, { ok: true }>,
