@@ -514,6 +514,11 @@ describe('verifyAdmission: an invitee who rotated since the admission (#62)', ()
     rejected(stateAfter(world(), one(), { x: new Uint8Array(32).fill(99) }), /wrapping key/)
   })
 
+  it('rejects a signing key and a wrapping key that the chain never held together', () => {
+    // Both are served and both were held, but the wrapping key belongs to the first pair.
+    rejected(stateAfter(world(), one(), { ed: m1.publicKey }), /wrapping key/)
+  })
+
   it('does not consult the chain when the wrapping key is the served one', () => {
     const w = world()
     expect(check(w, admission(w), { inviteeHistory: one() })).toEqual({ ok: true })
