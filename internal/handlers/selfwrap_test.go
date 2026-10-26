@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -281,5 +282,32 @@ func TestSelfWrapTransactionChecksTheRowAndTheEntryGenerationSeparately(t *testi
 	}
 	if !handoffRowExists(t, owner.userID, gid) || wrapEpochOf(t, gid, owner.userID) == "1" {
 		t.Fatal("a refused self-wrap wrote something")
+	}
+}
+
+// The list tells the client which groups have no re-key, so it need not read
+// every group to know which ones it owes a row for.
+func TestListGroupsServesNoRotation(t *testing.T) {
+	h := noCooldown(t)
+	owner, cookie := loggedInUser(t, h)
+	open := createOpenGroup(t, h, owner, cookie)
+	public := createPublicGroup(t, h, owner, cookie)
+	private := createPrivateGroup(t, h, owner, cookie)
+	var list listGroupsResponse
+	if rec := doJSON(t, h, http.MethodGet, "/api/groups", cookie, nil); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &list) != nil {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+	got := map[string]bool{}
+	for _, g := range list.Groups {
+		got[g.GroupID] = g.NoRotation
+	}
+	want := map[string]bool{open: true, public: true, private: false}
+	if len(got) != len(want) {
+		t.Fatalf("groups = %v, want %v", got, want)
+	}
+	for gid, w := range want {
+		if got[gid] != w {
+			t.Errorf("group %s: noRotation = %v, want %v", gid, got[gid], w)
+		}
 	}
 }
