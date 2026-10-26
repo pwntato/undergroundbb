@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/pwntato/undergroundbb/internal/db"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // A member of an Open group wraps the key their handoff row holds to their own
@@ -189,5 +193,45 @@ func TestSweepKeepsAMembersRowOnlyInAGroupWithNoRotation(t *testing.T) {
 	}
 	if handoffRowExists(t, carol.userID, private) {
 		t.Error("the sweep kept a plain member's row for a Rotating group")
+	}
+}
+
+// The transaction, not the handler, is what holds when something moves between
+// the handler's reads and the commit.
+func TestSelfWrapTransactionRefusesWhatHasMovedUnderIt(t *testing.T) {
+	h := noCooldown(t)
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	next, _ := rotateUser(t, h, owner, ownerCookie, gid)
+	current, err := h.db.GetUserByIDConsistent(t.Context(), owner.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := db.SelfWrapInput{
+		GroupID: gid, CallerUserID: owner.userID, Generation: 0,
+		Wrapped:           models.WrappedKey{EphemeralPub: randBytes(32), Nonce: randBytes(12), Ciphertext: randBytes(48)},
+		CallerKeyEpoch:    current.KeyEpoch,
+		CallerWrappingKey: next.wrapPub,
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*db.SelfWrapInput)
+		want   error
+	}{
+		"a key epoch that moved":      {func(in *db.SelfWrapInput) { in.CallerKeyEpoch++ }, db.ErrWrapEpochStale},
+		"a key the row does not name": {func(in *db.SelfWrapInput) { in.CallerWrappingKey = randBytes(32) }, db.ErrHandoffStale},
+		"another generation":          {func(in *db.SelfWrapInput) { in.Generation = 1 }, db.ErrHandoffStale},
+		"a member who left":           {func(in *db.SelfWrapInput) { in.GroupID = "00000000-0000-4000-8000-000000000000" }, db.ErrHandoffStale},
+	} {
+		in := good
+		tc.mutate(&in)
+		if err := h.db.SelfWrap(t.Context(), in); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", name, err, tc.want)
+		}
+		if !handoffRowExists(t, owner.userID, gid) || wrapEpochOf(t, gid, owner.userID) == "1" {
+			t.Fatalf("%s: a refused self-wrap wrote something", name)
+		}
+	}
+	if err := h.db.SelfWrap(t.Context(), good); err != nil {
+		t.Fatalf("the untouched input: %v", err)
 	}
 }
