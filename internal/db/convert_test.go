@@ -124,3 +124,22 @@ func TestConvertTransactionRefusesAMarkerAndAnOpenGroup(t *testing.T) {
 		t.Fatalf("already open: %v, want ErrGroupAlreadyOpen", err)
 	}
 }
+
+func TestConvertTransactionRefusesADirectMessage(t *testing.T) {
+	c := testClient(t)
+	g := settledGroup(t, c)
+	if _, err := c.ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(c.table),
+		Key:                       map[string]types.AttributeValue{"PK": s("GROUP#" + g), "SK": s("META")},
+		UpdateExpression:          aws.String("SET GroupType = :d"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":d": s("dm")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.convertTx(context.Background(), g, "a1", 0); !errors.Is(err, ErrGroupAlreadyOpen) {
+		t.Fatalf("a DM: %v, want a refusal", err)
+	}
+	if m := modeInMeta(t, c, g); m != "rotating" {
+		t.Fatalf("a DM was converted: mode %q", m)
+	}
+}
