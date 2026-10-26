@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"errors"
-	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -85,21 +84,8 @@ func (c *Client) convertTx(ctx context.Context, groupID, adminUserID string, cal
 		metaIndex   = 2
 	)
 	items := []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{
-			TableName:                aws.String(c.table),
-			Key:                      memberKey(groupID, adminUserID),
-			ConditionExpression:      aws.String("#role = :admin AND #gen = :gen"),
-			ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation"},
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
-				":gen":   &types.AttributeValueMemberN{Value: strconv.FormatInt(callerGeneration, 10)},
-			},
-		}},
-		{ConditionCheck: &types.ConditionCheck{
-			TableName:           aws.String(c.table),
-			Key:                 rotationKey(groupID),
-			ConditionExpression: aws.String("attribute_not_exists(PK)"),
-		}},
+		c.callerAtGenerationCheck(groupID, adminUserID, callerGeneration),
+		c.markerCheck(groupID, callerGeneration, false),
 		{Update: &types.Update{
 			TableName: aws.String(c.table),
 			Key: map[string]types.AttributeValue{

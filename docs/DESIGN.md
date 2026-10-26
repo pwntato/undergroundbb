@@ -1993,7 +1993,7 @@ because Open never completes a marker and the removed member's cut-off would sil
 group already Open is 409 `already_open`; a direct message is 400. The mode is an unsigned flag, like the
 mode chosen at creation (THREAT_MODEL row). The cap already reads the mode at write time (`memberCap`),
 so nothing else changes for it, and the `GENKEY#` chain is left alone: its links are still served.
-Members of a converted group owe handoff rows from then on, because `HasNoRotation` now covers them. The
+A member who rotated their keys but is still at the caller's generation does not block it either, so converting drops the re-key their approval would have needed (the warning says so). Members of a converted group owe handoff rows from then on, because `HasNoRotation` now covers them. The
 settings panel offers the conversion to an admin of a Rotating group only, spells out the loss, and asks
 for the group's name to be typed.
 

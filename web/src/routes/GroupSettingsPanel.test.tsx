@@ -188,6 +188,7 @@ describe('converting to Open (#61)', () => {
     const text = CONVERT_OPEN_WARNING.join(' ')
     expect(text).toContain('never be re-keyed')
     expect(text).toContain('cannot be undone')
+    expect(text).toContain('changed their account keys')
     expect(text).toContain('member cap')
     expect(text).not.toContain('—')
   })
