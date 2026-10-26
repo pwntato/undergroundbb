@@ -571,7 +571,7 @@ class Fake {
             const o = this.outsiders.get(id)
             if (!o) return []
             const extra = this.fabricatedSuperseded.get(id)
-            const projection = served(o)
+            const projection = { ...served(o), ...this.supersededOf(id) }
             return [
               [
                 id,
@@ -595,10 +595,10 @@ class Fake {
       getUserDetail: async (id) => {
         this.detailReads.push(id)
         if (this.detailError) throw this.detailError
-        const r = this.members.get(id)
-        if (!r) throw new ApiError(404, 'not found')
+        const person = this.members.get(id)?.person ?? this.outsiders.get(id)
+        if (!person) throw new ApiError(404, 'not found')
         return {
-          ...served(r.person),
+          ...served(person),
           ...this.supersededOf(id),
           keyEpoch: this.epochs.get(id)?.key ?? 0,
           keyChanges: this.details.get(id) ?? [],
@@ -1679,6 +1679,46 @@ describe('runRotation', () => {
     // marker into ITS OWN new signature, so a leaver's key the server merely
     // served (first sight) is not enough.
     describe("trusting the leaver's key before signing their removal", () => {
+      it('takes over for a leaver who has since rotated: the chain carries their admission to the served keys', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        const next: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(202),
+        }
+        f.outsiders.set(leaver.id, next)
+        f.superseded.set(leaver.id, leaver.signing.publicKey)
+        f.details.set(leaver.id, [
+          makeKeyChange({
+            userId: leaver.id,
+            from: leaver.signing,
+            to: next.signing,
+            epoch: 1,
+            day: '2026-10-20',
+            oldWrapping: leaver.wrapping,
+            newWrapping: next.wrapping,
+          }).change,
+        ])
+        await runRotation(f.deps(), GROUP)
+        expect(f.detailReads).toEqual([leaver.id])
+        expect(f.mints).toBe(1)
+      })
+
+      it('takes nothing over for a rotated leaver whose chain is not served', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        const next: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(202),
+        }
+        f.outsiders.set(leaver.id, next)
+        f.superseded.set(leaver.id, leaver.signing.publicKey)
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
       it('takes nothing over for a forged leave: an unpinned member, a key the server made up', async () => {
         const f = new Fake()
         const leaver = leftBehind(f, 'none')
@@ -2252,6 +2292,39 @@ describe('re-admitting a member', () => {
 
     expect(await runRotation(f.deps(), GROUP)).toEqual({ status: 'completed', rewrapped: 1 })
     expect(f.cryptoRecipients.flat()).toEqual([x.id])
+  })
+
+  it('says a member who rotated since their admission is already admitted, and offers no Re-admit', async () => {
+    const f = new Fake()
+    const p = f.add(person())
+    const next: Person = {
+      id: p.id,
+      signing: generateSigningKey(),
+      wrapping: new Uint8Array(32).fill(201),
+    }
+    f.members.get(p.id)!.person = next
+    f.superseded.set(p.id, p.signing.publicKey)
+    f.details.set(p.id, [
+      makeKeyChange({
+        userId: p.id,
+        from: p.signing,
+        to: next.signing,
+        epoch: 1,
+        day: '2026-10-20',
+        oldWrapping: p.wrapping,
+        newWrapping: next.wrapping,
+      }).change,
+    ])
+    // The pin was approved for the new keys (the whole served set).
+    const keys = [next.signing.publicKey, p.signing.publicKey]
+    const payload = pinPayload(ME, p.id, me.publicKey, next.wrapping, keys, 0, '2026-10-21')
+    f.pins.set(p.id, {
+      ...pinFor(next),
+      signingPublicKeys: keys.map(b64),
+      signature: b64(sign(me, SigningContext.Pin, payload)),
+    })
+    const { deps } = readmitDeps(f)
+    expect(await prepareReadmit(deps, GROUP, p.id)).toEqual({ ok: false, kind: 'alreadyAdmitted' })
   })
 
   it('works for an ambassador too', async () => {
