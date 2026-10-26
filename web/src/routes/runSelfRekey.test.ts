@@ -25,6 +25,8 @@ const MINTED = {
   startSignature: 'sig',
 }
 
+const WRAPPED = { ephemeralPub: 'we2', nonce: 'wn2', ciphertext: 'wc2' }
+
 function detail(over: Partial<GroupDetail> = {}): GroupDetail {
   return {
     role: 'admin',
@@ -42,6 +44,8 @@ function setup(group: GroupDetail | Error = detail()) {
     mint: vi.fn(() => Promise.resolve(MINTED)),
     selfRekey: vi.fn((): Promise<void> => Promise.resolve()),
     deleteHandoff: vi.fn((): Promise<void> => Promise.resolve()),
+    wrapCrypto: vi.fn(() => Promise.resolve(WRAPPED)),
+    selfWrap: vi.fn((): Promise<void> => Promise.resolve()),
   }
   const deps = {
     selfUserId: ME,
@@ -51,6 +55,8 @@ function setup(group: GroupDetail | Error = detail()) {
     startSelfRekeyCrypto: calls.mint,
     selfRekey: calls.selfRekey,
     deleteHandoff: calls.deleteHandoff,
+    selfWrapCrypto: calls.wrapCrypto,
+    selfWrap: calls.selfWrap,
   } as unknown as SelfRekeyDeps
   return { deps, ...calls }
 }
@@ -150,11 +156,66 @@ describe('runSelfRekey', () => {
     expect(t.mint).not.toHaveBeenCalled()
   })
 
-  it('leaves an Open group to its self-wrap, keeping the row', async () => {
-    const t = setup(detail({ revocationMode: 'open' }))
-    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'open' })
-    expect(t.deleteHandoff).not.toHaveBeenCalled()
-    expect(t.mint).not.toHaveBeenCalled()
+  describe('an Open group', () => {
+    const open = (over: Partial<GroupDetail> = {}) =>
+      detail({ revocationMode: 'open', role: 'member', ...over })
+
+    it('self-wraps for a plain member from the row, without a re-key or a job', async () => {
+      const t = setup(open())
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+      expect(t.wrapCrypto).toHaveBeenCalledWith({
+        userId: ME,
+        groupId: GROUP,
+        handoffGeneration: 2,
+        handoffWrappedKey: ROW.wrappedGroupKey,
+      })
+      expect(t.selfWrap).toHaveBeenCalledWith(GROUP, { generation: 2, wrappedKey: WRAPPED })
+      expect(t.mint).not.toHaveBeenCalled()
+      expect(t.selfRekey).not.toHaveBeenCalled()
+      expect(rotation.runRotation).not.toHaveBeenCalled()
+      expect(t.deleteHandoff).not.toHaveBeenCalled()
+    })
+
+    it('treats a public group the same way', async () => {
+      const t = setup(open({ revocationMode: 'rotating', visibility: 'public' }))
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+      expect(t.selfRekey).not.toHaveBeenCalled()
+    })
+
+    it('deletes the row only when the server says it is stale', async () => {
+      const t = setup(open())
+      t.selfWrap.mockRejectedValue(new ApiError(409, 'stale', 'handoff_stale'))
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'stale' })
+      expect(t.deleteHandoff).toHaveBeenCalledWith(GROUP)
+    })
+
+    it("deletes a row the caller's own entry has already moved past, sending nothing", async () => {
+      const t = setup(open({ generation: 5 }))
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'stale' })
+      expect(t.deleteHandoff).toHaveBeenCalledWith(GROUP)
+      expect(t.wrapCrypto).not.toHaveBeenCalled()
+      expect(t.selfWrap).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['a refusal it cannot interpret', new ApiError(409, 'x', 'key_epoch_stale')],
+      ['a network failure', new Error('offline')],
+    ])('keeps the row on %s', async (_name, err) => {
+      const t = setup(open())
+      t.selfWrap.mockRejectedValue(err)
+      expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'incomplete' })
+      expect(t.deleteHandoff).not.toHaveBeenCalled()
+    })
+
+    it('keeps the row, and sends nothing, when it will not open', async () => {
+      const t = setup(open())
+      t.wrapCrypto.mockRejectedValue(new Error('crypto: bad tag'))
+      const out = await runSelfRekey(t.deps, ROW)
+      expect(out).toMatchObject({ status: 'incomplete' })
+      expect(JSON.stringify(out)).toContain('bad tag')
+      expect(t.selfWrap).not.toHaveBeenCalled()
+      expect(t.deleteHandoff).not.toHaveBeenCalled()
+    })
   })
 
   it('treats an unreadable group as incomplete, never as stale', async () => {

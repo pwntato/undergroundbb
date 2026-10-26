@@ -16,6 +16,8 @@ export interface ReviewGroup {
   readonly label: string
   /** Open groups have no re-key, so the old keys keep reading them. */
   readonly open: boolean
+  /** An admin's new keys take over by a re-key; a member of an Open group self-wraps. */
+  readonly admin: boolean
 }
 
 export function RotateKeysReview({
@@ -36,6 +38,8 @@ export function RotateKeysReview({
   const [understood, setUnderstood] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const openGroups = groups.filter((g) => g.open)
+  const adminGroups = groups.filter((g) => g.admin)
+  const memberGroups = groups.filter((g) => !g.admin)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -72,8 +76,8 @@ export function RotateKeysReview({
             has to accept it.
           </li>
           <li>
-            In groups where you are not an admin, you cannot read new messages until an admin
-            approves your new key.
+            In groups that rotate their keys where you are not an admin, you cannot read new
+            messages until an admin approves your new key.
           </li>
           <li>You can rotate once a day.</li>
         </ul>
@@ -81,11 +85,11 @@ export function RotateKeysReview({
 
       <div className="flex flex-col gap-2 text-sm">
         <p className="font-medium">Groups you administer</p>
-        {groups.length === 0 ? (
+        {adminGroups.length === 0 ? (
           <p className="text-muted-foreground">You do not administer any groups.</p>
         ) : (
           <ul className="list-disc pl-5">
-            {groups.map((g) => (
+            {adminGroups.map((g) => (
               <li key={g.groupId}>
                 {g.label}
                 {g.open ? ' (Open)' : ''}
@@ -93,13 +97,28 @@ export function RotateKeysReview({
             ))}
           </ul>
         )}
-        {groups.length > 0 && (
+        {adminGroups.length > 0 && (
           <p className="text-muted-foreground">
             In these groups your new keys take over right away, with no one else needed. This works
             from your new keys after the change, even if you close this tab.
           </p>
         )}
       </div>
+
+      {memberGroups.length > 0 && (
+        <div className="flex flex-col gap-2 text-sm">
+          <p className="font-medium">Open groups you belong to</p>
+          <ul className="list-disc pl-5">
+            {memberGroups.map((g) => (
+              <li key={g.groupId}>{g.label}</li>
+            ))}
+          </ul>
+          <p className="text-muted-foreground">
+            An Open group needs no admin to approve your new keys. They take over right away, from
+            your new keys after the change, even if you close this tab.
+          </p>
+        </div>
+      )}
 
       {openGroups.length > 0 && (
         <Alert>

@@ -12,7 +12,7 @@ import { DecryptionFailedError } from './aesgcm.js'
 // worker file could be swapped without the bundle's SRI hash noticing. Inline, the worker bytes
 // are covered by that hash. Needs `worker-src blob:` in the CSP (terraform/cloudfront.tf).
 import CryptoWorker from './worker.ts?worker&inline'
-import { InviteMACError } from './credential-material.js'
+import { InviteMACError, type WireWrapped } from './credential-material.js'
 import type {
   BeginKeyRotationRequest,
   BeginKeyRotationResponse,
@@ -51,6 +51,8 @@ import type {
   StartApprovalRekeyRequest,
   StartApprovalRekeyResponse,
   StartApprovalRekeyResult,
+  SelfWrapFromHandoffRequest,
+  SelfWrapFromHandoffResponse,
   StartSelfRekeyRequest,
   StartSelfRekeyResponse,
   StartGroupRotationResponse,
@@ -741,6 +743,17 @@ export function startSelfRekey(
     (id) => ({ kind: 'startSelfRekey', id, ...req }) satisfies StartSelfRekeyRequest,
     'startSelfRekeyDone',
     (res) => res.result,
+  )
+}
+
+/** #62: wraps a member's handed-off key to their own new key, for an Open group (see selfWrapFromHandoff in credential-material.ts). */
+export function selfWrapFromHandoff(
+  req: Omit<SelfWrapFromHandoffRequest, 'kind' | 'id'>,
+): Promise<WireWrapped> {
+  return workerCall<SelfWrapFromHandoffResponse, WireWrapped>(
+    (id) => ({ kind: 'selfWrapFromHandoff', id, ...req }) satisfies SelfWrapFromHandoffRequest,
+    'selfWrapFromHandoffDone',
+    (res) => res.wrappedKey,
   )
 }
 

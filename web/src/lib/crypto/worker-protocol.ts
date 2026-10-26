@@ -605,6 +605,25 @@ export interface StartSelfRekeyResponse {
 }
 
 /**
+ * #62: the self-wrap of a member of an Open group who rotated their account
+ * keys, from the HANDOFF# row. See credential-material.ts's selfWrapFromHandoff.
+ */
+export interface SelfWrapFromHandoffRequest {
+  readonly kind: 'selfWrapFromHandoff'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly handoffGeneration: number
+  readonly handoffWrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+export interface SelfWrapFromHandoffResponse {
+  readonly kind: 'selfWrapFromHandoffDone'
+  readonly id: string
+  readonly wrappedKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+}
+
+/**
  * #62: mints the next key for an admin's approval of a dormant member's new
  * keys, wrapping it to the member's new wrapping key as well. See
  * credential-material.ts's startApprovalRekey.
@@ -905,6 +924,7 @@ export type WorkerRequest =
   | SignReadmissionRequest
   | StartGroupRotationRequest
   | StartSelfRekeyRequest
+  | SelfWrapFromHandoffRequest
   | StartApprovalRekeyRequest
   | SignLeaveRotationStartRequest
   | RewrapGroupKeyRequest
@@ -938,6 +958,7 @@ export type WorkerResponse =
   | SignReadmissionResponse
   | StartGroupRotationResponse
   | StartSelfRekeyResponse
+  | SelfWrapFromHandoffResponse
   | StartApprovalRekeyResponse
   | SignLeaveRotationStartResponse
   | RewrapGroupKeyResponse

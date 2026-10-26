@@ -94,8 +94,8 @@ export function selfRekeyText(
       return `${label}: the group moved on before this finished, so the saved key was no longer needed. Another admin can approve your new keys there.`
     case 'not-admin':
       return `${label}: you are no longer an admin there, so there is nothing to finish.`
-    case 'open':
-      return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
+    case 'wrapped':
+      return `${label}: your new keys are in place.`
     case 'incomplete':
       return `${label}: stopped (${outcome.reason}). Try again.`
   }

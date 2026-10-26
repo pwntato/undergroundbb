@@ -31,6 +31,7 @@ import {
   signLeaveRotationStart as signLeaveRotationStartPure,
   startGroupRotation as startGroupRotationPure,
   startApprovalRekey as startApprovalRekeyPure,
+  selfWrapFromHandoff as selfWrapFromHandoffPure,
   startSelfRekey as startSelfRekeyPure,
   signGroupCreation as signGroupCreationPure,
   signInviteAcceptance as signInviteAcceptancePure,
@@ -73,6 +74,7 @@ import type {
   SignLeaveRotationStartRequest,
   StartGroupRotationRequest,
   StartApprovalRekeyRequest,
+  SelfWrapFromHandoffRequest,
   StartSelfRekeyRequest,
   SignGroupCreationRequest,
   SignInviteAcceptanceRequest,
@@ -194,6 +196,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'startSelfRekey':
       await startSelfRekey(req)
+      return
+    case 'selfWrapFromHandoff':
+      await selfWrapFromHandoff(req)
       return
     case 'signLeaveRotationStart':
       signLeaveRotationStart(req)
@@ -536,6 +541,18 @@ async function startSelfRekey(req: StartSelfRekeyRequest): Promise<void> {
     wrappedFromWire(req.handoffWrappedKey),
   )
   post({ kind: 'startSelfRekeyDone', id: req.id, result })
+}
+
+/** #62: wraps the key a member's handoff row holds to their own new key, for an Open group. */
+async function selfWrapFromHandoff(req: SelfWrapFromHandoffRequest): Promise<void> {
+  const keys = requireLiveKeysFor(req.userId, 'wrap a group key')
+  const wrappedKey = await selfWrapFromHandoffPure(
+    keys,
+    req.groupId,
+    req.handoffGeneration,
+    wrappedFromWire(req.handoffWrappedKey),
+  )
+  post({ kind: 'selfWrapFromHandoffDone', id: req.id, wrappedKey })
 }
 
 /** #62: mints the key of an admin's approval re-key and wraps it to the approved member. */

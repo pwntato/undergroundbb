@@ -36,6 +36,7 @@ import {
   signLeaveRotationStart,
   startGroupRotation,
   startApprovalRekey,
+  selfWrapFromHandoff,
   startSelfRekey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -1426,6 +1427,53 @@ describe('group key rotation (#58)', () => {
     await expect(
       startApprovalRekey(admin, GROUP_ID, entry, 1, CAROL_ID, member.wrappingKey.publicKey),
     ).rejects.toThrow()
+  })
+
+  it("self-wrap: moves the handed-off key to the caller's entry at the same generation (#62)", async () => {
+    const member = await realUserKeys(CAROL_ID, 'carol-password-selfwrap')
+    const groupKey = new Uint8Array(32).fill(9)
+    const row = await wrap(
+      member.wrappingKey.publicKey,
+      groupKey,
+      handoffWrapAAD(CAROL_ID, GROUP_ID, 0, member.wrappingKey.publicKey),
+    )
+    const entry = await selfWrapFromHandoff(member, GROUP_ID, 0, row)
+    // It opens as the caller's own entry, and it is the very same key.
+    expect(
+      await unwrap(
+        member.wrappingKey.privateKey,
+        wire(entry),
+        memberWrapAAD(GROUP_ID, CAROL_ID, 0),
+      ),
+    ).toEqual(groupKey)
+    // Bound to the entry's AAD: not as a handoff row, nor at another generation or group.
+    for (const aad of [
+      handoffWrapAAD(CAROL_ID, GROUP_ID, 0, member.wrappingKey.publicKey),
+      memberWrapAAD(GROUP_ID, CAROL_ID, 1),
+      memberWrapAAD('other-group', CAROL_ID, 0),
+      memberWrapAAD(GROUP_ID, ADMIN_ID, 0),
+    ]) {
+      await expect(unwrap(member.wrappingKey.privateKey, wire(entry), aad)).rejects.toThrow()
+    }
+  })
+
+  it('self-wrap: a row for another group, generation or key does not open', async () => {
+    const member = await realUserKeys(CAROL_ID, 'carol-password-selfwrap2')
+    const groupKey = new Uint8Array(32).fill(9)
+    const aad = (group: string, gen: number) =>
+      handoffWrapAAD(CAROL_ID, group, gen, member.wrappingKey.publicKey)
+    const swapped = await wrap(member.wrappingKey.publicKey, groupKey, aad('other-group', 0))
+    await expect(selfWrapFromHandoff(member, GROUP_ID, 0, swapped)).rejects.toThrow()
+    const wrongGen = await wrap(member.wrappingKey.publicKey, groupKey, aad(GROUP_ID, 1))
+    await expect(selfWrapFromHandoff(member, GROUP_ID, 0, wrongGen)).rejects.toThrow()
+    const memberEntry = await wrap(
+      member.wrappingKey.publicKey,
+      groupKey,
+      memberWrapAAD(GROUP_ID, CAROL_ID, 0),
+    )
+    await expect(selfWrapFromHandoff(member, GROUP_ID, 0, memberEntry)).rejects.toThrow()
+    const short = await wrap(member.wrappingKey.publicKey, new Uint8Array(16), aad(GROUP_ID, 0))
+    await expect(selfWrapFromHandoff(member, GROUP_ID, 0, short)).rejects.toThrow()
   })
 
   it('self re-key: a row for another group, generation or key does not open', async () => {

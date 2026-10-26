@@ -95,7 +95,7 @@ describe('selfRekeyText', () => {
     { status: 'rekeyed', rotation: { status: 'incomplete', reason: 'offline', rewrapped: 0 } },
     { status: 'stale' },
     { status: 'not-admin' },
-    { status: 'open' },
+    { status: 'wrapped' },
     { status: 'incomplete', reason: 'offline' },
   ]
 
@@ -111,7 +111,6 @@ describe('selfRekeyText', () => {
     expect(selfRekeyText({ status: 'incomplete', reason: 'x' }, 'G', user)).not.toContain(
       'in place',
     )
-    expect(selfRekeyText({ status: 'open' }, 'G', user)).not.toContain('in place')
   })
 })
 
