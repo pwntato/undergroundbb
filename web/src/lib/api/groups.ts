@@ -169,7 +169,7 @@ export async function createGroup(req: CreateGroupRequest): Promise<CreateGroupR
  * public group, who also gets no wrappedGroupKey. `version` is what a
  * subsequent PUT must echo back.
  */
-export interface GroupDetail extends Omit<GroupListEntry, 'role' | 'noRotation'> {
+export interface GroupDetail extends Omit<GroupListEntry, 'role'> {
   readonly role: GroupListEntry['role'] | ''
   readonly revocationMode: 'rotating' | 'open'
   /** The most members this group may have; 0 means no cap (an Open group). Set by the deployment. */

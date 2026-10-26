@@ -15,6 +15,7 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
     visibility: 'public',
     role: 'member',
     generation: 0,
+    noRotation: true,
     nameGeneration: 0,
     namePlaintext: 'Book Club',
     descriptionPlaintext: 'We read books',

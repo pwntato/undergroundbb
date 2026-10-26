@@ -24,6 +24,7 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
     visibility: 'public',
     role: 'admin',
     generation: 0,
+    noRotation: true,
     nameGeneration: 0,
     revocationMode: 'open',
     memberCap: 0,

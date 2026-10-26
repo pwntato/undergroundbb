@@ -86,6 +86,9 @@ export async function runSelfRekey(
     if (err instanceof ApiError && err.status === 404) return { status: 'not-admin' }
     return { status: 'incomplete', reason: describe(err) }
   }
+  // A public group answers a non-member with 200 and an empty role; the server
+  // would refuse the self-wrap with a 404, which is not a retryable stop.
+  if (detail.role === '') return { status: 'not-admin' }
   if (detail.revocationMode === 'open' || detail.visibility !== 'private') {
     return selfWrapOpen(deps, row, detail.generation, staleRow)
   }

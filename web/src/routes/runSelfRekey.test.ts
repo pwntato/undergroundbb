@@ -176,6 +176,13 @@ describe('runSelfRekey', () => {
       expect(t.deleteHandoff).not.toHaveBeenCalled()
     })
 
+    it('is not-admin for a public group that answers a non-member with an empty role', async () => {
+      const t = setup(open({ revocationMode: 'rotating', visibility: 'public', role: '' }))
+      expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'not-admin' })
+      expect(t.selfWrap).not.toHaveBeenCalled()
+      expect(t.deleteHandoff).not.toHaveBeenCalled()
+    })
+
     it('treats a public group the same way', async () => {
       const t = setup(open({ revocationMode: 'rotating', visibility: 'public' }))
       expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })

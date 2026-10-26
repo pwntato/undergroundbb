@@ -746,6 +746,7 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		entry.WrappedGroupKey = &wk
 	}
 
+	entry.NoRotation = g.HasNoRotation()
 	resp := groupDetailResponse{
 		groupListEntry: entry,
 		RevocationMode: g.RevocationMode,

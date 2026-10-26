@@ -311,3 +311,22 @@ func TestListGroupsServesNoRotation(t *testing.T) {
 		}
 	}
 }
+
+// GET /api/groups/{id} embeds the same entry, so it must say the same thing.
+func TestGetGroupServesNoRotation(t *testing.T) {
+	h := noCooldown(t)
+	owner, cookie := loggedInUser(t, h)
+	for gid, want := range map[string]bool{
+		createOpenGroup(t, h, owner, cookie):    true,
+		createPublicGroup(t, h, owner, cookie):  true,
+		createPrivateGroup(t, h, owner, cookie): false,
+	} {
+		var got groupDetailResponse
+		if rec := doJSON(t, h, http.MethodGet, "/api/groups/"+gid, cookie, nil); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+			t.Fatalf("get %s: %d %s", gid, rec.Code, rec.Body.String())
+		}
+		if got.NoRotation != want {
+			t.Errorf("group %s: noRotation = %v, want %v", gid, got.NoRotation, want)
+		}
+	}
+}
