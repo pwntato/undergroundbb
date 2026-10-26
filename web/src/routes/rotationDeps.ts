@@ -64,6 +64,7 @@ export function makeRotationDeps(userId: string): RotationDeps {
     getKeychain,
     listAllMembers: (groupId) => listAllMembers({ listMembers }, groupId),
     getUsers,
+    getUserDetail,
     listGrants,
     listDesignations,
     listAdmissions,

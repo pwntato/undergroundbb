@@ -56,6 +56,8 @@ export interface OwnKeyLink {
   readonly day: string
   readonly oldSigning: Uint8Array
   readonly newSigning: Uint8Array
+  readonly oldWrapping: Uint8Array
+  readonly newWrapping: Uint8Array
   /** The listed rows whose digest matched the signed one; null when the list was missing or did not match. */
   readonly roster: readonly Uint8Array[] | null
 }
@@ -143,6 +145,7 @@ export function buildOwnKeyHistory(input: {
     if (!verify(newSigning, SigningContext.KeyRotation, payload, newSig)) return null
     if (previous !== undefined) {
       if (!sameBytes(previous.newSigning, oldSigning)) return null
+      if (!sameBytes(previous.newWrapping, oldWrapping)) return null
       if (c.day < previous.day) return null
     }
     const listed = rosters.find((r) => r.keyEpoch === c.keyEpoch)
@@ -151,6 +154,8 @@ export function buildOwnKeyHistory(input: {
       day: c.day,
       oldSigning,
       newSigning,
+      oldWrapping,
+      newWrapping,
       roster: decodeRoster(listed?.roster, digest),
     }
     links.push(link)
@@ -158,6 +163,36 @@ export function buildOwnKeyHistory(input: {
   }
   if (previous !== undefined && !sameBytes(previous.newSigning, ownSigningKey)) return null
   return { current: ownSigningKey, links }
+}
+
+/**
+ * Whether a verified chain carries the key pair an admission names to the
+ * pair the server serves now (#62, DESIGN.md "Roles and the chain of trust"
+ * (5)). The admitted pair must be some link's OLD pair, the record must not be
+ * dated after that rotation (nor before the one that introduced the pair; both
+ * keys are candidates on a rotation day), and the last link must end at the
+ * served wrapping key (the signing end is the history's `current`, which the
+ * builder already tied to the served signing key). A rotated member's old
+ * admission then still counts; the chain only ever says the served keys were
+ * introduced by a holder of the admitted ones, never that anyone approved them.
+ */
+export function chainCarriesKeys(
+  history: OwnKeyHistory,
+  admittedSigning: Uint8Array,
+  admittedWrapping: Uint8Array,
+  admissionDay: string,
+  servedWrapping: Uint8Array,
+): boolean {
+  if (!isDay(admissionDay)) return false
+  const last = history.links[history.links.length - 1]
+  if (last === undefined || !sameBytes(last.newWrapping, servedWrapping)) return false
+  return history.links.some((link, i) => {
+    if (!sameBytes(link.oldSigning, admittedSigning)) return false
+    if (!sameBytes(link.oldWrapping, admittedWrapping)) return false
+    if (admissionDay > link.day) return false
+    const introduced = i > 0 ? history.links[i - 1]!.day : undefined
+    return introduced === undefined || admissionDay >= introduced
+  })
 }
 
 /** Every signing key the history says the caller held: the current one, then each superseded one. */

@@ -16,7 +16,7 @@ import type {
   RewrapEntry,
   TakeOverRotationRequest,
 } from '@/lib/api/groups'
-import type { UserProjection } from '@/lib/api/users'
+import type { UserDetail, UserProjection } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateSigningKey, sign, SigningContext, type SigningKey } from '@/lib/crypto/ed25519'
 import type { AdmissionRecord } from '@/lib/crypto/admission'
@@ -325,6 +325,12 @@ class Fake {
   listPinsError: Error | undefined
   /** Per-member dormancy inputs (#62): the keyEpoch served and the entry's wrapEpoch. */
   epochs = new Map<string, { key: number; wrap?: number }>()
+  /** Per-member KEYCHANGE# chains served by the single-user read (#62); absent reads as empty. */
+  details = new Map<string, UserDetail['keyChanges']>()
+  detailError: Error | undefined
+  /** Signing keys a member rotated away from, served as superseded (#62). */
+  superseded = new Map<string, Uint8Array>()
+  detailReads: string[] = []
 
   // The group's signed history: ME created it, so ME's root grant anchors the
   // chain, and every member `add`ed is admitted by ME unless a test says not.
@@ -511,6 +517,16 @@ class Fake {
     }
   }
 
+  supersededOf(id: string): Pick<UserProjection, 'supersededSigningKeys'> {
+    const old = this.superseded.get(id)
+    return {
+      supersededSigningKeys:
+        old === undefined
+          ? []
+          : [{ publicKey: b64(old), from: '2026-01-01T00:00:00Z', until: '2026-10-20T00:00:00Z' }],
+    }
+  }
+
   gen(p: Person): number {
     return this.members.get(p.id)!.generation
   }
@@ -550,7 +566,7 @@ class Fake {
             if (id === ME && this.servedCaller) return [[id, this.servedCaller] as const]
             if (r) {
               const keyEpoch = this.epochs.get(id)?.key ?? 0
-              return [[id, { ...served(r.person), keyEpoch }] as const]
+              return [[id, { ...served(r.person), ...this.supersededOf(id), keyEpoch }] as const]
             }
             const o = this.outsiders.get(id)
             if (!o) return []
@@ -575,6 +591,18 @@ class Fake {
             ]
           }),
         )
+      },
+      getUserDetail: async (id) => {
+        this.detailReads.push(id)
+        if (this.detailError) throw this.detailError
+        const r = this.members.get(id)
+        if (!r) throw new ApiError(404, 'not found')
+        return {
+          ...served(r.person),
+          ...this.supersededOf(id),
+          keyEpoch: this.epochs.get(id)?.key ?? 0,
+          keyChanges: this.details.get(id) ?? [],
+        }
       },
       getKeychain: async (_g, from, to) => {
         this.keychainReads.push([from, to])
@@ -1334,6 +1362,103 @@ describe('runRotation', () => {
       for (let i = 0; i < 60; i++) f.add(person())
       await runRotation(f.deps(), GROUP)
       expect(f.admissionReads).toBe(1)
+    })
+  })
+
+  describe('a member who rotated since their admission (#62)', () => {
+    /** `p` after rotating: new keys at the same id, the chain served, an epoch-1 projection. */
+    function rotated(f: Fake, p: Person, o: { day?: string; chainTo?: SigningKey } = {}): Person {
+      const next: Person = {
+        id: p.id,
+        signing: generateSigningKey(),
+        wrapping: new Uint8Array(32).fill(201),
+      }
+      const kc = makeKeyChange({
+        userId: p.id,
+        from: p.signing,
+        to: o.chainTo ?? next.signing,
+        epoch: 1,
+        day: o.day ?? '2026-10-20',
+        oldWrapping: p.wrapping,
+        newWrapping: next.wrapping,
+      })
+      f.members.get(p.id)!.person = next
+      f.details.set(p.id, [kc.change])
+      f.epochs.set(p.id, { key: 1 })
+      f.superseded.set(p.id, p.signing.publicKey)
+      return next
+    }
+
+    it('counts the old admission through the verified chain, then stops at the pin until approved', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      rotated(f, p)
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', blocked: [p.id] })
+      expect(out).not.toHaveProperty('unadmitted')
+      expect(out).not.toHaveProperty('readmittable')
+      expect(f.cryptoRecipients).toEqual([])
+      expect(f.detailReads).toEqual([p.id])
+    })
+
+    it('wraps to the new keys once the pin is approved', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      const next = rotated(f, p)
+      // An approved pin covers the whole served set: the new key and the one it replaced.
+      const keys = [next.signing.publicKey, p.signing.publicKey]
+      const payload = pinPayload(ME, p.id, me.publicKey, next.wrapping, keys, 1, '2026-10-21')
+      f.pins.set(p.id, {
+        ...pinFor(next, undefined, 1),
+        signingPublicKeys: keys.map(b64),
+        signature: b64(sign(me, SigningContext.Pin, payload)),
+      })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toEqual({ status: 'completed', rewrapped: 1 })
+      expect(f.cryptoRecipients.flat()).toEqual([p.id])
+    })
+
+    it('reads a member whose keys did not change without fetching a chain', async () => {
+      const f = new Fake()
+      f.add(person())
+      await runRotation(f.deps(), GROUP)
+      expect(f.detailReads).toEqual([])
+    })
+
+    it('does not count it when the served chain is empty (key substitution)', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      rotated(f, p)
+      f.details.set(p.id, [])
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+      expect(f.cryptoRecipients).toEqual([])
+    })
+
+    it('does not count it when the chain ends at a key the server does not serve', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      rotated(f, p, { chainTo: generateSigningKey() })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+    })
+
+    it('does not count it when the admission is dated after the rotation', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      rotated(f, p, { day: '2026-03-05' })
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+    })
+
+    it('fails closed when the chain cannot be read', async () => {
+      const f = new Fake()
+      const p = f.add(person())
+      rotated(f, p)
+      f.detailError = new Error('boom')
+      const out = await runRotation(f.deps(), GROUP)
+      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+      expect(f.cryptoRecipients).toEqual([])
     })
   })
 

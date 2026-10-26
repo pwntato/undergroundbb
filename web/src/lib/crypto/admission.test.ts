@@ -14,6 +14,8 @@ import {
   type GrantRecord,
   type UserKeyHistory,
 } from './grant-chain.js'
+import { buildOwnKeyHistory, type OwnKeyHistory } from './own-history.js'
+import { makeKeyChange, wrapForEpoch } from './own-history.testkit.js'
 import { admissionPayload, roleGrantPayload, trustAnchorPayload } from './group.js'
 
 const GROUP = '11111111-1111-4111-8111-111111111111'
@@ -161,6 +163,7 @@ function check(
     served?: { signing?: Uint8Array[]; wrapping?: Uint8Array }
     inviterHistory?: UserKeyHistory | null
     chain?: GrantChainResult
+    inviteeHistory?: OwnKeyHistory | null
   } = {},
 ) {
   return verifyAdmission({
@@ -171,6 +174,7 @@ function check(
     chain: o.chain ?? w.chain(),
     inviterHistory:
       o.inviterHistory === null ? undefined : (o.inviterHistory ?? history(w.aliceKey)),
+    inviteeHistory: o.inviteeHistory ?? undefined,
   })
 }
 
@@ -396,5 +400,122 @@ describe('verifyAdmission: the inviter must have held the role, and the signatur
       check(w, admission(w, { inviterKey: later, day: '2026-03-05' }), { inviterHistory: rotated }),
       /signature/,
     )
+  })
+})
+
+describe('verifyAdmission: an invitee who rotated since the admission (#62)', () => {
+  const m0 = generateSigningKey()
+  const m1 = generateSigningKey()
+  const m2 = generateSigningKey()
+  const stale = { ed: m0.publicKey, x: wrapForEpoch(0) }
+
+  function chainOf(
+    links: readonly { from: SigningKey; to: SigningKey; day: string }[],
+    end: SigningKey,
+  ): OwnKeyHistory {
+    const h = buildOwnKeyHistory({
+      userId: MEMBER,
+      ownSigningKey: end.publicKey,
+      changes: links.map(
+        (l, i) =>
+          makeKeyChange({ userId: MEMBER, from: l.from, to: l.to, epoch: i + 1, day: l.day })
+            .change,
+      ),
+      rosters: [],
+    })
+    expect(h).not.toBeNull()
+    return h!
+  }
+
+  function stateAfter(
+    w: World,
+    h: OwnKeyHistory | null,
+    o: {
+      day?: string
+      ed?: Uint8Array
+      x?: Uint8Array
+      wrapping?: number
+      signing?: Uint8Array[]
+    } = {},
+  ) {
+    return check(
+      w,
+      admission(w, {
+        day: o.day ?? '2026-03-10',
+        signedKeys: { ed: o.ed ?? stale.ed, x: o.x ?? stale.x },
+      }),
+      {
+        served: {
+          signing: o.signing ?? [m1.publicKey, m0.publicKey],
+          wrapping: wrapForEpoch(o.wrapping ?? 1),
+        },
+        inviteeHistory: h,
+      },
+    )
+  }
+
+  const one = () => chainOf([{ from: m0, to: m1, day: '2026-03-20' }], m1)
+
+  it('admits an old record that a verified chain carries to the served keys', () => {
+    expect(stateAfter(world(), one())).toEqual({ ok: true })
+  })
+
+  it('admits on the day of the rotation itself (both keys are candidates)', () => {
+    expect(stateAfter(world(), one(), { day: '2026-03-20' })).toEqual({ ok: true })
+  })
+
+  it('admits across two rotations', () => {
+    const h = chainOf(
+      [
+        { from: m0, to: m1, day: '2026-03-20' },
+        { from: m1, to: m2, day: '2026-04-01' },
+      ],
+      m2,
+    )
+    expect(
+      stateAfter(world(), h, { wrapping: 2, signing: [m2.publicKey, m1.publicKey, m0.publicKey] }),
+    ).toEqual({ ok: true })
+  })
+
+  it('fails closed with no chain', () => {
+    rejected(stateAfter(world(), null), /wrapping key/)
+  })
+
+  it('rejects a record dated after the rotation that replaced its keys', () => {
+    rejected(stateAfter(world(), one(), { day: '2026-03-21' }), /wrapping key/)
+  })
+
+  it('rejects a record dated before the rotation that introduced its keys', () => {
+    const h = chainOf(
+      [
+        { from: m0, to: m1, day: '2026-03-20' },
+        { from: m1, to: m2, day: '2026-04-01' },
+      ],
+      m2,
+    )
+    // Names the epoch-1 pair (m1) but is dated before m1 existed.
+    rejected(
+      stateAfter(world(), h, {
+        wrapping: 2,
+        day: '2026-03-10',
+        signing: [m2.publicKey, m1.publicKey],
+        ed: m1.publicKey,
+        x: wrapForEpoch(1),
+      }),
+      /wrapping key/,
+    )
+  })
+
+  it('rejects when the chain does not end at the served wrapping key', () => {
+    rejected(stateAfter(world(), one(), { wrapping: 5 }), /wrapping key/)
+  })
+
+  it('rejects a record whose wrapping key was never paired with its signing key in the chain', () => {
+    rejected(stateAfter(world(), one(), { x: new Uint8Array(32).fill(99) }), /wrapping key/)
+  })
+
+  it('does not consult the chain when the wrapping key is the served one', () => {
+    const w = world()
+    expect(check(w, admission(w), { inviteeHistory: one() })).toEqual({ ok: true })
   })
 })

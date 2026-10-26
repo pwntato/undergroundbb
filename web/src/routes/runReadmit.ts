@@ -163,7 +163,7 @@ async function inspect(
   // Before anything else about the record: a removed member is never offered,
   // whatever their old admission says.
   if (loaded.context.removedAt.has(subjectUserId)) return { ok: false, kind: 'removed' }
-  if (isAdmitted(loaded.context, groupId, subjectUserId, served)) {
+  if (await isAdmitted(deps, loaded.context, groupId, subjectUserId, served)) {
     return { ok: false, kind: 'alreadyAdmitted' }
   }
 
