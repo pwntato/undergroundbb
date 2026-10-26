@@ -121,6 +121,12 @@ variable "purge_dry_run" {
   description = "Whether the scheduled test-account purge (cmd/purge) only reports what it would delete. Deletion is on by default (set to true for a report-only run): only accounts flagged as test accounts, with the reserved zz-delete-test- prefix, are eligible, and the prod table holds no real data yet."
 }
 
+variable "backfill_dry_run" {
+  type        = bool
+  default     = true
+  description = "Whether the one-off CreatedAt backfill (cmd/backfill, #253, #258) only reports what it would change. Set to false, in its own PR, for the run that writes."
+}
+
 variable "alarm_email" {
   type        = string
   default     = ""

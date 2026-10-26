@@ -60,6 +60,10 @@ jobs:
           GOOS=linux GOARCH=arm64 go build -o purge-bootstrap ./cmd/purge
           mkdir purge-pkg && mv purge-bootstrap purge-pkg/bootstrap
           (cd purge-pkg && zip ../purge.zip bootstrap)
+          # The one-off CreatedAt backfill (#253, #258), a third Lambda, same reason.
+          GOOS=linux GOARCH=arm64 go build -o backfill-bootstrap ./cmd/backfill
+          mkdir backfill-pkg && mv backfill-bootstrap backfill-pkg/bootstrap
+          (cd backfill-pkg && zip ../backfill.zip bootstrap)
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
