@@ -4,8 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
@@ -233,5 +237,49 @@ func TestSelfWrapTransactionRefusesWhatHasMovedUnderIt(t *testing.T) {
 	}
 	if err := h.db.SelfWrap(t.Context(), good); err != nil {
 		t.Fatalf("the untouched input: %v", err)
+	}
+}
+
+// The row's generation and the entry's are separate conditions: each is the
+// only thing standing when the other agrees with the request.
+func TestSelfWrapTransactionChecksTheRowAndTheEntryGenerationSeparately(t *testing.T) {
+	h := noCooldown(t)
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenGroup(t, h, owner, ownerCookie)
+	next, _ := rotateUser(t, h, owner, ownerCookie, gid)
+	in := db.SelfWrapInput{
+		GroupID: gid, CallerUserID: owner.userID, Generation: 0,
+		Wrapped:           models.WrappedKey{EphemeralPub: randBytes(32), Nonce: randBytes(12), Ciphertext: randBytes(48)},
+		CallerKeyEpoch:    1,
+		CallerWrappingKey: next.wrapPub,
+	}
+	setEntryGen := func(n int) {
+		t.Helper()
+		if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+			TableName: aws.String(testTableName()),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "GROUP#" + gid},
+				"SK": &types.AttributeValueMemberS{Value: "MEMBER#" + owner.userID},
+			},
+			UpdateExpression:          aws.String("SET Generation = :v"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberN{Value: strconv.Itoa(n)}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The row says generation 1 while the entry and the request say 0.
+	setProfileAttr(t, owner.userID, "HANDOFF#"+gid, "Generation", 1)
+	if err := h.db.SelfWrap(t.Context(), in); !errors.Is(err, db.ErrHandoffStale) {
+		t.Errorf("a row at another generation: %v, want ErrHandoffStale", err)
+	}
+	// The row agrees with the request, the entry does not.
+	setProfileAttr(t, owner.userID, "HANDOFF#"+gid, "Generation", 0)
+	setEntryGen(1)
+	if err := h.db.SelfWrap(t.Context(), in); !errors.Is(err, db.ErrHandoffStale) {
+		t.Errorf("an entry at another generation: %v, want ErrHandoffStale", err)
+	}
+	if !handoffRowExists(t, owner.userID, gid) || wrapEpochOf(t, gid, owner.userID) == "1" {
+		t.Fatal("a refused self-wrap wrote something")
 	}
 }
