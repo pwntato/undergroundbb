@@ -6,6 +6,7 @@ import { ApiError } from '@/lib/api/auth'
 import { nameStamp } from '@/lib/groups/groupNameCache'
 import type { GroupDetail } from '@/lib/api/groups'
 import {
+  convertGroupToOpen,
   loadGroupSettings,
   saveGroupSettings,
   type LoadSettingsDeps,
@@ -345,5 +346,40 @@ describe('a rename by another admin (same nameGeneration, new ciphertext)', () =
     await loadGroupSettings(deps, 'priv-1')
     await loadGroupSettings(deps, 'priv-1')
     expect(decrypt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('convertGroupToOpen (#61)', () => {
+  const fail = (status: number, code?: string) =>
+    convertGroupToOpen(
+      { convertToOpen: () => Promise.reject(new ApiError(status, 'no', code)) },
+      'g1',
+    )
+
+  it('is ok on success and sends the group id', async () => {
+    const convertToOpen = vi.fn().mockResolvedValue(undefined)
+    expect(await convertGroupToOpen({ convertToOpen }, 'g1')).toEqual({ ok: true })
+    expect(convertToOpen).toHaveBeenCalledWith('g1')
+  })
+
+  it.each([
+    [401, undefined, 'authRequired'],
+    [403, undefined, 'forbidden'],
+    [404, undefined, 'notFound'],
+    [409, 'rotation_in_progress', 'rotationInProgress'],
+    [409, 'members_behind', 'membersBehind'],
+    [409, 'already_open', 'alreadyOpen'],
+    [409, 'conflict_retry', 'retry'],
+    [409, undefined, 'retry'],
+  ])('maps %s %s to %s', async (status, code, kind) => {
+    expect(await fail(status, code)).toEqual({ ok: false, kind })
+  })
+
+  it('passes a 4xx message through and calls a 5xx or network failure ambiguous', async () => {
+    expect(await fail(400, 'x')).toEqual({ ok: false, kind: 'rejected', message: 'no' })
+    expect(await fail(500)).toEqual({ ok: false, kind: 'ambiguous' })
+    expect(
+      await convertGroupToOpen({ convertToOpen: () => Promise.reject(new TypeError('net')) }, 'g1'),
+    ).toEqual({ ok: false, kind: 'ambiguous' })
   })
 })

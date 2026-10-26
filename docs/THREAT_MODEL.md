@@ -390,6 +390,7 @@ switches off the only mechanism here that limits past exposure at any group size
 | Malicious custom theme attempting exfiltration | Blocked — themes are validated JSON tokens, never CSS. See below. |
 | Malicious operator keeps a removed member on the re-wrap list | **Blocked** for a rotation a signed removal started: the marker carries the remover's signature naming the removed member, and a resuming admin excludes them whatever the member list says (an unverifiable marker stops the run). **Still possible** by withholding the marker or the record, and the operator can still list an account it made up (nothing signs admission yet, #178). See "The recipient set is taken from the server" in [DESIGN.md](DESIGN.md). |
 | Removed member reading future posts | **Eventually blocked** in `Rotating` groups — new posts use the old generation until rotation finishes, and a rotation abandoned by its client stays open until an admin notices the stale marker and resumes it. Possible indefinitely in `Open` groups. |
+| Malicious operator flips a group's revocation mode (Rotating to Open, or reports Open for a Rotating group) | **Not prevented.** The mode, chosen at creation or converted by an admin, is a plain flag the server holds and clients believe, unsigned. A server that flips it makes later removals stop re-keying (and lifts the member cap), so a removed member keeps reading new content. Signing the mode (or the conversion) would close it, but only if the creation-time mode were signed too, which it is not. |
 
 ## Why custom themes are JSON, not CSS
 

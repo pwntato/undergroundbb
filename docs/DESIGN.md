@@ -1983,6 +1983,20 @@ write a chain walk that breaks on converted groups.
 This is an explicit choice rather than an automatic threshold. A security property should never
 change as a side effect of someone adding one more member.
 
+**As built (#61).** `POST /api/groups/{gid}/convert-open`, no body, admin only (403 otherwise, 404 for
+a non-member). One transaction: the caller is still an admin at the generation the server read, no
+`ROTATION` marker exists, and `META` is still `Rotating`; it sets `RevocationMode` to `open` and bumps
+`Version`, so a settings edit loaded before the conversion cannot land after it. Only a settled group
+converts. A removal still running is 409 `rotation_in_progress` and a member whose entry is behind the
+caller's generation is 409 `members_behind` (a dormant member does not count, as in `CompleteRotation`),
+because Open never completes a marker and the removed member's cut-off would silently never happen. A
+group already Open is 409 `already_open`; a direct message is 400. The mode is an unsigned flag, like the
+mode chosen at creation (THREAT_MODEL row). The cap already reads the mode at write time (`memberCap`),
+so nothing else changes for it, and the `GENKEY#` chain is left alone: its links are still served.
+A member who rotated their keys but is still at the caller's generation does not block it either, so converting drops the re-key their approval would have needed (the warning says so). Members of a converted group owe handoff rows from then on, because `HasNoRotation` now covers them. The
+settings panel offers the conversion to an admin of a Rotating group only, spells out the loss, and asks
+for the group's name to be typed.
+
 ### Key generations
 
 Each rotation creates a generation, and a post records the generation it was encrypted under.

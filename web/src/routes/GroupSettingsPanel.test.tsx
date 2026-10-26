@@ -6,7 +6,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { GroupDetail } from '@/lib/api/groups'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
-import { revocationText, validateSettingsForm } from './groupSettingsForm'
+import {
+  CONVERT_OPEN_WARNING,
+  convertConfirmed,
+  revocationText,
+  validateSettingsForm,
+} from './groupSettingsForm'
 import type { SettingsView } from './runGroupSettings'
 
 function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
@@ -33,6 +38,9 @@ function render(view: SettingsView): string {
       view,
       onSave: () => undefined,
       onReauthenticate: () => undefined,
+      onConvert: () => undefined,
+      converting: false,
+      convertError: null,
       saving: false,
       message: null,
       error: null,
@@ -145,5 +153,53 @@ describe('validateSettingsForm', () => {
     [{ description: 'é'.repeat(1001) }],
   ])('rejects %j', (bad) => {
     expect(validateSettingsForm({ ...ok, ...bad })).not.toBeNull()
+  })
+})
+
+describe('converting to Open (#61)', () => {
+  const adminView = (d: Partial<GroupDetail> = {}): SettingsView =>
+    publicView(detail({ role: 'admin', revocationMode: 'rotating', ...d }))
+
+  it('offers the conversion to an admin of a Rotating group, and only the first step', () => {
+    const html = render(adminView())
+    expect(html).toContain('Convert to Open')
+    // The warning and the typed confirmation appear only after the first click.
+    expect(html).not.toContain('Type the group name')
+  })
+
+  it.each([
+    ['an Open group', adminView({ revocationMode: 'open' })],
+    ['a plain member', adminView({ role: 'member' })],
+    ['an ambassador', adminView({ role: 'ambassador' })],
+    [
+      'an admin whose tab cannot read the name',
+      {
+        detail: detail({ visibility: 'private', role: 'admin', revocationMode: 'rotating' }),
+        name: null,
+        description: null,
+        nameStatus: 'coldKeys' as const,
+      },
+    ],
+  ])('does not offer it to %s', (_who, view) => {
+    expect(render(view)).not.toContain('Convert to Open')
+  })
+
+  it('spells out what is lost and that it is permanent, without em dashes', () => {
+    const text = CONVERT_OPEN_WARNING.join(' ')
+    expect(text).toContain('never be re-keyed')
+    expect(text).toContain('cannot be undone')
+    expect(text).toContain('changed their account keys')
+    expect(text).toContain('member cap')
+    expect(text).not.toContain('—')
+  })
+
+  it('needs the exact group name typed, ignoring surrounding spaces and nothing else', () => {
+    expect(convertConfirmed('Book Club', 'Book Club')).toBe(true)
+    expect(convertConfirmed('  Book Club ', 'Book Club')).toBe(true)
+    expect(convertConfirmed('book club', 'Book Club')).toBe(false)
+    expect(convertConfirmed('Book', 'Book Club')).toBe(false)
+    expect(convertConfirmed('', 'Book Club')).toBe(false)
+    expect(convertConfirmed('', '')).toBe(false)
+    expect(convertConfirmed('anything', null)).toBe(false)
   })
 })

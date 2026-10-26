@@ -39,3 +39,16 @@ export function validateSettingsForm(form: SettingsForm): string | null {
   }
   return null
 }
+
+/** What converting a group to Open gives up, shown before the confirmation field. */
+export const CONVERT_OPEN_WARNING = [
+  'Removing a member will only revoke their access. The group will never be re-keyed again, so a removed member keeps the group key and can still decrypt anything they get hold of.',
+  'This cannot be undone. Anyone removed while the group is Open keeps its key, so there is no way back to Rotating.',
+  'A member who changed their account keys will be brought back in without a re-key, so the keys they replaced keep working.',
+  'The member cap no longer applies. Older posts stay readable through the group’s existing key history.',
+]
+
+/** The typed confirmation matches the group name exactly (surrounding spaces ignored). */
+export function convertConfirmed(typed: string, groupName: string | null): boolean {
+  return groupName !== null && groupName.trim() !== '' && typed.trim() === groupName.trim()
+}
