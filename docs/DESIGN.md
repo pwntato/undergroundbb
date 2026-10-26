@@ -1767,7 +1767,9 @@ epochs 1..n, each link's old signing and wrapping keys the previous link's new o
 served signing key). The admitted signing and wrapping keys must be one link's old pair, the last
 link must end at the served wrapping key, and the record's day must fall from the day the pair was
 introduced to the day of the rotation that replaced it (both keys are candidates on that day). No
-chain, an unreadable one or any failure reads as unadmitted. The pin check still runs afterwards,
+chain, or one that does not verify, reads as unadmitted; a failed read stops the run with its reason
+(re-admit reports it unchecked) rather than offering Re-admit. A leaver's signed start is accepted
+under the admitted key or any key the chain carried it to. The pin check still runs afterwards,
 so a rotated member stays blocked until their key change is approved; what changes is that they no
 longer show as unadmitted with a Re-admit button. (6) **Liveness.** An inviter whose keys can no longer be
 read, or who has another grant dated from the ref grant's day through an admission's day (their role changed
