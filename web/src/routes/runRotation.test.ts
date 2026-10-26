@@ -1735,6 +1735,50 @@ describe('runRotation', () => {
         expect(f.mints).toBe(1)
       })
 
+      it('takes over for a leaver who rotated twice and signs with the newest key', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        const mid: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(202),
+        }
+        const next: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(203),
+        }
+        f.outsiders.set(leaver.id, next)
+        f.superseded.set(leaver.id, leaver.signing.publicKey)
+        f.details.set(leaver.id, [
+          makeKeyChange({
+            userId: leaver.id,
+            from: leaver.signing,
+            to: mid.signing,
+            epoch: 1,
+            day: '2026-10-20',
+            oldWrapping: leaver.wrapping,
+            newWrapping: mid.wrapping,
+          }).change,
+          makeKeyChange({
+            userId: leaver.id,
+            from: mid.signing,
+            to: next.signing,
+            epoch: 2,
+            day: '2026-10-22',
+            oldWrapping: mid.wrapping,
+            newWrapping: next.wrapping,
+          }).change,
+        ])
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: next.signing,
+          removed: leaver.id,
+        })
+        await runRotation(f.deps(), GROUP)
+        expect(f.mints).toBe(1)
+      })
+
       it('takes nothing over for a rotated leaver whose start is signed by an unrelated key', async () => {
         const f = new Fake()
         const leaver = leftBehind(f, 'admission')
