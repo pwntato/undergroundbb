@@ -123,7 +123,7 @@ func TestApproveRekeyRefusesAnOpenGroup(t *testing.T) {
 	gid := createOpenGroup(t, h, owner, ownerCookie)
 	carol := registerTestUser(t, h)
 	addMember(t, gid, carol, "member")
-	rotateUser(t, h, carol, loginCookie(t, h, carol))
+	rotateUser(t, h, carol, loginCookie(t, h, carol), gid)
 	wantApproveRekey(t, doApproveRekey(t, h, ownerCookie, gid, carol.userID, approveRekeyBody(t, owner, gid, carol.userID, 1, crypto.RekeyReasonApproval, 1)), http.StatusBadRequest, "rotation_not_applicable")
 	if getRow(t, "GROUP#"+gid, "ROTATION") != nil {
 		t.Fatal("a refused approval wrote a marker")

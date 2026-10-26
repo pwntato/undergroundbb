@@ -16,6 +16,7 @@ import {
   approveRekey,
   approveRewrap,
   selfRekey,
+  selfWrap,
   takeOverRotation,
   rewrapMembers,
 } from '@/lib/api/groups'
@@ -28,6 +29,7 @@ import {
   signReadmission,
   startApprovalRekey,
   startGroupRotation,
+  selfWrapFromHandoff,
   startSelfRekey,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
@@ -86,6 +88,8 @@ export function makeSelfRekeyDeps(userId: string): SelfRekeyDeps {
     ...makeRotationDeps(userId),
     startSelfRekeyCrypto: startSelfRekey,
     selfRekey,
+    selfWrapCrypto: selfWrapFromHandoff,
+    selfWrap,
     deleteHandoff,
   }
 }

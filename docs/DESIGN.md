@@ -515,10 +515,10 @@ a sole-admin group nobody can, which is the same end state as a sole admin who h
 keys. So right after `rotate-keys` the
 client runs the re-key itself in each `Rotating` group where the user is an admin (the ordinary
 rotation job, with every recipient's pin and admission checks, plus their own new key) and
-self-wraps the current key in each `Open` group where they are an admin. This is what keeps a
+self-wraps the current key in each `Open` group they belong to (see "The `Open` self-wrap" below). This is what keeps a
 group whose only admin rotates, and a solo group, from becoming unreadable to anyone, and it cuts
 the old keys off at once in those groups. Other members still see the admin's key change through
-their pins, so it is not silent. Members and ambassadors have no such path; they wait for an admin.
+their pins, so it is not silent. Members and ambassadors of a `Rotating` group have no such path; they wait for an admin. In an `Open` group nobody needs to wait: every member self-wraps, whatever their role.
 
 **The self re-key must survive a closed tab, so it does not depend on the old private key.** After
 `rotate-keys` commits, `PROFILE` and `RECOVERY` hold only the new keys, and a re-key start needs the
@@ -529,10 +529,11 @@ caller's own partition, holding that group's current key and generation wrapped 
 **new** X25519 public key, plus that public key. These are written with ordinary writes
 (`PUT /api/account/rotation-handoff/{groupId}`, authenticated by the old session), not in the
 `rotate-keys` transaction, so the number of admin groups is not capped by the 100-item transaction
-limit. Every group counts, public ones included (a public group is always `Open`, and its admin
+limit. Every group counts, public ones included (a public group is always `Open`, and every member
 needs the row for the `Open` self-wrap), so `GET /api/groups` and `GET /api/groups/{id}` serve the
 caller's own wrapped group key for a public group as well as a private one. `rotate-keys` refuses
-with 409 `handoff_required` unless every group where the caller is an admin has a row naming the new
+with 409 `handoff_required` unless every group where the caller is an admin, and every `Open` or public group
+they belong to in any role, has a row naming the new
 key at that group's current generation (one past its newest `GENKEY#`
 link, which is written when the rotation to the next generation starts, or 0 for a group that has
 never rotated), and the flow re-sends any it names. The 409 carries the group ids it is about. "Newest link" includes one a rotation in progress has already written, so the self re-key
@@ -557,7 +558,7 @@ to rotate), and account deletion sweeps the rest with the user's other own rows.
 enforced so a pending row is never overwritten: `PUT /api/account/rotation-handoff/{groupId}` answers 409 for
 a row whose public key is the account's **current** key (only rows from attempts that never
 committed can be replaced), `rotate-keys` refuses (409 `handoff_pending`, naming the groups) while any row naming the current key
-**for a group where the caller is still an admin** exists, and
+**for a group where the caller still owes one** (an admin of it, or a member of an `Open` group) exists, and
 the flow finishes pending self re-keys before it offers another rotation. A row whose start is refused because the generation moved, or because the user is no longer an
 admin or a member, is deleted by the client with an ordinary delete
 (`DELETE /api/account/rotation-handoff/{groupId}`), since nothing else would. The later session reads
@@ -565,7 +566,7 @@ rows with `GET /api/account/rotation-handoff` (the caller's own, ciphertext only
 success is not a separate call: the row is in the caller's partition at a known key, so the start's
 (or self-wrap's) own transaction deletes it, and a crash cannot leave a used row behind to block
 `rotate-keys`. (Built for the three starts that exist, a removal's, a leave takeover's and the self
-re-key's below; the `Open` self-wrap has no endpoint yet.) A thief gets nothing from these rows: only the holder of the new
+re-key's below and the `Open` self-wrap's.) A thief gets nothing from these rows: only the holder of the new
 private key can open them, and the old keys already open the same groups. One window remains: if
 another admin advances a group's generation after the row is written, that row is stale until the
 self re-key's start commits (the check at `rotate-keys` only covers the moment before). The start is
@@ -596,11 +597,29 @@ is refused) and excludes no one, and the removal-history check verifies a re-key
 records nobody as removed. It runs the start from the handoff row (`runSelfRekey`): the row is opened
 with the new key, and is deleted by the client only when the server answers `handoff_stale` or the
 caller's own entry has already moved past it, never for a failed read, a failed unwrap, a missing
-list entry or an `Open` group, whose self-wrap has no endpoint yet (the row is kept and reported).
+list entry (an `Open` group runs the self-wrap below instead).
 "Finish key changes" on the Rotate keys screen runs it for every pending group. The job that follows
 the start checks the caller's own pins, records and removal links through their verified key history
 (see "As built: the caller's verified key history" under Key rotation), so a rotated admin can re-wrap
 the other members.
+
+**The `Open` self-wrap.** An `Open` (or public) group has no re-key: nothing is minted, so the old keys keep
+reading it whatever anyone does, and what a rotation changes is only which key the member's own entry is wrapped
+to. `POST /api/groups/{gid}/rotation/selfwrap` brings the caller's own entry there from their handoff row. **Any
+member may call it, for their own entry only**; `rewrap/{userId}` refuses the caller's own id on purpose, and an
+admin or ambassador approving someone else is a different act (approve). The body is the generation and the group
+key from the row, opened with the new key and wrapped to that same key under the entry's own AAD
+(`memberWrapAAD`, at the row's generation). It is refused for a group that rotates (400 `rotation_not_applicable`).
+One transaction sets the entry's wrap and `WrapEpoch` (the entry must be at the generation the request names),
+checks the caller's `KeyEpoch`, and **deletes the handoff row, requiring that it exist, name the account's current
+wrapping key and hold that generation**; otherwise 409 `handoff_stale` and nothing is written, which tells the
+client to delete the row, and a replay is stale for the same reason. Because the row is how a member gets back in,
+every member of an `Open` group writes one before `rotate-keys` (the PUT accepts any member of such a group, not
+only an admin), `rotate-keys` counts those groups like administered ones for `handoff_required`,
+`handoff_pending` and `rotation_in_progress`, and the sweep after a commit keeps a member's row for an `Open`
+group while it deletes a plain member's row for a `Rotating` one, which nothing can use. `GET /api/groups` serves
+`noRotation` on each entry so the client does not have to read every group to know which it owes. The client runs
+it from the same "Finish key changes" step as the re-key (`runSelfRekey`, which takes the `Open` branch).
 
 **A handoff change during a rotation.** `rotate-keys` checks the handoff rows before it commits, and
 the commit alone cannot see them (a transaction of this size cannot condition on one row per group). A

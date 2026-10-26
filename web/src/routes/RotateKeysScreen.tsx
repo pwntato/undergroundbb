@@ -201,6 +201,7 @@ export function RotateKeysScreen() {
             groupId: g.groupId,
             label: labels.get(g.groupId) ?? '(a group)',
             open: g.open,
+            admin: g.admin,
           }))
         : [],
     [step, labels],

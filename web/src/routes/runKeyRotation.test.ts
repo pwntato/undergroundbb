@@ -27,6 +27,7 @@ function group(id: string, over: Partial<GroupListEntry> = {}): GroupListEntry {
     visibility: 'private',
     role: 'admin',
     generation: 0,
+    noRotation: false,
     nameGeneration: 0,
     wrappedGroupKey: WRAP,
     ...over,
@@ -102,7 +103,14 @@ function pre(over: Partial<KeyRotationPreflight> = {}): KeyRotationPreflight {
     keyEpoch: 2,
     credentialVersion: 4,
     adminGroups: [
-      { groupId: 'g1', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
+      {
+        groupId: 'g1',
+        generation: 0,
+        wrappedGroupKey: WRAP,
+        open: false,
+        admin: true,
+        visibility: 'private',
+      },
     ],
     pendingSelfRekeys: [],
     invitesToRevoke: [],
@@ -197,6 +205,39 @@ describe('preflightKeyRotation and handoff rows', () => {
     )
     const out = await preflightKeyRotation(deps)
     expect(out.pendingSelfRekeys).toEqual(['g1'])
+  })
+
+  it('counts a plain member of a group with no rotation, and not one of a group that rotates', async () => {
+    const listHandoffs = vi.fn().mockResolvedValue([row('open', 'cur'), row('rotating', 'cur')])
+    const deps = makeDeps(
+      {
+        getUser: vi
+          .fn()
+          .mockResolvedValue({ keyEpoch: 3, wrappingPublicKey: 'cur', username: 'a' }),
+        listHandoffs,
+      },
+      [
+        group('open', { role: 'member', noRotation: true }),
+        group('rotating', { role: 'member', noRotation: false }),
+      ],
+    )
+    const out = await preflightKeyRotation(deps)
+    expect(out.pendingSelfRekeys).toEqual(['open'])
+  })
+
+  it('owes a handoff for a plain member of a group with no rotation, and for no other member', async () => {
+    const deps = makeDeps({}, [
+      group('open', { role: 'member', noRotation: true }),
+      group('rotating', { role: 'member', noRotation: false }),
+      group('mine', { role: 'admin' }),
+      group('amb', { role: 'ambassador', noRotation: true }),
+    ])
+    const out = await preflightKeyRotation(deps)
+    expect(out.adminGroups.map((g) => [g.groupId, g.admin])).toEqual([
+      ['open', false],
+      ['mine', true],
+      ['amb', false],
+    ])
   })
 })
 
@@ -294,8 +335,22 @@ describe('runKeyRotation', () => {
     )
     const p = pre({
       adminGroups: [
-        { groupId: 'g1', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
-        { groupId: 'g2', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
+        {
+          groupId: 'g1',
+          generation: 0,
+          wrappedGroupKey: WRAP,
+          open: false,
+          admin: true,
+          visibility: 'private',
+        },
+        {
+          groupId: 'g2',
+          generation: 0,
+          wrappedGroupKey: WRAP,
+          open: false,
+          admin: true,
+          visibility: 'private',
+        },
       ],
     })
     const { result } = await run(deps, {}, p)
@@ -306,6 +361,32 @@ describe('runKeyRotation', () => {
     expect(deps.signKeyRotation).toHaveBeenCalledTimes(1)
     const [a, b] = vi.mocked(deps.rotateKeys).mock.calls
     expect(a?.[0]).toBe(b?.[0])
+  })
+
+  it('writes a handoff for a plain member of a group with no rotation', async () => {
+    const deps = makeDeps({}, [group('g1', { role: 'member', noRotation: true })])
+    const p = pre({
+      adminGroups: [
+        {
+          groupId: 'g1',
+          generation: 0,
+          wrappedGroupKey: WRAP,
+          open: true,
+          admin: false,
+          visibility: 'private',
+        },
+      ],
+    })
+    const { result } = await run(deps, {}, p)
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(deps.putHandoff).mock.calls.map((c) => c[0])).toEqual(['g1'])
+  })
+
+  it('writes nothing for a member who is no longer an admin of a group that rotates', async () => {
+    const deps = makeDeps({}, [group('g1', { role: 'member', noRotation: false })])
+    const { result } = await run(deps)
+    expect(result.ok).toBe(true)
+    expect(deps.putHandoff).not.toHaveBeenCalled()
   })
 
   it('rewrites every row when a handoff changed during the check, then resends', async () => {
@@ -320,8 +401,22 @@ describe('runKeyRotation', () => {
     )
     const p = pre({
       adminGroups: [
-        { groupId: 'g1', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
-        { groupId: 'g2', generation: 0, wrappedGroupKey: WRAP, open: false, visibility: 'private' },
+        {
+          groupId: 'g1',
+          generation: 0,
+          wrappedGroupKey: WRAP,
+          open: false,
+          admin: true,
+          visibility: 'private',
+        },
+        {
+          groupId: 'g2',
+          generation: 0,
+          wrappedGroupKey: WRAP,
+          open: false,
+          admin: true,
+          visibility: 'private',
+        },
       ],
     })
     const { result } = await run(deps, {}, p)

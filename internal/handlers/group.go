@@ -487,6 +487,10 @@ type groupListEntry struct {
 	Visibility string `json:"visibility"`
 	Role       string `json:"role"`
 	Generation int64  `json:"generation"`
+	// NoRotation is true for a group with no re-key (Open or public): a
+	// rotation of the caller's account keys owes a handoff row there whatever
+	// their role, and finishes with a self-wrap.
+	NoRotation bool `json:"noRotation"`
 	// NameGeneration is the key generation the private name/description
 	// ciphertexts are encrypted under. It is NOT the member's Generation:
 	// rotation does not re-encrypt the name (docs/DESIGN.md), so once
@@ -557,6 +561,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 			Visibility:     g.Visibility,
 			Role:           m.Role,
 			Generation:     m.Generation,
+			NoRotation:     g.HasNoRotation(),
 			NameGeneration: g.NameGeneration,
 		}
 		if g.Visibility == models.VisibilityPublic {
@@ -741,6 +746,7 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		entry.WrappedGroupKey = &wk
 	}
 
+	entry.NoRotation = g.HasNoRotation()
 	resp := groupDetailResponse{
 		groupListEntry: entry,
 		RevocationMode: g.RevocationMode,

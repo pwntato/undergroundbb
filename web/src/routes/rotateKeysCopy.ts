@@ -37,7 +37,7 @@ export function failureMessage(
     case 'cooldown':
       return 'You rotated your keys recently. Keys can be rotated once a day, so try again tomorrow.'
     case 'handoffPending':
-      return `A key change you started earlier still has to re-key ${groupList(failure.groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
+      return `A key change you started earlier still has to be finished in ${groupList(failure.groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
     case 'groupBusy':
       return `Another admin's key change is still under way in ${groupList(failure.groups, labelFor)}. Wait for it to finish, then try again.`
     case 'changedElsewhere':
@@ -76,7 +76,7 @@ export function pendingRekeyText(
   groups: readonly string[],
   labelFor: (groupId: string) => string,
 ): string {
-  return `A key change you started earlier still has to re-key ${groupList(groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
+  return `A key change you started earlier still has to be finished in ${groupList(groups, labelFor)}. Finish it first; keys cannot be rotated again until then.`
 }
 
 /** One line per group for the result of finishing a key change (#62). */
@@ -94,8 +94,8 @@ export function selfRekeyText(
       return `${label}: the group moved on before this finished, so the saved key was no longer needed. Another admin can approve your new keys there.`
     case 'not-admin':
       return `${label}: you are no longer an admin there, so there is nothing to finish.`
-    case 'open':
-      return `${label}: this group cannot be re-keyed, and finishing it for an open group is not available yet.`
+    case 'wrapped':
+      return `${label}: your new keys are in place.`
     case 'incomplete':
       return `${label}: stopped (${outcome.reason}). Try again.`
   }

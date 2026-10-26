@@ -52,6 +52,8 @@ export interface AdminGroup {
   readonly wrappedGroupKey: NonNullable<GroupListEntry['wrappedGroupKey']>
   /** An Open group has no re-key, so a rotation cannot cut the old keys off there. */
   readonly open: boolean
+  /** The caller administers the group. A member of a group with no rotation owes a row too. */
+  readonly admin: boolean
   /** Whether the group is public (always Open). */
   readonly visibility: GroupListEntry['visibility']
 }
@@ -214,7 +216,9 @@ async function adminGroupsOf(
 ): Promise<AdminGroup[]> {
   const out: AdminGroup[] = []
   for (const g of groups) {
-    if (g.role !== 'admin') continue
+    // An admin of any group, or a member of one with no rotation, whose entry
+    // would otherwise be left on the key they rotated away from.
+    if (g.role !== 'admin' && !g.noRotation) continue
     if (g.wrappedGroupKey === undefined) {
       // The server serves the caller's own wrap for every group they are in;
       // without it no handoff row can be made and the rotation cannot proceed.
@@ -226,6 +230,7 @@ async function adminGroupsOf(
       generation: g.generation,
       wrappedGroupKey: g.wrappedGroupKey,
       open: detail.revocationMode === 'open',
+      admin: g.role === 'admin',
       visibility: g.visibility,
     })
   }
@@ -260,7 +265,8 @@ async function writeHandoffs(
   for (const [i, groupId] of groupIds.entries()) {
     for (let tryNo = 0; ; tryNo++) {
       const group = groups.get(groupId)
-      if (group === undefined || group.role !== 'admin') break // no longer an admin there: nothing to hand off
+      // No longer an admin (or a member of a group with no rotation): nothing to hand off.
+      if (group === undefined || (group.role !== 'admin' && !group.noRotation)) break
       if (group.wrappedGroupKey === undefined) {
         throw new Error(`group ${groupId}: your own key for this group was not served`)
       }

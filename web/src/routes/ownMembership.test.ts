@@ -11,6 +11,7 @@ function entry(over: Partial<GroupListEntry>): GroupListEntry {
     visibility: 'private',
     role: 'admin',
     generation: 2,
+    noRotation: false,
     nameGeneration: 0,
     wrappedGroupKey: WRAP,
     ...over,

@@ -30,6 +30,7 @@ function displayGroup(overrides: Partial<DisplayGroup> = {}): DisplayGroup {
     visibility: 'public',
     role: 'member',
     generation: 0,
+    noRotation: true,
     nameGeneration: 0,
     displayName: 'Book Club',
     displayDescription: 'We read books',

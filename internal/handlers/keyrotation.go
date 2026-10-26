@@ -344,13 +344,15 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 		WriteInternalError(w, r, err, "could not rotate keys")
 		return 0, false
 	}
-	admin, err := h.db.ListAdminGroups(r.Context(), userID)
+	owed, err := h.db.ListHandoffGroups(r.Context(), userID)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not rotate keys")
 		return 0, false
 	}
-	administered := make(map[string]bool, len(admin))
-	for _, g := range admin {
+	// The groups that need a row: the ones the caller administers and, in a
+	// group with no rotation, every one they belong to.
+	administered := make(map[string]bool, len(owed))
+	for _, g := range owed {
 		administered[g.GroupID] = true
 	}
 	byGroup := make(map[string]models.Handoff, len(rows))
@@ -359,8 +361,8 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 		gid := row.SK[len("HANDOFF#"):]
 		byGroup[gid] = row
 		// A row naming the current key is a committed rotation's self re-key
-		// that has not run. It only blocks while the caller still administers
-		// the group: otherwise nothing can use it, and the sweep after this
+		// that has not run. It only blocks while the caller still owes a row
+		// for the group: otherwise nothing can use it, and the sweep after this
 		// rotation removes it.
 		if bytes.Equal(row.NewWrappingPublicKey, user.WrappingPublicKey) && administered[gid] {
 			pending = append(pending, gid)
@@ -372,7 +374,7 @@ func (h *Handler) checkHandoffs(w http.ResponseWriter, r *http.Request, userID s
 	}
 
 	var behind, missing []string
-	for _, g := range admin {
+	for _, g := range owed {
 		cur, err := h.db.GroupCurrentGeneration(r.Context(), g.GroupID)
 		if err != nil {
 			WriteInternalError(w, r, err, "could not rotate keys")
@@ -484,6 +486,11 @@ func (h *Handler) putHandoff(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "the group's key moved; wrap the current one", "handoff_stale")
 		return
 	}
+	group, err := h.db.GetGroup(r.Context(), groupID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not save handoff")
+		return
+	}
 	err = h.db.PutHandoff(r.Context(), db.PutHandoffInput{
 		UserID:               userID,
 		GroupID:              groupID,
@@ -491,12 +498,13 @@ func (h *Handler) putHandoff(w http.ResponseWriter, r *http.Request) {
 		NewWrappingPublicKey: newWrapping,
 		WrappedGroupKey:      wrapped,
 		CurrentWrappingKey:   user.WrappingPublicKey,
+		Open:                 group != nil && group.HasNoRotation(),
 	})
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, db.ErrHandoffNotAdmin):
-		WriteErrorWithCode(w, http.StatusConflict, "you are not an admin of this group at its current key", "handoff_stale")
+		WriteErrorWithCode(w, http.StatusConflict, "you are not an admin of this group, or a member of this Open group, at its current key", "handoff_stale")
 	case errors.Is(err, db.ErrHandoffPending):
 		WriteErrorWithCode(w, http.StatusConflict, "a handoff for your current key is waiting to be used; finish it first", "handoff_pending")
 	case errors.Is(err, db.ErrHandoffAccountChanged):

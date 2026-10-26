@@ -7,8 +7,9 @@
 // This only reads. It never deletes: a row naming the current key can be the
 // only copy of a group's key a sole admin can still reach, and "not in the
 // list" comes from an eventually consistent index, so it is not proof the
-// caller left. Rows for groups the caller no longer administers block nothing
-// (the server only counts administered groups), and the sweep after the next
+// caller left. Rows for groups the caller no longer owes one for block nothing
+// (the server only counts groups they administer or, with no rotation, belong
+// to), and the sweep after the next
 // rotation removes them. A row whose generation moved is found out by the
 // start being refused (slice 4), which deletes it then.
 
@@ -21,7 +22,8 @@ export interface PendingHandoffDeps {
 
 /**
  * The group ids with a self re-key waiting: rows naming the current key for a
- * group the caller (as far as the list says) administers.
+ * group the caller (as far as the list says) administers or, in a group with
+ * no rotation, belongs to.
  */
 export async function pendingSelfRekeys(
   deps: PendingHandoffDeps,
@@ -29,10 +31,12 @@ export async function pendingSelfRekeys(
   currentWrappingPublicKey: string,
 ): Promise<string[]> {
   const rows = await deps.listHandoffs()
-  const adminOf = new Set(groups.filter((g) => g.role === 'admin').map((g) => g.groupId))
+  const owed = new Set(
+    groups.filter((g) => g.role === 'admin' || g.noRotation).map((g) => g.groupId),
+  )
   const pending: string[] = []
   for (const row of rows) {
-    if (adminOf.has(row.groupId) && row.newWrappingPublicKey === currentWrappingPublicKey) {
+    if (owed.has(row.groupId) && row.newWrappingPublicKey === currentWrappingPublicKey) {
       pending.push(row.groupId)
     }
   }

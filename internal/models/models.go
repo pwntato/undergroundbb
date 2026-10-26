@@ -427,6 +427,13 @@ type Group struct {
 	GroupType string `dynamodbav:"GroupType,omitempty"`
 }
 
+// HasNoRotation reports whether the group has no re-key to run, so a member's
+// key change is a self-wrap of the one key it holds: an Open group, or a public
+// one (always Open). Rotating private groups return false.
+func (g *Group) HasNoRotation() bool {
+	return g.RevocationMode == RevocationOpen || g.Visibility == VisibilityPublic
+}
+
 // Group roles. See Membership.Role and docs/DESIGN.md, "Roles and the chain
 // of trust."
 const (

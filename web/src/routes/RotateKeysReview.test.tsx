@@ -23,7 +23,12 @@ function render(
   )
 }
 
-const g = (id: string, label: string, open = false): ReviewGroup => ({ groupId: id, label, open })
+const g = (id: string, label: string, open = false, admin = true): ReviewGroup => ({
+  groupId: id,
+  label,
+  open,
+  admin,
+})
 
 describe('RotateKeysReview', () => {
   it('tells rotating apart from changing a password, and links to the cheap one', () => {
@@ -38,6 +43,25 @@ describe('RotateKeysReview', () => {
     expect(html).toContain('Town Square (Open)')
     expect(html).not.toContain('Book Club (Open)')
     expect(html).toContain('whoever holds your old keys can keep reading it')
+  })
+
+  it('lists the Open groups the user only belongs to apart from the ones they administer', () => {
+    const html = render([g('1', 'Book Club'), g('2', 'Town Square', true, false)])
+    expect(html).toContain('Open groups you belong to')
+    expect(html).toContain('needs no admin to approve your new keys')
+    // The administered list does not carry the member's group.
+    const admin = html.slice(
+      html.indexOf('Groups you administer'),
+      html.indexOf('Open groups you belong to'),
+    )
+    expect(admin).toContain('Book Club')
+    expect(admin).not.toContain('Town Square')
+    // And it is still warned about: the old keys keep reading an Open group.
+    expect(html).toContain('whoever holds your old keys can keep reading it')
+  })
+
+  it('has no member section when the user belongs to no such group', () => {
+    expect(render([g('1', 'Book Club')])).not.toContain('Open groups you belong to')
   })
 
   it('shows no Open warning when no group is Open', () => {

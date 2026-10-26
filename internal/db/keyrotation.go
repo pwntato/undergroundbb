@@ -94,28 +94,47 @@ func (c *Client) GroupCurrentGeneration(ctx context.Context, groupID string) (in
 	return n + 1, nil
 }
 
-// AdminGroup is a group the user is an admin of, with the generation their own
-// entry point is at.
-type AdminGroup struct {
+// HandoffGroup is a group the user owes a handoff row for, with the generation
+// their own entry point is at: one they administer, or any group with no
+// rotation (Open or public) they belong to, where every member self-wraps.
+type HandoffGroup struct {
 	GroupID    string
 	Generation int64
 }
 
-// ListAdminGroups returns the groups userID currently administers. The list
+// ListHandoffGroups returns the groups userID owes a handoff row for. The list
 // comes from the GSI1 membership index, which is eventually consistent; a role
-// granted in the last moments can be missed, and a group missed here is one the
-// caller gets no handoff row for, which the design accepts (docs/DESIGN.md,
-// "One window remains").
-func (c *Client) ListAdminGroups(ctx context.Context, userID string) ([]AdminGroup, error) {
+// granted or a group joined in the last moments can be missed, and a group
+// missed here is one the caller gets no handoff row for, which the design
+// accepts (docs/DESIGN.md, "One window remains").
+func (c *Client) ListHandoffGroups(ctx context.Context, userID string) ([]HandoffGroup, error) {
 	memberships, err := c.queryMembershipsByUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("db: list admin groups: %w", err)
+		return nil, fmt.Errorf("db: list handoff groups: %w", err)
 	}
-	var groups []AdminGroup
+	// Only a non-admin's group needs its META read, to tell Open from Rotating.
+	var others []string
 	for _, m := range memberships {
-		if m.Role == models.RoleAdmin {
-			groups = append(groups, AdminGroup{GroupID: groupIDFromMembership(m), Generation: m.Generation})
+		if m.Role != models.RoleAdmin {
+			others = append(others, groupIDFromMembership(m))
 		}
+	}
+	var metas map[string]models.Group
+	if len(others) > 0 {
+		if metas, err = c.batchGetGroupMetas(ctx, others); err != nil {
+			return nil, fmt.Errorf("db: list handoff groups: %w", err)
+		}
+	}
+	var groups []HandoffGroup
+	for _, m := range memberships {
+		gid := groupIDFromMembership(m)
+		if m.Role != models.RoleAdmin {
+			meta, ok := metas[gid]
+			if !ok || !meta.HasNoRotation() {
+				continue
+			}
+		}
+		groups = append(groups, HandoffGroup{GroupID: gid, Generation: m.Generation})
 	}
 	return groups, nil
 }
@@ -160,11 +179,14 @@ type PutHandoffInput struct {
 	NewWrappingPublicKey []byte
 	WrappedGroupKey      models.WrappedKey
 	CurrentWrappingKey   []byte
+	// Open is true for a group with no rotation (Open or public), where any
+	// member, not only an admin, hands off the key it holds to self-wrap.
+	Open bool
 }
 
 // PutHandoff writes (or replaces) the caller's handoff row for a group in one
-// transaction: (0) the caller is still an admin whose own entry point is at
-// Generation, (1) the account's wrapping key is still CurrentWrappingKey, so a
+// transaction: (0) the caller is still an admin (any member, for an Open group)
+// whose own entry point is at Generation, (1) the account's wrapping key is still CurrentWrappingKey, so a
 // rotation that committed meanwhile cannot have its row clobbered by a stale
 // request, (2) the row is new or names a key other than the current one, since
 // a row naming the current key is a committed rotation's only copy and is never
@@ -190,17 +212,26 @@ func (c *Client) PutHandoff(ctx context.Context, in PutHandoffInput) error {
 	if err != nil {
 		return err
 	}
+	// DynamoDB rejects a name or value the expression does not use.
+	memberCond := "#role = :admin AND #gen = :gen"
+	memberNames := map[string]string{"#role": "Role", "#gen": "Generation"}
+	memberValues := map[string]types.AttributeValue{
+		":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
+		":gen":   genAttr(in.Generation),
+	}
+	if in.Open {
+		memberCond = "#gen = :gen"
+		memberNames = map[string]string{"#gen": "Generation"}
+		memberValues = map[string]types.AttributeValue{":gen": genAttr(in.Generation)}
+	}
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{ConditionCheck: &types.ConditionCheck{
-				TableName:                aws.String(c.table),
-				Key:                      memberKey(in.GroupID, in.UserID),
-				ConditionExpression:      aws.String("#role = :admin AND #gen = :gen"),
-				ExpressionAttributeNames: map[string]string{"#role": "Role", "#gen": "Generation"},
-				ExpressionAttributeValues: map[string]types.AttributeValue{
-					":admin": &types.AttributeValueMemberS{Value: models.RoleAdmin},
-					":gen":   genAttr(in.Generation),
-				},
+				TableName:                 aws.String(c.table),
+				Key:                       memberKey(in.GroupID, in.UserID),
+				ConditionExpression:       aws.String(memberCond),
+				ExpressionAttributeNames:  memberNames,
+				ExpressionAttributeValues: memberValues,
 			}},
 			{ConditionCheck: &types.ConditionCheck{
 				TableName: aws.String(c.table),
@@ -346,7 +377,16 @@ func (c *Client) SweepHandoffs(ctx context.Context, userID string, currentWrappi
 			return fmt.Errorf("db: sweep handoffs: %w", err)
 		}
 		role, _ := out.Item["Role"].(*types.AttributeValueMemberS)
-		if role == nil || role.Value != models.RoleAdmin {
+		keep := role != nil && role.Value == models.RoleAdmin
+		if role != nil && !keep {
+			// A member's row is still the way into a group with no rotation.
+			g, err := c.GetGroup(ctx, gid)
+			if err != nil {
+				return fmt.Errorf("db: sweep handoffs: %w", err)
+			}
+			keep = g != nil && g.HasNoRotation()
+		}
+		if !keep {
 			doomed = append(doomed, handoffKey(userID, gid))
 		}
 	}

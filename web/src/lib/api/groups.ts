@@ -112,6 +112,11 @@ export interface GroupListEntry {
   readonly role: 'admin' | 'ambassador' | 'member'
   readonly generation: number
   /**
+   * The group has no re-key (Open or public): a rotation of the caller's keys
+   * owes a handoff row here whatever their role, and finishes with a self-wrap.
+   */
+  readonly noRotation: boolean
+  /**
    * The key generation the private name/description ciphertext is encrypted
    * under -- what its AAD binds. Not the member's own `generation` once
    * rotation exists (rotation does not re-encrypt the name).
@@ -739,6 +744,24 @@ export function approveRekey(
  */
 export function selfRekey(groupId: string, req: TakeOverRotationRequest): Promise<void> {
   return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/rekey`, req)
+}
+
+/** The body of POST /api/groups/{id}/rotation/selfwrap. */
+export interface SelfWrapRequest {
+  readonly generation: number
+  readonly wrappedKey: WireWrappedKey
+}
+
+/**
+ * POST /api/groups/{id}/rotation/selfwrap -- #62, slice 4d. A member of an Open
+ * (or public) group who rotated their account keys wraps the key their handoff
+ * row holds to their own new key, for their own entry only, and the same
+ * transaction consumes the row. 409 codes: `handoff_stale` (the row is missing,
+ * names another key or holds another generation; delete it), `key_epoch_stale`.
+ * 400 `rotation_not_applicable` (the group rotates).
+ */
+export function selfWrap(groupId: string, req: SelfWrapRequest): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/selfwrap`, req)
 }
 
 /**

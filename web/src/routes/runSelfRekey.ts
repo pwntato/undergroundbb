@@ -16,13 +16,18 @@
 //     removal links under the signing key they rotated away from, through their
 //     verified key history (lib/crypto/own-history). When that history cannot
 //     be built the job stops and reports, and resumes once it can.
-//   - Open groups wait for the self-wrap, which has no endpoint yet; they are
-//     reported and left alone.
+//   - An Open group has no re-key, so any member, not only an admin, brings
+//     their own entry to the new key with a self-wrap from the same row: it mints
+//     nothing, and the server's transaction consumes the row.
 
 import { ApiError } from '@/lib/api/auth'
-import type { TakeOverRotationRequest } from '@/lib/api/groups'
+import type { SelfWrapRequest, TakeOverRotationRequest } from '@/lib/api/groups'
 import type { HandoffEntry } from '@/lib/api/keyRotation'
-import type { StartGroupRotationResult, StartSelfRekeyRequest } from '@/lib/crypto/worker-protocol'
+import type {
+  SelfWrapFromHandoffRequest,
+  StartGroupRotationResult,
+  StartSelfRekeyRequest,
+} from '@/lib/crypto/worker-protocol'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
 
 export interface SelfRekeyDeps extends RotationDeps {
@@ -30,6 +35,10 @@ export interface SelfRekeyDeps extends RotationDeps {
     req: Omit<StartSelfRekeyRequest, 'kind' | 'id'>,
   ) => Promise<StartGroupRotationResult>
   readonly selfRekey: (groupId: string, req: TakeOverRotationRequest) => Promise<void>
+  readonly selfWrapCrypto: (
+    req: Omit<SelfWrapFromHandoffRequest, 'kind' | 'id'>,
+  ) => Promise<SelfWrapRequest['wrappedKey']>
+  readonly selfWrap: (groupId: string, req: SelfWrapRequest) => Promise<void>
   readonly deleteHandoff: (groupId: string) => Promise<void>
 }
 
@@ -40,8 +49,8 @@ export type SelfRekeyOutcome =
   | { readonly status: 'stale' }
   /** The caller is not an admin of the group (any more); the row is left to the server's sweep. */
   | { readonly status: 'not-admin' }
-  /** An Open group: its self-wrap is not built yet; the row is kept. */
-  | { readonly status: 'open' }
+  /** An Open group: the caller's entry now holds the same key under their new one. */
+  | { readonly status: 'wrapped' }
   | { readonly status: 'incomplete'; readonly reason: string }
 
 function describe(err: unknown): string {
@@ -77,10 +86,13 @@ export async function runSelfRekey(
     if (err instanceof ApiError && err.status === 404) return { status: 'not-admin' }
     return { status: 'incomplete', reason: describe(err) }
   }
-  if (detail.role !== 'admin') return { status: 'not-admin' }
+  // A public group answers a non-member with 200 and an empty role; the server
+  // would refuse the self-wrap with a 404, which is not a retryable stop.
+  if (detail.role === '') return { status: 'not-admin' }
   if (detail.revocationMode === 'open' || detail.visibility !== 'private') {
-    return { status: 'open' }
+    return selfWrapOpen(deps, row, detail.generation, staleRow)
   }
+  if (detail.role !== 'admin') return { status: 'not-admin' }
   // A rotation is already running (this start's own, interrupted, or another
   // admin's): the start is not ours to make; the job resumes or reports.
   if (detail.rotation !== undefined) return continueJob()
@@ -119,4 +131,40 @@ export async function runSelfRekey(
     }
   }
   return continueJob()
+}
+
+/**
+ * The Open-group branch: any member self-wraps. The caller's own entry already
+ * past the row's generation means nothing can use the row (the same rule as the
+ * re-key); a server `handoff_stale` is the same answer, and only these delete it.
+ */
+async function selfWrapOpen(
+  deps: SelfRekeyDeps,
+  row: HandoffEntry,
+  entryGeneration: number,
+  staleRow: () => Promise<SelfRekeyOutcome>,
+): Promise<SelfRekeyOutcome> {
+  const { groupId } = row
+  if (entryGeneration !== row.generation) return staleRow()
+  let wrappedKey
+  try {
+    wrappedKey = await deps.selfWrapCrypto({
+      userId: deps.selfUserId,
+      groupId,
+      handoffGeneration: row.generation,
+      handoffWrappedKey: row.wrappedGroupKey,
+    })
+  } catch (err) {
+    return {
+      status: 'incomplete',
+      reason: `could not open the saved key for this group: ${describe(err)}`,
+    }
+  }
+  try {
+    await deps.selfWrap(groupId, { generation: row.generation, wrappedKey })
+  } catch (err) {
+    if (codeOf(err) === 'handoff_stale') return staleRow()
+    return { status: 'incomplete', reason: describe(err) }
+  }
+  return { status: 'wrapped' }
 }

@@ -895,6 +895,36 @@ export async function startSelfRekey(
 }
 
 /**
+ * #62: the self-wrap of a member of an Open group who rotated their account
+ * keys. An Open group mints no key, so this only moves the caller's entry point
+ * to their new X25519 key: it opens the HANDOFF# row (the group key wrapped to
+ * the new key under handoffWrapAAD, because the MEMBER# entry is still wrapped
+ * to the key they rotated away from) and wraps the same key to the same key
+ * under the entry's own AAD at the same generation.
+ */
+export async function selfWrapFromHandoff(
+  keys: LiveKeys,
+  groupId: string,
+  handoffGeneration: number,
+  handoffWrappedKey: Wrapped,
+): Promise<WireWrapped> {
+  const groupKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    handoffWrappedKey,
+    handoffWrapAAD(keys.userId, groupId, handoffGeneration, keys.wrappingKey.publicKey),
+  )
+  if (groupKey.length !== KEY_SIZE) {
+    throw new Error('crypto: handed-off group key has the wrong length')
+  }
+  const ownWrapped = await wrap(
+    keys.wrappingKey.publicKey,
+    groupKey,
+    memberWrapAAD(groupId, keys.userId, handoffGeneration),
+  )
+  return toWireWrapped(ownWrapped)
+}
+
+/**
  * #62: mints the next generation's key for an admin's approval of a dormant
  * member's new keys, when the member's entry is still at the admin's
  * generation (so the old keys hold the current key and approving must mint).
