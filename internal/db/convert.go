@@ -73,6 +73,12 @@ func (c *Client) ConvertGroupToOpen(ctx context.Context, groupID, adminUserID st
 		after = next
 	}
 
+	return c.convertTx(ctx, groupID, adminUserID, callerGeneration)
+}
+
+// convertTx is the transaction half of ConvertGroupToOpen, on its own so a
+// test can reach it past the pre-reads.
+func (c *Client) convertTx(ctx context.Context, groupID, adminUserID string, callerGeneration int64) error {
 	const (
 		adminIndex  = 0
 		markerIndex = 1
