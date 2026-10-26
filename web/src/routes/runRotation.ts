@@ -62,7 +62,7 @@ import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationRekeyPayload, rotationStartPayload } from '@/lib/crypto/group'
 import { rekeyKindOk, removersOf, verifyRemovals } from '@/lib/crypto/removal'
-import { buildOwnKeyHistory, type OwnKeyHistory } from '@/lib/crypto/own-history'
+import { buildOwnKeyHistory, keysCarriedFrom, type OwnKeyHistory } from '@/lib/crypto/own-history'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import { ownHistoryFor, ownSigningKeysFor } from './ownHistory'
 import type {
@@ -441,7 +441,16 @@ async function runOnce(
             }
             admissions = loaded.context
           }
-          if (!(await isAdmitted(deps, admissions, groupId, m.userId, servedForM))) {
+          let admitted: boolean
+          try {
+            admitted = await isAdmitted(deps, admissions, groupId, m.userId, servedForM)
+          } catch (err) {
+            if (err instanceof ChainReadError) {
+              return { status: 'incomplete', reason: err.message, rewrapped }
+            }
+            throw err
+          }
+          if (!admitted) {
             unadmitted.add(m.userId)
             if (!admissions.removedAt.has(m.userId)) readmittable.add(m.userId)
             continue
@@ -649,11 +658,29 @@ async function checkLeaverKey(
       ? { ok: true }
       : refuse("the start was not signed by the key the group's anchor names")
   }
-  if (!(await isAdmitted(deps, context, groupId, leaverId, served))) {
-    return refuse('no admission signed for the keys served for them')
+  try {
+    if (!(await isAdmitted(deps, context, groupId, leaverId, served))) {
+      return refuse('no admission signed for the keys served for them')
+    }
+  } catch (err) {
+    if (err instanceof ChainReadError) return { ok: false, reason: err.message }
+    throw err
   }
   const record = context.byInvitee.get(leaverId)
-  return record !== undefined && signedBy([base64ToBytes(record.inviteeEd25519PublicKey)])
+  // A leaver who rotated before leaving signs with their live key, which the
+  // admission does not name: the chain isAdmitted verified carried the admitted
+  // keys to it, so every key from the admitted link onward counts too.
+  const history = context.inviteeHistories.get(leaverId)
+  const signers =
+    record === undefined
+      ? []
+      : [
+          base64ToBytes(record.inviteeEd25519PublicKey),
+          ...(history
+            ? keysCarriedFrom(history, base64ToBytes(record.inviteeEd25519PublicKey))
+            : []),
+        ]
+  return record !== undefined && signedBy(signers)
     ? { ok: true }
     : refuse('the start was not signed by the key their admission names')
 }
@@ -776,8 +803,9 @@ export async function isAdmitted(
  * The verified chain of a member whose admission names an older wrapping key
  * than the one served (they rotated), or undefined when it cannot be had or
  * does not verify up to the served signing key: such a member then reads as
- * unadmitted, which only ever shrinks who is wrapped to. A failed read is not
- * cached, so a later call retries it.
+ * unadmitted, which only ever shrinks who is wrapped to. A failed read throws
+ * ChainReadError (not cached, so a later call retries it), so a server that
+ * withholds chains stops the run with a reason instead of offering Re-admit.
  */
 async function inviteeHistoryFor(
   deps: Pick<RotationDeps, 'getUserDetail'>,
@@ -797,10 +825,13 @@ async function inviteeHistoryFor(
     })
     ctx.inviteeHistories.set(userId, history)
     return history ?? undefined
-  } catch {
-    return undefined
+  } catch (err) {
+    throw new ChainReadError(`could not read the key history of ${userId}: ${describe(err)}`)
   }
 }
+
+/** A failed read of a member's key chain: not the same as a chain that does not verify. */
+export class ChainReadError extends Error {}
 
 type SignerKeys =
   | { readonly ok: true; readonly keys: ReadonlyMap<string, Uint8Array[] | null> }

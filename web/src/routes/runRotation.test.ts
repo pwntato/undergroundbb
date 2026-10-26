@@ -1451,13 +1451,13 @@ describe('runRotation', () => {
       expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
     })
 
-    it('fails closed when the chain cannot be read', async () => {
+    it('stops with the reason when the chain cannot be read, instead of offering Re-admit', async () => {
       const f = new Fake()
       const p = f.add(person())
       rotated(f, p)
       f.detailError = new Error('boom')
       const out = await runRotation(f.deps(), GROUP)
-      expect(out).toMatchObject({ status: 'blocked', unadmitted: [p.id] })
+      expect(out).toMatchObject({ status: 'incomplete', reason: expect.stringMatching(/boom/) })
       expect(f.cryptoRecipients).toEqual([])
     })
   })
@@ -1703,6 +1703,76 @@ describe('runRotation', () => {
         await runRotation(f.deps(), GROUP)
         expect(f.detailReads).toEqual([leaver.id])
         expect(f.mints).toBe(1)
+      })
+
+      it('takes over for a leaver who rotated and THEN left: the start is signed by the live key', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        const next: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(202),
+        }
+        f.outsiders.set(leaver.id, next)
+        f.superseded.set(leaver.id, leaver.signing.publicKey)
+        f.details.set(leaver.id, [
+          makeKeyChange({
+            userId: leaver.id,
+            from: leaver.signing,
+            to: next.signing,
+            epoch: 1,
+            day: '2026-10-20',
+            oldWrapping: leaver.wrapping,
+            newWrapping: next.wrapping,
+          }).change,
+        ])
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: next.signing,
+          removed: leaver.id,
+        })
+        await runRotation(f.deps(), GROUP)
+        expect(f.mints).toBe(1)
+      })
+
+      it('takes nothing over for a rotated leaver whose start is signed by an unrelated key', async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        const next: Person = {
+          id: leaver.id,
+          signing: generateSigningKey(),
+          wrapping: new Uint8Array(32).fill(202),
+        }
+        f.outsiders.set(leaver.id, next)
+        f.superseded.set(leaver.id, leaver.signing.publicKey)
+        f.details.set(leaver.id, [
+          makeKeyChange({
+            userId: leaver.id,
+            from: leaver.signing,
+            to: next.signing,
+            epoch: 1,
+            day: '2026-10-20',
+            oldWrapping: leaver.wrapping,
+            newWrapping: next.wrapping,
+          }).change,
+        ])
+        f.marker = startMarker(2, {
+          startedBy: leaver.id,
+          signer: generateSigningKey(),
+          removed: leaver.id,
+        })
+        expect((await runRotation(f.deps(), GROUP)).status).toBe('incomplete')
+        expect(f.mints).toBe(0)
+      })
+
+      it("stops with the reason when a rotated leaver's chain cannot be read", async () => {
+        const f = new Fake()
+        const leaver = leftBehind(f, 'admission')
+        f.outsiders.set(leaver.id, { ...leaver, wrapping: new Uint8Array(32).fill(202) })
+        f.detailError = new Error('boom')
+        const out = await runRotation(f.deps(), GROUP)
+        expect(out).toMatchObject({ status: 'incomplete', reason: expect.stringMatching(/boom/) })
+        expect(f.mints).toBe(0)
       })
 
       it('takes nothing over for a rotated leaver whose chain is not served', async () => {
@@ -2325,6 +2395,21 @@ describe('re-admitting a member', () => {
     })
     const { deps } = readmitDeps(f)
     expect(await prepareReadmit(deps, GROUP, p.id)).toEqual({ ok: false, kind: 'alreadyAdmitted' })
+  })
+
+  it('reports a failed chain read instead of offering Re-admit', async () => {
+    const f = new Fake()
+    const p = f.add(person())
+    const next = { ...p, wrapping: new Uint8Array(32).fill(201) }
+    f.members.get(p.id)!.person = next
+    f.pins.set(p.id, pinFor(next))
+    f.detailError = new Error('boom')
+    const { deps } = readmitDeps(f)
+    expect(await prepareReadmit(deps, GROUP, p.id)).toMatchObject({
+      ok: false,
+      kind: 'unchecked',
+      reason: expect.stringMatching(/boom/),
+    })
   })
 
   it('works for an ambassador too', async () => {

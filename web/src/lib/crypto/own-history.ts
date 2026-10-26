@@ -195,6 +195,16 @@ export function chainCarriesKeys(
   })
 }
 
+/**
+ * The signing keys a verified chain carried an admitted key to: the new key of
+ * the link that replaced it and of every later link, ending at the current one.
+ * Empty when no link starts at the admitted key.
+ */
+export function keysCarriedFrom(history: OwnKeyHistory, admittedSigning: Uint8Array): Uint8Array[] {
+  const start = history.links.findIndex((l) => sameBytes(l.oldSigning, admittedSigning))
+  return start < 0 ? [] : history.links.slice(start).map((l) => l.newSigning)
+}
+
 /** Every signing key the history says the caller held: the current one, then each superseded one. */
 export function ownKeys(history: OwnKeyHistory): Uint8Array[] {
   return [history.current, ...history.links.map((l) => l.oldSigning)]
