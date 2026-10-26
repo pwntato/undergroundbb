@@ -765,6 +765,16 @@ export function selfWrap(groupId: string, req: SelfWrapRequest): Promise<void> {
 }
 
 /**
+ * POST /api/groups/{id}/convert-open -- #61. An admin converts a Rotating group
+ * to Open, once and never back. No body. 409 codes: `rotation_in_progress`
+ * (a removal is still running), `members_behind` (someone still waits on a
+ * wrap), `already_open`, `conflict_retry`. 403 for a non-admin.
+ */
+export function convertToOpen(groupId: string): Promise<void> {
+  return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/convert-open`)
+}
+
+/**
  * POST /api/groups/{id}/rotation/takeover -- #178. An admin at the leaver's
  * generation turns the marker a leaving member left into a rotation the admin
  * mints. 409 codes: `rotation_not_active` (it finished, another admin got there

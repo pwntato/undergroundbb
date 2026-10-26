@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { getGroup, getKeychain, updateGroup } from '@/lib/api/groups'
+import { convertToOpen, getGroup, getKeychain, updateGroup } from '@/lib/api/groups'
 import { decryptGroupNames, encryptGroupText } from '@/lib/crypto/worker-client'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { fetchNameChain } from '@/lib/groups/nameChain'
@@ -17,8 +17,10 @@ import { useSession } from '@/lib/session/useSession'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import {
+  convertGroupToOpen,
   loadGroupSettings,
   saveGroupSettings,
+  type ConvertOpenResult,
   type SaveSettingsResult,
   type SettingsForm,
   type SettingsView,
@@ -41,6 +43,21 @@ const SAVE_ERRORS: Record<Exclude<SaveSettingsResult, { ok: true }>['kind'], str
     "We couldn't confirm whether your changes were saved. Reload to check before trying again.",
 }
 
+const CONVERT_ERRORS: Record<Exclude<ConvertOpenResult, { ok: true }>['kind'], string> = {
+  rotationInProgress:
+    'A key rotation is still running in this group. Finish it (open Members) and try again.',
+  membersBehind:
+    'Some members have not been moved to the current key yet. Open Members to bring them up, then try again.',
+  alreadyOpen: 'This group is already Open. Reload to see it.',
+  retry: 'Another change was in progress. Try again.',
+  forbidden: 'Only a group admin can convert this group.',
+  authRequired: 'Your session has expired. Log in again and retry.',
+  notFound: 'This group no longer exists, or you are no longer a member.',
+  rejected: 'The server rejected the conversion.',
+  ambiguous:
+    "We couldn't confirm whether the group was converted. Reload to check before trying again.",
+}
+
 export function GroupSettingsScreen() {
   const { groupId } = useParams<{ groupId: string }>()
   const session = useSession()
@@ -49,6 +66,8 @@ export function GroupSettingsScreen() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [converting, setConverting] = useState(false)
+  const [convertError, setConvertError] = useState<string | null>(null)
   // A save found the worker's keys cold (reload, new tab, deploy). /login would
   // bounce a signed-in user, so ask for the password in place (#217).
   const [needsReauth, setNeedsReauth] = useState(false)
@@ -127,6 +146,29 @@ export function GroupSettingsScreen() {
     })()
   }
 
+  const handleConvert = () => {
+    if (load.status !== 'ready') {
+      return
+    }
+    setConverting(true)
+    setConvertError(null)
+    void (async () => {
+      const outcome = await convertGroupToOpen({ convertToOpen }, load.view.detail.groupId)
+      setConverting(false)
+      if (outcome.ok) {
+        setMessage('This group is now Open.')
+      } else {
+        setConvertError(
+          outcome.kind === 'rejected' ? outcome.message : CONVERT_ERRORS[outcome.kind],
+        )
+      }
+      // After a success, or when it was already Open, show the new mode.
+      if (outcome.ok || outcome.kind === 'alreadyOpen') {
+        await reload(() => false)
+      }
+    })()
+  }
+
   if (needsReauth && userId !== null) {
     return (
       <ReauthenticateStep
@@ -172,6 +214,9 @@ export function GroupSettingsScreen() {
           onReauthenticate={() => {
             setNeedsReauth(true)
           }}
+          onConvert={handleConvert}
+          converting={converting}
+          convertError={convertError}
           saving={saving}
           message={message}
           error={error}

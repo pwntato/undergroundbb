@@ -303,3 +303,50 @@ export async function saveGroupSettings(
     return { ok: false, kind: 'ambiguous' }
   }
 }
+
+export type ConvertOpenResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly kind: 'authRequired' | 'forbidden' | 'notFound' }
+  // 409 with the server's code: the group is not settled, or already Open.
+  | {
+      readonly ok: false
+      readonly kind: 'rotationInProgress' | 'membersBehind' | 'alreadyOpen' | 'retry'
+    }
+  | { readonly ok: false; readonly kind: 'rejected'; readonly message: string }
+  // Network failure or 5xx: the conversion may or may not have committed.
+  | { readonly ok: false; readonly kind: 'ambiguous' }
+
+export interface ConvertOpenDeps {
+  readonly convertToOpen: (groupId: string) => Promise<void>
+}
+
+/** Converts a Rotating group to Open (#61), mapping the server's refusals to what the screen says. */
+export async function convertGroupToOpen(
+  deps: ConvertOpenDeps,
+  groupId: string,
+): Promise<ConvertOpenResult> {
+  try {
+    await deps.convertToOpen(groupId)
+    return { ok: true }
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (err.status === 401) return { ok: false, kind: 'authRequired' }
+      if (err.status === 403) return { ok: false, kind: 'forbidden' }
+      if (err.status === 404) return { ok: false, kind: 'notFound' }
+      if (err.status === 409) {
+        switch (err.code) {
+          case 'rotation_in_progress':
+            return { ok: false, kind: 'rotationInProgress' }
+          case 'members_behind':
+            return { ok: false, kind: 'membersBehind' }
+          case 'already_open':
+            return { ok: false, kind: 'alreadyOpen' }
+          default:
+            return { ok: false, kind: 'retry' }
+        }
+      }
+      if (err.status < 500) return { ok: false, kind: 'rejected', message: err.message }
+    }
+    return { ok: false, kind: 'ambiguous' }
+  }
+}

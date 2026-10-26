@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  CONVERT_OPEN_WARNING,
+  convertConfirmed,
   FALLBACK_EXPIRATION_DAYS,
   MAX_EXPIRATION_DAYS,
   revocationText,
@@ -37,6 +39,9 @@ export function GroupSettingsPanel({
   view,
   onSave,
   onReauthenticate,
+  onConvert,
+  converting,
+  convertError,
   saving,
   message,
   error,
@@ -45,6 +50,10 @@ export function GroupSettingsPanel({
   readonly onSave: (form: SettingsForm) => void
   /** Asks for the password so the worker's keys are warm again (the cold-keys notice's way out). */
   readonly onReauthenticate: () => void
+  /** Converts the group to Open (#61); the screen reloads on success. */
+  readonly onConvert: () => void
+  readonly converting: boolean
+  readonly convertError: string | null
   readonly saving: boolean
   readonly message: string | null
   readonly error: string | null
@@ -60,6 +69,8 @@ export function GroupSettingsPanel({
     String(detail.expirationDays === 0 ? FALLBACK_EXPIRATION_DAYS : detail.expirationDays),
   )
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [confirmingConvert, setConfirmingConvert] = useState(false)
+  const [typedName, setTypedName] = useState('')
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -133,6 +144,77 @@ export function GroupSettingsPanel({
             : `Messages expire after ${String(detail.expirationDays)} days.`}
         </p>
       </section>
+
+      {canEdit && detail.revocationMode === 'rotating' && (
+        <section aria-labelledby="convert-heading" className="flex flex-col gap-2 border-t pt-4">
+          <h2 id="convert-heading" className="text-sm font-medium">
+            Convert to Open
+          </h2>
+          {!confirmingConvert ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Switch this group from Rotating to Open. This is permanent.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="self-start"
+                onClick={() => {
+                  setConfirmingConvert(true)
+                }}
+              >
+                Convert to Open
+              </Button>
+            </>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                {CONVERT_OPEN_WARNING.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+              <Label htmlFor="convert-confirm">
+                Type the group name ({view.name ?? ''}) to confirm
+              </Label>
+              <Input
+                id="convert-confirm"
+                type="text"
+                value={typedName}
+                autoComplete="off"
+                onChange={(e) => {
+                  setTypedName(e.target.value)
+                }}
+              />
+              {convertError !== null && (
+                <Alert variant="destructive">
+                  <AlertDescription>{convertError}</AlertDescription>
+                </Alert>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={converting || !convertConfirmed(typedName, view.name)}
+                  onClick={onConvert}
+                >
+                  {converting ? 'Converting…' : 'Convert this group to Open'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={converting}
+                  onClick={() => {
+                    setConfirmingConvert(false)
+                    setTypedName('')
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {message !== null && (
         <Alert>
