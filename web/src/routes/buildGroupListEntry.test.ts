@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CreateGroupResult } from './runCreateGroup'
-import { buildGroupListEntry } from './CreateGroupScreen'
+import { buildGroupListEntry } from './buildGroupListEntry'
 
 const RESULT = {
   ok: true,
