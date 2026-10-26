@@ -1,6 +1,7 @@
 // Package backfill coarsens the full-resolution Record.CreatedAt that rows
-// written before issues #147 and #258 (#259) still carry. It lives outside internal/db because
-// it needs a table Scan, which no request-serving code may use: the web
+// written before #147 still carry, and before #259 for Admission,
+// GenerationKey and Rotation rows. It lives outside internal/db because it
+// needs a table Scan, which no request-serving code may use: the web
 // Lambda's IAM test (db/lambda_iam_test.go) scans package db's source, and
 // cmd/backfill has its own role (terraform/backfill.tf).
 package backfill
@@ -42,6 +43,9 @@ type Report struct {
 	// accounts' PROFILE (the purge needs it), MEMBER# rows already at midnight
 	// UTC, and rows of any other Type.
 	Kept int `json:"kept"`
+	// KeptByType breaks Kept down by Type, so a dry run shows any type that
+	// still carries a CreatedAt this backfill does not know about.
+	KeptByType map[string]int `json:"keptByType"`
 	// Unparsed counts MEMBER# rows whose CreatedAt is not RFC 3339. They are
 	// left alone, but the successor claim already refuses such a row
 	// (designation_before_join), so each is logged by key to be looked at.
@@ -122,7 +126,7 @@ func strAttr(item map[string]types.AttributeValue, k string) string {
 // counted as raced rather than overwritten. A dry run reports what a real run
 // would do.
 func Run(ctx context.Context, api API, table string, opts Options) (Report, error) {
-	rep := Report{DryRun: opts.DryRun, Removed: map[string]int{}}
+	rep := Report{DryRun: opts.DryRun, Removed: map[string]int{}, KeptByType: map[string]int{}}
 	var start map[string]types.AttributeValue
 	for {
 		out, err := api.Scan(ctx, &dynamodb.ScanInput{
@@ -144,6 +148,7 @@ func Run(ctx context.Context, api API, table string, opts Options) (Report, erro
 			}
 			if act == keep {
 				rep.Kept++
+				rep.KeptByType[typ]++
 				continue
 			}
 			if !opts.DryRun {

@@ -169,6 +169,10 @@ func TestRunBackfillsEachRowType(t *testing.T) {
 	if rep.Truncated != 1 || rep.Kept != 3 || rep.Unparsed != 1 || rep.Raced != 0 || rep.Scanned != 13 {
 		t.Errorf("report = %+v, want Truncated 1, Kept 3, Unparsed 1, Raced 0, Scanned 13", rep)
 	}
+	wantKept := map[string]int{"User": 1, "Membership": 1, "Invite": 1}
+	if !reflect.DeepEqual(rep.KeptByType, wantKept) {
+		t.Errorf("KeptByType = %v, want %v", rep.KeptByType, wantKept)
+	}
 	if got := attr(t, w.c, w.table, w.rotation, "StartedAt"); got != fullRes {
 		t.Errorf("Rotation StartedAt = %q, want it untouched (%q)", got, fullRes)
 	}

@@ -1,5 +1,6 @@
 // Command backfill coarsens the full-resolution CreatedAt on rows written
-// before issue #147 (internal/backfill). It runs as a Lambda that nothing
+// before issue #147, and before #259 for Admission, GenerationKey and Rotation
+// rows (internal/backfill). It runs as a Lambda that nothing
 // schedules, invoked by hand, or once from a shell when AWS_LAMBDA_FUNCTION_NAME
 // is unset, which is how it is run against DynamoDB Local.
 //

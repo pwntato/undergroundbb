@@ -124,7 +124,7 @@ variable "purge_dry_run" {
 variable "backfill_dry_run" {
   type        = bool
   default     = true
-  description = "Whether the one-off CreatedAt backfill (cmd/backfill, #253) only reports what it would change. Set to false, in its own PR, for the run that writes."
+  description = "Whether the one-off CreatedAt backfill (cmd/backfill, #253, #258) only reports what it would change. Set to false, in its own PR, for the run that writes."
 }
 
 variable "alarm_email" {
