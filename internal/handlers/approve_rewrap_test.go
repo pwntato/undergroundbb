@@ -70,7 +70,7 @@ func TestApproveRewrapEndpointOpenGroupWrapsTheCurrentKey(t *testing.T) {
 	gid := createOpenGroup(t, h, owner, ownerCookie)
 	carol := registerTestUser(t, h)
 	addMember(t, gid, carol, "member")
-	rotateUser(t, h, carol, loginCookie(t, h, carol))
+	rotateUser(t, h, carol, loginCookie(t, h, carol), gid)
 
 	// Carol's entry is at the generation the owner holds, and an Open group has
 	// no re-key: the wrap replaces the copy the old keys hold.
