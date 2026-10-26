@@ -1760,7 +1760,16 @@ re-invited. With rotation the check **follows the `KEYCHANGE#` chain**: an admis
 that a verified chain of rotations carries to the served ones is accepted. The chain proves the
 served keys were introduced by a holder of the admitted ones, which is what an admission attests to
 about the invitee; it does not make the member readable (that is the dormant re-wrap) or grant
-anything the admission did not. (6) **Liveness.** An inviter whose keys can no longer be
+anything the admission did not. **As built (slice 5):** the check fetches the invitee's chain
+(`GET /api/users/{id}`) only when the admitted wrapping key is not the served one, and builds it
+as the caller's own is built (`buildOwnKeyHistory`: every link signed by both keys it names,
+epochs 1..n, each link's old signing and wrapping keys the previous link's new ones, ending at the
+served signing key). The admitted signing and wrapping keys must be one link's old pair, the last
+link must end at the served wrapping key, and the record's day must fall from the day the pair was
+introduced to the day of the rotation that replaced it (both keys are candidates on that day). No
+chain, an unreadable one or any failure reads as unadmitted. The pin check still runs afterwards,
+so a rotated member stays blocked until their key change is approved; what changes is that they no
+longer show as unadmitted with a Re-admit button. (6) **Liveness.** An inviter whose keys can no longer be
 read, or who has another grant dated from the ref grant's day through an admission's day (their role changed
 later on that admission's own day, or their current grant shares a day with an earlier one), leaves their
 invitees unadmitted until an
