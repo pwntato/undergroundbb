@@ -18,7 +18,7 @@ import {
   ownSignerAccepted,
 } from './own-history.js'
 import { keysOnDay } from './grant-chain.js'
-import { makeKeyChange, rowId } from './own-history.testkit.js'
+import { makeKeyChange, rowId, wrapForEpoch } from './own-history.testkit.js'
 
 const ME = 'a0000000-0000-4000-8000-000000000001'
 const BOB = 'b0000000-0000-4000-8000-000000000002'
@@ -449,5 +449,39 @@ describe('ownKeyHistoryForVerifiers', () => {
   it('has both keys on a rotation day', () => {
     expect(keyIdsOn('2026-10-01').sort()).toEqual([0, 1])
     expect(keyIdsOn('2026-10-10').sort()).toEqual([1, 2])
+  })
+})
+
+describe('buildOwnKeyHistory: wrapping keys (#62)', () => {
+  it("rejects a chain whose second link does not start at the first link's new wrapping key", () => {
+    const a = makeKeyChange({ userId: ME, from: k0, to: k1, epoch: 1, day: '2026-10-01' })
+    const b = makeKeyChange({
+      userId: ME,
+      from: k1,
+      to: k2,
+      epoch: 2,
+      day: '2026-10-10',
+      oldWrapping: new Uint8Array(32).fill(99),
+    })
+    expect(
+      buildOwnKeyHistory({
+        userId: ME,
+        ownSigningKey: k2.publicKey,
+        changes: [a.change, b.change],
+        rosters: [],
+      }),
+    ).toBeNull()
+  })
+
+  it("keeps each link's wrapping pair", () => {
+    const a = makeKeyChange({ userId: ME, from: k0, to: k1, epoch: 1, day: '2026-10-01' })
+    const h = buildOwnKeyHistory({
+      userId: ME,
+      ownSigningKey: k1.publicKey,
+      changes: [a.change],
+      rosters: [],
+    })!
+    expect(Array.from(h.links[0]!.oldWrapping)).toEqual(Array.from(wrapForEpoch(0)))
+    expect(Array.from(h.links[0]!.newWrapping)).toEqual(Array.from(wrapForEpoch(1)))
   })
 })

@@ -7,8 +7,9 @@
 // A record admits a member if ALL of these hold:
 //   - it is the invitee's own: its keys are the ones the server now serves for
 //     them (the Ed25519 key among their served signing keys, the X25519 key
-//     equal to the served wrapping key). A record for other keys admits
-//     nobody at the address the server is offering;
+//     equal to the served wrapping key, or carried to it by the invitee's
+//     verified KEYCHANGE# chain once they have rotated). A record for other
+//     keys admits nobody at the address the server is offering;
 //   - the inviter's signature (Admission context) over admissionPayload
 //     verifies under a key the inviter held on the record's day, from their
 //     key history. The history is TRUSTED AS GIVEN: the caller must have
@@ -33,6 +34,7 @@
 // wrapped to.
 
 import { base64ToBytes } from './base64.js'
+import { chainCarriesKeys, type OwnKeyHistory } from './own-history.js'
 import { SigningContext, verify } from './ed25519.js'
 import {
   keysOnDay,
@@ -71,6 +73,12 @@ export interface VerifyAdmissionInput {
   readonly chain: GrantChainResult
   /** The inviter's key history; missing fails closed. Must be pin-checked. */
   readonly inviterHistory: UserKeyHistory | undefined
+  /**
+   * The invitee's verified KEYCHANGE# chain, ending at their served signing
+   * key. Only consulted when the admitted wrapping key is not the served one
+   * (the invitee rotated since); absent fails closed.
+   */
+  readonly inviteeHistory?: OwnKeyHistory | undefined
 }
 
 const DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -119,7 +127,12 @@ export function verifyAdmission(input: VerifyAdmissionInput): AdmissionVerdict {
     return reject('the admitted signing key is not one the server serves for this member')
   }
   const served = decode(input.inviteeWrappingKey, 32)
-  if (served === null || !sameBytes(served, x)) {
+  if (
+    served === null ||
+    (!sameBytes(served, x) &&
+      (input.inviteeHistory === undefined ||
+        !chainCarriesKeys(input.inviteeHistory, ed, x, record.day, served)))
+  ) {
     return reject('the admitted wrapping key is not the one the server serves for this member')
   }
 

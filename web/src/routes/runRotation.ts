@@ -56,12 +56,13 @@ import type {
   TakeOverRotationRequest,
 } from '@/lib/api/groups'
 import { MAX_REWRAP_BATCH } from '@/lib/api/groups'
-import type { UserProjection } from '@/lib/api/users'
+import type { UserDetail, UserProjection } from '@/lib/api/users'
 import { verifyAdmission, type AdmissionRecord } from '@/lib/crypto/admission'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, verify } from '@/lib/crypto/ed25519'
 import { rotationRekeyPayload, rotationStartPayload } from '@/lib/crypto/group'
 import { rekeyKindOk, removersOf, verifyRemovals } from '@/lib/crypto/removal'
+import { buildOwnKeyHistory, keysCarriedFrom, type OwnKeyHistory } from '@/lib/crypto/own-history'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import { ownHistoryFor, ownSigningKeysFor } from './ownHistory'
 import type {
@@ -88,6 +89,12 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
     userIds: readonly string[],
     onError?: (err: unknown) => void,
   ) => Promise<ReadonlyMap<string, UserProjection>>
+  /**
+   * One user with their KEYCHANGE# chain. Only read for a member whose admission
+   * names older keys than the served ones; absent (as in tests) means no chain,
+   * so such a member reads as unadmitted.
+   */
+  readonly getUserDetail?: (userId: string) => Promise<UserDetail>
   /** The caller's own current signing public key, base64. */
   readonly ownSigningKey: () => Promise<string>
   /** Every pin the caller holds, following nextCursor. A missing pin reads as first-sight, so a partial list is unsafe. */
@@ -434,7 +441,16 @@ async function runOnce(
             }
             admissions = loaded.context
           }
-          if (!isAdmitted(admissions, groupId, m.userId, servedForM)) {
+          let admitted: boolean
+          try {
+            admitted = await isAdmitted(deps, admissions, groupId, m.userId, servedForM)
+          } catch (err) {
+            if (err instanceof ChainReadError) {
+              return { status: 'incomplete', reason: err.message, rewrapped }
+            }
+            throw err
+          }
+          if (!admitted) {
             unadmitted.add(m.userId)
             if (!admissions.removedAt.has(m.userId)) readmittable.add(m.userId)
             continue
@@ -642,11 +658,29 @@ async function checkLeaverKey(
       ? { ok: true }
       : refuse("the start was not signed by the key the group's anchor names")
   }
-  if (!isAdmitted(context, groupId, leaverId, served)) {
-    return refuse('no admission signed for the keys served for them')
+  try {
+    if (!(await isAdmitted(deps, context, groupId, leaverId, served))) {
+      return refuse('no admission signed for the keys served for them')
+    }
+  } catch (err) {
+    if (err instanceof ChainReadError) return { ok: false, reason: err.message }
+    throw err
   }
   const record = context.byInvitee.get(leaverId)
-  return record !== undefined && signedBy([base64ToBytes(record.inviteeEd25519PublicKey)])
+  // A leaver who rotated before leaving signs with their live key, which the
+  // admission does not name: the chain isAdmitted verified carried the admitted
+  // keys to it, so every key from the admitted link onward counts too.
+  const history = context.inviteeHistories.get(leaverId)
+  const signers =
+    record === undefined
+      ? []
+      : [
+          base64ToBytes(record.inviteeEd25519PublicKey),
+          ...(history
+            ? keysCarriedFrom(history, base64ToBytes(record.inviteeEd25519PublicKey))
+            : []),
+        ]
+  return record !== undefined && signedBy(signers)
     ? { ok: true }
     : refuse('the start was not signed by the key their admission names')
 }
@@ -657,6 +691,8 @@ export interface AdmissionContext {
   readonly byInvitee: ReadonlyMap<string, AdmissionRecord>
   /** Whom the signed removal history says was removed, and at which generation (#178). */
   readonly removedAt: ReadonlyMap<string, number>
+  /** Verified chains of members who rotated since their admission, read at most once per pass; null = unverifiable. */
+  readonly inviteeHistories: Map<string, OwnKeyHistory | null>
 }
 
 // A list this deep means the server is not honoring nextCursor; stop.
@@ -718,6 +754,7 @@ export async function loadAdmissions(
         chain,
         byInvitee: new Map(records.map((r) => [r.inviteeUserId, r])),
         removedAt: removals.removedAt,
+        inviteeHistories: new Map(),
       },
     }
   } catch (err) {
@@ -735,12 +772,13 @@ export async function loadAdmissions(
  * otherwise indistinguishable from a rejoin (#178). That includes the creator,
  * who is exempt only while nobody removed them.
  */
-export function isAdmitted(
+export async function isAdmitted(
+  deps: Pick<RotationDeps, 'getUserDetail'>,
   ctx: AdmissionContext,
   groupId: string,
   userId: string,
   served: UserProjection,
-): boolean {
+): Promise<boolean> {
   const removedAt = ctx.removedAt.get(userId)
   if (userId === ctx.chain.anchor.creatorUserId && removedAt === undefined) return true
   const record = ctx.byInvitee.get(userId)
@@ -754,8 +792,46 @@ export function isAdmitted(
     inviteeWrappingKey: served.wrappingPublicKey,
     chain: ctx.chain.result,
     inviterHistory: ctx.chain.keyHistories.get(record.inviterUserId),
+    inviteeHistory:
+      record.inviteeX25519PublicKey === served.wrappingPublicKey
+        ? undefined
+        : await inviteeHistoryFor(deps, ctx, userId, served),
   }).ok
 }
+
+/**
+ * The verified chain of a member whose admission names an older wrapping key
+ * than the one served (they rotated), or undefined when it cannot be had or
+ * does not verify up to the served signing key: such a member then reads as
+ * unadmitted, which only ever shrinks who is wrapped to. A failed read throws
+ * ChainReadError (not cached, so a later call retries it), so a server that
+ * withholds chains stops the run with a reason instead of offering Re-admit.
+ */
+async function inviteeHistoryFor(
+  deps: Pick<RotationDeps, 'getUserDetail'>,
+  ctx: AdmissionContext,
+  userId: string,
+  served: UserProjection,
+): Promise<OwnKeyHistory | undefined> {
+  if (ctx.inviteeHistories.has(userId)) return ctx.inviteeHistories.get(userId) ?? undefined
+  if (deps.getUserDetail === undefined) return undefined
+  try {
+    const detail = await deps.getUserDetail(userId)
+    const history = buildOwnKeyHistory({
+      userId,
+      ownSigningKey: base64ToBytes(served.signingPublicKey),
+      changes: detail.keyChanges,
+      rosters: [],
+    })
+    ctx.inviteeHistories.set(userId, history)
+    return history ?? undefined
+  } catch (err) {
+    throw new ChainReadError(`could not read the key history of ${userId}: ${describe(err)}`)
+  }
+}
+
+/** A failed read of a member's key chain: not the same as a chain that does not verify. */
+export class ChainReadError extends Error {}
 
 type SignerKeys =
   | { readonly ok: true; readonly keys: ReadonlyMap<string, Uint8Array[] | null> }

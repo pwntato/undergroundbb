@@ -30,7 +30,13 @@ import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type { SignReadmissionRequest, SignReadmissionResult } from '@/lib/crypto/worker-protocol'
 import { ownHistoryFor } from './ownHistory'
 import { isLiveKeysError } from './runListGroups'
-import { isAdmitted, loadAdmissions, type RotationDeps, type RotationOutcome } from './runRotation'
+import {
+  ChainReadError,
+  isAdmitted,
+  loadAdmissions,
+  type RotationDeps,
+  type RotationOutcome,
+} from './runRotation'
 
 export interface ReadmitDeps extends RotationDeps {
   readonly signReadmission: (
@@ -163,8 +169,13 @@ async function inspect(
   // Before anything else about the record: a removed member is never offered,
   // whatever their old admission says.
   if (loaded.context.removedAt.has(subjectUserId)) return { ok: false, kind: 'removed' }
-  if (isAdmitted(loaded.context, groupId, subjectUserId, served)) {
-    return { ok: false, kind: 'alreadyAdmitted' }
+  try {
+    if (await isAdmitted(deps, loaded.context, groupId, subjectUserId, served)) {
+      return { ok: false, kind: 'alreadyAdmitted' }
+    }
+  } catch (err) {
+    if (err instanceof ChainReadError) return { ok: false, kind: 'unchecked', reason: err.message }
+    throw err
   }
 
   let print: string
