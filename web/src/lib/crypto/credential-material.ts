@@ -21,9 +21,11 @@ import {
   successorClaimPayload,
   admissionPayload,
   rotationRekeyPayload,
+  wrapRecordPayload,
   rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
+  type RekeyReason,
 } from './group.js'
 import { fingerprint } from './fingerprint.js'
 import { handoffWrapAAD } from './key-rotation.js'
@@ -430,6 +432,38 @@ export function signSuccessorClaim(
   const payload = successorClaimPayload(groupId, keys.userId, designationSortKey, claimSortKey)
   const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.SuccessorClaim, payload)
   return { claimSortKey, signature: bytesToBase64(signature) }
+}
+
+/**
+ * #280: signs the wrap record for a member's group-key entry, under the
+ * caller's own current signing key. generation and keyEpoch are the entry's
+ * own after the write: the generation the entry is wrapped at and the member's
+ * KeyEpoch it is wrapped to (what the server stores as WrapEpoch). The reason
+ * must agree with the parties: 'self' only for the caller's own entry,
+ * 'approval' only for someone else's, as the server's endpoint fixes it. The
+ * signed day is today (UTC), judged by the server with a pin's window.
+ */
+export function signWrapRecord(
+  keys: LiveKeys,
+  groupId: string,
+  memberUserId: string,
+  generation: number,
+  keyEpoch: number,
+  reason: RekeyReason,
+  now: Date = new Date(),
+): { wrapSignature: string; wrapDay: string } {
+  if ((reason === 'self') !== (memberUserId === keys.userId)) {
+    throw new Error(
+      "crypto: a wrap record's reason must be 'self' exactly for the caller's own entry",
+    )
+  }
+  const wrapDay = now.toISOString().slice(0, 10)
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.WrapRecord,
+    wrapRecordPayload(groupId, keys.userId, memberUserId, generation, keyEpoch, reason, wrapDay),
+  )
+  return { wrapSignature: bytesToBase64(signature), wrapDay }
 }
 
 /**

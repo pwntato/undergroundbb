@@ -43,6 +43,7 @@ import type {
   StartApprovalRekeyResult,
 } from '@/lib/crypto/worker-protocol'
 import { ownHistoryFor } from './ownHistory'
+import { wrapRecordFor, type SignWrapRecord } from './wrapRecord'
 import { servedFingerprint } from './runMemberVerification'
 import { isLiveKeysError } from './runListGroups'
 import type { RotationDeps } from './runRotation'
@@ -61,6 +62,8 @@ export interface ApproveDeps extends RotationDeps {
   readonly startApprovalCrypto: (
     req: Omit<StartApprovalRekeyRequest, 'kind' | 'id'>,
   ) => Promise<StartApprovalRekeyResult>
+  /** Signs who wrapped (#280); absent in a caller that does not, and then no record is sent. */
+  readonly signWrapRecord?: SignWrapRecord
 }
 
 export type ApproveFailure =
@@ -343,6 +346,14 @@ async function tryRewrap(ctx: Context): Promise<Attempt> {
       generation: detail.generation,
       wrappedKey,
       keyEpoch: served.keyEpoch,
+      ...(await wrapRecordFor(deps.signWrapRecord, {
+        userId: deps.selfUserId,
+        groupId,
+        memberUserId: subjectUserId,
+        generation: detail.generation,
+        keyEpoch: served.keyEpoch,
+        reason: 'approval',
+      })),
     })
     return { ok: true, how: 'rewrap' }
   } catch (err) {
@@ -390,6 +401,14 @@ async function tryRekey(ctx: Context): Promise<Attempt> {
       startSignature: minted.startSignature,
       memberWrappedKey: minted.memberWrappedKey,
       memberKeyEpoch: served.keyEpoch,
+      ...(await wrapRecordFor(deps.signWrapRecord, {
+        userId: deps.selfUserId,
+        groupId,
+        memberUserId: subjectUserId,
+        generation: minted.generation,
+        keyEpoch: served.keyEpoch,
+        reason: 'approval',
+      })),
     })
     return { ok: true, how: 'rekey' }
   } catch (err) {

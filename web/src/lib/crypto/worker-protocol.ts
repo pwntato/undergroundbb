@@ -321,6 +321,33 @@ export interface SignPinResponse {
 }
 
 /**
+ * Signs who wrapped a member's group-key entry (#280) with the worker's own
+ * liveKeys. generation and keyEpoch are the entry's own after the write; the
+ * reason is 'self' exactly when memberUserId is the caller.
+ */
+export interface SignWrapRecordRequest {
+  readonly kind: 'signWrapRecord'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly memberUserId: string
+  readonly generation: number
+  readonly keyEpoch: number
+  readonly reason: 'self' | 'approval'
+}
+
+export interface SignWrapRecordResult {
+  readonly wrapSignature: string
+  readonly wrapDay: string
+}
+
+export interface SignWrapRecordResponse {
+  readonly kind: 'signWrapRecordDone'
+  readonly id: string
+  readonly result: SignWrapRecordResult
+}
+
+/**
  * Signs a verification of another user's fingerprint (issue #65) with the
  * worker's own liveKeys. The fingerprint is the 60-digit string the person
  * compared out loud.
@@ -912,6 +939,7 @@ export type WorkerRequest =
   | SignSuccessorDesignationRequest
   | SignSuccessorClaimRequest
   | SignPinRequest
+  | SignWrapRecordRequest
   | SignVerificationRequest
   | GetOwnSigningKeyRequest
   | GetOwnFingerprintRequest
@@ -946,6 +974,7 @@ export type WorkerResponse =
   | SignSuccessorDesignationResponse
   | SignSuccessorClaimResponse
   | SignPinResponse
+  | SignWrapRecordResponse
   | SignVerificationResponse
   | GetOwnSigningKeyResponse
   | GetOwnFingerprintResponse

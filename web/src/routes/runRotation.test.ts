@@ -4,7 +4,7 @@
 // realistic state changes rather than canned replies. Pins are signed with real
 // keys, so a pin rejection is evaluatePin's decision, not a malformed fixture.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type {
   ApproveRekeyRequest,
@@ -3189,6 +3189,8 @@ describe('approving a dormant member (#62)', () => {
       rekeyError?: Error
       /** Throw this even though the write is stored, like a lost response. */
       landThenThrow?: Error
+      /** Signs who wrapped (#280); absent means the caller signs nothing. */
+      sign?: ApproveDeps['signWrapRecord']
     } = {},
   ): { deps: ApproveDeps; calls: Calls } {
     const calls: Calls = { order: [], rewraps: [], rekeys: [], minted: [] }
@@ -3199,6 +3201,7 @@ describe('approving a dormant member (#62)', () => {
     }
     const deps: ApproveDeps = {
       ...base,
+      ...(o.sign !== undefined && { signWrapRecord: o.sign }),
       getGroup: async (g) => ({
         ...(await base.getGroup(g)),
         role: o.role ?? 'admin',
@@ -3286,6 +3289,54 @@ describe('approving a dormant member (#62)', () => {
     const { deps, calls } = approveDeps(f, { role: 'ambassador' })
     expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
     expect(calls.rewraps).toHaveLength(1)
+  })
+
+  describe('the wrap record (#280)', () => {
+    const signed = () =>
+      vi.fn((_req: unknown) => Promise.resolve({ wrapSignature: 'ws', wrapDay: '2026-10-27' }))
+
+    it('signs a plain wrap for the entry it writes, and sends the signature with it', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const sign = signed()
+      const { deps, calls } = approveDeps(f, { sign })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+      expect(sign).toHaveBeenCalledTimes(1)
+      expect(sign).toHaveBeenCalledWith({
+        userId: deps.selfUserId,
+        groupId: GROUP,
+        memberUserId: x.id,
+        generation: 1,
+        keyEpoch: 1,
+        reason: 'approval',
+      })
+      expect(calls.rewraps[0]!.body).toMatchObject({ wrapSignature: 'ws', wrapDay: '2026-10-27' })
+    })
+
+    it('signs a re-key for the generation it mints, not the one it started from', async () => {
+      const { f, x } = setup({ memberGeneration: 1 })
+      const sign = signed()
+      const { deps, calls } = approveDeps(f, { sign })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rekey' })
+      expect(sign).toHaveBeenCalledWith({
+        userId: deps.selfUserId,
+        groupId: GROUP,
+        memberUserId: x.id,
+        generation: 2,
+        keyEpoch: 1,
+        reason: 'approval',
+      })
+      expect(calls.rekeys[0]!.body).toMatchObject({ wrapSignature: 'ws', wrapDay: '2026-10-27' })
+    })
+
+    it('approves without a record when signing fails: the record is evidence, not a gate', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const sign = vi.fn(() => Promise.reject(new Error('worker went away')))
+      const { deps, calls } = approveDeps(f, { sign })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+      expect(sign).toHaveBeenCalledTimes(1)
+      expect(calls.rewraps[0]!.body).not.toHaveProperty('wrapSignature')
+      expect(calls.rewraps[0]!.body).not.toHaveProperty('wrapDay')
+    })
   })
 
   it('wraps plainly in an Open group whatever the member generation', async () => {

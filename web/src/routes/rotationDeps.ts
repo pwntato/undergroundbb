@@ -27,6 +27,7 @@ import {
   rewrapGroupKey,
   signPin,
   signReadmission,
+  signWrapRecord,
   startApprovalRekey,
   startGroupRotation,
   selfWrapFromHandoff,
@@ -92,6 +93,7 @@ export function makeSelfRekeyDeps(userId: string): SelfRekeyDeps {
     selfWrapCrypto: selfWrapFromHandoff,
     selfWrap,
     deleteHandoff,
+    signWrapRecord,
   }
 }
 
@@ -112,6 +114,7 @@ export function makeApproveDeps(userId: string): ApproveDeps {
     approveRewrap,
     approveRekey,
     startApprovalCrypto: startApprovalRekey,
+    signWrapRecord,
   }
 }
 

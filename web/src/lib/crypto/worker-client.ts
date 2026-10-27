@@ -61,13 +61,16 @@ import type {
   SignGroupCreationResponse,
   SignGroupCreationResult,
   SignPinRequest,
+  SignWrapRecordRequest,
   SignVerificationRequest,
   SignReadmissionRequest,
   SignReadmissionResponse,
   SignReadmissionResult,
   SignPinResponse,
+  SignWrapRecordResponse,
   SignVerificationResponse,
   SignPinResult,
+  SignWrapRecordResult,
   SignVerificationResult,
   GetOwnFingerprintRequest,
   GetOwnFingerprintResponse,
@@ -522,6 +525,37 @@ export function signPin(req: Omit<SignPinRequest, 'kind' | 'id'>): Promise<SignP
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signPin`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Signs who wrapped a member's group-key entry -- #280. Uses the worker's own cached liveKeys. */
+export function signWrapRecord(
+  req: Omit<SignWrapRecordRequest, 'kind' | 'id'>,
+): Promise<SignWrapRecordResult> {
+  const id = nextRequestID()
+  const fullReq: SignWrapRecordRequest = { kind: 'signWrapRecord', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signWrapRecordDone') {
+        resolve((msg as SignWrapRecordResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signWrapRecord`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

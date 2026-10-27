@@ -29,6 +29,7 @@ import {
   ownFingerprint,
   signInviteCreation,
   signPin,
+  signWrapRecord,
   signReadmission,
   signRoleGrant,
   signSuccessorClaim,
@@ -51,6 +52,7 @@ import {
   successorClaimPayload,
   successorDesignationPayload,
   trustAnchorPayload,
+  wrapRecordPayload,
 } from './group.js'
 import {
   computeInviteMAC,
@@ -1117,6 +1119,50 @@ describe('signRoleGrant', () => {
     const a = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
     const b = signRoleGrant(keys, GROUP_ID, SUBJECT_ID, 'member', GRANTOR_REF)
     expect(a.grantSortKey).not.toBe(b.grantSortKey)
+  })
+})
+
+describe('signWrapRecord (#280)', () => {
+  const WRAPPER = '66666666-6666-4666-8666-666666666666'
+  const MEMBER = '77777777-7777-4777-8777-777777777777'
+  const GROUP = '88888888-8888-4888-8888-888888888888'
+  const at = new Date('2026-10-27T23:59:59Z')
+
+  // A hand-built LiveKeys: signing reads only userId and signingKey, so this
+  // stays off the Argon2 path like signPin's test.
+  const keysFor = (userId: string) => ({
+    userId,
+    signingKey: ed25519.generateSigningKey(),
+    wrappingKey: undefined as never,
+  })
+
+  it('signs exactly the payload a reader rebuilds from the entry, under its own context', () => {
+    const keys = keysFor(WRAPPER)
+    const signed = signWrapRecord(keys, GROUP, MEMBER, 5, 3, 'approval', at)
+    expect(signed.wrapDay).toBe('2026-10-27')
+    const sig = base64ToBytes(signed.wrapSignature)
+    const payload = wrapRecordPayload(GROUP, WRAPPER, MEMBER, 5, 3, 'approval', '2026-10-27')
+    const verifyUnder = (ctx: ed25519.SigningContext, p = payload) =>
+      ed25519.verify(keys.signingKey.publicKey, ctx, p, sig)
+    expect(verifyUnder(ed25519.SigningContext.WrapRecord)).toBe(true)
+    // Another context, generation, epoch, reason, member or day does not verify.
+    expect(verifyUnder(ed25519.SigningContext.RotationRekey)).toBe(false)
+    expect(verifyUnder(ed25519.SigningContext.Admission)).toBe(false)
+    for (const other of [
+      wrapRecordPayload(GROUP, WRAPPER, MEMBER, 6, 3, 'approval', '2026-10-27'),
+      wrapRecordPayload(GROUP, WRAPPER, MEMBER, 5, 4, 'approval', '2026-10-27'),
+      wrapRecordPayload(GROUP, WRAPPER, WRAPPER, 5, 3, 'self', '2026-10-27'),
+      wrapRecordPayload(GROUP, WRAPPER, MEMBER, 5, 3, 'approval', '2026-10-26'),
+    ]) {
+      expect(verifyUnder(ed25519.SigningContext.WrapRecord, other)).toBe(false)
+    }
+  })
+
+  it("refuses a reason that does not fit the parties: 'self' is the caller's own entry only", () => {
+    const keys = keysFor(WRAPPER)
+    expect(() => signWrapRecord(keys, GROUP, MEMBER, 5, 3, 'self', at)).toThrow(/reason/)
+    expect(() => signWrapRecord(keys, GROUP, WRAPPER, 5, 3, 'approval', at)).toThrow(/reason/)
+    expect(() => signWrapRecord(keys, GROUP, WRAPPER, 5, 3, 'self', at)).not.toThrow()
   })
 })
 
