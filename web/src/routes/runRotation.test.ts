@@ -903,7 +903,12 @@ describe('runRotation', () => {
 
       const out = await runRotation(f.deps(), GROUP)
 
-      expect(out).toEqual({ status: 'blocked', blocked: [swapped.id], rewrapped: 1 })
+      expect(out).toEqual({
+        status: 'blocked',
+        blocked: [swapped.id],
+        changed: [swapped.id],
+        rewrapped: 1,
+      })
       expect(f.cryptoRecipients.flat()).toEqual([ok.id])
       expect(f.gen(swapped)).toBe(0)
       expect(f.completed).toEqual([])
@@ -942,7 +947,7 @@ describe('runRotation', () => {
         f.admissions.set(x.id, admissionOf(x, { keys: { x: new Uint8Array(32).fill(251) } }))
       }
       const out = await runRotation(f.deps(), GROUP)
-      expect(out).toEqual({ status: 'blocked', blocked: [x.id], rewrapped: 0 })
+      expect(out).toEqual({ status: 'blocked', blocked: [x.id], changed: [x.id], rewrapped: 0 })
       expect(f.pinned).toEqual([x.id]) // pinned once, never re-pinned
       expect(f.gen(x)).toBe(0)
       expect(f.completed).toEqual([])
@@ -955,6 +960,7 @@ describe('runRotation', () => {
       f.add(p, 'member', 0, forged)
       const out = await runRotation(f.deps(), GROUP)
       expect(out).toMatchObject({ status: 'blocked', blocked: [p.id] })
+      expect(out).not.toHaveProperty('changed') // no accept action for a bad signature
       expect(f.cryptoRecipients).toEqual([])
     })
 
@@ -2233,6 +2239,26 @@ describe('runRotation', () => {
       expect(note?.text).toContain('<x>, <y>')
       expect(note?.text).toContain('NOT given the new group key')
       expect(note?.text).not.toContain('invitation')
+    })
+
+    it('tells the admin a changed member can be accepted, apart from a plain pin failure', () => {
+      const one = describeRotation(
+        { status: 'blocked', blocked: ['x'], changed: ['x'], rewrapped: 0 },
+        label,
+      )
+      expect(one?.kind).toBe('error')
+      expect(one?.text).toContain('<x> has new keys')
+      expect(one?.text).toContain('Accept key change')
+      expect(one?.text).not.toContain("<x> don't match")
+      expect(one?.text).toContain('NOT given the new group key')
+
+      const mixed = describeRotation(
+        { status: 'blocked', blocked: ['y', 'a', 'b'], changed: ['a', 'b'], rewrapped: 0 },
+        label,
+      )
+      expect(mixed?.text).toContain("<y> don't match")
+      expect(mixed?.text).toContain('<a>, <b> have new keys')
+      expect(mixed?.text).not.toContain('<y>, <a>')
     })
 
     it('names members no invitation backs, and says so apart from a pin mismatch', () => {
