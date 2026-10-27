@@ -191,6 +191,9 @@ describe('changed keys (#62)', () => {
     const users = usersOf({ ...bad, signingPublicKey: 'not base64!' }, rotated(CAROL, 1))
     const pins = [pinOf(BOB, old, 0), pinOf(CAROL, old, 0)]
     expect([...findChanged(members, users, ME, ctx(pins))]).toEqual([CAROL])
+    // A wrapping key that does not parse has no fingerprint to compare either.
+    const noFp = usersOf({ ...bad, wrappingPublicKey: 'not base64!' }, rotated(CAROL, 1))
+    expect([...findChanged(members, noFp, ME, ctx(pins))]).toEqual([CAROL])
   })
 
   it('leaves out the caller, a deleted account and a missing projection', () => {
