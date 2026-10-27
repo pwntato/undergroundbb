@@ -259,6 +259,25 @@ export function acceptFailureMessage(outcome: Fail): string {
   return FAILURE_MESSAGES[outcome.kind]
 }
 
+/**
+ * Who wrapped their entry, in words for the person comparing the fingerprint
+ * (#280). `label` names the wrapper. Evidence only: it never decides anything.
+ */
+export function wrapEvidenceText(wrap: WrapEvidence, label: (userId: string) => string): string {
+  switch (wrap.kind) {
+    case 'approved':
+      return `Their new keys were wrapped by ${label(wrap.wrapperUserId)}.`
+    case 'self':
+      return 'They wrapped their own new keys (self-approved).'
+    case 'none':
+      return 'No signed record of who wrapped their new keys.'
+    case 'invalid':
+      return "A record is attached, but its signature doesn't check out."
+    case 'unchecked':
+      return 'Could not check who wrapped their new keys.'
+  }
+}
+
 /** What the server's own history says, in words for the person comparing the fingerprint. */
 export function evidenceText(evidence: KeyChangeEvidence): string {
   switch (evidence) {

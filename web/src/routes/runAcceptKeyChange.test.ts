@@ -13,6 +13,7 @@ import {
   evidenceText,
   prepareAcceptKeyChange,
   runAcceptKeyChange,
+  wrapEvidenceText,
   type AcceptKeyChangeDeps,
 } from './runAcceptKeyChange'
 
@@ -125,7 +126,10 @@ describe('accepting a key change', () => {
 
   it('says when nothing links the saved keys to the served ones', async () => {
     const { deps } = setup({ served: served({ keyChanges: [] }) })
-    expect(await prepareAcceptKeyChange(deps, X, CTX)).toMatchObject({ ok: true, evidence: 'no-link' })
+    expect(await prepareAcceptKeyChange(deps, X, CTX)).toMatchObject({
+      ok: true,
+      evidence: 'no-link',
+    })
     const bad = served()
     const tampered = [{ ...bad.keyChanges[0]!, newSignature: b64(new Uint8Array(64).fill(1)) }]
     const t = setup({ served: served({ keyChanges: tampered }) })
@@ -166,7 +170,10 @@ describe('accepting a key change', () => {
     })
     // The history loaded and the pin still does not verify: that is tampering.
     const loaded: AcceptKeyChangeDeps = { ...deps, ownKeyHistoryFailure: async () => null }
-    expect(await prepareAcceptKeyChange(loaded, X, CTX)).toEqual({ ok: false, kind: 'pinUnverifiable' })
+    expect(await prepareAcceptKeyChange(loaded, X, CTX)).toEqual({
+      ok: false,
+      kind: 'pinUnverifiable',
+    })
   })
 
   it('has nothing to accept when the keys match the pin or there is no pin', async () => {
@@ -174,7 +181,10 @@ describe('accepting a key change', () => {
       pin: pinOf(k1, WRAP_NEW, 1),
       served: served({ supersededSigningKeys: [] }),
     })
-    expect(await prepareAcceptKeyChange(same.deps, X, CTX)).toEqual({ ok: false, kind: 'notChanged' })
+    expect(await prepareAcceptKeyChange(same.deps, X, CTX)).toEqual({
+      ok: false,
+      kind: 'notChanged',
+    })
     const none = setup({ pin: null })
     expect(await runAcceptKeyChange(none.deps, X, printOfServed())).toEqual({
       ok: false,
@@ -213,7 +223,10 @@ describe('accepting a key change', () => {
 
   it('refuses to accept the caller', async () => {
     const { deps } = setup()
-    expect(await prepareAcceptKeyChange(deps, ME, CTX)).toMatchObject({ ok: false, kind: 'rejected' })
+    expect(await prepareAcceptKeyChange(deps, ME, CTX)).toMatchObject({
+      ok: false,
+      kind: 'rejected',
+    })
   })
 
   it('has words for every outcome', () => {
@@ -234,6 +247,23 @@ describe('accepting a key change', () => {
       expect(evidenceText(e)).toMatch(/\S/)
     }
     expect(evidenceText('no-link')).toContain('Only accept if')
+  })
+})
+
+describe('wrapEvidenceText', () => {
+  const label = (id: string) => `<${id}>`
+  it('words each outcome distinctly, and never calls an unreadable record "no record"', () => {
+    const texts = [
+      wrapEvidenceText({ kind: 'approved', wrapperUserId: ADMIN }, label),
+      wrapEvidenceText({ kind: 'self' }, label),
+      wrapEvidenceText({ kind: 'none' }, label),
+      wrapEvidenceText({ kind: 'invalid' }, label),
+      wrapEvidenceText({ kind: 'unchecked', reason: 'x' }, label),
+    ]
+    expect(new Set(texts).size).toBe(5)
+    expect(texts[0]).toContain(`<${ADMIN}>`)
+    expect(texts[4]).toMatch(/could not check/i)
+    expect(texts[4]).not.toMatch(/no signed record/i)
   })
 })
 

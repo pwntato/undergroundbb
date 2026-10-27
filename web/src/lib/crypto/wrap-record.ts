@@ -58,7 +58,10 @@ export function checkWrapRecord(input: {
   const { record } = input
   if (record === undefined) return { kind: 'none' }
   if (input.wrapEpoch === undefined) {
-    return { kind: 'unchecked', reason: 'the server did not say which keys the entry was wrapped to' }
+    return {
+      kind: 'unchecked',
+      reason: 'the server did not say which keys the entry was wrapped to',
+    }
   }
   const isSelf = record.reason === 'self'
   if (!isSelf && record.reason !== 'approval') return { kind: 'invalid' }
