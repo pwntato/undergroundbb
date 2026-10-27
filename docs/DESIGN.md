@@ -705,7 +705,14 @@ re-key approval just wrote. The record attests to the generation and the member 
 is wrapped to, not to the wrapped bytes, and that rewrite leaves both true. What it does and does
 not say: the server can withhold a
 record, which shows as "no signed record", but cannot forge one, move one to another member, group,
-generation or epoch, or turn a self wrap into an approval. It does not prove the wrapper was an
+generation or epoch, or turn a self wrap into an approval, provided the wrapper's keys are ones the
+reader already trusts: the reader checks a record only under keys anchored to its own key (when it
+wrapped the entry itself) or to its own pin of the wrapper (anyone else), and an unpinned or
+changed wrapper reads as "could not check", never "wrapped by". Where the subject wrapped their own
+entry, the keys are the very ones being questioned, so "self" only says whoever holds these new keys
+wrapped them. A superseded key of the wrapper that leaked can still sign a record dated anywhere in
+that key's interval, because nothing like the pin roster rules it out; that is accepted for
+evidence. It does not prove the wrapper was an
 admin or ambassador that day: the roster says so, unsigned, and proving it means walking the grant
 chain at every prompt, which is left out. Like the chain evidence it informs the person deciding and
 approves nothing.
