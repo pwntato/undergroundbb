@@ -232,6 +232,39 @@ describe('changed keys (#62)', () => {
     // A failed read is flagged, not silent: the empty set means "not checked".
     expect(broken.state === 'ready' && broken.changedUnavailable).toBe(true)
     expect(out.state === 'ready' && out.changedUnavailable).toBeUndefined()
+    // The real history loader resolves null instead of throwing, and without
+    // it a pin signed before the caller rotated reads as bad-signature, so the
+    // empty set would otherwise look like "nobody changed".
+    const meNew = generateSigningKey()
+    const rotatedCaller = {
+      ownSigningKey: async () => bytesToBase64(meNew.publicKey),
+      listPins: async () => [pinOf(BOB, old, 0)], // signed under the caller's earlier key
+      loadOwnKeyHistory: async () => null,
+    }
+    const noHistory = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: { ...rotatedCaller, ownKeyHistoryFailure: async () => 'the server is down' },
+      },
+      members,
+      0,
+      'rotating',
+    )
+    expect(noHistory.state === 'ready' && [...(noHistory.changed ?? [])]).toEqual([])
+    expect(noHistory.state === 'ready' && noHistory.changedUnavailable).toBe(true)
+    // A history that loaded is not a failure.
+    const loaded = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: { ...rotatedCaller, ownKeyHistoryFailure: async () => null },
+      },
+      members,
+      0,
+      'rotating',
+    )
+    expect(loaded.state === 'ready' && loaded.changedUnavailable).toBeUndefined()
     const without = await loadDormancy({ getUsers, selfUserId: ME }, members, 0, 'rotating')
     expect(without.state === 'ready' && [...(without.changed ?? [])]).toEqual([])
     expect(without.state === 'ready' && without.changedUnavailable).toBeUndefined()

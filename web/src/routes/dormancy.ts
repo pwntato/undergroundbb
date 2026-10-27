@@ -67,6 +67,13 @@ export interface LoadDormancyDeps {
     readonly ownSigningKey: () => Promise<string>
     readonly listPins: () => Promise<readonly PinRecord[]>
     readonly loadOwnKeyHistory?: (ownSigningKey: Uint8Array) => Promise<OwnKeyHistory | null>
+    /**
+     * Why that history could not be loaded, or null when it did. The loader
+     * resolves null instead of throwing, and without the history every pin the
+     * caller signed before rotating reads as bad-signature, so this is the only
+     * way to tell a failed read from "nobody changed".
+     */
+    readonly ownKeyHistoryFailure?: (ownSigningKey: Uint8Array) => Promise<string | null>
   }
 }
 
@@ -160,6 +167,10 @@ async function loadChanged(
     const own = base64ToBytes(await deps.pins.ownSigningKey())
     const pins = await deps.pins.listPins()
     const history = await ownHistoryFor(deps.pins, own)
+    const historyFailure = await deps.pins.ownKeyHistoryFailure?.(own)
+    if (historyFailure !== null && historyFailure !== undefined) {
+      return { changed: new Set(), failed: true }
+    }
     return {
       changed: findChanged(members, users, deps.selfUserId, { own, pins, history }),
       failed: false,
