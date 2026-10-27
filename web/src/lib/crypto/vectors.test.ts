@@ -24,6 +24,7 @@ import {
   roleGrantPayload,
   successorClaimPayload,
   rotationRekeyPayload,
+  wrapRecordPayload,
   rotationStartPayload,
   successorDesignationPayload,
   trustAnchorPayload,
@@ -205,6 +206,20 @@ interface VectorFile {
     member_uuid: string
     generation: number
     reason: 'self' | 'approval'
+    payload_hex: string
+    signature_hex: string
+  }[]
+  wrap_record: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    group_id: string
+    wrapper_uuid: string
+    member_uuid: string
+    generation: number
+    key_epoch: number
+    reason: 'self' | 'approval'
+    day: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -675,6 +690,30 @@ describe('rotation rekey vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.RotationRekey, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins wrapRecordPayload's exact encoding (#280).
+describe('wrap record vectors', () => {
+  for (const tc of vectors.wrap_record) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = wrapRecordPayload(
+        tc.group_id,
+        tc.wrapper_uuid,
+        tc.member_uuid,
+        tc.generation,
+        tc.key_epoch,
+        tc.reason,
+        tc.day,
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.WrapRecord, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

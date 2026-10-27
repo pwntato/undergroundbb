@@ -28,6 +28,9 @@ type SelfWrapInput struct {
 	// CallerWrappingKey is the caller's current X25519 public key: the handoff
 	// row must name it.
 	CallerWrappingKey []byte
+	// WrapRecord is the caller's signed record of this wrap, or nil from a
+	// client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // SelfWrap moves the caller's entry point to their new key and consumes their
@@ -71,6 +74,7 @@ func (c *Client) SelfWrap(ctx context.Context, in SelfWrapInput) error {
 			},
 		}},
 	}
+	applyWrapRecord(items[entryIndex].Update, in.WrapRecord)
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isConditionalCheckFailure(err, entryIndex), isConditionalCheckFailure(err, rowIndex):

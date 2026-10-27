@@ -29,6 +29,9 @@ type TakeOverLeaveRotationInput struct {
 	// transaction, as RemoveRotation.RemoverKeyEpoch is.
 	CallerKeyEpoch uint64
 	StartSignature []byte
+	// WrapRecord is the caller's signed record of their own entry at the new
+	// generation (#280), or nil from a client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // TakeOverLeaveRotation turns the marker a leaving member left (#178) into a
@@ -133,6 +136,7 @@ func (c *Client) TakeOverLeaveRotation(ctx context.Context, in TakeOverLeaveRota
 		}},
 	}
 	const epochIndex = 4
+	applyWrapRecord(items[callerIndex].Update, in.WrapRecord)
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isConditionalCheckFailure(err, markerIndex), isConditionalCheckFailure(err, linkIndex):

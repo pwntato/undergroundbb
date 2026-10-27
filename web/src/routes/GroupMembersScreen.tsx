@@ -28,10 +28,11 @@ import {
   signLeaveRotationStart,
   signRoleGrant,
   signVerification,
+  signWrapRecord,
   startGroupRotation,
 } from '@/lib/crypto/worker-client'
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
-import { getUsers } from '@/lib/api/users'
+import { getUserDetail, getUsers } from '@/lib/api/users'
 import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
 import { loadDormancy, type Dormancy } from './dormancy'
 import { listAllPins } from '@/lib/api/pins'
@@ -435,7 +436,15 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       const result = await removeAndRotate(
         {
           guard,
-          remove: { getGroup, signRoleGrant, startGroupRotation, removeMember, userId },
+          remove: {
+            getGroup,
+            signRoleGrant,
+            startGroupRotation,
+            removeMember,
+            userId,
+            getUserDetail,
+            signWrapRecord,
+          },
           rotation: makeRotationDeps(userId),
         },
         view.groupId,

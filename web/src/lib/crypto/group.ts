@@ -210,6 +210,38 @@ export function rotationRekeyPayload(
 }
 
 /**
+ * Builds the bytes a wrapper signs (under ed25519.SigningContext.WrapRecord) when
+ * they set a member's group-key entry (#280): the group, the wrapper, the member
+ * (the wrapper for 'self'), the generation the entry was wrapped at, the member's
+ * KeyEpoch it was wrapped to, the reason and the UTC day. Must match
+ * internal/crypto/group.go's WrapRecordPayload byte for byte, and never change
+ * once a real wrap has been signed under it.
+ */
+export function wrapRecordPayload(
+  groupId: string,
+  wrapperUUID: string,
+  memberUUID: string,
+  generation: number,
+  keyEpoch: number,
+  reason: RekeyReason,
+  day: string,
+): Uint8Array {
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(keyEpoch)) {
+    throw new Error('generation and keyEpoch must be integers')
+  }
+  const encoder = new TextEncoder()
+  return lengthPrefixedConcat([
+    encoder.encode(groupId),
+    encoder.encode(wrapperUUID),
+    encoder.encode(memberUUID),
+    encoder.encode(String(generation)),
+    encoder.encode(String(keyEpoch)),
+    encoder.encode(reason),
+    encoder.encode(day),
+  ])
+}
+
+/**
  * Builds the bytes an admin signs (under ed25519.SigningContext.SuccessorDesignation)
  * to name the member who takes over if they go inactive (#161). An empty
  * successorUUID is the revocation form. designationSortKey is the row's own

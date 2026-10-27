@@ -37,6 +37,19 @@ type memberEntry struct {
 	// client reads from their projection; the server serves it unsigned and the
 	// client derives dormancy itself (docs/DESIGN.md, "Dormancy is derived").
 	WrapEpoch uint64 `json:"wrapEpoch"`
+	// WrapRecord is who signed for the entry's current wrap (#280), absent when
+	// no one did. Served unsigned like the rest of the entry: a reader trusts it
+	// only after rebuilding the signed payload from this entry's own generation
+	// and wrapEpoch.
+	WrapRecord *wrapRecordEntry `json:"wrapRecord,omitempty"`
+}
+
+// wrapRecordEntry is the wire form of a member's wrap record.
+type wrapRecordEntry struct {
+	WrapperUserID string `json:"wrapperUserId"`
+	Reason        string `json:"reason"`
+	Day           string `json:"day"`
+	Signature     string `json:"signature"`
 }
 
 // listMembersResponse is the wire shape of GET /api/groups/{id}/members.
@@ -94,12 +107,21 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]memberEntry, 0, len(members))
 	for _, mem := range members {
-		entries = append(entries, memberEntry{
+		entry := memberEntry{
 			UserID:     strings.TrimPrefix(mem.SK, "MEMBER#"),
 			Role:       mem.Role,
 			Generation: mem.Generation,
 			WrapEpoch:  mem.WrapEpoch,
-		})
+		}
+		if mem.WrapperUserID != "" && mem.WrapReason != "" && mem.WrapDay != "" && len(mem.WrapSignature) > 0 {
+			entry.WrapRecord = &wrapRecordEntry{
+				WrapperUserID: mem.WrapperUserID,
+				Reason:        mem.WrapReason,
+				Day:           mem.WrapDay,
+				Signature:     base64.StdEncoding.EncodeToString(mem.WrapSignature),
+			}
+		}
+		entries = append(entries, entry)
 	}
 	WriteJSON(w, http.StatusOK, listMembersResponse{Members: entries, NextCursor: next})
 }
@@ -770,6 +792,7 @@ type removeRotationRequest struct {
 	// crypto.RotationStartPayload naming the removed member (#178), stored on
 	// the marker so a resuming admin knows whom this rotation removed.
 	StartSignature string `json:"startSignature"`
+	wrapRecordFields
 }
 
 // removeMember implements DELETE /api/groups/{groupId}/members/{userId} --
@@ -879,6 +902,17 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		}
 		rot.StartSignature = sig
 		rot.RemoverKeyEpoch = keyEpoch
+		// The remover's own entry is written at the generation one past theirs.
+		rec, problem, err := h.wrapRecord(r, req.Rotation.wrapRecordFields, groupID, userID, userID, rot.CurrentGeneration+1, keyEpoch, crypto.RekeyReasonSelf)
+		if err != nil {
+			WriteInternalError(w, r, err, "could not remove member")
+			return
+		}
+		if problem != nil {
+			problem.write(w)
+			return
+		}
+		rot.WrapRecord = rec
 		in.Rotation = rot
 	} else if req.Rotation != nil {
 		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")

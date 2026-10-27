@@ -493,6 +493,18 @@ type Membership struct {
 	// refused instead of stored. Server-held and unsigned, see DESIGN.md,
 	// "Dormancy is derived, not stored."
 	WrapEpoch uint64 `dynamodbav:"WrapEpoch,omitempty"`
+
+	// WrapperUserID, WrapReason, WrapDay and WrapSignature are the wrap record
+	// (#280): who set this entry's wrap, why ("self" or "approval"), on which
+	// UTC day, and their signature under crypto.ContextWrapRecord over
+	// crypto.WrapRecordPayload for this entry's Generation and WrapEpoch. Set
+	// only by the writes that sign one and left behind by the others, so a
+	// reader rebuilds the payload from the entry's own Generation and
+	// WrapEpoch: a record from an earlier wrap then fails to verify.
+	WrapperUserID string `dynamodbav:"WrapperUserID,omitempty"`
+	WrapReason    string `dynamodbav:"WrapReason,omitempty"`
+	WrapDay       string `dynamodbav:"WrapDay,omitempty"`
+	WrapSignature []byte `dynamodbav:"WrapSignature,omitempty"`
 }
 
 // RoleGrant is a GROUP#<gid> / GRANT#<uuid>#<YYYY-MM-DD, UTC>#<rand> item --

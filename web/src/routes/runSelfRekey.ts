@@ -29,6 +29,7 @@ import type {
   StartSelfRekeyRequest,
 } from '@/lib/crypto/worker-protocol'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
+import { ownWrapRecord, sendWithRecord } from './wrapRecord'
 
 export interface SelfRekeyDeps extends RotationDeps {
   readonly startSelfRekeyCrypto: (
@@ -114,12 +115,15 @@ export async function runSelfRekey(
     }
   }
   try {
-    await deps.selfRekey(groupId, {
-      generation: minted.generation,
-      link: minted.link,
-      wrappedKey: minted.removerWrappedKey,
-      startSignature: minted.startSignature,
-    })
+    await sendWithRecord(await ownWrapRecord(deps, groupId, minted.generation), (record) =>
+      deps.selfRekey(groupId, {
+        generation: minted.generation,
+        link: minted.link,
+        wrappedKey: minted.removerWrappedKey,
+        startSignature: minted.startSignature,
+        ...record,
+      }),
+    )
   } catch (err) {
     switch (codeOf(err)) {
       case 'handoff_stale':
@@ -161,7 +165,9 @@ async function selfWrapOpen(
     }
   }
   try {
-    await deps.selfWrap(groupId, { generation: row.generation, wrappedKey })
+    await sendWithRecord(await ownWrapRecord(deps, groupId, row.generation), (record) =>
+      deps.selfWrap(groupId, { generation: row.generation, wrappedKey, ...record }),
+    )
   } catch (err) {
     if (codeOf(err) === 'handoff_stale') return staleRow()
     return { status: 'incomplete', reason: describe(err) }

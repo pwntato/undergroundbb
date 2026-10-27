@@ -47,6 +47,9 @@ type ApproveRekeyInput struct {
 	MemberKeyEpoch   uint64
 	Reason           string
 	StartSignature   []byte
+	// WrapRecord is the admin's signed record of the member's wrap at the new
+	// generation, or nil from a client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // ApproveRekey starts a rotation that removes no one and, in the same
@@ -136,6 +139,7 @@ func (c *Client) ApproveRekey(ctx context.Context, in ApproveRekeyInput) error {
 		}},
 		c.keyEpochCheck(in.MemberUserID, in.MemberKeyEpoch),
 	}
+	applyWrapRecord(items[memberIndex].Update, in.WrapRecord)
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isTransactionConflict(err):

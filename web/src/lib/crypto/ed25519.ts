@@ -42,6 +42,7 @@ export const SigningContext = {
   RotationStart: 'underground-bb:rotation-start:v1',
   RotationRekey: 'underground-bb:rotation-rekey:v1',
   Admission: 'underground-bb:admission:v1',
+  WrapRecord: 'underground-bb:wrap-record:v1',
   KeyRotation: 'underground-bb:key-rotation:v1',
 } as const
 

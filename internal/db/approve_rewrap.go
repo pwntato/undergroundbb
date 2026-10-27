@@ -45,6 +45,9 @@ type ApproveRewrapInput struct {
 	// A Rotating group needs the member strictly behind, or it answers
 	// ErrRekeyRequired.
 	Open bool
+	// WrapRecord is the approver's signed record of this wrap, or nil from a
+	// client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // ApproveRewrap writes a dormant member's wrap, generation and WrapEpoch in one
@@ -109,6 +112,7 @@ func (c *Client) ApproveRewrap(ctx context.Context, in ApproveRewrapInput) error
 		}},
 		c.keyEpochCheck(in.MemberUserID, in.KeyEpoch),
 	}
+	applyWrapRecord(items[memberIndex].Update, in.WrapRecord)
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isTransactionConflict(err):

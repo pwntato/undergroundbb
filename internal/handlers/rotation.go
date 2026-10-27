@@ -149,6 +149,7 @@ type takeOverRotationRequest struct {
 	// WrappedKey is the new key wrapped for the caller (their only copy).
 	WrappedKey     wrappedKey `json:"wrappedKey"`
 	StartSignature string     `json:"startSignature"`
+	wrapRecordFields
 }
 
 // takeOverRotation implements POST /api/groups/{groupId}/rotation/takeover
@@ -219,6 +220,15 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, userID, caller.Generation+1, keyEpoch, crypto.RekeyReasonSelf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not take over the rotation")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	in := db.TakeOverLeaveRotationInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
@@ -228,6 +238,7 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		CallerWrappedKey:  wrapped,
 		CallerKeyEpoch:    keyEpoch,
 		StartSignature:    sig,
+		WrapRecord:        rec,
 	}
 	err = h.db.TakeOverLeaveRotation(r.Context(), in)
 	if errors.Is(err, db.ErrWrapEpochStale) {
@@ -272,6 +283,7 @@ type selfRekeyRequest struct {
 	// WrappedKey is the new key wrapped for the caller (their only copy).
 	WrappedKey     wrappedKey `json:"wrappedKey"`
 	StartSignature string     `json:"startSignature"`
+	wrapRecordFields
 }
 
 // selfRekey implements POST /api/groups/{groupId}/rotation/rekey (#62): an
@@ -354,6 +366,15 @@ func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "startSignature: does not verify against the caller's current signing key", "bad_signature")
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, userID, req.Generation, self.KeyEpoch, crypto.RekeyReasonSelf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not start the re-key")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	err = h.db.SelfRekey(r.Context(), db.SelfRekeyInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
@@ -364,6 +385,7 @@ func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 		CallerWrappingKey: self.WrappingPublicKey,
 		Reason:            crypto.RekeyReasonSelf,
 		StartSignature:    sig,
+		WrapRecord:        rec,
 	})
 	switch {
 	case errors.Is(err, db.ErrHandoffStale):

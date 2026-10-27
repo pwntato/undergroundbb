@@ -37,6 +37,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  signWrapRecord as signWrapRecordPure,
   signVerification as signVerificationPure,
   signReadmission as signReadmissionPure,
   signRoleGrant as signRoleGrantPure,
@@ -80,6 +81,7 @@ import type {
   SignInviteAcceptanceRequest,
   SignInviteCreationRequest,
   SignPinRequest,
+  SignWrapRecordRequest,
   SignVerificationRequest,
   SignReadmissionRequest,
   SignRoleGrantRequest,
@@ -157,6 +159,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signPin':
       signPin(req)
+      return
+    case 'signWrapRecord':
+      signWrapRecord(req)
       return
     case 'signVerification':
       signVerification(req)
@@ -372,6 +377,21 @@ function signPin(req: SignPinRequest): void {
     req.keyEpoch,
   )
   post({ kind: 'signPinDone', id: req.id, result })
+}
+
+/** Signs who wrapped a member's entry -- #280. Same guards as signPin: no signing mid-rotation. */
+function signWrapRecord(req: SignWrapRecordRequest): void {
+  rotation.assertIdle('sign a wrap')
+  const keys = requireLiveKeys(req.userId, 'sign a wrap')
+  const result = signWrapRecordPure(
+    keys,
+    req.groupId,
+    req.memberUserId,
+    req.generation,
+    req.keyEpoch,
+    req.reason,
+  )
+  post({ kind: 'signWrapRecordDone', id: req.id, result })
 }
 
 /** Signs a re-admission of an existing member -- #178 part 5b. */

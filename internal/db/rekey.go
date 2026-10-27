@@ -40,6 +40,9 @@ type SelfRekeyInput struct {
 	CallerWrappingKey []byte
 	Reason            string
 	StartSignature    []byte
+	// WrapRecord is the caller's signed record of their own entry at the new
+	// generation, or nil from a client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // SelfRekey starts a rotation that removes no one, as the caller, and consumes
@@ -133,6 +136,7 @@ func (c *Client) SelfRekey(ctx context.Context, in SelfRekeyInput) error {
 			},
 		}},
 	}
+	applyWrapRecord(items[callerIndex].Update, in.WrapRecord)
 	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		switch {
 		case isConditionalCheckFailure(err, markerIndex):

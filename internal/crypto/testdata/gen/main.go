@@ -213,6 +213,22 @@ type rotationRekeyVector struct {
 	SignatureHex string `json:"signature_hex"`
 }
 
+// wrapRecordVector proves WrapRecordPayload's exact encoding (#280).
+type wrapRecordVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	WrapperUUID  string `json:"wrapper_uuid"`
+	MemberUUID   string `json:"member_uuid"`
+	Generation   int64  `json:"generation"`
+	KeyEpoch     uint64 `json:"key_epoch"`
+	Reason       string `json:"reason"`
+	Day          string `json:"day"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
 // rotationStartVector proves RotationStartPayload's exact encoding (#178).
 type rotationStartVector struct {
 	Name         string `json:"name"`
@@ -430,6 +446,7 @@ type vectorFile struct {
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	RotationRekey        []rotationRekeyVector        `json:"rotation_rekey"`
+	WrapRecord           []wrapRecordVector           `json:"wrap_record"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
@@ -984,6 +1001,41 @@ func main() {
 				MemberUUID:   tc.member,
 				Generation:   4,
 				Reason:       tc.reason,
+				PayloadHex:   hex.EncodeToString(payload),
+				SignatureHex: hex.EncodeToString(sig),
+			})
+		}
+	}
+
+	// --- Wrap record (#280) ---
+	{
+		wrapperPub, wrapperPriv := fixedEd25519Key("wrap-record-wrapper-1")
+		groupID := "group-uuid-6"
+		wrapperUUID := "wrapper-uuid-1"
+		memberUUID := "member-uuid-2"
+		for _, tc := range []struct {
+			name, member, reason string
+			epoch                uint64
+		}{
+			{"self", wrapperUUID, crypto.RekeyReasonSelf, 2},
+			{"approval", memberUUID, crypto.RekeyReasonApproval, 3},
+		} {
+			payload := crypto.WrapRecordPayload(groupID, wrapperUUID, tc.member, 5, tc.epoch, tc.reason, "2026-10-27")
+			sig, err := crypto.Sign(wrapperPriv, crypto.ContextWrapRecord, payload)
+			if err != nil {
+				panic(err)
+			}
+			out.WrapRecord = append(out.WrapRecord, wrapRecordVector{
+				Name:         tc.name,
+				PrivateHex:   hex.EncodeToString(wrapperPriv),
+				PublicHex:    hex.EncodeToString(wrapperPub),
+				GroupID:      groupID,
+				WrapperUUID:  wrapperUUID,
+				MemberUUID:   tc.member,
+				Generation:   5,
+				KeyEpoch:     tc.epoch,
+				Reason:       tc.reason,
+				Day:          "2026-10-27",
 				PayloadHex:   hex.EncodeToString(payload),
 				SignatureHex: hex.EncodeToString(sig),
 			})

@@ -105,6 +105,9 @@ type RemoveRotation struct {
 	// for (group, remover, subject, CurrentGeneration+1), stored on the marker
 	// so a resuming admin can tell whom this rotation removed (#178).
 	StartSignature []byte
+	// WrapRecord is the remover's signed record of their own entry at the new
+	// generation (#280), or nil from a client that signs none.
+	WrapRecord *WrapRecord
 }
 
 // RemoveDemotion is the signed grant a removal appends for an elevated subject.
@@ -173,6 +176,7 @@ func (c *Client) RemoveMember(ctx context.Context, in RemoveMemberInput) error {
 			ExpressionAttributeNames:  map[string]string{"#role": "Role", "#gsk": "GrantSortKey", "#gen": "Generation", "#wrapped": "WrappedGroupKey"},
 			ExpressionAttributeValues: removerValues,
 		}}
+		applyWrapRecord(removerItem.Update, in.Rotation.WrapRecord)
 	}
 	items := []types.TransactWriteItem{
 		removerItem,

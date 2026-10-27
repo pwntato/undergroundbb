@@ -66,6 +66,106 @@ beforeEach(() => {
   rotation.runRotation.mockResolvedValue(DONE)
 })
 
+/** The body of the nth call, for mocks typed without their arguments. */
+const sentTo = (fn: { mock: { calls: unknown[][] } }, n: number): unknown => fn.mock.calls[n]![1]
+
+describe('the wrap record (#280)', () => {
+  const SIGNED = { wrapSignature: 'ws', wrapDay: '2026-10-27' }
+
+  function withSigner(group: GroupDetail, epoch: number | Error = 4) {
+    const t = setup(group)
+    const sign = vi.fn((_req: unknown) => Promise.resolve(SIGNED))
+    const getUserDetail = vi.fn(() =>
+      epoch instanceof Error ? Promise.reject(epoch) : Promise.resolve({ keyEpoch: epoch }),
+    )
+    Object.assign(t.deps, { signWrapRecord: sign, getUserDetail })
+    return { ...t, sign, getUserDetail }
+  }
+
+  it("signs the admin's own entry at the generation the re-key mints, to their own epoch", async () => {
+    const t = withSigner(detail())
+    await runSelfRekey(t.deps, ROW)
+    expect(t.getUserDetail).toHaveBeenCalledWith(ME)
+    expect(t.sign).toHaveBeenCalledWith({
+      userId: ME,
+      groupId: GROUP,
+      memberUserId: ME,
+      generation: 3,
+      keyEpoch: 4,
+      reason: 'self',
+    })
+    expect(t.selfRekey).toHaveBeenCalledWith(GROUP, expect.objectContaining(SIGNED))
+  })
+
+  it("signs a self-wrap at the row's generation, which an Open group never moves", async () => {
+    const t = withSigner(detail({ revocationMode: 'open' }))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+    expect(t.sign).toHaveBeenCalledWith({
+      userId: ME,
+      groupId: GROUP,
+      memberUserId: ME,
+      generation: 2,
+      keyEpoch: 4,
+      reason: 'self',
+    })
+    expect(t.selfWrap).toHaveBeenCalledWith(GROUP, {
+      generation: 2,
+      wrappedKey: WRAPPED,
+      ...SIGNED,
+    })
+  })
+
+  it("sends no record when the caller's epoch cannot be read, and still wraps", async () => {
+    const t = withSigner(detail({ revocationMode: 'open' }), new Error('offline'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+    expect(t.sign).not.toHaveBeenCalled()
+    expect(t.selfWrap).toHaveBeenCalledWith(GROUP, { generation: 2, wrappedKey: WRAPPED })
+  })
+
+  it('sends the re-key again without the record when the server refuses it', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'rekeyed', rotation: DONE })
+    expect(t.selfRekey).toHaveBeenCalledTimes(2)
+    expect(sentTo(t.selfRekey, 0)).toMatchObject(SIGNED)
+    expect(sentTo(t.selfRekey, 1)).not.toHaveProperty('wrapSignature')
+  })
+
+  it('sends the self-wrap again without the record when the server refuses it', async () => {
+    const t = withSigner(detail({ revocationMode: 'open' }))
+    t.selfWrap.mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+    expect(t.selfWrap).toHaveBeenCalledTimes(2)
+    expect(sentTo(t.selfWrap, 1)).toEqual({ generation: 2, wrappedKey: WRAPPED })
+  })
+
+  it('does not hide a bad_signature that stays after the record is dropped', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValue(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'incomplete' })
+    expect(t.selfRekey).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not resend after a refusal that has nothing to do with the record', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValue(new ApiError(409, 'stale', 'handoff_stale'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'stale' })
+    expect(t.selfRekey).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends no record when signing fails, and still re-keys', async () => {
+    const t = withSigner(detail())
+    t.sign.mockRejectedValue(new Error('worker went away'))
+    await runSelfRekey(t.deps, ROW)
+    expect(t.selfRekey).toHaveBeenCalledWith(GROUP, {
+      generation: 3,
+      link: MINTED.link,
+      wrappedKey: MINTED.removerWrappedKey,
+      startSignature: 'sig',
+    })
+  })
+})
+
 describe('runSelfRekey', () => {
   it('opens the row, starts the re-key with what was minted, then runs the job', async () => {
     const t = setup()

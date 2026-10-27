@@ -544,6 +544,9 @@ export interface RemoveRotationRequest {
   readonly removerWrappedKey: WireWrappedKey
   /** The remover's base64 signature over rotationStartPayload naming the removed member (#178). */
   readonly startSignature: string
+  /** The wrap record (#280) for the remover's own entry at the new generation. Both or neither. */
+  readonly wrapSignature?: string
+  readonly wrapDay?: string
 }
 
 /**
@@ -664,6 +667,9 @@ export interface TakeOverRotationRequest {
   readonly wrappedKey: WireWrappedKey
   /** The caller's base64 signature over rotationStartPayload naming the leaver. */
   readonly startSignature: string
+  /** The wrap record (#280): both or neither. Sent by a re-key; a takeover sends none. */
+  readonly wrapSignature?: string
+  readonly wrapDay?: string
 }
 
 /** A dormant member's entry point re-wrapped to their new key at the approver's generation. */
@@ -673,6 +679,9 @@ export interface ApproveRewrapRequest {
   readonly wrappedKey: WireWrappedKey
   /** The member's keyEpoch (as served by GET /api/users) the key was wrapped to. */
   readonly keyEpoch: number
+  /** The wrap record (#280): the approver's signed statement of this wrap. Both or neither. */
+  readonly wrapSignature?: string
+  readonly wrapDay?: string
 }
 
 /**
@@ -750,6 +759,9 @@ export function selfRekey(groupId: string, req: TakeOverRotationRequest): Promis
 export interface SelfWrapRequest {
   readonly generation: number
   readonly wrappedKey: WireWrappedKey
+  /** The wrap record (#280): the member's signed statement of this wrap. Both or neither. */
+  readonly wrapSignature?: string
+  readonly wrapDay?: string
 }
 
 /**

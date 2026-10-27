@@ -53,6 +53,10 @@ const (
 	// ContextAdmission signs the admission of an invitee into a group, by the
 	// admin or ambassador who invited them (#178).
 	ContextAdmission SigningContext = "underground-bb:admission:v1"
+	// ContextWrapRecord signs who wrapped a member's group-key entry, for the
+	// "accept key change" prompt (#280). Its own context so a wrap record can
+	// never be read as a re-key, an admission or a pin.
+	ContextWrapRecord SigningContext = "underground-bb:wrap-record:v1"
 )
 
 // GenerateSigningKey generates a new Ed25519 keypair.

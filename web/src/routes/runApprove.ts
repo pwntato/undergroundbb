@@ -43,6 +43,7 @@ import type {
   StartApprovalRekeyResult,
 } from '@/lib/crypto/worker-protocol'
 import { ownHistoryFor } from './ownHistory'
+import { sendWithRecord, wrapRecordFor } from './wrapRecord'
 import { servedFingerprint } from './runMemberVerification'
 import { isLiveKeysError } from './runListGroups'
 import type { RotationDeps } from './runRotation'
@@ -339,11 +340,22 @@ async function tryRewrap(ctx: Context): Promise<Attempt> {
     return { ok: false, kind: 'rejected', message: "Couldn't wrap the group key. Try again." }
   }
   try {
-    await deps.approveRewrap(groupId, subjectUserId, {
+    const record = await wrapRecordFor(deps.signWrapRecord, {
+      userId: deps.selfUserId,
+      groupId,
+      memberUserId: subjectUserId,
       generation: detail.generation,
-      wrappedKey,
       keyEpoch: served.keyEpoch,
+      reason: 'approval',
     })
+    await sendWithRecord(record, (fields) =>
+      deps.approveRewrap(groupId, subjectUserId, {
+        generation: detail.generation,
+        wrappedKey,
+        keyEpoch: served.keyEpoch,
+        ...fields,
+      }),
+    )
     return { ok: true, how: 'rewrap' }
   } catch (err) {
     switch (codeOf(err)) {
@@ -383,14 +395,25 @@ async function tryRekey(ctx: Context): Promise<Attempt> {
     return signFailure(err)
   }
   try {
-    await deps.approveRekey(groupId, subjectUserId, {
+    const record = await wrapRecordFor(deps.signWrapRecord, {
+      userId: deps.selfUserId,
+      groupId,
+      memberUserId: subjectUserId,
       generation: minted.generation,
-      link: minted.link,
-      wrappedKey: minted.removerWrappedKey,
-      startSignature: minted.startSignature,
-      memberWrappedKey: minted.memberWrappedKey,
-      memberKeyEpoch: served.keyEpoch,
+      keyEpoch: served.keyEpoch,
+      reason: 'approval',
     })
+    await sendWithRecord(record, (fields) =>
+      deps.approveRekey(groupId, subjectUserId, {
+        generation: minted.generation,
+        link: minted.link,
+        wrappedKey: minted.removerWrappedKey,
+        startSignature: minted.startSignature,
+        memberWrappedKey: minted.memberWrappedKey,
+        memberKeyEpoch: served.keyEpoch,
+        ...fields,
+      }),
+    )
     return { ok: true, how: 'rekey' }
   } catch (err) {
     switch (codeOf(err)) {

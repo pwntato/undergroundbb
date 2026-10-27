@@ -20,7 +20,9 @@ import type {
   StartGroupRotationRequest,
   StartGroupRotationResult,
 } from '@/lib/crypto/worker-protocol'
+import type { UserDetail } from '@/lib/api/users'
 import { isLiveKeysError } from './runListGroups'
+import { ownWrapRecord, type SignWrapRecord } from './wrapRecord'
 
 export type RemoveResult =
   /** Removed. `rotating` says whether a rotation was started and must now be run. */
@@ -60,6 +62,9 @@ export interface RemoveDeps {
   ) => Promise<void>
   /** The signed-in user's own id. */
   readonly userId: string
+  /** Read the caller's own KeyEpoch and sign who wrapped (#280); absent, no record is sent. */
+  readonly getUserDetail?: (userId: string) => Promise<UserDetail>
+  readonly signWrapRecord?: SignWrapRecord
 }
 
 // 'grantor_grant_missing' is deliberately absent: reloading cannot fix it.
@@ -128,6 +133,7 @@ export async function runRemoveMember(
         link: minted.link,
         removerWrappedKey: minted.removerWrappedKey,
         startSignature: minted.startSignature,
+        ...(await ownWrapRecord({ selfUserId: deps.userId, ...deps }, groupId, minted.generation)),
       }
     } catch (err) {
       // A worker call, not a request: nothing was sent.
@@ -168,6 +174,20 @@ export async function runRemoveMember(
       await deps.removeMember(groupId, subjectUserId, body)
       return { ok: true, rotating }
     } catch (err) {
+      // The record is evidence only: a refused one is dropped and the same
+      // removal sent again, as sendWithRecord does for the other writers.
+      if (
+        rotation?.wrapSignature !== undefined &&
+        err instanceof ApiError &&
+        err.code === 'bad_signature'
+      ) {
+        const { wrapSignature: _s, wrapDay: _d, ...plain } = rotation
+        rotation = plain
+        // Not a signing attempt: the passes are for grant_key_taken. This can only
+        // fire once, since the record is gone from the resend.
+        attempt--
+        continue
+      }
       if (err instanceof ApiError && err.status === 409 && err.code === 'grant_key_taken') {
         if (attempt < MAX_SIGN_ATTEMPTS) {
           continue
