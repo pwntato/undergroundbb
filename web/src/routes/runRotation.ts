@@ -152,6 +152,14 @@ export type RotationOutcome =
       readonly status: 'blocked'
       readonly blocked: readonly string[]
       /**
+       * The subset of `blocked` whose served keys differ from the caller's pin
+       * with the `mismatch` verdict: the keys changed (typically another admin
+       * approved them), and the roster offers "accept key change" for them.
+       * Never a rollback or bad-signature member, which stay hard-blocked with
+       * no accept action. Absent when there are none.
+       */
+      readonly changed?: readonly string[]
+      /**
        * Members no valid inviter-signed admission backs (#178), also NOT
        * wrapped to. Absent when there are none.
        */
@@ -199,9 +207,16 @@ export function describeRotation(
       }
     case 'blocked': {
       const parts: string[] = []
-      if (outcome.blocked.length > 0) {
+      const changed = outcome.changed ?? []
+      const stuck = outcome.blocked.filter((id) => !changed.includes(id))
+      if (stuck.length > 0) {
         parts.push(
-          `The keys the server shows for ${outcome.blocked.map(label).join(', ')} don't match the copy you saved earlier.`,
+          `The keys the server shows for ${stuck.map(label).join(', ')} don't match the copy you saved earlier.`,
+        )
+      }
+      if (changed.length > 0) {
+        parts.push(
+          `${changed.map(label).join(', ')} ${changed.length === 1 ? 'has' : 'have'} new keys that don't match the copy you saved earlier, possibly approved by another admin. Check the fingerprint with ${changed.length === 1 ? 'them' : 'each of them'}, then use Accept key change in the member list to continue.`,
         )
       }
       const unadmitted = outcome.unadmitted ?? []
@@ -349,6 +364,8 @@ async function runOnce(
   }
 
   const blocked = new Set<string>()
+  // The blocked whose keys changed (mismatch): the ones "accept key change" applies to.
+  const changed = new Set<string>()
   // Members no valid admission backs (#178): skipped like a pin mismatch.
   const unadmitted = new Set<string>()
   // The unadmitted the removal history does not name: the ones Re-admit applies to.
@@ -395,6 +412,7 @@ async function runOnce(
         return {
           status: 'blocked',
           blocked: [...blocked],
+          ...(changed.size > 0 && { changed: [...changed] }),
           ...(unadmitted.size > 0 && { unadmitted: [...unadmitted] }),
           ...(readmittable.size > 0 && { readmittable: [...readmittable] }),
           rewrapped,
@@ -471,6 +489,7 @@ async function runOnce(
           recipients.push({ userId: m.userId, x25519PublicKey: verdict.wrappingPublicKey })
         } else if (verdict.reason === 'blocked') {
           blocked.add(m.userId)
+          if (verdict.changed) changed.add(m.userId)
         } else {
           return { status: 'incomplete', reason: verdict.detail, rewrapped }
         }
@@ -1071,7 +1090,7 @@ async function verifyRekeyStart(
 
 type RecipientCheck =
   | { readonly ok: true; readonly wrappingPublicKey: string }
-  | { readonly ok: false; readonly reason: 'blocked' }
+  | { readonly ok: false; readonly reason: 'blocked'; readonly changed: boolean }
   | { readonly ok: false; readonly reason: 'unavailable'; readonly detail: string }
 
 /**
@@ -1110,12 +1129,12 @@ async function checkRecipient(
   })
   // An allowlist, so a verdict added later (rollback was) cannot fall through.
   if (verdict !== 'match' && verdict !== 'first-sight') {
-    return { ok: false, reason: 'blocked' }
+    return { ok: false, reason: 'blocked', changed: verdict === 'mismatch' }
   }
   if (verdict === 'first-sight') {
     const keys = servedSigningKeySet(served)
     if (keys === null) {
-      return { ok: false, reason: 'blocked' }
+      return { ok: false, reason: 'blocked', changed: false }
     }
     try {
       await deps.pinKeys(userId, keys.map(bytesToBase64), served.wrappingPublicKey, served.keyEpoch)
