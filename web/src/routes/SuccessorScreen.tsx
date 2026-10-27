@@ -239,7 +239,12 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
           onDesignate={handleDesignate}
           onRevoke={handleRevoke}
           confirmingClaim={confirmingClaim}
-          onStartClaim={setConfirmingClaim}
+          onStartClaim={(sortKey) => {
+            // The previous outcome belongs to the last attempt, not this one (#202).
+            setMessage(null)
+            setError(null)
+            setConfirmingClaim(sortKey)
+          }}
           onCancelClaim={() => {
             setConfirmingClaim(null)
           }}
