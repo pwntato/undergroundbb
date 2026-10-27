@@ -12,7 +12,7 @@ import type { GroupDetail, MemberEntry } from '@/lib/api/groups'
 import type { UserProjection } from '@/lib/api/users'
 import { base64ToBytes } from '@/lib/crypto/base64'
 import type { OwnKeyHistory } from '@/lib/crypto/own-history'
-import { evaluatePin, type PinRecord } from '@/lib/crypto/pin'
+import { evaluatePin, servedSigningKeySet, type PinRecord, type PinVerdict } from '@/lib/crypto/pin'
 import { ownHistoryFor } from './ownHistory'
 import { servedFingerprint } from './runMemberVerification'
 
@@ -48,6 +48,12 @@ export type Dormancy =
        * offer: accepting re-checks everything itself.
        */
       readonly changed?: ReadonlySet<string>
+      /**
+       * True when the pins or the caller's key history could not be read, so
+       * `changed` is empty only because nothing could be checked: the roster
+       * then offers no "accept key change" even for a member who changed.
+       */
+      readonly changedUnavailable?: true
     }
 
 export interface LoadDormancyDeps {
@@ -97,6 +103,21 @@ export function findDormant(
 }
 
 /**
+ * Whether a pin verdict is a key change an admin can be offered to accept:
+ * `mismatch` only, and only when the served keys parse, since accepting
+ * (prepareAcceptKeyChange) refuses malformed keys, so offering the button for
+ * them would be a dead end. (runRotation needs no such check: its admission
+ * check refuses a malformed served key before the pin is evaluated.)
+ */
+export function isAcceptableChange(verdict: PinVerdict, served: UserProjection): boolean {
+  return (
+    verdict === 'mismatch' &&
+    servedSigningKeySet(served) !== null &&
+    servedFingerprint(served) !== null
+  )
+}
+
+/**
  * The members whose served keys fail the caller's pin with the `mismatch`
  * verdict, in roster order. Not `rollback`, `bad-signature`, first sight or a
  * match: only a changed key set is something to accept.
@@ -124,7 +145,7 @@ export function findChanged(
       pin: ctx.pins.find((p) => p.pinnedUserId === m.userId),
       served: user,
     })
-    if (verdict === 'mismatch') out.add(m.userId)
+    if (isAcceptableChange(verdict, user)) out.add(m.userId)
   }
   return out
 }
@@ -133,15 +154,18 @@ async function loadChanged(
   deps: LoadDormancyDeps,
   members: readonly MemberEntry[],
   users: ReadonlyMap<string, UserProjection>,
-): Promise<Set<string>> {
-  if (deps.pins === undefined) return new Set()
+): Promise<{ readonly changed: Set<string>; readonly failed: boolean }> {
+  if (deps.pins === undefined) return { changed: new Set(), failed: false }
   try {
     const own = base64ToBytes(await deps.pins.ownSigningKey())
     const pins = await deps.pins.listPins()
     const history = await ownHistoryFor(deps.pins, own)
-    return findChanged(members, users, deps.selfUserId, { own, pins, history })
+    return {
+      changed: findChanged(members, users, deps.selfUserId, { own, pins, history }),
+      failed: false,
+    }
   } catch {
-    return new Set()
+    return { changed: new Set(), failed: true }
   }
 }
 
@@ -163,9 +187,11 @@ export async function loadDormancy(
     failed = true
   })
   if (failed) return { state: 'unavailable' }
+  const { changed, failed: changedFailed } = await loadChanged(deps, members, users)
   return {
     state: 'ready',
     dormant: findDormant(members, users, deps.selfUserId, myGeneration, revocationMode),
-    changed: await loadChanged(deps, members, users),
+    changed,
+    ...(changedFailed && { changedUnavailable: true as const }),
   }
 }

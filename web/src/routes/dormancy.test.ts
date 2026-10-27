@@ -185,6 +185,14 @@ describe('changed keys (#62)', () => {
     expect([...findChanged([member(BOB, 1)], usersOf(bob), ME, ctx([forged]))]).toEqual([])
   })
 
+  it('does not list a member whose served keys are malformed: accepting refuses them (#288)', () => {
+    const bad = rotated(BOB, 1)
+    const members = [member(BOB, 1), member(CAROL, 1)]
+    const users = usersOf({ ...bad, signingPublicKey: 'not base64!' }, rotated(CAROL, 1))
+    const pins = [pinOf(BOB, old, 0), pinOf(CAROL, old, 0)]
+    expect([...findChanged(members, users, ME, ctx(pins))]).toEqual([CAROL])
+  })
+
   it('leaves out the caller, a deleted account and a missing projection', () => {
     const members = [member(ME, 1), member(BOB, 1), member(CAROL, 1)]
     const users = usersOf(rotated(ME, 1), { ...rotated(BOB, 1), deleted: true })
@@ -218,7 +226,11 @@ describe('changed keys (#62)', () => {
       'rotating',
     )
     expect(broken.state === 'ready' && [...(broken.changed ?? [])]).toEqual([])
+    // A failed read is flagged, not silent: the empty set means "not checked".
+    expect(broken.state === 'ready' && broken.changedUnavailable).toBe(true)
+    expect(out.state === 'ready' && out.changedUnavailable).toBeUndefined()
     const without = await loadDormancy({ getUsers, selfUserId: ME }, members, 0, 'rotating')
     expect(without.state === 'ready' && [...(without.changed ?? [])]).toEqual([])
+    expect(without.state === 'ready' && without.changedUnavailable).toBeUndefined()
   })
 })
