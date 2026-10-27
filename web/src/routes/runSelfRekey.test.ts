@@ -146,6 +146,13 @@ describe('the wrap record (#280)', () => {
     expect(t.selfRekey).toHaveBeenCalledTimes(2)
   })
 
+  it('does not resend after a refusal that has nothing to do with the record', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValue(new ApiError(409, 'stale', 'handoff_stale'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'stale' })
+    expect(t.selfRekey).toHaveBeenCalledTimes(1)
+  })
+
   it('sends no record when signing fails, and still re-keys', async () => {
     const t = withSigner(detail())
     t.sign.mockRejectedValue(new Error('worker went away'))
