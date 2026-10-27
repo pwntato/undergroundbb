@@ -263,6 +263,7 @@ describe('wrapEvidenceText', () => {
     expect(new Set(texts).size).toBe(5)
     expect(texts[0]).toContain(`<${ADMIN}>`)
     expect(texts[4]).toMatch(/could not check/i)
+    expect(texts[4]).toContain('(x)')
     expect(texts[4]).not.toMatch(/no signed record/i)
   })
 })
@@ -279,10 +280,27 @@ describe('who wrapped their entry (#280)', () => {
       keyChanges: [],
     }) as UserDetail
 
-  function withWrapper(read: (id: string) => Promise<UserDetail>) {
+  // The caller's own signed pin of ADMIN's keys (epoch 0), the anchor a record is checked against.
+  function pinOfAdmin(key: { publicKey: Uint8Array }): PinRecord {
+    const payload = pinPayload(ME, ADMIN, me.publicKey, WRAP_OLD, [key.publicKey], 0, '2026-10-01')
+    return {
+      pinnedUserId: ADMIN,
+      signingPublicKeys: [b64(key.publicKey)],
+      wrappingPublicKey: b64(WRAP_OLD),
+      pinnerSigningPublicKey: b64(me.publicKey),
+      signature: b64(sign(me, SigningContext.Pin, payload)),
+      keyEpoch: 0,
+      signedDay: '2026-10-01',
+    }
+  }
+
+  function withWrapper(
+    read: (id: string) => Promise<UserDetail>,
+    pins: readonly PinRecord[] = [pinOf(k0, WRAP_OLD, 0), pinOfAdmin(adminKey)],
+  ) {
     const { deps } = setup()
     const getUserDetail = vi.fn(async (id: string) => (id === X ? served() : read(id)))
-    return { deps: { ...deps, getUserDetail }, getUserDetail }
+    return { deps: { ...deps, getUserDetail, listPins: async () => pins }, getUserDetail }
   }
 
   it('reports the admin whose signed record verifies', async () => {
@@ -302,6 +320,47 @@ describe('who wrapped their entry (#280)', () => {
     })
     // One read of the subject: the one that checks the pin. Nothing for the wrapper.
     expect(getUserDetail.mock.calls.map(([id]) => id)).toEqual([X])
+  })
+
+  it('does not say approved when the server serves a made-up key for the admin the caller pinned', async () => {
+    const forged = generateSigningKey()
+    const { deps } = withWrapper(async () => ({
+      ...adminDetail(),
+      signingPublicKey: b64(forged.publicKey),
+    }))
+    const entry = { ...ENTRY, wrapRecord: recordBy(ADMIN, forged, 'approval') }
+    const out = await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })
+    expect(out).toMatchObject({ ok: true, wrap: { kind: 'unchecked' } })
+    expect(wrapEvidenceText((out as Extract<typeof out, { ok: true }>).wrap, (id) => id)).toMatch(
+      /changed since/,
+    )
+  })
+
+  it('says unchecked, not approved, for an admin whose keys the caller never saved', async () => {
+    const { deps } = withWrapper(async () => adminDetail(), [pinOf(k0, WRAP_OLD, 0)])
+    const entry = { ...ENTRY, wrapRecord: recordBy(ADMIN, adminKey, 'approval') }
+    const out = await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })
+    expect(out).toMatchObject({ ok: true, wrap: { kind: 'unchecked' } })
+    expect(wrapEvidenceText((out as Extract<typeof out, { ok: true }>).wrap, (id) => id)).toMatch(
+      /not saved/,
+    )
+  })
+
+  it('anchors a record the caller wrapped themselves at their own key', async () => {
+    const meDetail = (key: { publicKey: Uint8Array }): UserDetail =>
+      ({ ...adminDetail(), userId: ME, signingPublicKey: b64(key.publicKey) }) as UserDetail
+    const entry = { ...ENTRY, wrapRecord: recordBy(ME, me, 'approval') }
+    const honest = withWrapper(async () => meDetail(me))
+    expect(await prepareAcceptKeyChange(honest.deps, X, { groupId: GROUP, entry })).toMatchObject({
+      wrap: { kind: 'approved', wrapperUserId: ME },
+    })
+    // A server that serves someone else's key as the caller's own is not believed.
+    const forged = generateSigningKey()
+    const lying = withWrapper(async () => meDetail(forged))
+    const forgedEntry = { ...ENTRY, wrapRecord: recordBy(ME, forged, 'approval') }
+    expect(
+      await prepareAcceptKeyChange(lying.deps, X, { groupId: GROUP, entry: forgedEntry }),
+    ).toMatchObject({ wrap: { kind: 'unchecked' } })
   })
 
   it('says unchecked, not none, when the wrapper’s keys cannot be read', async () => {

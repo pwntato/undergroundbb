@@ -17,6 +17,12 @@
 //   - 'unchecked': the facts to check it were missing or unreadable (no
 //     wrapEpoch served, the wrapper's key chain does not verify). Never 'none'.
 //
+// The wrapper's keys are taken as given: the caller anchors them to a key it
+// already trusts first (routes/runAcceptKeyChange). With no roster behind the
+// wrapper's key rotations, a leaked superseded key of theirs can sign a record
+// dated anywhere in that key's interval and it verifies; that is accepted, as
+// the record is evidence only (docs/DESIGN.md "Who wrapped a member's entry").
+//
 // Pure and never throws.
 
 import { base64ToBytes } from './base64.js'

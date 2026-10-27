@@ -88,6 +88,10 @@ type Inspection =
       readonly signingKeys: readonly Uint8Array[]
       readonly fingerprint: string
       readonly evidence: KeyChangeEvidence
+      /** What the wrapper check anchors to: the caller's own key, pins and history. */
+      readonly own: Uint8Array
+      readonly pins: readonly PinRecord[]
+      readonly pinnerHistory: OwnKeyHistory | undefined
     }
   | Fail
 
@@ -114,10 +118,11 @@ async function inspect(deps: AcceptKeyChangeDeps, subjectUserId: string): Promis
     return { ok: false, kind: 'unchecked', reason: 'the keys served for them are malformed' }
   }
   const pin = pins.find((p) => p.pinnedUserId === subjectUserId)
+  const pinnerHistory = await ownHistoryFor(deps, own)
   const verdict = evaluatePin({
     pinnerUserId: deps.selfUserId,
     pinnerSigningPublicKey: own,
-    pinnerHistory: await ownHistoryFor(deps, own),
+    pinnerHistory,
     pinnedUserId: subjectUserId,
     pin,
     served,
@@ -150,6 +155,9 @@ async function inspect(deps: AcceptKeyChangeDeps, subjectUserId: string): Promis
       served,
       changes: served.keyChanges,
     }),
+    own,
+    pins,
+    pinnerHistory,
   }
 }
 
@@ -166,7 +174,7 @@ export async function prepareAcceptKeyChange(
 ): Promise<PrepareAcceptResult> {
   const found = await inspect(deps, subjectUserId)
   if (!found.ok) return found
-  const wrap = await wrapEvidenceFor(deps, subjectUserId, found.served, context)
+  const wrap = await wrapEvidenceFor(deps, subjectUserId, found, context)
   return { ok: true, fingerprint: found.fingerprint, evidence: found.evidence, wrap }
 }
 
@@ -174,11 +182,24 @@ export async function prepareAcceptKeyChange(
  * Who wrapped the subject's entry, from the entry's own signed record. The
  * wrapper's key history is read only when there is a record to check, and a
  * failed read is 'unchecked': it must never read as "no signed record".
+ *
+ * The wrapper's keys are what the server serves, so they are anchored to a key
+ * the caller already trusts before a record is checked under them (the same
+ * rule as runGrantCheck). A server that swapped a member's keys could
+ * otherwise serve a made-up key for an admin and sign an approval with it.
+ *   - the caller wrapped it: the served current key must be the caller's own,
+ *     and the chain behind it is signed by both keys of every link;
+ *   - someone else wrapped it: the caller's pin of them must still match what
+ *     is served, else the line is 'unchecked' ("approved" is never shown on a
+ *     pin that is missing, changed or does not verify);
+ *   - the subject wrapped it: their served keys are the very keys being
+ *     questioned, so 'self' only says whoever holds these new keys wrapped
+ *     them. It is the less reassuring line, and evidence like the rest.
  */
 async function wrapEvidenceFor(
   deps: AcceptKeyChangeDeps,
   subjectUserId: string,
-  subjectServed: UserDetail,
+  found: Extract<Inspection, { ok: true }>,
   context: { readonly groupId: string; readonly entry: MemberEntry | undefined },
 ): Promise<WrapEvidence> {
   const { entry } = context
@@ -186,13 +207,28 @@ async function wrapEvidenceFor(
   const record = entry.wrapRecord
   let wrapper: UserDetail | undefined
   if (record !== undefined) {
+    const wrapperId = record.wrapperUserId
     try {
-      wrapper =
-        record.wrapperUserId === subjectUserId
-          ? subjectServed
-          : await deps.getUserDetail(record.wrapperUserId)
+      wrapper = wrapperId === subjectUserId ? found.served : await deps.getUserDetail(wrapperId)
     } catch (err) {
       return { kind: 'unchecked', reason: `could not read the wrapper's keys: ${describe(err)}` }
+    }
+    if (wrapperId === deps.selfUserId) {
+      if (!sameKey(wrapper.signingPublicKey, found.own)) {
+        return { kind: 'unchecked', reason: 'the keys served for you are not the ones you hold' }
+      }
+    } else if (wrapperId !== subjectUserId) {
+      const verdict = evaluatePin({
+        pinnerUserId: deps.selfUserId,
+        pinnerSigningPublicKey: found.own,
+        pinnerHistory: found.pinnerHistory,
+        pinnedUserId: wrapperId,
+        pin: found.pins.find((p) => p.pinnedUserId === wrapperId),
+        served: wrapper,
+      })
+      if (verdict !== 'match') {
+        return { kind: 'unchecked', reason: unanchoredReason(verdict) }
+      }
     }
   }
   return checkWrapRecord({
@@ -203,6 +239,29 @@ async function wrapEvidenceFor(
     record,
     wrapper,
   })
+}
+
+function sameKey(b64: string, key: Uint8Array): boolean {
+  try {
+    const bytes = base64ToBytes(b64)
+    return bytes.length === key.length && bytes.every((x, i) => x === key[i])
+  } catch {
+    return false
+  }
+}
+
+/** Why a pin could not vouch for the wrapper's served keys, for the "could not check" line. */
+function unanchoredReason(verdict: ReturnType<typeof evaluatePin>): string {
+  switch (verdict) {
+    case 'first-sight':
+      return "you have not saved the wrapper's keys"
+    case 'mismatch':
+      return "the wrapper's keys changed since you saved them"
+    case 'rollback':
+      return 'the server shows older keys for the wrapper than you saw before'
+    default:
+      return "the copy of the wrapper's keys you saved does not verify"
+  }
 }
 
 /**
@@ -274,7 +333,7 @@ export function wrapEvidenceText(wrap: WrapEvidence, label: (userId: string) => 
     case 'invalid':
       return "A record is attached, but its signature doesn't check out."
     case 'unchecked':
-      return 'Could not check who wrapped their new keys.'
+      return `Could not check who wrapped their new keys (${wrap.reason}).`
   }
 }
 

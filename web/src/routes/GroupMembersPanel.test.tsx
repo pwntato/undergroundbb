@@ -13,6 +13,7 @@ import type { MembersView } from './runGroupMembers'
 
 const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
 const BOB = 'bbbbbbbb-2222-4222-8222-222222222222'
+const CAROL = 'cccccccc-3333-4333-8333-333333333333'
 
 const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
   userId,
@@ -645,16 +646,16 @@ describe('GroupMembersPanel dormant members (#62)', () => {
         {},
         {
           dormancy: changed,
-          usernames: names,
+          usernames: new Map([...names, [CAROL, 'carol']]),
           acceptPrompt: {
             userId: BOB,
             fingerprint: 'XXXX YYYY',
             evidence: 'no-link',
-            wrap: { kind: 'approved', wrapperUserId: BOB },
+            wrap: { kind: 'approved', wrapperUserId: CAROL },
           },
         },
       )
-      expect(html).toContain('wrapped by bob.')
+      expect(html).toContain('wrapped by carol.')
     })
   })
 })
