@@ -141,6 +141,12 @@ describe('checkWrapRecord', () => {
     )
   })
 
+  it('accepts the new key on the rotation day itself', () => {
+    expect(check(recordBy(k1, { day: '2026-10-15' }), rotatedOn('2026-10-15')).kind).toBe(
+      'approved',
+    )
+  })
+
   it('refuses the current key for a day before it existed', () => {
     expect(check(recordBy(k1, { day: '2026-10-14' }), rotatedOn('2026-10-15'))).toEqual({
       kind: 'invalid',

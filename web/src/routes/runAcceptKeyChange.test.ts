@@ -300,7 +300,8 @@ describe('who wrapped their entry (#280)', () => {
     expect(await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })).toMatchObject({
       wrap: { kind: 'self' },
     })
-    expect(getUserDetail.mock.calls.filter(([id]) => id !== X)).toEqual([])
+    // One read of the subject: the one that checks the pin. Nothing for the wrapper.
+    expect(getUserDetail.mock.calls.map(([id]) => id)).toEqual([X])
   })
 
   it('says unchecked, not none, when the wrapper’s keys cannot be read', async () => {
