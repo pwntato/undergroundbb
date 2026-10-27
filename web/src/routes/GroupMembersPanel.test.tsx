@@ -547,6 +547,20 @@ describe('GroupMembersPanel dormant members (#62)', () => {
     expect(html).not.toContain('awaiting approval')
   })
 
+  it('says Accept key change may be missing when the pins could not be read', () => {
+    const noPins: Dormancy = {
+      state: 'ready',
+      dormant: [],
+      changed: new Set(),
+      changedUnavailable: true,
+    }
+    const html = render({}, { dormancy: noPins })
+    expect(html).toContain('Accept key change')
+    expect(html).toContain('Reload to try again')
+    const ok: Dormancy = { state: 'ready', dormant: [], changed: new Set() }
+    expect(render({}, { dormancy: ok })).not.toContain('Reload to try again')
+  })
+
   it('says there is no fingerprint to check when their keys could not be read', () => {
     const noFp: Dormancy = {
       state: 'ready',

@@ -225,6 +225,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     }
     const { view } = load
     let cancelled = false
+    const ownKeyHistory = makeOwnKeyHistoryLoader(userId)
     void (async () => {
       const dormancy = await loadDormancy(
         {
@@ -233,7 +234,8 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           pins: {
             ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
             listPins: listAllPins,
-            loadOwnKeyHistory: makeOwnKeyHistoryLoader(userId),
+            loadOwnKeyHistory: ownKeyHistory,
+            ownKeyHistoryFailure: ownKeyHistory.failure,
           },
         },
         view.members,

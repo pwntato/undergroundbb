@@ -185,6 +185,17 @@ describe('changed keys (#62)', () => {
     expect([...findChanged([member(BOB, 1)], usersOf(bob), ME, ctx([forged]))]).toEqual([])
   })
 
+  it('does not list a member whose served keys are malformed: accepting refuses them (#288)', () => {
+    const bad = rotated(BOB, 1)
+    const members = [member(BOB, 1), member(CAROL, 1)]
+    const users = usersOf({ ...bad, signingPublicKey: 'not base64!' }, rotated(CAROL, 1))
+    const pins = [pinOf(BOB, old, 0), pinOf(CAROL, old, 0)]
+    expect([...findChanged(members, users, ME, ctx(pins))]).toEqual([CAROL])
+    // A wrapping key that does not parse has no fingerprint to compare either.
+    const noFp = usersOf({ ...bad, wrappingPublicKey: 'not base64!' }, rotated(CAROL, 1))
+    expect([...findChanged(members, noFp, ME, ctx(pins))]).toEqual([CAROL])
+  })
+
   it('leaves out the caller, a deleted account and a missing projection', () => {
     const members = [member(ME, 1), member(BOB, 1), member(CAROL, 1)]
     const users = usersOf(rotated(ME, 1), { ...rotated(BOB, 1), deleted: true })
@@ -218,7 +229,79 @@ describe('changed keys (#62)', () => {
       'rotating',
     )
     expect(broken.state === 'ready' && [...(broken.changed ?? [])]).toEqual([])
+    // A failed read is flagged, not silent: the empty set means "not checked".
+    expect(broken.state === 'ready' && broken.changedUnavailable).toBe(true)
+    expect(out.state === 'ready' && out.changedUnavailable).toBeUndefined()
+    // The real history loader resolves null instead of throwing, and without
+    // it a pin signed before the caller rotated reads as bad-signature, so the
+    // empty set would otherwise look like "nobody changed".
+    const meNew = generateSigningKey()
+    const rotatedCaller = {
+      ownSigningKey: async () => bytesToBase64(meNew.publicKey),
+      listPins: async () => [pinOf(BOB, old, 0)], // signed under the caller's earlier key
+      loadOwnKeyHistory: async () => null,
+    }
+    const noHistory = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: { ...rotatedCaller, ownKeyHistoryFailure: async () => 'the server is down' },
+      },
+      members,
+      0,
+      'rotating',
+    )
+    expect(noHistory.state === 'ready' && [...(noHistory.changed ?? [])]).toEqual([])
+    expect(noHistory.state === 'ready' && noHistory.changedUnavailable).toBe(true)
+    // A history that loaded is not a failure.
+    const loaded = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: { ...rotatedCaller, ownKeyHistoryFailure: async () => null },
+      },
+      members,
+      0,
+      'rotating',
+    )
+    expect(loaded.state === 'ready' && loaded.changedUnavailable).toBeUndefined()
     const without = await loadDormancy({ getUsers, selfUserId: ME }, members, 0, 'rotating')
     expect(without.state === 'ready' && [...(without.changed ?? [])]).toEqual([])
+    expect(without.state === 'ready' && without.changedUnavailable).toBeUndefined()
+  })
+
+  it('still lists changes it can verify when the key history failed to load (#288)', async () => {
+    // Without the history only a pin signed under the caller's CURRENT key
+    // verifies. BOB's pin predates the caller's rotation, so it is dropped;
+    // CAROL's was signed under the current key, so her change stays offered.
+    const meNew = generateSigningKey()
+    const payload = pinPayload(ME, CAROL, meNew.publicKey, WRAP, [old.publicKey], 0, '2026-10-01')
+    const carolPin: PinRecord = {
+      pinnedUserId: CAROL,
+      signingPublicKeys: [bytesToBase64(old.publicKey)],
+      wrappingPublicKey: bytesToBase64(WRAP),
+      pinnerSigningPublicKey: bytesToBase64(meNew.publicKey),
+      signature: bytesToBase64(sign(meNew, SigningContext.Pin, payload)),
+      keyEpoch: 0,
+      signedDay: '2026-10-01',
+    }
+    const getUsers = vi.fn().mockResolvedValue(usersOf(rotated(BOB, 1), rotated(CAROL, 1)))
+    const out = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: {
+          ownSigningKey: async () => bytesToBase64(meNew.publicKey),
+          listPins: async () => [pinOf(BOB, old, 0), carolPin],
+          loadOwnKeyHistory: async () => null,
+          ownKeyHistoryFailure: async () => 'the server is down',
+        },
+      },
+      [member(BOB, 1), member(CAROL, 1)],
+      0,
+      'rotating',
+    )
+    expect(out.state === 'ready' && [...(out.changed ?? [])]).toEqual([CAROL])
+    expect(out.state === 'ready' && out.changedUnavailable).toBe(true)
   })
 })

@@ -34,38 +34,48 @@ export function DormantMembersNotice({
       </p>
     )
   }
+  const changedNote =
+    dormancy.changedUnavailable === true ? (
+      <p className="text-xs text-muted-foreground">
+        Couldn&apos;t check which members&apos; keys changed since you saved them, so Accept key
+        change may be missing for someone who changed. Reload to try again.
+      </p>
+    ) : null
   if (dormancy.dormant.length === 0) {
-    return null
+    return changedNote
   }
   return (
-    <Alert>
-      <AlertDescription className="flex flex-col gap-3">
-        <span className="font-medium">
-          {dormancy.dormant.length === 1
-            ? '1 member changed their keys'
-            : `${String(dormancy.dormant.length)} members changed their keys`}
-        </span>
-        <span className="text-xs">
-          They stay in the group but cannot read new content here until an admin or ambassador
-          approves their new keys. Check the fingerprint with them in person or on a call you know
-          is them. Do not take it from the group or from a message.
-        </span>
-        <ul className="flex flex-col gap-3">
-          {dormancy.dormant.map((d) => (
-            <li key={d.userId} className="flex flex-col gap-1">
-              <span className="text-sm">{memberLabel(d.userId, usernames)}</span>
-              <span className="text-xs text-muted-foreground">{ENTRY_NOTE[d.entry]}</span>
-              {d.fingerprint === null ? (
-                <span className="text-xs text-amber-700 dark:text-amber-400">
-                  Their keys could not be read, so there is no fingerprint to check.
-                </span>
-              ) : (
-                <span className="font-mono text-xs break-all">{d.fingerprint}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </AlertDescription>
-    </Alert>
+    <>
+      {changedNote}
+      <Alert>
+        <AlertDescription className="flex flex-col gap-3">
+          <span className="font-medium">
+            {dormancy.dormant.length === 1
+              ? '1 member changed their keys'
+              : `${String(dormancy.dormant.length)} members changed their keys`}
+          </span>
+          <span className="text-xs">
+            They stay in the group but cannot read new content here until an admin or ambassador
+            approves their new keys. Check the fingerprint with them in person or on a call you know
+            is them. Do not take it from the group or from a message.
+          </span>
+          <ul className="flex flex-col gap-3">
+            {dormancy.dormant.map((d) => (
+              <li key={d.userId} className="flex flex-col gap-1">
+                <span className="text-sm">{memberLabel(d.userId, usernames)}</span>
+                <span className="text-xs text-muted-foreground">{ENTRY_NOTE[d.entry]}</span>
+                {d.fingerprint === null ? (
+                  <span className="text-xs text-amber-700 dark:text-amber-400">
+                    Their keys could not be read, so there is no fingerprint to check.
+                  </span>
+                ) : (
+                  <span className="font-mono text-xs break-all">{d.fingerprint}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </AlertDescription>
+      </Alert>
+    </>
   )
 }
