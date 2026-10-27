@@ -664,9 +664,12 @@ stays a hard-block with no accept action. The action is offered with evidence an
 the verified `KEYCHANGE#` chain from the pinned keys to the served ones (rotation by a holder of the
 pinned key, or no link), the member's fingerprint to compare out of band, and whether the wrap was
 made by another admin or was a self-approval. Accepting replaces that admin's pin, exactly as the
-original approval did. `runRotation` reports such members as their own outcome, "keys changed and
-approved elsewhere; accept them to continue", instead of a plain `blocked`, and still wraps to
-nobody until the admin accepts. A signed approval record by the first approver was considered, so
+original approval did. `runRotation` reports such members in the `blocked` outcome's `changed` subset (only the
+`mismatch` verdict, never `rollback` or `bad-signature`), and `describeRotation` says "new keys,
+possibly approved by another admin; check the fingerprint, then accept key change" instead of the
+plain "don't match" line. A subset rather than a separate status, because one run can block a
+changed member and a rolled-back one together and every existing consumer already handles
+`blocked`. It still wraps to nobody until the admin accepts. A signed approval record by the first approver was considered, so
 that Y could re-pin on X's word; it is not needed to close this stall and adds a delegation the
 pinning section does not otherwise have, so each admin makes their own decision.
 
