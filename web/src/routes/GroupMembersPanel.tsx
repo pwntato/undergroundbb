@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
 import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
+import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
 import {
   MemberVerificationBadge,
@@ -24,7 +25,7 @@ import {
 import { DormantMembersNotice } from './DormantMembersNotice'
 import type { Dormancy } from './dormancy'
 import type { GrantCheck } from './runGrantCheck'
-import { evidenceText } from './runAcceptKeyChange'
+import { evidenceText, wrapEvidenceText } from './runAcceptKeyChange'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
 
@@ -98,6 +99,7 @@ export function GroupMembersPanel({
     readonly userId: string
     readonly fingerprint: string
     readonly evidence: KeyChangeEvidence
+    readonly wrap: WrapEvidence
   } | null
   readonly onStartAccept?: (subjectUserId: string) => void
   readonly onCancelAccept?: () => void
@@ -290,6 +292,9 @@ export function GroupMembersPanel({
                       or from a message.
                     </span>
                     <span className="text-xs">{evidenceText(acceptPrompt.evidence)}</span>
+                    <span className="text-xs">
+                      {wrapEvidenceText(acceptPrompt.wrap, (id) => memberLabel(id, usernames))}
+                    </span>
                     <span className="font-mono text-xs break-all">{acceptPrompt.fingerprint}</span>
                     <span className="flex flex-wrap gap-2">
                       <Button

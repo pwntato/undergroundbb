@@ -34,6 +34,7 @@ import {
 import { readAnchorPin, writeAnchorPin } from '@/lib/groups/anchorPin'
 import { getUserDetail, getUsers } from '@/lib/api/users'
 import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
+import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { loadDormancy, type Dormancy } from './dormancy'
 import { listAllPins } from '@/lib/api/pins'
 import { deleteVerification, listAllVerifications, putVerification } from '@/lib/api/verifications'
@@ -159,6 +160,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     readonly userId: string
     readonly fingerprint: string
     readonly evidence: KeyChangeEvidence
+    readonly wrap: WrapEvidence
   } | null>(null)
   // How this tab's most recent rotation job (on-load catch-up or a removal's)
   // ended; null until one has. The stale-rotation banner's advice depends on it
@@ -583,12 +585,16 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     setMessage(null)
     setError(null)
     void (async () => {
-      const prepared = await prepareAcceptKeyChange(makeAcceptDeps(userId), subjectUserId)
+      const prepared = await prepareAcceptKeyChange(makeAcceptDeps(userId), subjectUserId, {
+        groupId: load.view.groupId,
+        entry: load.view.members.find((m) => m.userId === subjectUserId),
+      })
       if (prepared.ok) {
         setAcceptPrompt({
           userId: subjectUserId,
           fingerprint: prepared.fingerprint,
           evidence: prepared.evidence,
+          wrap: prepared.wrap,
         })
       } else {
         setAcceptPrompt(null)

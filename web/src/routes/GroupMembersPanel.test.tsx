@@ -1,6 +1,7 @@
 // Markup tests for GroupMembersPanel (renderToStaticMarkup, per
 // GroupList.test.tsx's reasoning).
 
+import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -12,6 +13,7 @@ import type { MembersView } from './runGroupMembers'
 
 const ME = 'aaaaaaaa-1111-4111-8111-111111111111'
 const BOB = 'bbbbbbbb-2222-4222-8222-222222222222'
+const CAROL = 'cccccccc-3333-4333-8333-333333333333'
 
 const member = (userId: string, role: MemberEntry['role']): MemberEntry => ({
   userId,
@@ -34,6 +36,7 @@ function render(
       userId: string
       fingerprint: string
       evidence: 'signed-rotation' | 'no-link' | 'unverified'
+      wrap: WrapEvidence
     } | null
   } = {},
 ): string {
@@ -623,13 +626,36 @@ describe('GroupMembersPanel dormant members (#62)', () => {
         {
           dormancy: changed,
           usernames: names,
-          acceptPrompt: { userId: BOB, fingerprint: 'XXXX YYYY', evidence: 'no-link' },
+          acceptPrompt: {
+            userId: BOB,
+            fingerprint: 'XXXX YYYY',
+            evidence: 'no-link',
+            wrap: { kind: 'none' },
+          },
         },
       )
       expect(html).toContain('XXXX YYYY')
+      expect(html).toContain('No signed record of who wrapped')
       expect(html).toContain('It matches, accept')
       expect(html).toContain('Only accept if they confirm')
       expect(html).not.toContain('>Accept key change<')
+    })
+
+    it('names the wrapper by username in the wrap line', () => {
+      const html = render(
+        {},
+        {
+          dormancy: changed,
+          usernames: new Map([...names, [CAROL, 'carol']]),
+          acceptPrompt: {
+            userId: BOB,
+            fingerprint: 'XXXX YYYY',
+            evidence: 'no-link',
+            wrap: { kind: 'approved', wrapperUserId: CAROL },
+          },
+        },
+      )
+      expect(html).toContain('wrapped by carol.')
     })
   })
 })

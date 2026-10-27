@@ -265,6 +265,17 @@ export interface MemberEntry {
    * and then nobody is reported dormant.
    */
   readonly wrapEpoch?: number
+  /**
+   * The signed record of who last set this entry (#280). Absent when the entry
+   * was written by a path that carries none. Evidence only: see
+   * lib/crypto/wrap-record for how it is checked.
+   */
+  readonly wrapRecord?: {
+    readonly wrapperUserId: string
+    readonly reason: string
+    readonly day: string
+    readonly signature: string
+  }
 }
 
 export interface ListMembersResponse {
