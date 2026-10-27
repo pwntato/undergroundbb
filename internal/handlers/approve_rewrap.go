@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
 	"github.com/pwntato/undergroundbb/internal/models"
@@ -18,6 +19,7 @@ type approveRewrapRequest struct {
 	// KeyEpoch is the member's keyEpoch (as served by GET /api/users) the key
 	// was wrapped to; the server checks it is still their current epoch.
 	KeyEpoch uint64 `json:"keyEpoch"`
+	wrapRecordFields
 }
 
 // approveRewrap implements POST /api/groups/{groupId}/rewrap/{userId}, the
@@ -80,6 +82,15 @@ func (h *Handler) approveRewrap(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "wrappedKey: "+err.Error())
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, subjectID, req.Generation, req.KeyEpoch, crypto.RekeyReasonApproval)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not approve the key change")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	err = h.db.ApproveRewrap(r.Context(), db.ApproveRewrapInput{
 		GroupID:        groupID,
 		ApproverUserID: userID,
@@ -88,6 +99,7 @@ func (h *Handler) approveRewrap(w http.ResponseWriter, r *http.Request) {
 		Wrapped:        wk,
 		KeyEpoch:       req.KeyEpoch,
 		Open:           group.RevocationMode == models.RevocationOpen,
+		WrapRecord:     rec,
 	})
 	switch {
 	case errors.Is(err, db.ErrRekeyRequired):

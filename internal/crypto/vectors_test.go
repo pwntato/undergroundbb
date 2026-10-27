@@ -33,6 +33,7 @@ type vectorFile struct {
 	SuccessorClaim       []successorClaimVector       `json:"successor_claim"`
 	RotationStart        []rotationStartVector        `json:"rotation_start"`
 	RotationRekey        []rotationRekeyVector        `json:"rotation_rekey"`
+	WrapRecord           []wrapRecordVector           `json:"wrap_record"`
 	Admission            []admissionVector            `json:"admission"`
 	Pin                  []pinVector                  `json:"pin"`
 	Verification         []verificationVector         `json:"verification"`
@@ -203,6 +204,21 @@ type rotationRekeyVector struct {
 	MemberUUID   string `json:"member_uuid"`
 	Generation   int64  `json:"generation"`
 	Reason       string `json:"reason"`
+	PayloadHex   string `json:"payload_hex"`
+	SignatureHex string `json:"signature_hex"`
+}
+
+type wrapRecordVector struct {
+	Name         string `json:"name"`
+	PrivateHex   string `json:"private_key_hex"`
+	PublicHex    string `json:"public_key_hex"`
+	GroupID      string `json:"group_id"`
+	WrapperUUID  string `json:"wrapper_uuid"`
+	MemberUUID   string `json:"member_uuid"`
+	Generation   int64  `json:"generation"`
+	KeyEpoch     uint64 `json:"key_epoch"`
+	Reason       string `json:"reason"`
+	Day          string `json:"day"`
 	PayloadHex   string `json:"payload_hex"`
 	SignatureHex string `json:"signature_hex"`
 }
@@ -1377,5 +1393,44 @@ func TestVectorHandoffWrap(t *testing.T) {
 	}
 	if v.HandoffWrap[0].AADHex == v.HandoffWrap[1].AADHex {
 		t.Fatal("different groups must produce different AADs")
+	}
+}
+
+// TestVectorWrapRecord pins WrapRecordPayload's exact encoding (#280).
+func TestVectorWrapRecord(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.WrapRecord) < 2 {
+		t.Fatalf("expected at least 2 wrap_record vectors, got %d", len(v.WrapRecord))
+	}
+	seen := map[string]bool{}
+	for _, tc := range v.WrapRecord {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := WrapRecordPayload(tc.GroupID, tc.WrapperUUID, tc.MemberUUID, tc.Generation, tc.KeyEpoch, tc.Reason, tc.Day)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("WrapRecordPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			seen[tc.PayloadHex] = true
+			gotSig, err := Sign(priv, ContextWrapRecord, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextWrapRecord, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature")
+			}
+			if Verify(pub, ContextRotationRekey, wantPayload, wantSig) || Verify(pub, ContextAdmission, wantPayload, wantSig) || Verify(pub, ContextPin, wantPayload, wantSig) {
+				t.Fatal("wrap-record signature verified under another context")
+			}
+		})
+	}
+	if len(seen) != len(v.WrapRecord) {
+		t.Fatal("wrap-record vectors with different members, epochs or reasons must produce different payloads")
 	}
 }

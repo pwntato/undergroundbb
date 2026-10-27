@@ -272,6 +272,7 @@ type selfRekeyRequest struct {
 	// WrappedKey is the new key wrapped for the caller (their only copy).
 	WrappedKey     wrappedKey `json:"wrappedKey"`
 	StartSignature string     `json:"startSignature"`
+	wrapRecordFields
 }
 
 // selfRekey implements POST /api/groups/{groupId}/rotation/rekey (#62): an
@@ -354,6 +355,15 @@ func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "startSignature: does not verify against the caller's current signing key", "bad_signature")
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, userID, req.Generation, self.KeyEpoch, crypto.RekeyReasonSelf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not start the re-key")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	err = h.db.SelfRekey(r.Context(), db.SelfRekeyInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
@@ -364,6 +374,7 @@ func (h *Handler) selfRekey(w http.ResponseWriter, r *http.Request) {
 		CallerWrappingKey: self.WrappingPublicKey,
 		Reason:            crypto.RekeyReasonSelf,
 		StartSignature:    sig,
+		WrapRecord:        rec,
 	})
 	switch {
 	case errors.Is(err, db.ErrHandoffStale):

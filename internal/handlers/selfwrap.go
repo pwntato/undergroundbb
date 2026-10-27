@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
@@ -15,6 +16,7 @@ import (
 type selfWrapRequest struct {
 	Generation int64      `json:"generation"`
 	WrappedKey wrappedKey `json:"wrappedKey"`
+	wrapRecordFields
 }
 
 // selfWrap implements POST /api/groups/{groupId}/rotation/selfwrap (#62): a
@@ -78,6 +80,15 @@ func (h *Handler) selfWrap(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "wrappedKey: "+err.Error())
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, userID, caller.Generation, self.KeyEpoch, crypto.RekeyReasonSelf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not wrap the group key")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	err = h.db.SelfWrap(r.Context(), db.SelfWrapInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
@@ -85,6 +96,7 @@ func (h *Handler) selfWrap(w http.ResponseWriter, r *http.Request) {
 		Wrapped:           wrapped,
 		CallerKeyEpoch:    self.KeyEpoch,
 		CallerWrappingKey: self.WrappingPublicKey,
+		WrapRecord:        rec,
 	})
 	switch {
 	case errors.Is(err, db.ErrHandoffStale):

@@ -23,6 +23,7 @@ type approveRekeyRequest struct {
 	MemberWrappedKey wrappedKey `json:"memberWrappedKey"`
 	MemberKeyEpoch   uint64     `json:"memberKeyEpoch"`
 	StartSignature   string     `json:"startSignature"`
+	wrapRecordFields
 }
 
 // approveRekey implements POST /api/groups/{groupId}/rotation/approve/{userId}
@@ -117,6 +118,16 @@ func (h *Handler) approveRekey(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "startSignature: does not verify against the caller's current signing key", "bad_signature")
 		return
 	}
+	// The member's entry is written at the generation one past the admin's.
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, memberID, caller.Generation+1, req.MemberKeyEpoch, crypto.RekeyReasonApproval)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not approve the key change")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	err = h.db.ApproveRekey(r.Context(), db.ApproveRekeyInput{
 		GroupID:           groupID,
 		AdminUserID:       userID,
@@ -129,6 +140,7 @@ func (h *Handler) approveRekey(w http.ResponseWriter, r *http.Request) {
 		MemberKeyEpoch:    req.MemberKeyEpoch,
 		Reason:            crypto.RekeyReasonApproval,
 		StartSignature:    sig,
+		WrapRecord:        rec,
 	})
 	switch {
 	case errors.Is(err, db.ErrRotationInProgress):

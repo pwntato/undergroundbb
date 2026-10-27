@@ -670,6 +670,33 @@ nobody until the admin accepts. A signed approval record by the first approver w
 that Y could re-pin on X's word; it is not needed to close this stall and adds a delegation the
 pinning section does not otherwise have, so each admin makes their own decision.
 
+**Who wrapped a member's entry (#280).** The "accept key change" prompt tells the admin whether the
+member's current wrap was made by another admin, by the member themself, or by nobody who signed for
+it. Every write that sets an entry's `WrapEpoch` therefore carries a **wrap record**: `POST
+/api/groups/{gid}/rewrap/{uid}`, `rotation/approve/{uid}`, `rotation/rekey` and `rotation/selfwrap`.
+The record is the wrapper's Ed25519 signature, under its own context `underground-bb:wrap-record:v1`,
+over `WrapRecordPayload(group, wrapper, member, generation, keyEpoch, reason, day)`: the generation
+the entry was wrapped at, the member's `KeyEpoch` it was wrapped to (the value stored as `WrapEpoch`),
+the reason and the UTC day. The server fixes the reason from the endpoint (`approval` for the two that
+approve someone else, `self` for the other two), checks the signature under the caller's current
+signing key and the day with the same window as a pin's, and writes `WrapperUserID`, `WrapReason`,
+`WrapDay` and `WrapSignature` on the member's entry in the same transaction as the wrap. The roster
+serves them as `wrapRecord` next to `wrapEpoch`. The fields are optional on the wire, all or none, so
+a client from before this existed keeps working and its wraps read as "no signed record"; a signature
+without a day, or the reverse, is 400.
+
+A reader trusts a record only when it is **for the entry as it stands**: the signature verifies
+under one of the wrapper's keys for the signed day, and the payload is rebuilt from the entry's
+*own* served `generation` and `wrapEpoch`, so a record left over from an earlier wrap fails the
+match and reads as no record. Nothing else writes the entry's wrap and clears the record (the
+ordinary re-wrap after a removal, an invite): the binding does that work, because any later wrap
+changes the generation or the epoch. What it does and does not say: the server can withhold a
+record, which shows as "no signed record", but cannot forge one, move one to another member, group,
+generation or epoch, or turn a self wrap into an approval. It does not prove the wrapper was an
+admin or ambassador that day: the roster says so, unsigned, and proving it means walking the grant
+chain at every prompt, which is left out. Like the chain evidence it informs the person deciding and
+approves nothing.
+
 **The window, stated plainly.** From the moment of rotation until an admin acts in a group, the old
 keys keep reading that group's new content, `Rotating` included, because the generation in use is
 still the one their entry holds. The only prompt an admin gets is the roster mismatch, so a group

@@ -291,6 +291,36 @@
       "signature_hex": "3e738a527beb03ae431da6a6c2b3ed9fd936a5b30bb78474085bb8a907b4e192dcf1ea8ccafe1d8fd7c03138fdc1fd8495f308265e684d14e0c88fd0e1766b03"
     }
   ],
+  "wrap_record": [
+    {
+      "name": "self",
+      "private_key_hex": "a05d40a635ab2d33955066b40ef64b84560e719b90b8f2e34414f2241d5bcbe4ae03470345d3c4c9e99f54a28ac304abeb60493c0b0b91c4c355cbdae633aa12",
+      "public_key_hex": "ae03470345d3c4c9e99f54a28ac304abeb60493c0b0b91c4c355cbdae633aa12",
+      "group_id": "group-uuid-6",
+      "wrapper_uuid": "wrapper-uuid-1",
+      "member_uuid": "wrapper-uuid-1",
+      "generation": 5,
+      "key_epoch": 2,
+      "reason": "self",
+      "day": "2026-10-27",
+      "payload_hex": "0000000c67726f75702d757569642d360000000e777261707065722d757569642d310000000e777261707065722d757569642d31000000013500000001320000000473656c660000000a323032362d31302d3237",
+      "signature_hex": "b0d975b1a50aa527bcec822a31f5c1c298ef4152e7c68b2d3966ae5d5b2cd8eb4ad0033e6b631a0c2ac4abc985901458cde207c5d38d44b8d27266f666b4330e"
+    },
+    {
+      "name": "approval",
+      "private_key_hex": "a05d40a635ab2d33955066b40ef64b84560e719b90b8f2e34414f2241d5bcbe4ae03470345d3c4c9e99f54a28ac304abeb60493c0b0b91c4c355cbdae633aa12",
+      "public_key_hex": "ae03470345d3c4c9e99f54a28ac304abeb60493c0b0b91c4c355cbdae633aa12",
+      "group_id": "group-uuid-6",
+      "wrapper_uuid": "wrapper-uuid-1",
+      "member_uuid": "member-uuid-2",
+      "generation": 5,
+      "key_epoch": 3,
+      "reason": "approval",
+      "day": "2026-10-27",
+      "payload_hex": "0000000c67726f75702d757569642d360000000e777261707065722d757569642d310000000d6d656d6265722d757569642d320000000135000000013300000008617070726f76616c0000000a323032362d31302d3237",
+      "signature_hex": "5e36cf5c61da4be452b670be064f986cc20a3d15c05673579322cd245e8c0bd372bd74cef199265827bfe95150956907c6604023548dfefd4d1de810f60b5502"
+    }
+  ],
   "admission": [
     {
       "name": "inviter holds a promoted grant",

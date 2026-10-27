@@ -153,6 +153,31 @@ func RotationRekeyPayload(groupID, adminUUID, memberUUID string, generation int6
 	return lengthPrefixedConcat(fields)
 }
 
+// WrapRecordPayload builds the bytes a wrapper signs (under ContextWrapRecord)
+// when they set a member's group-key entry (#280, docs/DESIGN.md, "Who wrapped
+// a member's entry"): the group, the wrapper, the member whose entry it is
+// (the wrapper themself for RekeyReasonSelf), the generation the entry was
+// wrapped at, the member's KeyEpoch it was wrapped to (stored as the entry's
+// WrapEpoch), the reason and the UTC day. Binding the generation and epoch is
+// what ties a record to one wrap: a reader rebuilds them from the entry as it
+// stands, so a record left over from an earlier wrap fails to verify.
+//
+// generation and keyEpoch are signed as decimal strings. Same encoding as
+// RotationRekeyPayload, and the same warning: it must never change once a real
+// wrap has been signed under it.
+func WrapRecordPayload(groupID, wrapperUUID, memberUUID string, generation int64, keyEpoch uint64, reason, day string) []byte {
+	fields := [][]byte{
+		[]byte(groupID),
+		[]byte(wrapperUUID),
+		[]byte(memberUUID),
+		[]byte(strconv.FormatInt(generation, 10)),
+		[]byte(strconv.FormatUint(keyEpoch, 10)),
+		[]byte(reason),
+		[]byte(day),
+	}
+	return lengthPrefixedConcat(fields)
+}
+
 // AdmissionPayload builds the bytes the inviter signs (under ContextAdmission)
 // when they complete an invite -- docs/DESIGN.md, "The recipient set is taken
 // from the server" (#178). It is the durable record that this inviter admitted
