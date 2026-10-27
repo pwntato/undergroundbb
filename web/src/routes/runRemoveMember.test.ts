@@ -95,6 +95,27 @@ describe('runRemoveMember: the wrap record (#280)', () => {
     expect(t.calls[1]?.body?.rotation).toMatchObject({ startSignature: 'start-sig' })
   })
 
+  // Dropping a refused record is not a signing attempt: the two passes exist for
+  // grant_key_taken, and a collision on either must still be re-signed.
+  it('still re-signs a grant-key collision after dropping a refused record', async () => {
+    const t = withSigner()
+    t.deps.removeMember
+      .mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+      .mockRejectedValueOnce(new ApiError(409, 'taken', 'grant_key_taken'))
+    expect(await run(t.deps, 'ambassador')).toEqual({ ok: true, rotating: true })
+    expect(t.deps.removeMember).toHaveBeenCalledTimes(3)
+    expect(t.deps.signRoleGrant).toHaveBeenCalledTimes(3)
+  })
+
+  it('still drops a refused record that only shows after a grant-key collision', async () => {
+    const t = withSigner()
+    t.deps.removeMember
+      .mockRejectedValueOnce(new ApiError(409, 'taken', 'grant_key_taken'))
+      .mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await run(t.deps, 'ambassador')).toEqual({ ok: true, rotating: true })
+    expect(t.deps.removeMember).toHaveBeenCalledTimes(3)
+  })
+
   it('sends no record when the caller epoch cannot be read, and still removes', async () => {
     const t = withSigner()
     t.getUserDetail.mockRejectedValue(new Error('offline'))

@@ -183,6 +183,9 @@ export async function runRemoveMember(
       ) {
         const { wrapSignature: _s, wrapDay: _d, ...plain } = rotation
         rotation = plain
+        // Not a signing attempt: the passes are for grant_key_taken. This can only
+        // fire once, since the record is gone from the resend.
+        attempt--
         continue
       }
       if (err instanceof ApiError && err.status === 409 && err.code === 'grant_key_taken') {
