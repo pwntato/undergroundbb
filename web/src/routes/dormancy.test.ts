@@ -269,4 +269,39 @@ describe('changed keys (#62)', () => {
     expect(without.state === 'ready' && [...(without.changed ?? [])]).toEqual([])
     expect(without.state === 'ready' && without.changedUnavailable).toBeUndefined()
   })
+
+  it('still lists changes it can verify when the key history failed to load (#288)', async () => {
+    // Without the history only a pin signed under the caller's CURRENT key
+    // verifies. BOB's pin predates the caller's rotation, so it is dropped;
+    // CAROL's was signed under the current key, so her change stays offered.
+    const meNew = generateSigningKey()
+    const payload = pinPayload(ME, CAROL, meNew.publicKey, WRAP, [old.publicKey], 0, '2026-10-01')
+    const carolPin: PinRecord = {
+      pinnedUserId: CAROL,
+      signingPublicKeys: [bytesToBase64(old.publicKey)],
+      wrappingPublicKey: bytesToBase64(WRAP),
+      pinnerSigningPublicKey: bytesToBase64(meNew.publicKey),
+      signature: bytesToBase64(sign(meNew, SigningContext.Pin, payload)),
+      keyEpoch: 0,
+      signedDay: '2026-10-01',
+    }
+    const getUsers = vi.fn().mockResolvedValue(usersOf(rotated(BOB, 1), rotated(CAROL, 1)))
+    const out = await loadDormancy(
+      {
+        getUsers,
+        selfUserId: ME,
+        pins: {
+          ownSigningKey: async () => bytesToBase64(meNew.publicKey),
+          listPins: async () => [pinOf(BOB, old, 0), carolPin],
+          loadOwnKeyHistory: async () => null,
+          ownKeyHistoryFailure: async () => 'the server is down',
+        },
+      },
+      [member(BOB, 1), member(CAROL, 1)],
+      0,
+      'rotating',
+    )
+    expect(out.state === 'ready' && [...(out.changed ?? [])]).toEqual([CAROL])
+    expect(out.state === 'ready' && out.changedUnavailable).toBe(true)
+  })
 })

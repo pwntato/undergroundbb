@@ -167,13 +167,13 @@ async function loadChanged(
     const own = base64ToBytes(await deps.pins.ownSigningKey())
     const pins = await deps.pins.listPins()
     const history = await ownHistoryFor(deps.pins, own)
+    // Still computed on a failed history: without it only a pin signed under
+    // the caller's current key verifies, so what comes back is a partial set
+    // (fail-closed, and accepting re-checks everything), not a wrong one.
     const historyFailure = await deps.pins.ownKeyHistoryFailure?.(own)
-    if (historyFailure !== null && historyFailure !== undefined) {
-      return { changed: new Set(), failed: true }
-    }
     return {
       changed: findChanged(members, users, deps.selfUserId, { own, pins, history }),
-      failed: false,
+      failed: historyFailure !== null && historyFailure !== undefined,
     }
   } catch {
     return { changed: new Set(), failed: true }
