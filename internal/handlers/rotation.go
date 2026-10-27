@@ -149,6 +149,7 @@ type takeOverRotationRequest struct {
 	// WrappedKey is the new key wrapped for the caller (their only copy).
 	WrappedKey     wrappedKey `json:"wrappedKey"`
 	StartSignature string     `json:"startSignature"`
+	wrapRecordFields
 }
 
 // takeOverRotation implements POST /api/groups/{groupId}/rotation/takeover
@@ -219,6 +220,15 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	rec, problem, err := h.wrapRecord(r, req.wrapRecordFields, groupID, userID, userID, caller.Generation+1, keyEpoch, crypto.RekeyReasonSelf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not take over the rotation")
+		return
+	}
+	if problem != nil {
+		problem.write(w)
+		return
+	}
 	in := db.TakeOverLeaveRotationInput{
 		GroupID:           groupID,
 		CallerUserID:      userID,
@@ -228,6 +238,7 @@ func (h *Handler) takeOverRotation(w http.ResponseWriter, r *http.Request) {
 		CallerWrappedKey:  wrapped,
 		CallerKeyEpoch:    keyEpoch,
 		StartSignature:    sig,
+		WrapRecord:        rec,
 	}
 	err = h.db.TakeOverLeaveRotation(r.Context(), in)
 	if errors.Is(err, db.ErrWrapEpochStale) {

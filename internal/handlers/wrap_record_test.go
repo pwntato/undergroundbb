@@ -268,3 +268,67 @@ func TestSelfRekeyStoresTheAdminsOwnRecord(t *testing.T) {
 	}
 	wantWrapRecord(t, gid, owner.userID, owner.userID, crypto.RekeyReasonSelf, today, ok.wrapRecordFields)
 }
+
+// A removal in a Rotating group writes the remover's own entry at the next
+// generation, and that is a self wrap that must carry a record too (#280).
+func TestRemovalStoresTheRemoversOwnRecord(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	bob := registerTestUser(t, h)
+	addMember(t, gid, bob, "member")
+	today := utcToday()
+
+	for name, f := range map[string]wrapRecordFields{
+		"another generation": wrapFields(t, owner, gid, owner.userID, 0, 0, crypto.RekeyReasonSelf, today),
+		"another epoch":      wrapFields(t, owner, gid, owner.userID, 1, 1, crypto.RekeyReasonSelf, today),
+		"as an approval":     wrapFields(t, owner, gid, owner.userID, 1, 0, crypto.RekeyReasonApproval, today),
+	} {
+		rot := rotationBody(t, owner, gid, bob.userID, 1)
+		rot.wrapRecordFields = f
+		if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rot}); rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_signature" {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	if getRow(t, "GROUP#"+gid, "MEMBER#"+bob.userID) == nil || getRow(t, "GROUP#"+gid, "ROTATION") != nil {
+		t.Fatal("a refused record still removed the member or started the rotation")
+	}
+	wantNoWrapRecord(t, gid, owner.userID)
+
+	rot := rotationBody(t, owner, gid, bob.userID, 1)
+	rot.wrapRecordFields = wrapFields(t, owner, gid, owner.userID, 1, 0, crypto.RekeyReasonSelf, today)
+	if rec := doRemove(t, h, ownerCookie, gid, bob.userID, &removeMemberRequest{Rotation: rot}); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
+	}
+	wantWrapRecord(t, gid, owner.userID, owner.userID, crypto.RekeyReasonSelf, today, rot.wrapRecordFields)
+}
+
+// Taking over a leaver's marker is the other way a dormant admin brings their
+// own entry current, so it carries the same self record (#280).
+func TestTakeOverStoresTheAdminsOwnRecord(t *testing.T) {
+	f := leftRotating(t)
+	today := utcToday()
+
+	for name, fields := range map[string]wrapRecordFields{
+		"another generation": wrapFields(t, f.owner, f.gid, f.owner.userID, 0, 0, crypto.RekeyReasonSelf, today),
+		"another epoch":      wrapFields(t, f.owner, f.gid, f.owner.userID, 1, 3, crypto.RekeyReasonSelf, today),
+		"as an approval":     wrapFields(t, f.owner, f.gid, f.owner.userID, 1, 0, crypto.RekeyReasonApproval, today),
+	} {
+		b := takeOverBody(t, f, f.owner, 1)
+		b.wrapRecordFields = fields
+		if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "takeover", b); rec.Code != http.StatusBadRequest || errCode(t, rec) != "bad_signature" {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	if m := getRow(t, "GROUP#"+f.gid, "ROTATION"); strAttr(m, "StartedBy") != f.carol.userID {
+		t.Fatal("a refused record replaced the leaver's marker")
+	}
+	wantNoWrapRecord(t, f.gid, f.owner.userID)
+
+	ok := takeOverBody(t, f, f.owner, 1)
+	ok.wrapRecordFields = wrapFields(t, f.owner, f.gid, f.owner.userID, 1, 0, crypto.RekeyReasonSelf, today)
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "takeover", ok); rec.Code != http.StatusNoContent {
+		t.Fatalf("takeover: %d %s", rec.Code, rec.Body.String())
+	}
+	wantWrapRecord(t, f.gid, f.owner.userID, f.owner.userID, crypto.RekeyReasonSelf, today, ok.wrapRecordFields)
+}

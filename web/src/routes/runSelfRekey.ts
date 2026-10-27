@@ -29,7 +29,7 @@ import type {
   StartSelfRekeyRequest,
 } from '@/lib/crypto/worker-protocol'
 import { runRotation, type RotationDeps, type RotationOutcome } from './runRotation'
-import { wrapRecordFor, type SignWrapRecord, type WrapRecordFields } from './wrapRecord'
+import { ownWrapRecord, sendWithRecord } from './wrapRecord'
 
 export interface SelfRekeyDeps extends RotationDeps {
   readonly startSelfRekeyCrypto: (
@@ -41,8 +41,6 @@ export interface SelfRekeyDeps extends RotationDeps {
   ) => Promise<SelfWrapRequest['wrappedKey']>
   readonly selfWrap: (groupId: string, req: SelfWrapRequest) => Promise<void>
   readonly deleteHandoff: (groupId: string) => Promise<void>
-  /** Signs who wrapped (#280); absent in a caller that does not, and then no record is sent. */
-  readonly signWrapRecord?: SignWrapRecord
 }
 
 export type SelfRekeyOutcome =
@@ -55,33 +53,6 @@ export type SelfRekeyOutcome =
   /** An Open group: the caller's entry now holds the same key under their new one. */
   | { readonly status: 'wrapped' }
   | { readonly status: 'incomplete'; readonly reason: string }
-
-/**
- * The wrap record for the caller's own entry at `generation`, signed to their
- * own current KeyEpoch (the value the server stamps as the entry's WrapEpoch),
- * or none when that epoch cannot be read.
- */
-async function ownWrapRecord(
-  deps: SelfRekeyDeps,
-  groupId: string,
-  generation: number,
-): Promise<WrapRecordFields> {
-  if (deps.getUserDetail === undefined) return {}
-  let keyEpoch: number
-  try {
-    keyEpoch = (await deps.getUserDetail(deps.selfUserId)).keyEpoch
-  } catch {
-    return {}
-  }
-  return wrapRecordFor(deps.signWrapRecord, {
-    userId: deps.selfUserId,
-    groupId,
-    memberUserId: deps.selfUserId,
-    generation,
-    keyEpoch,
-    reason: 'self',
-  })
-}
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -144,13 +115,15 @@ export async function runSelfRekey(
     }
   }
   try {
-    await deps.selfRekey(groupId, {
-      generation: minted.generation,
-      link: minted.link,
-      wrappedKey: minted.removerWrappedKey,
-      startSignature: minted.startSignature,
-      ...(await ownWrapRecord(deps, groupId, minted.generation)),
-    })
+    await sendWithRecord(await ownWrapRecord(deps, groupId, minted.generation), (record) =>
+      deps.selfRekey(groupId, {
+        generation: minted.generation,
+        link: minted.link,
+        wrappedKey: minted.removerWrappedKey,
+        startSignature: minted.startSignature,
+        ...record,
+      }),
+    )
   } catch (err) {
     switch (codeOf(err)) {
       case 'handoff_stale':
@@ -192,11 +165,9 @@ async function selfWrapOpen(
     }
   }
   try {
-    await deps.selfWrap(groupId, {
-      generation: row.generation,
-      wrappedKey,
-      ...(await ownWrapRecord(deps, groupId, row.generation)),
-    })
+    await sendWithRecord(await ownWrapRecord(deps, groupId, row.generation), (record) =>
+      deps.selfWrap(groupId, { generation: row.generation, wrappedKey, ...record }),
+    )
   } catch (err) {
     if (codeOf(err) === 'handoff_stale') return staleRow()
     return { status: 'incomplete', reason: describe(err) }

@@ -544,6 +544,9 @@ export interface RemoveRotationRequest {
   readonly removerWrappedKey: WireWrappedKey
   /** The remover's base64 signature over rotationStartPayload naming the removed member (#178). */
   readonly startSignature: string
+  /** The wrap record (#280) for the remover's own entry at the new generation. Both or neither. */
+  readonly wrapSignature?: string
+  readonly wrapDay?: string
 }
 
 /**

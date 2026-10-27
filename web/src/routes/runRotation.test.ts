@@ -1932,6 +1932,50 @@ describe('runRotation', () => {
         expect(f.mints).toBe(0)
       })
 
+      describe('the wrap record (#280)', () => {
+        const signed = () =>
+          vi.fn((_req: unknown) => Promise.resolve({ wrapSignature: 'ws', wrapDay: '2026-10-27' }))
+        function withSigner(f: Fake, sign: ReturnType<typeof signed>) {
+          const base = f.deps()
+          return {
+            ...base,
+            signWrapRecord: sign,
+            getUserDetail: (id: string) =>
+              id === ME ? Promise.resolve({ keyEpoch: 5 } as UserDetail) : base.getUserDetail!(id),
+          }
+        }
+
+        it("signs the admin's own entry at the generation the takeover mints, to their own epoch", async () => {
+          const f = new Fake()
+          leftBehind(f, 'admission')
+          const sign = signed()
+          expect((await runRotation(withSigner(f, sign), GROUP)).status).toBe('completed')
+          expect(sign).toHaveBeenCalledWith({
+            userId: ME,
+            groupId: GROUP,
+            memberUserId: ME,
+            generation: 2,
+            keyEpoch: 5,
+            reason: 'self',
+          })
+          expect(f.takeOvers[0]!.request).toMatchObject({
+            wrapSignature: 'ws',
+            wrapDay: '2026-10-27',
+          })
+        })
+
+        it('sends the takeover again without the record when the server refuses it', async () => {
+          const f = new Fake()
+          leftBehind(f, 'admission')
+          f.takeOverFailures.push(new ApiError(400, 'does not verify', 'bad_signature'))
+          const out = await runRotation(withSigner(f, signed()), GROUP)
+          expect(out.status).toBe('completed')
+          expect(f.takeOvers).toHaveLength(1)
+          expect(f.takeOvers[0]!.request).not.toHaveProperty('wrapSignature')
+          expect(f.takeOvers[0]!.request).not.toHaveProperty('wrapDay')
+        })
+      })
+
       // PR #209 round 4: a member removed once and re-invited AFTER the removal
       // is admitted again (isAdmitted), so their leave must be takeable.
       it('takes over the leave of a member who was removed once and re-invited after the removal', async () => {
@@ -3191,6 +3235,8 @@ describe('approving a dormant member (#62)', () => {
       landThenThrow?: Error
       /** Signs who wrapped (#280); absent means the caller signs nothing. */
       sign?: ApproveDeps['signWrapRecord']
+      /** Refuse only the first plain wrap, as a server does a record it cannot verify. */
+      refuseFirstRewrap?: Error
     } = {},
   ): { deps: ApproveDeps; calls: Calls } {
     const calls: Calls = { order: [], rewraps: [], rekeys: [], minted: [] }
@@ -3215,6 +3261,7 @@ describe('approving a dormant member (#62)', () => {
       approveRewrap: async (_g, userId, body) => {
         calls.order.push('rewrap')
         calls.rewraps.push({ userId, body })
+        if (o.refuseFirstRewrap && calls.rewraps.length === 1) throw o.refuseFirstRewrap
         if (o.rewrapError) throw o.rewrapError
         land(userId, body.generation, body.keyEpoch)
         if (o.landThenThrow) throw o.landThenThrow
@@ -3326,6 +3373,19 @@ describe('approving a dormant member (#62)', () => {
         reason: 'approval',
       })
       expect(calls.rekeys[0]!.body).toMatchObject({ wrapSignature: 'ws', wrapDay: '2026-10-27' })
+    })
+
+    it('sends the wrap again without the record when the server refuses it, and approves', async () => {
+      const { f, x } = setup({ memberGeneration: 0 })
+      const { deps, calls } = approveDeps(f, {
+        sign: signed(),
+        refuseFirstRewrap: api(400, 'bad_signature'),
+      })
+      expect(await runApprove(deps, GROUP, x.id, printOf(x))).toEqual({ ok: true, how: 'rewrap' })
+      expect(calls.rewraps).toHaveLength(2)
+      expect(calls.rewraps[0]!.body).toHaveProperty('wrapSignature')
+      expect(calls.rewraps[1]!.body).not.toHaveProperty('wrapSignature')
+      expect(calls.rewraps[1]!.body).not.toHaveProperty('wrapDay')
     })
 
     it('approves without a record when signing fails: the record is evidence, not a gate', async () => {

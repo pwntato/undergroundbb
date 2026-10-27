@@ -66,6 +66,9 @@ beforeEach(() => {
   rotation.runRotation.mockResolvedValue(DONE)
 })
 
+/** The body of the nth call, for mocks typed without their arguments. */
+const sentTo = (fn: { mock: { calls: unknown[][] } }, n: number): unknown => fn.mock.calls[n]![1]
+
 describe('the wrap record (#280)', () => {
   const SIGNED = { wrapSignature: 'ws', wrapDay: '2026-10-27' }
 
@@ -117,6 +120,30 @@ describe('the wrap record (#280)', () => {
     expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
     expect(t.sign).not.toHaveBeenCalled()
     expect(t.selfWrap).toHaveBeenCalledWith(GROUP, { generation: 2, wrappedKey: WRAPPED })
+  })
+
+  it('sends the re-key again without the record when the server refuses it', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'rekeyed', rotation: DONE })
+    expect(t.selfRekey).toHaveBeenCalledTimes(2)
+    expect(sentTo(t.selfRekey, 0)).toMatchObject(SIGNED)
+    expect(sentTo(t.selfRekey, 1)).not.toHaveProperty('wrapSignature')
+  })
+
+  it('sends the self-wrap again without the record when the server refuses it', async () => {
+    const t = withSigner(detail({ revocationMode: 'open' }))
+    t.selfWrap.mockRejectedValueOnce(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toEqual({ status: 'wrapped' })
+    expect(t.selfWrap).toHaveBeenCalledTimes(2)
+    expect(sentTo(t.selfWrap, 1)).toEqual({ generation: 2, wrappedKey: WRAPPED })
+  })
+
+  it('does not hide a bad_signature that stays after the record is dropped', async () => {
+    const t = withSigner(detail())
+    t.selfRekey.mockRejectedValue(new ApiError(400, 'does not verify', 'bad_signature'))
+    expect(await runSelfRekey(t.deps, ROW)).toMatchObject({ status: 'incomplete' })
+    expect(t.selfRekey).toHaveBeenCalledTimes(2)
   })
 
   it('sends no record when signing fails, and still re-keys', async () => {

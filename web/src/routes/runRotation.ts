@@ -71,6 +71,7 @@ import type {
   StartGroupRotationResult,
 } from '@/lib/crypto/worker-protocol'
 import { loadVerifiedChain, type GrantCheckDeps, type VerifiedChain } from './runGrantCheck'
+import { ownWrapRecord, sendWithRecord, type SignWrapRecord } from './wrapRecord'
 
 /** Passes before giving up. A pass is a full re-list, so this bounds churn, not batches. */
 const MAX_PASSES = 6
@@ -95,6 +96,8 @@ export interface RotationDeps extends Omit<GrantCheckDeps, 'getUsers'> {
    * so such a member reads as unadmitted.
    */
   readonly getUserDetail?: (userId: string) => Promise<UserDetail>
+  /** Signs who wrapped (#280); absent in a caller that does not, and then no record is sent. */
+  readonly signWrapRecord?: SignWrapRecord
   /** The caller's own current signing public key, base64. */
   readonly ownSigningKey: () => Promise<string>
   /** Every pin the caller holds, following nextCursor. A missing pin reads as first-sight, so a partial list is unsafe. */
@@ -560,12 +563,15 @@ async function takeOverLeave(
         ownGeneration: detail.generation,
         subjectUserId: started.removedUserId,
       })
-      await deps.takeOverRotation(groupId, {
-        generation: minted.generation,
-        link: minted.link,
-        wrappedKey: minted.removerWrappedKey,
-        startSignature: minted.startSignature,
-      })
+      await sendWithRecord(await ownWrapRecord(deps, groupId, minted.generation), (record) =>
+        deps.takeOverRotation(groupId, {
+          generation: minted.generation,
+          link: minted.link,
+          wrappedKey: minted.removerWrappedKey,
+          startSignature: minted.startSignature,
+          ...record,
+        }),
+      )
       return { status: 'continue' }
     } catch (err) {
       const code = codeOf(err)

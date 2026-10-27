@@ -672,25 +672,38 @@ pinning section does not otherwise have, so each admin makes their own decision.
 
 **Who wrapped a member's entry (#280).** The "accept key change" prompt tells the admin whether the
 member's current wrap was made by another admin, by the member themself, or by nobody who signed for
-it. Every write that sets an entry's `WrapEpoch` therefore carries a **wrap record**: `POST
-/api/groups/{gid}/rewrap/{uid}`, `rotation/approve/{uid}`, `rotation/rekey` and `rotation/selfwrap`.
+it. The writes that bring an existing entry to a member's new keys therefore carry a **wrap record**:
+`POST /api/groups/{gid}/rewrap/{uid}`, `rotation/approve/{uid}`, `rotation/rekey`,
+`rotation/selfwrap`, and the two ways an admin brings their own entry current while starting a
+rotation, a removal's start (`DELETE /api/groups/{gid}/members/{uid}` in a Rotating group, the
+remover's own entry) and a leave takeover (`rotation/takeover`). Three writes set an entry's
+`WrapEpoch` without one, and read as "no signed record": the creator's entry when a group is made,
+an invitee's entry when an invite completes (the inviter's signed admission is that record), and the
+ordinary re-wrap of members by the rotation job.
 The record is the wrapper's Ed25519 signature, under its own context `underground-bb:wrap-record:v1`,
 over `WrapRecordPayload(group, wrapper, member, generation, keyEpoch, reason, day)`: the generation
 the entry was wrapped at, the member's `KeyEpoch` it was wrapped to (the value stored as `WrapEpoch`),
 the reason and the UTC day. The server fixes the reason from the endpoint (`approval` for the two that
-approve someone else, `self` for the other two), checks the signature under the caller's current
+approve someone else, `self` for the other four), checks the signature under the caller's current
 signing key and the day with the same window as a pin's, and writes `WrapperUserID`, `WrapReason`,
 `WrapDay` and `WrapSignature` on the member's entry in the same transaction as the wrap. The roster
 serves them as `wrapRecord` next to `wrapEpoch`. The fields are optional on the wire, all or none, so
 a client from before this existed keeps working and its wraps read as "no signed record"; a signature
-without a day, or the reverse, is 400.
+without a day, or the reverse, is 400. The client signs the epoch it read from the account's
+projection, which can lag a just-committed rotation, so a record the server refuses as
+`bad_signature` is dropped and the same wrap sent once more without it: a record is evidence, and
+a refused one must not turn a wrap that would have succeeded into a failure.
 
 A reader trusts a record only when it is **for the entry as it stands**: the signature verifies
 under one of the wrapper's keys for the signed day, and the payload is rebuilt from the entry's
 *own* served `generation` and `wrapEpoch`, so a record left over from an earlier wrap fails the
-match and reads as no record. Nothing else writes the entry's wrap and clears the record (the
-ordinary re-wrap after a removal, an invite): the binding does that work, because any later wrap
-changes the generation or the epoch. What it does and does not say: the server can withhold a
+match and reads as no record. The writes that sign nothing do not clear the record (a removal's
+re-wrap of the others, an invite): the binding does that work, because a later wrap moves the
+generation or the epoch. The one exception is harmless: the rotation job's re-wrap (`#gen <= :gen`
+while a marker exists) can rewrite an entry at the same generation and epoch, for instance one a
+re-key approval just wrote. The record attests to the generation and the member key epoch the entry
+is wrapped to, not to the wrapped bytes, and that rewrite leaves both true. What it does and does
+not say: the server can withhold a
 record, which shows as "no signed record", but cannot forge one, move one to another member, group,
 generation or epoch, or turn a self wrap into an approval. It does not prove the wrapper was an
 admin or ambassador that day: the roster says so, unsigned, and proving it means walking the grant

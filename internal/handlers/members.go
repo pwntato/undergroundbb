@@ -792,6 +792,7 @@ type removeRotationRequest struct {
 	// crypto.RotationStartPayload naming the removed member (#178), stored on
 	// the marker so a resuming admin knows whom this rotation removed.
 	StartSignature string `json:"startSignature"`
+	wrapRecordFields
 }
 
 // removeMember implements DELETE /api/groups/{groupId}/members/{userId} --
@@ -901,6 +902,17 @@ func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
 		}
 		rot.StartSignature = sig
 		rot.RemoverKeyEpoch = keyEpoch
+		// The remover's own entry is written at the generation one past theirs.
+		rec, problem, err := h.wrapRecord(r, req.Rotation.wrapRecordFields, groupID, userID, userID, rot.CurrentGeneration+1, keyEpoch, crypto.RekeyReasonSelf)
+		if err != nil {
+			WriteInternalError(w, r, err, "could not remove member")
+			return
+		}
+		if problem != nil {
+			problem.write(w)
+			return
+		}
+		rot.WrapRecord = rec
 		in.Rotation = rot
 	} else if req.Rotation != nil {
 		WriteErrorWithCode(w, http.StatusBadRequest, "an Open group does not rotate keys on removal", "rotation_not_applicable")

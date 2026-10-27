@@ -56,6 +56,54 @@ function setup(d: GroupDetail = detail()) {
 const run = (deps: RemoveDeps, role: MemberRole = 'member') =>
   runRemoveMember(deps, GROUP, SUBJECT, role)
 
+describe('runRemoveMember: the wrap record (#280)', () => {
+  const rotating = () => detail({ revocationMode: 'rotating' })
+  function withSigner() {
+    const t = setup(rotating())
+    const sign = vi.fn().mockResolvedValue({ wrapSignature: 'ws', wrapDay: '2026-10-27' })
+    const getUserDetail = vi.fn().mockResolvedValue({ keyEpoch: 6 })
+    Object.assign(t.deps, { signWrapRecord: sign, getUserDetail })
+    return { ...t, sign, getUserDetail }
+  }
+
+  it("signs the remover's own entry at the generation the removal mints, to their own epoch", async () => {
+    const t = withSigner()
+    expect(await run(t.deps)).toEqual({ ok: true, rotating: true })
+    expect(t.getUserDetail).toHaveBeenCalledWith(ME)
+    expect(t.sign).toHaveBeenCalledWith({
+      userId: ME,
+      groupId: GROUP,
+      memberUserId: ME,
+      generation: MINTED.generation,
+      keyEpoch: 6,
+      reason: 'self',
+    })
+    expect(t.calls[0]?.body?.rotation).toMatchObject({ wrapSignature: 'ws', wrapDay: '2026-10-27' })
+  })
+
+  it('sends the removal again without the record when the server refuses it', async () => {
+    const t = withSigner()
+    t.deps.removeMember.mockImplementationOnce(async (groupId, userId, body) => {
+      t.calls.push({ groupId, userId, body })
+      throw new ApiError(400, 'does not verify', 'bad_signature')
+    })
+    expect(await run(t.deps)).toEqual({ ok: true, rotating: true })
+    expect(t.calls).toHaveLength(2)
+    expect(t.calls[0]?.body?.rotation).toHaveProperty('wrapSignature')
+    expect(t.calls[1]?.body?.rotation).not.toHaveProperty('wrapSignature')
+    expect(t.calls[1]?.body?.rotation).not.toHaveProperty('wrapDay')
+    expect(t.calls[1]?.body?.rotation).toMatchObject({ startSignature: 'start-sig' })
+  })
+
+  it('sends no record when the caller epoch cannot be read, and still removes', async () => {
+    const t = withSigner()
+    t.getUserDetail.mockRejectedValue(new Error('offline'))
+    expect(await run(t.deps)).toEqual({ ok: true, rotating: true })
+    expect(t.sign).not.toHaveBeenCalled()
+    expect(t.calls[0]?.body?.rotation).not.toHaveProperty('wrapSignature')
+  })
+})
+
 describe('runRemoveMember: what the request carries', () => {
   it('sends no body for a plain member of an Open group, and mints and signs nothing', async () => {
     const { deps, calls } = setup()
