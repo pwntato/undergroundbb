@@ -6,6 +6,8 @@ import { generateSigningKey, sign, SigningContext } from '@/lib/crypto/ed25519'
 import { fingerprint } from '@/lib/crypto/fingerprint'
 import { makeKeyChange } from '@/lib/crypto/own-history.testkit'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
+import { wrapRecordPayload } from '@/lib/crypto/group'
+import type { MemberEntry } from '@/lib/api/groups'
 import {
   acceptFailureMessage,
   evidenceText,
@@ -39,6 +41,23 @@ function pinOf(
     signature: b64(sign(signer, SigningContext.Pin, payload)),
     keyEpoch,
     signedDay: '2026-10-01',
+  }
+}
+
+const GROUP = 'd0000000-0000-4000-8000-000000000004'
+const ADMIN = 'e0000000-0000-4000-8000-000000000005'
+const adminKey = generateSigningKey()
+const ENTRY: MemberEntry = { userId: X, role: 'member', generation: 3, wrapEpoch: 1 }
+const CTX = { groupId: GROUP, entry: ENTRY }
+
+function recordBy(wrapper: string, key: typeof k0, reason: 'self' | 'approval') {
+  const day = '2026-10-20'
+  const payload = wrapRecordPayload(GROUP, wrapper, X, 3, 1, reason, day)
+  return {
+    wrapperUserId: wrapper,
+    reason,
+    day,
+    signature: b64(sign(key, SigningContext.WrapRecord, payload)),
   }
 }
 
@@ -89,10 +108,11 @@ function setup(
 describe('accepting a key change', () => {
   it('offers a changed member with the evidence and the fingerprint, and writes nothing yet', async () => {
     const { deps, pinned } = setup()
-    expect(await prepareAcceptKeyChange(deps, X)).toEqual({
+    expect(await prepareAcceptKeyChange(deps, X, CTX)).toEqual({
       ok: true,
       fingerprint: printOfServed(),
       evidence: 'signed-rotation',
+      wrap: { kind: 'none' },
     })
     expect(pinned).toEqual([])
   })
@@ -105,11 +125,11 @@ describe('accepting a key change', () => {
 
   it('says when nothing links the saved keys to the served ones', async () => {
     const { deps } = setup({ served: served({ keyChanges: [] }) })
-    expect(await prepareAcceptKeyChange(deps, X)).toMatchObject({ ok: true, evidence: 'no-link' })
+    expect(await prepareAcceptKeyChange(deps, X, CTX)).toMatchObject({ ok: true, evidence: 'no-link' })
     const bad = served()
     const tampered = [{ ...bad.keyChanges[0]!, newSignature: b64(new Uint8Array(64).fill(1)) }]
     const t = setup({ served: served({ keyChanges: tampered }) })
-    expect(await prepareAcceptKeyChange(t.deps, X)).toMatchObject({
+    expect(await prepareAcceptKeyChange(t.deps, X, CTX)).toMatchObject({
       ok: true,
       evidence: 'unverified',
     })
@@ -118,7 +138,7 @@ describe('accepting a key change', () => {
   it('does not accept a rollback, whatever the fingerprint', async () => {
     // Saved at epoch 2; the server now serves epoch 1.
     const { deps, pinned } = setup({ pin: pinOf(k0, WRAP_OLD, 2) })
-    expect(await prepareAcceptKeyChange(deps, X)).toEqual({ ok: false, kind: 'rollback' })
+    expect(await prepareAcceptKeyChange(deps, X, CTX)).toEqual({ ok: false, kind: 'rollback' })
     expect(await runAcceptKeyChange(deps, X, printOfServed())).toEqual({
       ok: false,
       kind: 'rollback',
@@ -139,14 +159,14 @@ describe('accepting a key change', () => {
     const forged = pinOf(k0, WRAP_OLD, 0, generateSigningKey())
     const { deps } = setup({ pin: forged })
     const failing: AcceptKeyChangeDeps = { ...deps, ownKeyHistoryFailure: async () => 'offline' }
-    expect(await prepareAcceptKeyChange(failing, X)).toEqual({
+    expect(await prepareAcceptKeyChange(failing, X, CTX)).toEqual({
       ok: false,
       kind: 'unchecked',
       reason: 'could not load your key history: offline',
     })
     // The history loaded and the pin still does not verify: that is tampering.
     const loaded: AcceptKeyChangeDeps = { ...deps, ownKeyHistoryFailure: async () => null }
-    expect(await prepareAcceptKeyChange(loaded, X)).toEqual({ ok: false, kind: 'pinUnverifiable' })
+    expect(await prepareAcceptKeyChange(loaded, X, CTX)).toEqual({ ok: false, kind: 'pinUnverifiable' })
   })
 
   it('has nothing to accept when the keys match the pin or there is no pin', async () => {
@@ -154,7 +174,7 @@ describe('accepting a key change', () => {
       pin: pinOf(k1, WRAP_NEW, 1),
       served: served({ supersededSigningKeys: [] }),
     })
-    expect(await prepareAcceptKeyChange(same.deps, X)).toEqual({ ok: false, kind: 'notChanged' })
+    expect(await prepareAcceptKeyChange(same.deps, X, CTX)).toEqual({ ok: false, kind: 'notChanged' })
     const none = setup({ pin: null })
     expect(await runAcceptKeyChange(none.deps, X, printOfServed())).toEqual({
       ok: false,
@@ -193,7 +213,7 @@ describe('accepting a key change', () => {
 
   it('refuses to accept the caller', async () => {
     const { deps } = setup()
-    expect(await prepareAcceptKeyChange(deps, ME)).toMatchObject({ ok: false, kind: 'rejected' })
+    expect(await prepareAcceptKeyChange(deps, ME, CTX)).toMatchObject({ ok: false, kind: 'rejected' })
   })
 
   it('has words for every outcome', () => {
@@ -214,5 +234,72 @@ describe('accepting a key change', () => {
       expect(evidenceText(e)).toMatch(/\S/)
     }
     expect(evidenceText('no-link')).toContain('Only accept if')
+  })
+})
+
+describe('who wrapped their entry (#280)', () => {
+  const adminDetail = (): UserDetail =>
+    ({
+      userId: ADMIN,
+      username: 'admin',
+      signingPublicKey: b64(adminKey.publicKey),
+      wrappingPublicKey: b64(WRAP_OLD),
+      supersededSigningKeys: [],
+      keyEpoch: 0,
+      keyChanges: [],
+    }) as UserDetail
+
+  function withWrapper(read: (id: string) => Promise<UserDetail>) {
+    const { deps } = setup()
+    const getUserDetail = vi.fn(async (id: string) => (id === X ? served() : read(id)))
+    return { deps: { ...deps, getUserDetail }, getUserDetail }
+  }
+
+  it('reports the admin whose signed record verifies', async () => {
+    const { deps } = withWrapper(async () => adminDetail())
+    const entry = { ...ENTRY, wrapRecord: recordBy(ADMIN, adminKey, 'approval') }
+    expect(await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })).toMatchObject({
+      ok: true,
+      wrap: { kind: 'approved', wrapperUserId: ADMIN },
+    })
+  })
+
+  it('reports a self-wrap using the subject’s own served keys, without another read', async () => {
+    const { deps, getUserDetail } = withWrapper(async () => adminDetail())
+    const entry = { ...ENTRY, wrapRecord: recordBy(X, k1, 'self') }
+    expect(await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })).toMatchObject({
+      wrap: { kind: 'self' },
+    })
+    expect(getUserDetail.mock.calls.filter(([id]) => id !== X)).toEqual([])
+  })
+
+  it('says unchecked, not none, when the wrapper’s keys cannot be read', async () => {
+    const { deps } = withWrapper(async () => {
+      throw new Error('boom')
+    })
+    const entry = { ...ENTRY, wrapRecord: recordBy(ADMIN, adminKey, 'approval') }
+    const out = await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })
+    expect(out).toMatchObject({ ok: true, wrap: { kind: 'unchecked' } })
+  })
+
+  it('does not read the wrapper when the entry has no record', async () => {
+    const { deps, getUserDetail } = withWrapper(async () => adminDetail())
+    await prepareAcceptKeyChange(deps, X, CTX)
+    expect(getUserDetail.mock.calls.filter(([id]) => id !== X)).toEqual([])
+  })
+
+  it('says invalid for a record signed for another generation', async () => {
+    const { deps } = withWrapper(async () => adminDetail())
+    const entry = { ...ENTRY, generation: 4, wrapRecord: recordBy(ADMIN, adminKey, 'approval') }
+    expect(await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry })).toMatchObject({
+      wrap: { kind: 'invalid' },
+    })
+  })
+
+  it('says unchecked when the subject is not on the roster', async () => {
+    const { deps } = setup()
+    expect(
+      await prepareAcceptKeyChange(deps, X, { groupId: GROUP, entry: undefined }),
+    ).toMatchObject({ ok: true, wrap: { kind: 'unchecked' } })
   })
 })

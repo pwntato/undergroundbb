@@ -583,7 +583,10 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
     setMessage(null)
     setError(null)
     void (async () => {
-      const prepared = await prepareAcceptKeyChange(makeAcceptDeps(userId), subjectUserId)
+      const prepared = await prepareAcceptKeyChange(makeAcceptDeps(userId), subjectUserId, {
+        groupId: load.view.groupId,
+        entry: load.view.members.find((m) => m.userId === subjectUserId),
+      })
       if (prepared.ok) {
         setAcceptPrompt({
           userId: subjectUserId,

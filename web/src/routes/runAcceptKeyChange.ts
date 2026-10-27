@@ -19,9 +19,11 @@
 // Plain functions over injected deps, like runApprove.ts.
 
 import { ApiError } from '@/lib/api/auth'
+import type { MemberEntry } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import { keyChangeEvidence, type KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
+import { checkWrapRecord, type WrapEvidence } from '@/lib/crypto/wrap-record'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import type { OwnKeyHistory } from '@/lib/crypto/own-history'
 import { ownHistoryFor } from './ownHistory'
@@ -64,7 +66,14 @@ export type AcceptFailure =
 type Fail = { readonly ok: false } & AcceptFailure
 
 export type PrepareAcceptResult =
-  { readonly ok: true; readonly fingerprint: string; readonly evidence: KeyChangeEvidence } | Fail
+  | {
+      readonly ok: true
+      readonly fingerprint: string
+      readonly evidence: KeyChangeEvidence
+      /** Who wrapped their entry in this group (#280); evidence only. */
+      readonly wrap: WrapEvidence
+    }
+  | Fail
 
 export type AcceptResult = { readonly ok: true } | Fail
 
@@ -152,9 +161,48 @@ async function inspect(deps: AcceptKeyChangeDeps, subjectUserId: string): Promis
 export async function prepareAcceptKeyChange(
   deps: AcceptKeyChangeDeps,
   subjectUserId: string,
+  /** The subject's roster entry in the group being looked at, and that group. */
+  context: { readonly groupId: string; readonly entry: MemberEntry | undefined },
 ): Promise<PrepareAcceptResult> {
   const found = await inspect(deps, subjectUserId)
-  return found.ok ? { ok: true, fingerprint: found.fingerprint, evidence: found.evidence } : found
+  if (!found.ok) return found
+  const wrap = await wrapEvidenceFor(deps, subjectUserId, found.served, context)
+  return { ok: true, fingerprint: found.fingerprint, evidence: found.evidence, wrap }
+}
+
+/**
+ * Who wrapped the subject's entry, from the entry's own signed record. The
+ * wrapper's key history is read only when there is a record to check, and a
+ * failed read is 'unchecked': it must never read as "no signed record".
+ */
+async function wrapEvidenceFor(
+  deps: AcceptKeyChangeDeps,
+  subjectUserId: string,
+  subjectServed: UserDetail,
+  context: { readonly groupId: string; readonly entry: MemberEntry | undefined },
+): Promise<WrapEvidence> {
+  const { entry } = context
+  if (entry === undefined) return { kind: 'unchecked', reason: 'they are not on the roster' }
+  const record = entry.wrapRecord
+  let wrapper: UserDetail | undefined
+  if (record !== undefined) {
+    try {
+      wrapper =
+        record.wrapperUserId === subjectUserId
+          ? subjectServed
+          : await deps.getUserDetail(record.wrapperUserId)
+    } catch (err) {
+      return { kind: 'unchecked', reason: `could not read the wrapper's keys: ${describe(err)}` }
+    }
+  }
+  return checkWrapRecord({
+    groupId: context.groupId,
+    memberUserId: subjectUserId,
+    generation: entry.generation,
+    wrapEpoch: entry.wrapEpoch,
+    record,
+    wrapper,
+  })
 }
 
 /**
