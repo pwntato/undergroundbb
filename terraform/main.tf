@@ -20,8 +20,8 @@ terraform {
       # touch anything this module manages.
       #
       # >= 6.37.0 for the GSI's key_schema block (dynamodb.tf, #96): it first
-      # shipped in 6.29.0, but 6.32.0 fixed a perpetual diff on it and 6.37.0
-      # a GSI removal that deleted every index.
+      # shipped in 6.29.0, but 6.32.1 fixed a perpetual diff on it (for a
+      # single range key) and 6.37.0 a GSI removal that deleted every index.
       #
       # < 6.69.0: CI doesn't commit .terraform.lock.hcl, so every deploy takes
       # the newest provider in range. 6.69.0 fails every aws_lambda_function
