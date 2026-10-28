@@ -266,8 +266,9 @@ type getInviteResponse struct {
 	// GroupName is the group's plaintext name, present only when the group
 	// is public (#155). A private group's name is ciphertext under a key the
 	// invitee does not hold until step 3, so it is omitted rather than sent.
-	// Public names are already served by the directory, so naming one to
-	// someone holding the invite id discloses nothing new.
+	// Public names are discoverable by design (the directory, #71, lists
+	// them), so naming one to someone holding the invite id discloses nothing
+	// a public group has not already opted into.
 	GroupName string `json:"groupName,omitempty"`
 }
 

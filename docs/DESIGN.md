@@ -1208,7 +1208,8 @@ refused rather than allowed.
 `GET /api/invites/received` carry `groupName`, the plaintext name, for a public group and omit the
 field for a private one: a private group's name is ciphertext under the group key, which the invitee
 does not hold until step 3, so the invitee's client shows "a group" there. The unauthenticated read
-discloses nothing the public directory does not already list. A member of the group still sees their
+discloses nothing a public group has not already chosen to make discoverable: public names are
+designed to be listed in the directory (#71). A member of the group still sees their
 own decrypted label first.
 
 *An invite has no invitee until step 2.* The step 1 payload deliberately contains no invitee
