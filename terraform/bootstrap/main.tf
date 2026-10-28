@@ -7,8 +7,9 @@
 # — bootstrapping the bootstrap would be its own kind of absurd.
 #
 # Pattern matches notoriousmcp's terraform/bootstrap/ (a sibling project in
-# the same AWS account): same account-id-suffixed naming (but not the same
-# resource set: no DynamoDB lock table here, see #94) so the bucket name is globally unique without a random suffix.
+# the same AWS account): same account-id-suffixed naming, so the bucket name
+# is globally unique without a random suffix. Unlike notoriousmcp's, there is
+# no DynamoDB lock table here (#94).
 
 terraform {
   required_version = ">= 1.15"
@@ -36,11 +37,10 @@ data "aws_caller_identity" "current" {}
 # empty state directory would plan to recreate resources that already exist
 # in the account, and apply would fail outright for the bucket
 # (BucketAlreadyOwnedByYou) or silently overwrite the three S3 sub-resource
-# settings with byte-identical config that merely
-# happens to match today -- if the live bucket ever drifted (someone enabled
-# a KMS key, say), a fresh-clone apply would revert it with no `~` in the
-# plan to show it, because Terraform would think it was creating, not
-# correcting. All four resources need an import, not just the one that fails
+# settings with byte-identical config that merely happens to match today --
+# if the live bucket ever drifted (someone enabled a KMS key, say), a
+# fresh-clone apply would revert it with no `~` in the plan to show it,
+# because Terraform would think it was creating, not correcting. All four resources need an import, not just the one that fails
 # loudly without one.
 #
 # Once adopted, an import whose target is already in state is a silent
