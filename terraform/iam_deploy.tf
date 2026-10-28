@@ -52,11 +52,12 @@ resource "aws_iam_role" "deploy" {
 # which get their own statements added as each lands, same incremental
 # approach as notoriousmcp's iam_deploy.tf grew resource by resource rather
 # than pre-granting a wide policy up front. Bootstrap itself (creating the
-# state bucket) stays a manual, human-run step and is
-# deliberately outside this role's reach -- this policy grants none of
+# state bucket) stays a manual, human-run step and is deliberately outside
+# this role's reach -- this policy grants none of
 # s3:CreateBucket/PutBucketVersioning/PutEncryptionConfiguration/
-# PutBucketPublicAccessBlock on the state bucket specifically (it does grant several of those same action names
-# on the #7 frontend bucket below, which this role does manage).
+# PutBucketPublicAccessBlock on the state bucket specifically (it does grant
+# several of those same action names on the #7 frontend bucket below, which
+# this role does manage).
 data "aws_iam_policy_document" "deploy_policy" {
   statement {
     actions = [

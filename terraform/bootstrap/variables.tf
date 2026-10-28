@@ -7,5 +7,5 @@ variable "aws_region" {
 variable "create_new_state" {
   type        = bool
   default     = false
-  description = "Set to true only for the very first bootstrap of an AWS account, where the state bucket doesn't exist yet to import — the default (false) assumes it's already there in whichever account you're authenticated to, and fails with \"Cannot import non-existent remote object\" if they aren't. Every run after that first one, including later runs in that same account, uses the default."
+  description = "Set to true only for the very first bootstrap of an AWS account, where the state bucket doesn't exist yet to import — the default (false) assumes it's already there in whichever account you're authenticated to, and fails with \"Cannot import non-existent remote object\" if it isn't. Every run after that first one, including later runs in that same account, uses the default."
 }

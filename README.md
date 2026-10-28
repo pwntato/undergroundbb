@@ -152,8 +152,8 @@ terraform apply
 This creates a versioned, encrypted, non-public S3 bucket (`undergroundbb-tfstate-<account-id>`) in
 `us-west-2` by default (override with `-var aws_region=...`). `terraform/` locks its state with an
 S3-native lock file (`use_lockfile`, #94), so there is no lock table; the one the bootstrap used to
-create was deleted. The rest of the project's infrastructure defaults to this same region — ACM (#9) is the one exception, since
-CloudFront requires its certificate in `us-east-1` regardless.
+create was deleted. The rest of the project's infrastructure defaults to this same region — ACM
+(#9) is the one exception, since CloudFront requires its certificate in `us-east-1` regardless.
 
 **Already applied in account `350195739155`.** Because this module's state is local and gitignored,
 it exists only on the machine that ran the first apply — running the command above from elsewhere

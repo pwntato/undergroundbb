@@ -7,8 +7,8 @@
 # — bootstrapping the bootstrap would be its own kind of absurd.
 #
 # Pattern matches notoriousmcp's terraform/bootstrap/ (a sibling project in
-# the same AWS account): same resource set, same account-id-suffixed naming
-# so the bucket name is globally unique without a random suffix.
+# the same AWS account): same account-id-suffixed naming (but not the same
+# resource set: no DynamoDB lock table here, see #94) so the bucket name is globally unique without a random suffix.
 
 terraform {
   required_version = ">= 1.15"
@@ -18,7 +18,7 @@ terraform {
       source = "hashicorp/aws"
       # Matches terraform/main.tf's constraint (see its comment) -- kept in
       # sync so this account isn't managed by two different provider majors.
-      # This module's own resources (S3, DynamoDB) are unaffected either way.
+      # This module's own resources (S3) are unaffected either way.
       version = ">= 6.28.0, < 7.0"
     }
   }
@@ -34,9 +34,9 @@ data "aws_caller_identity" "current" {}
 # exists only on whichever machine ran the first apply -- never in the repo.
 # Without these, a second maintainer, a new laptop, or CI starting from an
 # empty state directory would plan to recreate resources that already exist
-# in the account, and apply would fail outright for the bucket and table
-# (BucketAlreadyOwnedByYou) or silently overwrite
-# the three S3 sub-resource settings with byte-identical config that merely
+# in the account, and apply would fail outright for the bucket
+# (BucketAlreadyOwnedByYou) or silently overwrite the three S3 sub-resource
+# settings with byte-identical config that merely
 # happens to match today -- if the live bucket ever drifted (someone enabled
 # a KMS key, say), a fresh-clone apply would revert it with no `~` in the
 # plan to show it, because Terraform would think it was creating, not
@@ -115,9 +115,6 @@ resource "aws_s3_bucket_public_access_block" "tf_state" {
   restrict_public_buckets = true
 }
 
-# No longer used for locking: terraform/ locks with S3-native use_lockfile
-# (#94). Kept, not destroyed, so removing it is a deliberate follow-up rather
-# than a side effect of switching the lock; nothing reads or writes it.
 output "state_bucket" {
   value = aws_s3_bucket.tf_state.bucket
 }
