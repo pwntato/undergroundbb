@@ -69,14 +69,14 @@ resource "aws_cloudwatch_log_group" "lambda" {
 }
 
 # SESSION_SECRET -- see internal/config.Config.SessionSecret and
-# internal/session's own package doc. Generated once per workspace (dev and
-# prod get independent, unrelated secrets, which is correct: a session
-# issued by one must never verify against the other) and stored directly in
-# the Lambda's environment, the same mechanism as every other config value
-# in this file. That means it is visible in Terraform state and the Lambda
-# console -- the standard tradeoff for an env-var secret, accepted here
-# rather than adding Secrets Manager (a new resource, a new IAM grant, and a
-# fetch-at-cold-start code path) for a single value with no rotation
+# internal/session's own package doc. Generated once per workspace (any
+# two workspaces would get independent, unrelated secrets, which is correct:
+# a session issued by one must never verify against the other) and stored
+# directly in the Lambda's environment, the same mechanism as every other
+# config value in this file. That means it is visible in Terraform state and
+# the Lambda console -- the standard tradeoff for an env-var secret, accepted
+# here rather than adding Secrets Manager (a new resource, a new IAM grant,
+# and a fetch-at-cold-start code path) for a single value with no rotation
 # requirement beyond "generate a new one," which `terraform taint
 # random_id.session_secret && terraform apply` already does.
 #

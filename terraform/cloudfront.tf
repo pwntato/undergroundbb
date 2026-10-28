@@ -409,8 +409,8 @@ resource "aws_cloudfront_distribution" "main" {
   # real S3 403 instead of being masked as a 200 -- an accurate error rather
   # than a silently-wrong success.
 
-  # #9/#11: this workspace's custom domain (prod's bare apex, or a
-  # subdomain of it for every other workspace -- see locals.tf). Must be
+  # #9/#11: this workspace's custom domain (the bare apex; prod is
+  # the only workspace in use -- see locals.tf). Must be
   # covered by viewer_certificate's cert below -- CloudFront rejects an
   # alias the certificate doesn't cover.
   aliases = [local.domain_name]

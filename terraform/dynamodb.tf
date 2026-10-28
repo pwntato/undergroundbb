@@ -5,9 +5,9 @@
 # actually running.
 #
 # Name derives from terraform.workspace, not a free-form variable (#11) --
-# resolves to "undergroundbb-dev" or "undergroundbb-prod" depending which
-# workspace is selected when this is applied (see the README's "Deploying"
-# section for how to select one).
+# resolves to "undergroundbb-prod" for the one workspace in use; any other
+# workspace fails plan at locals.tf's domain lookup (see the README's
+# "Deploying" section for how to select one).
 resource "aws_dynamodb_table" "main" {
   name         = "undergroundbb-${terraform.workspace}"
   billing_mode = "PAY_PER_REQUEST"
@@ -17,7 +17,7 @@ resource "aws_dynamodb_table" "main" {
   # Enforced by the service, not just Terraform's plan -- also blocks a
   # console/CLI delete, and unlike `lifecycle.prevent_destroy` it doesn't
   # block a legitimate `terraform destroy` of everything else. Matters more
-  # with dev/prod workspaces (#11): the table name is ambient state (not
+  # with workspaces (#11): the table name is ambient state (not
   # visible in the destroy command itself), so a `destroy` run against the
   # wrong selected workspace is a real, easy mistake to make.
   deletion_protection_enabled = true

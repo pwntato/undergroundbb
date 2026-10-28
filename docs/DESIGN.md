@@ -2960,8 +2960,8 @@ and it is precisely the cost the paragraph above says the design does not have â
 of Argon2id and the challenge leg, and not of these writes. A limit sized only against harvesting
 rate will not necessarily catch it, so bound the verify endpoint on its own terms.
 
-Environments are Terraform workspaces (`dev`, `prod`) in one AWS account, with resource names derived
-from the workspace so a mistyped variable cannot cross-wire them.
+The one deployed environment is the Terraform workspace `prod`, with resource names derived from the
+workspace so a mistyped variable cannot cross-wire them. There is no dev environment (#13).
 
 Whether `no expiration` is permitted deserves particular care: enabling it lets a group turn off the
 mitigation that Limitation 3 of the threat model, the forward-secrecy argument above, and generation
