@@ -218,7 +218,8 @@ aws_region=...` on `terraform apply` here too, in addition to matching the boots
 Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
 value can't point one environment's `apply` at another's table. `prod` is the only workspace
 in use (the live account: `undergroundbb-prod`, `undergroundbb.com`); there is no dev environment
-(#13). Terraform's own built-in `default` workspace also still exists — the
+(#13). A `dev` workspace may still exist in the state bucket, empty; selecting it works but plan fails
+at the domain lookup, so it is harmless. Terraform's own built-in `default` workspace also still exists — the
 CLI refuses to delete it outright — and is left empty rather than used for anything: everything that
 had been applied there (from before this project had workspaces at all) was migrated to
 `prod` and destroyed out of `default`, and it's kept empty going forward so an `apply` run with a

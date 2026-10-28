@@ -71,9 +71,10 @@ resource "aws_acm_certificate_validation" "main" {
 # Points local.domain_name at this workspace's own distribution -- the bare
 # apex (prod is the only workspace in use; #11, see locals.tf). Still just
 # one record type per alias: an ALIAS-style Route 53 record works identically
-# for an apex A/AAAA and a subdomain A/AAAA. www/other subdomains beyond what
-# local.domain_name already covers are out of scope here -- a "www" alias (or redirect) is a
-# separate, later decision, not implied by #9 or #11's text.
+# for an apex A/AAAA and a subdomain A/AAAA. www/other subdomains beyond
+# what local.domain_name already covers are out of scope here -- a "www"
+# alias (or redirect) is a separate, later decision, not implied by #9 or
+# #11's text.
 resource "aws_route53_record" "app" {
   zone_id = data.aws_route53_zone.main.zone_id
   name    = local.domain_name
