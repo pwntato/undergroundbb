@@ -1499,3 +1499,32 @@ func TestInviteGroupNameOnlyForPublicGroups(t *testing.T) {
 		}
 	}
 }
+
+// TestInviteGroupNameGuardsOnVisibility: publicGroupName keys off the
+// group's Visibility, not on NamePlaintext merely being non-empty, so a
+// private group row that somehow carried a plaintext name still stays
+// generic. createGroup refuses that shape, so the row is written directly.
+func TestInviteGroupNameGuardsOnVisibility(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+		UpdateExpression:          aws.String("SET NamePlaintext = :n"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":n": &types.AttributeValueMemberS{Value: "Leaked"}},
+	}); err != nil {
+		t.Fatalf("seeding NamePlaintext: %v", err)
+	}
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+	rec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "Leaked") {
+		t.Errorf("private group's plaintext name served: %s", rec.Body.String())
+	}
+}
