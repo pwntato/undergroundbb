@@ -151,10 +151,11 @@ terraform apply
 ```
 
 This creates a versioned, encrypted, non-public S3 bucket (`undergroundbb-tfstate-<account-id>`)
-and a `PAY_PER_REQUEST` DynamoDB table (`undergroundbb-tfstate-lock`) for state locking, both in
-`us-west-2` by default (override with `-var aws_region=...`). The rest of the project's
-infrastructure defaults to this same region — ACM (#9) is the one exception, since CloudFront
-requires its certificate in `us-east-1` regardless.
+and a `PAY_PER_REQUEST` DynamoDB table (`undergroundbb-tfstate-lock`), both in `us-west-2` by
+default (override with `-var aws_region=...`). The table is a leftover: `terraform/` locks its state
+with an S3-native lock file (`use_lockfile`, #94) and nothing uses the table any more. The rest of
+the project's infrastructure defaults to this same region — ACM (#9) is the one exception, since
+CloudFront requires its certificate in `us-east-1` regardless.
 
 **Already applied in account `350195739155`.** Because this module's state is local and gitignored,
 it exists only on the machine that ran the first apply — running the command above from elsewhere
@@ -181,21 +182,19 @@ Every run after that first one — including later runs in that same new account
 DynamoDB table (#5), the Lambda function and its IAM role plus the CI/CD deploy pipeline (#6), the
 S3 frontend bucket (#7), the CloudFront distribution (#8), the ACM certificate + Route 53 records
 serving it at https://undergroundbb.com (#9), and dev/prod Terraform workspaces (#11, below). Its
-state lives in the bucket and lock table the bootstrap above creates, supplied at init time since
-their names include the account id:
+state lives in the bucket the bootstrap above creates, supplied at init time since its name includes
+the account id:
 
 ```sh
 cd "$(git rev-parse --show-toplevel)/terraform"
 STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket 2>/dev/null)
-LOCK_TABLE=$(terraform -chdir=bootstrap output -raw state_lock_table 2>/dev/null)
 STATE_REGION=$(terraform -chdir=bootstrap output -raw aws_region 2>/dev/null)
-[ -n "$STATE_BUCKET" ] && [ -n "$LOCK_TABLE" ] && [ -n "$STATE_REGION" ] || {
+[ -n "$STATE_BUCKET" ] && [ -n "$STATE_REGION" ] || {
   echo "No bootstrap state on this machine. Run 'terraform apply' in terraform/bootstrap first (it adopts the existing resources via its import blocks)." >&2
   return 1 2>/dev/null || exit 1
 }
 terraform init \
   -backend-config="bucket=$STATE_BUCKET" \
-  -backend-config="dynamodb_table=$LOCK_TABLE" \
   -backend-config="region=$STATE_REGION"
 terraform apply -var state_bucket="$STATE_BUCKET"
 ```
@@ -204,6 +203,11 @@ terraform apply -var state_bucket="$STATE_BUCKET"
 this machine (the state is local and gitignored, same as the note above) — without the check above,
 that empty value flows silently into `-backend-config="bucket="` and Terraform fails on `main.tf`'s
 `backend "s3"` block, which is not where the actual problem is.
+
+A checkout that already ran `terraform init` with the old `dynamodb_table` setting needs `terraform
+init -reconfigure` with the same flags (plain `init` stops with "Backend configuration changed").
+Nothing is migrated: the state stays where it is, only the lock moves. CI starts from a fresh
+checkout, so it is not affected.
 
 The backend region is derived from the bootstrap's own output rather than hardcoded, since the
 bootstrap region is itself overridable (`-var aws_region=...`, above). This `terraform/` config has

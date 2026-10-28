@@ -425,9 +425,10 @@ data "aws_iam_policy_document" "deploy_policy" {
   # goes through cloudfront:UpdateDistribution instead, already granted
   # "*" scope by the existing CloudFront statement above.
 
-  # Terraform state backend (the bucket + lock table terraform/bootstrap/
-  # creates). Lock table name is a fixed literal there, not
-  # workspace-derived, so it's referenced the same way here.
+  # Terraform state backend (the bucket terraform/bootstrap/ creates). The
+  # state lock is a <state key>.tflock object in the same bucket (use_lockfile
+  # in main.tf, #94), so the object grants below cover it; there is no lock
+  # table grant.
   statement {
     actions   = ["s3:ListBucket"]
     resources = ["arn:aws:s3:::${var.state_bucket}"]
@@ -440,15 +441,6 @@ data "aws_iam_policy_document" "deploy_policy" {
       "s3:DeleteObject",
     ]
     resources = ["arn:aws:s3:::${var.state_bucket}/*"]
-  }
-
-  statement {
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
-    ]
-    resources = ["arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/undergroundbb-tfstate-lock"]
   }
 }
 
