@@ -122,6 +122,9 @@ resource "aws_s3_bucket_public_access_block" "tf_state" {
   restrict_public_buckets = true
 }
 
+# No longer used for locking: terraform/ locks with S3-native use_lockfile
+# (#94). Kept, not destroyed, so removing it is a deliberate follow-up rather
+# than a side effect of switching the lock; nothing reads or writes it.
 resource "aws_dynamodb_table" "tf_state_lock" {
   name         = "undergroundbb-tfstate-lock"
   billing_mode = "PAY_PER_REQUEST"

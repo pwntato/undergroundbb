@@ -1,9 +1,9 @@
 # Main infrastructure, split across this file and the resource-scoped files
 # alongside it (dynamodb.tf, and more as #6-#11 land). State lives in the S3
-# bucket + DynamoDB lock table terraform/bootstrap/ creates (#4) — bucket,
-# table, and region are supplied at init time rather than hardcoded here,
-# since bucket/table names include the AWS account id and region is derived
-# from the bootstrap's own (overridable) output. See the README's "Deploying"
+# bucket terraform/bootstrap/ creates (#4), locked with an S3-native lock
+# file (#94) — bucket and region are supplied at init time rather than
+# hardcoded here, since the bucket name includes the AWS account id and region
+# is derived from the bootstrap's own (overridable) output. See the README's "Deploying"
 # section for the init command.
 
 terraform {
@@ -43,6 +43,12 @@ terraform {
 
   backend "s3" {
     key = "undergroundbb/terraform.tfstate"
+
+    # Native S3 locking (a <state key>.tflock object written with a
+    # conditional PUT), replacing the dynamodb_table lock the backend now
+    # warns is deprecated (#94). The deploy role's existing GetObject /
+    # PutObject / DeleteObject on the state bucket already covers it.
+    use_lockfile = true
   }
 }
 
