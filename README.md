@@ -342,7 +342,9 @@ The GitHub Actions OIDC provider is per-AWS-account, not per-project — this ac
 than declaring it as a resource, to avoid fighting over ownership of a provider shared with an
 unrelated project's deploy pipeline.
 
-**The AWS provider requires `>= 6.28.0`** (not `~> 5.0`, as it was through #4/#5). A Function URL's
+**The AWS provider requires `>= 6.37.0`** (not `~> 5.0`, as it was through #4/#5). The floor is
+`6.28.0` for the Function URL permission below, raised to `6.37.0` for the DynamoDB index's
+`key_schema` block (#96), which had bugs before that release. A Function URL's
 `NONE` auth type needs two resource-policy statements, `lambda:InvokeFunctionUrl` and
 `lambda:InvokeFunction` (the second gated on the `lambda:InvokedViaFunctionUrl` condition key, per
 [AWS's own docs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html), mandatory since

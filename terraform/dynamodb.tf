@@ -44,9 +44,19 @@ resource "aws_dynamodb_table" "main" {
 
   global_secondary_index {
     name            = "GSI1"
-    hash_key        = "GSI1PK"
-    range_key       = "GSI1SK"
     projection_type = "ALL"
+
+    # key_schema replaces the index's hash_key/range_key, deprecated in
+    # provider v6 (#96). The table's own hash_key/range_key are not.
+    key_schema {
+      attribute_name = "GSI1PK"
+      key_type       = "HASH"
+    }
+
+    key_schema {
+      attribute_name = "GSI1SK"
+      key_type       = "RANGE"
+    }
   }
 
   server_side_encryption {

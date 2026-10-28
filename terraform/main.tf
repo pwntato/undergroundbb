@@ -19,6 +19,10 @@ terraform {
       # (OpsWorks removal, aws_eip's vpc -> domain, SimpleDB removal) don't
       # touch anything this module manages.
       #
+      # >= 6.37.0 for the GSI's key_schema block (dynamodb.tf, #96): it first
+      # shipped in 6.29.0, but 6.32.1 fixed a perpetual diff on it (for a
+      # single range key) and 6.37.0 a GSI removal that deleted every index.
+      #
       # < 6.69.0: CI doesn't commit .terraform.lock.hcl, so every deploy takes
       # the newest provider in range. 6.69.0 fails every aws_lambda_function
       # code update with "UpdateFunctionCode, decomposing request:
@@ -26,7 +30,7 @@ terraform {
       # re-run); 6.68.0 applied the same zips fine. Upstream regression:
       # hashicorp/terraform-provider-aws#50474. Lift the cap once a release
       # with that fix ships and a deploy applies cleanly on it.
-      version = ">= 6.28.0, < 6.69.0"
+      version = ">= 6.37.0, < 6.69.0"
     }
     # Generates SESSION_SECRET (lambda.tf) -- a Terraform-local value with no
     # AWS API calls of its own, so no separate provider configuration block
