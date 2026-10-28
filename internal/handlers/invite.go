@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -262,6 +263,26 @@ type getInviteResponse struct {
 	// step 2 against a row that will just reject it with
 	// ErrInviteAlreadyAccepted.
 	Accepted bool `json:"accepted"`
+	// GroupName is the group's plaintext name, present only when the group
+	// is public (#155). A private group's name is ciphertext under a key the
+	// invitee does not hold until step 3, so it is omitted rather than sent.
+	// Public names are already served by the directory, so naming one to
+	// someone holding the invite id discloses nothing new.
+	GroupName string `json:"groupName,omitempty"`
+}
+
+// publicGroupName returns the plaintext name of groupID if it is a public
+// group, and "" otherwise (private, or no such group). A failed read is an
+// error, so the caller does not mistake it for "private".
+func (h *Handler) publicGroupName(ctx context.Context, groupID string) (string, error) {
+	g, err := h.db.GetGroup(ctx, groupID)
+	if err != nil || g == nil {
+		return "", err
+	}
+	if g.Visibility != models.VisibilityPublic {
+		return "", nil
+	}
+	return g.NamePlaintext, nil
 }
 
 // getInvite implements GET /api/invites/{id} -- issue #39. An invite nobody
@@ -313,7 +334,14 @@ func (h *Handler) getInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	groupName, err := h.publicGroupName(r.Context(), invite.GroupID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not fetch invite")
+		return
+	}
+
 	WriteJSON(w, http.StatusOK, getInviteResponse{
+		GroupName:                groupName,
 		GroupID:                  invite.GroupID,
 		InviterUserID:            invite.InviterUserID,
 		InviterSigningPublicKey:  encodeBase64(invite.InviterSigningPublicKey),
@@ -997,6 +1025,8 @@ type receivedInviteEntry struct {
 	// acceptance was already reported to them as a success (#83).
 	Overdue     bool   `json:"overdue,omitempty"`
 	RemovalDate string `json:"removalDate"`
+	// GroupName: see getInviteResponse. Public groups only (#155).
+	GroupName string `json:"groupName,omitempty"`
 }
 
 type receivedInvitesResponse struct {
@@ -1020,9 +1050,21 @@ func (h *Handler) receivedInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One read per distinct group, not per invite.
+	names := make(map[string]string)
 	entries := make([]receivedInviteEntry, 0, len(invites))
 	for _, inv := range invites {
+		name, seen := names[inv.GroupID]
+		if !seen {
+			name, err = h.publicGroupName(r.Context(), inv.GroupID)
+			if err != nil {
+				WriteInternalError(w, r, err, "could not list received invites")
+				return
+			}
+			names[inv.GroupID] = name
+		}
 		entries = append(entries, receivedInviteEntry{
+			GroupName:          name,
 			InviteID:           strings.TrimPrefix(inv.PK, "INVITE#"),
 			GroupID:            inv.GroupID,
 			InviterUserID:      inv.InviterUserID,
