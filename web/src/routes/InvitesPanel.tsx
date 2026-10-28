@@ -40,7 +40,7 @@ export function InvitesPanel({
   usernames,
 }: {
   readonly view: InvitesView
-  /** groupId to a display name, for groups the caller belongs to. Anything missing renders generically. */
+  /** groupId to a display name, for groups the caller belongs to. Anything missing falls back to the server-supplied public name, then to a generic label. */
   readonly groupLabels: ReadonlyMap<string, string>
   /** The invite whose revoke is in flight, if any; all revoke buttons lock while one is. */
   readonly busyInviteId: string | null
@@ -50,7 +50,8 @@ export function InvitesPanel({
   /** userId to username; anything missing renders as a short id. */
   readonly usernames?: ReadonlyMap<string, string> | undefined
 }) {
-  const label = (groupId: string) => groupLabels.get(groupId) ?? 'a group'
+  const label = (groupId: string, publicName?: string) =>
+    groupLabels.get(groupId) ?? publicName ?? 'a group'
   return (
     <div className="flex w-full max-w-md flex-col gap-6">
       <h1 className="text-2xl font-semibold">Invites</h1>
@@ -88,7 +89,7 @@ export function InvitesPanel({
               <ReceivedRow
                 key={inv.inviteId}
                 invite={inv}
-                groupName={label(inv.groupId)}
+                groupName={label(inv.groupId, inv.groupName)}
                 showRemoval={isUpcoming(inv.removalDate, now)}
                 usernames={usernames}
               />
