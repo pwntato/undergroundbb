@@ -1,4 +1,4 @@
-# One-time bootstrap: creates the S3 bucket and DynamoDB lock table that hold
+# One-time bootstrap: creates the S3 bucket that holds
 # Terraform remote state for the rest of this project (terraform/, once
 # #5-#11 land). Run once per AWS account — see the README for the command.
 #
@@ -7,8 +7,9 @@
 # — bootstrapping the bootstrap would be its own kind of absurd.
 #
 # Pattern matches notoriousmcp's terraform/bootstrap/ (a sibling project in
-# the same AWS account): same resource set, same account-id-suffixed naming
-# so the bucket name is globally unique without a random suffix.
+# the same AWS account): same account-id-suffixed naming, so the bucket name
+# is globally unique without a random suffix. Unlike notoriousmcp's, there is
+# no DynamoDB lock table here (#94).
 
 terraform {
   required_version = ">= 1.15"
@@ -18,7 +19,7 @@ terraform {
       source = "hashicorp/aws"
       # Matches terraform/main.tf's constraint (see its comment) -- kept in
       # sync so this account isn't managed by two different provider majors.
-      # This module's own resources (S3, DynamoDB) are unaffected either way.
+      # This module's own resources (S3) are unaffected either way.
       version = ">= 6.28.0, < 7.0"
     }
   }
@@ -34,13 +35,12 @@ data "aws_caller_identity" "current" {}
 # exists only on whichever machine ran the first apply -- never in the repo.
 # Without these, a second maintainer, a new laptop, or CI starting from an
 # empty state directory would plan to recreate resources that already exist
-# in the account, and apply would fail outright for the bucket and table
-# (BucketAlreadyOwnedByYou / ResourceInUseException) or silently overwrite
-# the three S3 sub-resource settings with byte-identical config that merely
-# happens to match today -- if the live bucket ever drifted (someone enabled
-# a KMS key, say), a fresh-clone apply would revert it with no `~` in the
-# plan to show it, because Terraform would think it was creating, not
-# correcting. All five resources need an import, not just the two that fail
+# in the account, and apply would fail outright for the bucket
+# (BucketAlreadyOwnedByYou) or silently overwrite the three S3 sub-resource
+# settings with byte-identical config that merely happens to match today --
+# if the live bucket ever drifted (someone enabled a KMS key, say), a
+# fresh-clone apply would revert it with no `~` in the plan to show it,
+# because Terraform would think it was creating, not correcting. All four resources need an import, not just the one that fails
 # loudly without one.
 #
 # Once adopted, an import whose target is already in state is a silent
@@ -51,9 +51,8 @@ data "aws_caller_identity" "current" {}
 # An import block is unconditional -- if its id doesn't resolve to a real
 # object, plan fails outright ("Cannot import non-existent remote object")
 # rather than falling back to a create. The ids follow the caller's own
-# account (four interpolate data.aws_caller_identity.current.account_id; the
-# fifth, a DynamoDB table name, is account-scoped by definition), so these
-# adopt correctly in any account where the resources already exist -- but
+# account (all four interpolate data.aws_caller_identity.current.account_id), so
+# these adopt correctly in any account where the resources already exist -- but
 # the very first bootstrap of an account has nothing to import, and needs
 # var.create_new_state=true to skip them and create fresh. Every run after
 # that first one, including later runs in that same account, leaves it at
@@ -80,12 +79,6 @@ import {
   for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket_public_access_block.tf_state
   id       = "undergroundbb-tfstate-${data.aws_caller_identity.current.account_id}"
-}
-
-import {
-  for_each = var.create_new_state ? toset([]) : toset(["x"])
-  to       = aws_dynamodb_table.tf_state_lock
-  id       = "undergroundbb-tfstate-lock"
 }
 
 resource "aws_s3_bucket" "tf_state" {
@@ -122,26 +115,8 @@ resource "aws_s3_bucket_public_access_block" "tf_state" {
   restrict_public_buckets = true
 }
 
-# No longer used for locking: terraform/ locks with S3-native use_lockfile
-# (#94). Kept, not destroyed, so removing it is a deliberate follow-up rather
-# than a side effect of switching the lock; nothing reads or writes it.
-resource "aws_dynamodb_table" "tf_state_lock" {
-  name         = "undergroundbb-tfstate-lock"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-}
-
 output "state_bucket" {
   value = aws_s3_bucket.tf_state.bucket
-}
-
-output "state_lock_table" {
-  value = aws_dynamodb_table.tf_state_lock.name
 }
 
 output "aws_region" {
