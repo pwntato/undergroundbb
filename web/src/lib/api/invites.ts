@@ -108,6 +108,8 @@ export interface GetInviteResponse {
   readonly expiresAt: string
   readonly creationSignature: string
   readonly accepted: boolean
+  /** The group's plaintext name; present only for a public group (#155). */
+  readonly groupName?: string
 }
 
 /**
@@ -282,6 +284,8 @@ export interface ReceivedInvite {
   readonly overdue?: boolean
   /** When the server may sweep the row; after this the acceptance silently disappears. RFC 3339. */
   readonly removalDate: string
+  /** The group's plaintext name; present only for a public group (#155). */
+  readonly groupName?: string
 }
 
 export interface ReceivedInvitesResponse {

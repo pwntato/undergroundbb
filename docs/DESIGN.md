@@ -1204,6 +1204,14 @@ succeeded; the group key arrives via step 3, not this write) would silently stra
 membership and no remaining record anything was ever accepted, so revocation after acceptance is
 refused rather than allowed.
 
+**An invite names its group only when the group is public.** `GET /api/invites/:id` and
+`GET /api/invites/received` carry `groupName`, the plaintext name, for a public group and omit the
+field for a private one: a private group's name is ciphertext under the group key, which the invitee
+does not hold until step 3, so the invitee's client shows "a group" there. The unauthenticated read
+discloses nothing a public group has not already chosen to make discoverable: public names are
+designed to be listed in the directory (#71). A member of the group still sees their
+own decrypted label first.
+
 *An invite has no invitee until step 2.* The step 1 payload deliberately contains no invitee
 identity — an invite is a link, handed to someone who may not have an account yet, and
 `GET /api/invites/:id` is unauthenticated for exactly that reason. So the invite item is **written

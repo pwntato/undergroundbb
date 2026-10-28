@@ -26,6 +26,7 @@ import { Link, useParams } from 'react-router'
 import { acceptInvite, getInvite, type GetInviteResponse } from '@/lib/api/invites'
 import { signInviteAcceptance } from '@/lib/crypto/worker-client'
 import { useSession } from '@/lib/session/useSession'
+import { inviteHeading } from './inviteHeading'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { useLiveKeys } from './useLiveKeys'
 import {
@@ -283,7 +284,7 @@ export function AcceptInviteScreen() {
 
   return (
     <div className="flex w-full max-w-sm flex-col gap-4">
-      <h1 className="text-lg font-semibold">You've been invited</h1>
+      <h1 className="text-lg font-semibold">{inviteHeading(state.invite.groupName)}</h1>
       {state.fingerprint !== '' && (
         <div className="flex flex-col gap-1">
           <p className="text-xs text-muted-foreground">Inviter's fingerprint (matched):</p>

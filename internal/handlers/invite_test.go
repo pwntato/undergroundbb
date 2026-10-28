@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1422,5 +1423,108 @@ func checkRemovalDate(t *testing.T, legacy bool, deadline, removal string) {
 	}
 	if !r.After(d) {
 		t.Errorf("removalDate = %s, want it strictly after completionDeadline %s", removal, deadline)
+	}
+}
+
+// TestInviteGroupNameOnlyForPublicGroups pins #155: GET /api/invites/{id}
+// and GET /api/invites/received name a public group, and say nothing about
+// a private one (whose name is ciphertext the invitee cannot read yet).
+func TestInviteGroupNameOnlyForPublicGroups(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	publicGroup := createPublicGroup(t, h, creator, creatorCookie)
+	privateGroup := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	publicInvite := createTestInvite(t, h, creator, creatorCookie, publicGroup, time.Now().Add(24*time.Hour))
+	publicInvite2 := createTestInvite(t, h, creator, creatorCookie, publicGroup, time.Now().Add(24*time.Hour))
+	privateInvite := createTestInvite(t, h, creator, creatorCookie, privateGroup, time.Now().Add(24*time.Hour))
+
+	get := func(id string) (getInviteResponse, string) {
+		t.Helper()
+		rec := doJSON(t, h, http.MethodGet, "/api/invites/"+id, nil, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var resp getInviteResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding: %v", err)
+		}
+		return resp, rec.Body.String()
+	}
+	if resp, _ := get(publicInvite); resp.GroupName != "Book Club" {
+		t.Errorf("public GroupName = %q, want %q", resp.GroupName, "Book Club")
+	}
+	resp, raw := get(privateInvite)
+	if resp.GroupName != "" || strings.Contains(raw, "groupName") {
+		t.Errorf("private invite response names the group: %s", raw)
+	}
+
+	invitee, inviteeCookie := loggedInUser(t, h)
+	for _, id := range []string{publicInvite, publicInvite2, privateInvite} {
+		if rec := doJSON(t, h, http.MethodPost, "/api/invites/"+id+"/accept", inviteeCookie, signedAcceptInviteRequest(t, invitee, id)); rec.Code != http.StatusOK {
+			t.Fatalf("accept status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+	}
+	rec := doJSON(t, h, http.MethodGet, "/api/invites/received", inviteeCookie, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("received status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var recv receivedInvitesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &recv); err != nil {
+		t.Fatalf("decoding received: %v", err)
+	}
+	if len(recv.Invites) != 3 {
+		t.Fatalf("received = %+v, want 3", recv.Invites)
+	}
+	for _, e := range recv.Invites {
+		want := ""
+		if e.GroupID == publicGroup {
+			want = "Book Club"
+		}
+		if e.GroupName != want {
+			t.Errorf("received invite %s (group %s) GroupName = %q, want %q", e.InviteID, e.GroupID, e.GroupName, want)
+		}
+	}
+	// The private entry must not carry the key at all, not just an empty value.
+	var generic struct {
+		Invites []map[string]any `json:"invites"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &generic); err != nil {
+		t.Fatalf("decoding generic: %v", err)
+	}
+	for _, e := range generic.Invites {
+		if e["groupId"] == privateGroup {
+			if _, has := e["groupName"]; has {
+				t.Errorf("private received entry carries groupName: %v", e)
+			}
+		}
+	}
+}
+
+// TestInviteGroupNameGuardsOnVisibility: publicGroupName keys off the
+// group's Visibility, not on NamePlaintext merely being non-empty, so a
+// private group row that somehow carried a plaintext name still stays
+// generic. createGroup refuses that shape, so the row is written directly.
+func TestInviteGroupNameGuardsOnVisibility(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	creator, creatorCookie := loggedInUser(t, h)
+	groupID := createTestGroupWithMembers(t, h, creator, creatorCookie)
+	if _, err := rawDDB(t).UpdateItem(t.Context(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: "META"},
+		},
+		UpdateExpression:          aws.String("SET NamePlaintext = :n"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":n": &types.AttributeValueMemberS{Value: "Leaked"}},
+	}); err != nil {
+		t.Fatalf("seeding NamePlaintext: %v", err)
+	}
+	inviteID := createTestInvite(t, h, creator, creatorCookie, groupID, time.Now().Add(24*time.Hour))
+	rec := doJSON(t, h, http.MethodGet, "/api/invites/"+inviteID, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "Leaked") {
+		t.Errorf("private group's plaintext name served: %s", rec.Body.String())
 	}
 }

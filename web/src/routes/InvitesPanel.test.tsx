@@ -78,6 +78,22 @@ describe('InvitesPanel', () => {
     expect(html).toContain('You join once they next log in')
   })
 
+  it('names a received invite by the public name the server sent (#155)', () => {
+    const html = render({ received: [{ ...received, groupName: 'Public Garden' }] })
+    expect(html).toContain('Public Garden')
+    expect(html).not.toContain('a group')
+  })
+
+  it("prefers the caller's own label over the server-sent name", () => {
+    const html = render({ received: [{ ...received, groupId: 'g1', groupName: 'Public Garden' }] })
+    expect(html).toContain('Book Club')
+    expect(html).not.toContain('Public Garden')
+  })
+
+  it('stays generic for a received invite with no public name', () => {
+    expect(render({ received: [received] })).toContain('a group')
+  })
+
   it('flags an overdue sent invite, with when it disappears, and does not offer Revoke', () => {
     const html = render({
       sent: [{ ...accepted, overdue: true, removalDate: '2026-10-15T23:59:59Z' }],
