@@ -10,16 +10,13 @@
 #   -trimpath        keeps the checkout's absolute path out of the binary.
 #   chmod + touch    pin the mode (umask-dependent) and the file time that
 #                    zip records; actions/checkout writes fresh mtimes.
-#   zip -X           drops the extra attributes (uid/gid, extended times).
+#   zip -X           drops the extra fields (extended timestamps, uid/gid).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 root=$PWD
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-
-# zip stores local time, so pin the zone too.
-export TZ=UTC
 
 build_zip() { # <package> <output zip>
   local pkg=$1 out=$2

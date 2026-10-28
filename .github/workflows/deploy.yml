@@ -52,14 +52,11 @@ jobs:
           go-version-file: go.mod
 
       - name: build
-        run: |
-          GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
-          zip lambda.zip bootstrap
-          # The scheduled test-account purge is a second Lambda; its zip must
-          # exist before terraform plan reads its hash.
-          GOOS=linux GOARCH=arm64 go build -o purge-bootstrap ./cmd/purge
-          mkdir purge-pkg && mv purge-bootstrap purge-pkg/bootstrap
-          (cd purge-pkg && zip ../purge.zip bootstrap)
+        # Builds lambda.zip and purge.zip (the scheduled test-account purge is
+        # a second Lambda; its zip must exist before terraform plan reads its
+        # hash). Reproducible, so a push that changes no Go code plans no
+        # Lambda update (#98).
+        run: ./scripts/build-lambda-zips.sh
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
