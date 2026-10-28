@@ -217,7 +217,8 @@ aws_region=...` on `terraform apply` here too, in addition to matching the boots
 
 Resource names derive from `terraform.workspace`, never a free-form variable (#11), so a mistyped
 value can't point one environment's `apply` at another's table. `prod` is the only workspace
-in use (the live account: `undergroundbb-prod`, `undergroundbb.com`); there is no dev environment (#13). Terraform's own built-in `default` workspace also still exists — the
+in use (the live account: `undergroundbb-prod`, `undergroundbb.com`); there is no dev environment
+(#13). Terraform's own built-in `default` workspace also still exists — the
 CLI refuses to delete it outright — and is left empty rather than used for anything: everything that
 had been applied there (from before this project had workspaces at all) was migrated to
 `prod` and destroyed out of `default`, and it's kept empty going forward so an `apply` run with a
@@ -248,10 +249,10 @@ doesn't exist in the backend) rather than silently creating one or falling back 
 of the two silently.
 
 The domain served depends on which workspace is selected: `local.domain_name`
-(`terraform/locals.tf`) resolves to the bare apex for `prod` and a `dev.`-prefixed subdomain of it
-for every other workspace, both inside the one Route 53 zone `var.root_domain` names — see
-`locals.tf`'s own comment for why a third, unlisted workspace name fails plan loudly rather than
-silently getting an unplanned subdomain.
+(`terraform/locals.tf`) resolves to the bare apex of the Route 53 zone
+`var.root_domain` names, for `prod`, the only workspace in use. Any other workspace fails plan at
+that lookup — see `locals.tf`'s own comment for why it fails loudly rather than silently getting an
+unplanned subdomain.
 
 **The Lambda (#6)** needs a real deploy artifact — `terraform apply` reads `lambda.zip` at the
 `terraform/` module's parent directory via `filebase64sha256`, so build it first:
