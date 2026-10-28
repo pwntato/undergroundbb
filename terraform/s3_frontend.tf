@@ -13,8 +13,8 @@
 # the one resource type in terraform/ whose name is a globally-unique S3
 # namespace rather than an account-scoped one (DynamoDB table, Lambda
 # function, and IAM role names all only have to be unique within this
-# account). Without the suffix, "undergroundbb-frontend-dev"/"-prod" are
-# generic enough for anyone to claim before #11 creates those workspaces;
+# account). Without the suffix, "undergroundbb-frontend-prod" is
+# generic enough for anyone to claim;
 # with it, this follows the same pattern bootstrap already uses for exactly
 # that reason.
 resource "aws_s3_bucket" "frontend" {
