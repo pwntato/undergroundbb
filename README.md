@@ -259,19 +259,19 @@ silently getting an unplanned subdomain.
 `terraform/` module's parent directory via `filebase64sha256`, so build it first:
 
 ```sh
-GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/lambda
-zip lambda.zip bootstrap
+./scripts/build-lambda-zips.sh
 ```
+
+The script builds both Lambda zips (the purge Lambda below reads `purge.zip` the same way)
+reproducibly, so the hash only changes when the Go code does and a push that touches only
+`web/` or `docs/` plans no Lambda update (#98). Build with the Go version in `go.mod`: a different
+toolchain produces a different binary, and so a different hash.
 
 **The test-account purge** is a second Lambda (`cmd/purge`, `terraform/purge.tf`) that deletes accounts
 created by automated smoke tests (reserved `zz-delete-test-` username prefix) and everything they
 own. It has its own minimal execution role and an EventBridge schedule (`var.purge_schedule`,
-hourly by default), and `terraform apply` reads its `purge.zip` the same way:
-
-```sh
-GOOS=linux GOARCH=arm64 go build -o purge-pkg/bootstrap ./cmd/purge
-(cd purge-pkg && zip ../purge.zip bootstrap)
-```
+hourly by default), and `terraform apply` reads its `purge.zip` the same way; the script above
+builds it too.
 
 Deletion is on (`var.purge_dry_run` defaults to `false`; set it to `true` for a report-only run, and
 every run logs a `purge report:` JSON line to CloudWatch, `/aws/lambda/undergroundbb-purge-<workspace>`).
