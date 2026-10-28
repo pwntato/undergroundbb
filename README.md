@@ -138,7 +138,7 @@ also clears all data if you want a clean slate for any other reason.
 
 ## Deploying
 
-Infrastructure is Terraform (`terraform/`), with remote state in S3 and locking via DynamoDB.
+Infrastructure is Terraform (`terraform/`), with remote state in S3, locked with an S3-native lock file.
 Bootstrapping that remote state is a one-time, per-AWS-account step — it has to exist before
 `terraform/` has anywhere remote to put its own state, so it keeps its own local state rather than
 depending on the thing it creates:
@@ -149,17 +149,16 @@ terraform init
 terraform apply
 ```
 
-This creates a versioned, encrypted, non-public S3 bucket (`undergroundbb-tfstate-<account-id>`)
-and a `PAY_PER_REQUEST` DynamoDB table (`undergroundbb-tfstate-lock`), both in `us-west-2` by
-default (override with `-var aws_region=...`). The table is a leftover: `terraform/` locks its state
-with an S3-native lock file (`use_lockfile`, #94) and nothing uses the table any more. The rest of
-the project's infrastructure defaults to this same region — ACM (#9) is the one exception, since
+This creates a versioned, encrypted, non-public S3 bucket (`undergroundbb-tfstate-<account-id>`) in
+`us-west-2` by default (override with `-var aws_region=...`). `terraform/` locks its state with an
+S3-native lock file (`use_lockfile`, #94), so there is no lock table; the one the bootstrap used to
+create was deleted. The rest of the project's infrastructure defaults to this same region — ACM (#9) is the one exception, since
 CloudFront requires its certificate in `us-east-1` regardless.
 
 **Already applied in account `350195739155`.** Because this module's state is local and gitignored,
 it exists only on the machine that ran the first apply — running the command above from elsewhere
 (a second maintainer, a new machine, CI) against the same account starts from empty state where the
-resources already exist. `import` blocks in `main.tf` cover all five resources for exactly this
+resources already exist. `import` blocks in `main.tf` cover all four resources for exactly this
 case: `terraform apply` (the plain command above) adopts them into the new local state instead of
 trying to recreate them, so it's safe and idempotent to re-run from any machine, in any account whose
 resources already exist.
