@@ -1,8 +1,6 @@
 # Go
-/bootstrap
 /lambda.zip
 /purge.zip
-/purge-pkg/
 *.test
 vectors.log
 # Root-anchored: ignores a stray compiled binary from
