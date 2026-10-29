@@ -103,15 +103,15 @@ const (
 	// setting. Below 2 a group could never hold an invitee; above the ceiling
 	// the rotation burst outgrows what a browser can finish, so a larger value
 	// is almost certainly a typo.
-	// DefaultMaxPostTitleBytes and DefaultMaxPostBodyBytes are the post size
-	// caps' defaults; the Min/Max pairs bound the settings.
-	DefaultMaxPostTitleBytes       = 200
-	DefaultMaxPostBodyBytes        = 10000
-	MinPostFieldBytes              = 1
-	MaxPostTitleBytesCeiling       = 2000
-	MaxPostBodyBytesCeiling        = 100000
 	MinRotatingGroupMembers        = 2
 	MaxRotatingGroupMembersCeiling = 10000
+	// DefaultMaxPostTitleBytes and DefaultMaxPostBodyBytes are the post size
+	// caps' defaults; the Min/Max pairs bound the settings.
+	DefaultMaxPostTitleBytes = 200
+	DefaultMaxPostBodyBytes  = 10000
+	MinPostFieldBytes        = 1
+	MaxPostTitleBytesCeiling = 2000
+	MaxPostBodyBytesCeiling  = 100000
 )
 
 // DefaultSessionTTL is SessionTTL's default: 24 hours. docs/DESIGN.md pins

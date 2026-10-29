@@ -291,3 +291,77 @@ func TestPostCiphertextLimitFollowsTheConfiguredCaps(t *testing.T) {
 		t.Fatalf("one over: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func countPosts(t *testing.T, gid string) int {
+	t.Helper()
+	out, err := rawDDB(t).Query(context.Background(), &dynamodb.QueryInput{
+		TableName:                 aws.String(testTableName()),
+		ConsistentRead:            aws.Bool(true),
+		KeyConditionExpression:    aws.String("PK = :p AND begins_with(SK, :s)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":p": s("GROUP#" + gid), ":s": s("POST#")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(out.Items)
+}
+
+// A send that committed and lost its response is resent byte for byte. The
+// resend must be answered by what was written even when the group's generation
+// moved or the day aged out since; otherwise the client seals a second post.
+func TestCreatePostResendAfterTheRotationCompletedIsStillOnePost(t *testing.T) {
+	f := startRotation(t)
+	carolCookie := loginCookie(t, f.h, f.carol)
+	req, _ := signedPost(t, f.gid, f.carol, postOpts{generation: 0})
+	if rec := doPost(t, f.h, carolCookie, f.gid, req); rec.Code != http.StatusCreated {
+		t.Fatalf("first send: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, u := range []registeredUser{f.carol, f.dave} {
+		if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPut, f.gid, "members", rewrapReq(1, u)); rec.Code != http.StatusNoContent {
+			t.Fatalf("rewrap: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if rec := doRotationCall(t, f.h, f.ownerCookie, http.MethodPost, f.gid, "complete", completeRotationRequest{Generation: 1}); rec.Code != http.StatusNoContent {
+		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if rec := doPost(t, f.h, carolCookie, f.gid, req); rec.Code != http.StatusCreated {
+		t.Fatalf("resend after the rotation completed: %d %s", rec.Code, rec.Body.String())
+	}
+	if n := countPosts(t, f.gid); n != 1 {
+		t.Fatalf("%d posts, want 1", n)
+	}
+	// A new post at the old generation is still refused: only the same bytes are answered.
+	fresh, _ := signedPost(t, f.gid, f.carol, postOpts{generation: 0})
+	if rec := doPost(t, f.h, carolCookie, f.gid, fresh); rec.Code != http.StatusConflict || errCode(t, rec) != "generation_stale" {
+		t.Fatalf("a new post at the old generation: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreatePostResendAfterTheDayAgedOutIsStillOnePost(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	suffix, err := idgen.DaySuffix(time.Now().AddDate(0, 0, -3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := signedPost(t, gid, owner, postOpts{sortKey: "POST#" + suffix})
+	// Seed what the first send wrote, as if it had landed three days ago.
+	in := db.CreatePostInput{GroupID: gid, SortKey: req.SortKey, AuthorUserID: owner.userID, Generation: 0, AuthorKeyEpoch: 0, ExpirationDays: 30, Now: time.Now()}
+	in.Nonce, _ = base64.StdEncoding.DecodeString(req.Nonce)
+	in.Ciphertext, _ = base64.StdEncoding.DecodeString(req.Ciphertext)
+	in.Signature, _ = base64.StdEncoding.DecodeString(req.Signature)
+	if err := h.db.CreatePost(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doPost(t, h, cookie, gid, req); rec.Code != http.StatusCreated {
+		t.Fatalf("resend past the day tolerance: %d %s", rec.Code, rec.Body.String())
+	}
+	// A different post at that old address is a backdated post, refused as before.
+	other, _ := signedPost(t, gid, owner, postOpts{sortKey: req.SortKey})
+	if rec := doPost(t, h, cookie, gid, other); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a different post at an aged address: %d %s", rec.Code, rec.Body.String())
+	}
+	if n := countPosts(t, gid); n != 1 {
+		t.Fatalf("%d posts, want 1", n)
+	}
+}

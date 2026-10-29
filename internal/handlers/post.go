@@ -102,28 +102,6 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "sortKey: must be POST#<YYYY-MM-DD>#<16 hex characters>")
 		return
 	}
-	if skew := time.Since(day); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "sortKey: day is not within tolerance of the current UTC day")
-		return
-	}
-	// New posts use the settled generation; a running rotation counts in
-	// GroupCurrentGeneration, so the settled one is one below.
-	postGeneration := current
-	if marker != nil {
-		postGeneration = marker.Generation - 1
-	}
-	if req.Generation != postGeneration {
-		WriteErrorWithCode(w, http.StatusConflict, "generation: not the generation new posts use; reload and try again", "generation_stale")
-		return
-	}
-	if caller.Generation < postGeneration {
-		WriteErrorWithCode(w, http.StatusConflict, "your key for this group is behind; wait for the rotation to reach you", "member_behind")
-		return
-	}
-	if caller.WrapEpoch < self.KeyEpoch {
-		WriteErrorWithCode(w, http.StatusConflict, "your keys changed and an admin has not approved them for this group yet", "member_dormant")
-		return
-	}
 	nonce, err := decodeBase64Field(req.Nonce, crypto.NonceSize, crypto.NonceSize)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "nonce: "+err.Error())
@@ -149,7 +127,7 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = h.db.CreatePost(r.Context(), db.CreatePostInput{
+	in := db.CreatePostInput{
 		GroupID:        groupID,
 		SortKey:        req.SortKey,
 		AuthorUserID:   userID,
@@ -158,14 +136,54 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 		Ciphertext:     ciphertext,
 		Signature:      sig,
 		AuthorKeyEpoch: self.KeyEpoch,
+		MarkerPresent:  marker != nil,
 		ExpirationDays: group.ExpirationDays,
 		Now:            time.Now(),
-	})
+	}
+	if marker != nil {
+		in.MarkerGeneration = marker.Generation
+	}
+	// A resend of a post that already landed is answered by what was written,
+	// before any freshness check: the first send committed and its response was
+	// lost, and a rotation may have completed or the day passed since. Refusing
+	// the resend would make the client seal a second post.
+	if stored, err := h.db.PostAlreadyStored(r.Context(), in); err != nil {
+		WriteInternalError(w, r, err, "could not create the post")
+		return
+	} else if stored {
+		WriteJSON(w, http.StatusCreated, map[string]string{"sortKey": req.SortKey})
+		return
+	}
+	if skew := time.Since(day); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
+		WriteError(w, http.StatusBadRequest, "sortKey: day is not within tolerance of the current UTC day")
+		return
+	}
+	// New posts use the settled generation; a running rotation counts in
+	// GroupCurrentGeneration, so the settled one is one below.
+	postGeneration := current
+	if marker != nil {
+		postGeneration = marker.Generation - 1
+	}
+	if req.Generation != postGeneration {
+		WriteErrorWithCode(w, http.StatusConflict, "generation: not the generation new posts use; reload and try again", "generation_stale")
+		return
+	}
+	if caller.Generation < postGeneration {
+		WriteErrorWithCode(w, http.StatusConflict, "your key for this group is behind; wait for the rotation to reach you", "member_behind")
+		return
+	}
+	if caller.WrapEpoch < self.KeyEpoch {
+		WriteErrorWithCode(w, http.StatusConflict, "your keys changed and an admin has not approved them for this group yet", "member_dormant")
+		return
+	}
+	err = h.db.CreatePost(r.Context(), in)
 	switch {
 	case err == nil:
 		WriteJSON(w, http.StatusCreated, map[string]string{"sortKey": req.SortKey})
 	case errors.Is(err, db.ErrPostExists):
 		WriteErrorWithCode(w, http.StatusConflict, "a different post already has this address; try again", "post_exists")
+	case errors.Is(err, db.ErrPostMarkerChanged):
+		WriteErrorWithCode(w, http.StatusConflict, "the group's key rotation changed; reload and try again", "generation_stale")
 	case errors.Is(err, db.ErrPostMemberChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "your membership changed; reload and try again", "membership_changed")
 	case errors.Is(err, db.ErrWrapEpochStale):

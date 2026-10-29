@@ -153,3 +153,82 @@ func TestCreatePostChecksTheAuthorsMembershipInTheSameTransaction(t *testing.T) 
 		t.Errorf("profile epoch moved: %v", err)
 	}
 }
+
+func TestCreatePostPinsTheRotationMarkerInTheSameTransaction(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	g := startedRotation(t, c) // rotation 0 -> 1 running; a1 is at generation 1, a2 behind at 0
+	marker, err := c.GetRotation(ctx, g)
+	if err != nil || marker == nil {
+		t.Fatalf("marker = %v, %v", marker, err)
+	}
+	in := postInput(g, "a1")
+	in.Generation, in.MarkerPresent, in.MarkerGeneration = 0, true, marker.Generation
+
+	// The rotation completes between the handler's read and the write: the
+	// marker is gone, and the post sealed for the old generation must not land.
+	if _, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(c.table), Key: rotationKey(g)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CreatePost(ctx, in); !errors.Is(err, ErrPostMarkerChanged) {
+		t.Fatalf("after the rotation completed: %v, want ErrPostMarkerChanged", err)
+	}
+	if readPost(t, c, g) != nil {
+		t.Error("a post landed on the old generation after the rotation completed")
+	}
+
+	// The marker as the handler read it (gone) is what the write now sees.
+	in.MarkerPresent, in.MarkerGeneration = false, 0
+	if err := c.CreatePost(ctx, in); err != nil {
+		t.Fatalf("with the marker absent as read: %v", err)
+	}
+
+	// A rotation that starts in the window is refused too: the settled
+	// generation the handler used may be about to change.
+	in.SortKey = "POST#2026-10-28#4444444444444444"
+	putRotationMarker(t, c, g, 2)
+	if err := c.CreatePost(ctx, in); !errors.Is(err, ErrPostMarkerChanged) {
+		t.Fatalf("a rotation started in the window: %v, want ErrPostMarkerChanged", err)
+	}
+	// And one whose marker moved to another generation.
+	in.MarkerPresent, in.MarkerGeneration = true, 1
+	if err := c.CreatePost(ctx, in); !errors.Is(err, ErrPostMarkerChanged) {
+		t.Fatalf("marker moved to another generation: %v, want ErrPostMarkerChanged", err)
+	}
+	in.MarkerGeneration = 2
+	if err := c.CreatePost(ctx, in); err != nil {
+		t.Fatalf("marker as read: %v", err)
+	}
+}
+
+func TestPostAlreadyStoredIsTrueOnlyForTheSameBytes(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	g := newLeaveGroup(t, c)
+	putTestMember(t, c, g, "a1", "member")
+	in := postInput(g, "a1")
+	if same, err := c.PostAlreadyStored(ctx, in); err != nil || same {
+		t.Fatalf("before any write: %v, %v", same, err)
+	}
+	if err := c.CreatePost(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if same, err := c.PostAlreadyStored(ctx, in); err != nil || !same {
+		t.Fatalf("same bytes: %v, %v", same, err)
+	}
+	other := in
+	other.Ciphertext = []byte("other-cipher")
+	if same, err := c.PostAlreadyStored(ctx, other); err != nil || same {
+		t.Fatalf("other bytes: %v, %v", same, err)
+	}
+}
+
+func putRotationMarker(t *testing.T, c *Client, g string, gen int64) {
+	t.Helper()
+	item := rotationKey(g)
+	item["Type"] = s("Rotation")
+	item["Generation"] = genAttr(gen)
+	if _, err := c.ddb.PutItem(context.Background(), &dynamodb.PutItemInput{TableName: aws.String(c.table), Item: item}); err != nil {
+		t.Fatal(err)
+	}
+}
