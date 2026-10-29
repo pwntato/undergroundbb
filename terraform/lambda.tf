@@ -123,6 +123,10 @@ resource "aws_lambda_function" "main" {
   timeout          = 10
   memory_size      = 256
 
+  # Caps how fast the API can run, and so what a flood can cost (costguard.tf).
+  # cmd/costguard sets this to 0 to stop the API; a deploy restores it.
+  reserved_concurrent_executions = var.web_max_concurrency
+
   # #113: SITE_NAME/DOMAIN/REGISTRATION_POLICY/ALLOW_GROUP_EXPIRATION_OFF/
   # DEFAULT_EXPIRATION_DAYS previously had no Terraform variable at all, so a
   # deployed Lambda could never actually be configured with them -- it always
@@ -154,7 +158,15 @@ resource "aws_lambda_function" "main" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy.lambda]
+  # deploy_costguard holds the deploy role's PutFunctionConcurrency grant on
+  # this function; without that edge the first apply can set the concurrency
+  # before the grant exists (the #118/#119 self-grant race). IAM propagation
+  # can still fail the first run once; a retry passes.
+  depends_on = [
+    aws_cloudwatch_log_group.lambda,
+    aws_iam_role_policy.lambda,
+    aws_iam_role_policy.deploy_costguard,
+  ]
 }
 
 # authorization_type = "NONE" per #6 -- CloudFront (#8) is the intended

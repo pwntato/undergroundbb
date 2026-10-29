@@ -201,7 +201,7 @@ jobs:
         # credentials; picked "prod" arbitrarily since validate only type-
         # and reference-checks, it doesn't need to represent a real apply.
         run: |
-          touch ../lambda.zip ../purge.zip
+          touch ../lambda.zip ../purge.zip ../costguard.zip
           terraform init -backend=false
           TF_WORKSPACE=prod terraform validate
         working-directory: terraform

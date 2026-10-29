@@ -262,10 +262,34 @@ unplanned subdomain.
 ./scripts/build-lambda-zips.sh
 ```
 
-The script builds both Lambda zips (the purge Lambda below reads `purge.zip` the same way)
+The script builds all three Lambda zips (the purge Lambda and the cost guard below read `purge.zip` and `costguard.zip` the same way)
 reproducibly, so the hash only changes when the Go code does and a push that touches only
 `web/` or `docs/` plans no Lambda update (#98). Build with the Go version in `go.mod`: a different
 toolchain produces a different binary, and so a different hash.
+
+**The cost guard** (`cmd/costguard`, `terraform/costguard.tf`) bounds what a flood can cost. WAF's rate
+rules limit one source IP and CloudFront bills every request, so nothing in front of the API caps a
+distributed flood. The web Lambda has a reserved concurrency (`var.web_max_concurrency`, default 50),
+which caps Lambda and DynamoDB spend. A CloudWatch alarm on its invocations
+(`var.flood_invocations_per_5min`, default 20,000 in five minutes) and an AWS Budget on actual monthly
+spend (`var.cost_guard_budget_usd`, default 20; whole account) publish to one SNS topic that invokes
+`cmd/costguard`, which sets the web Lambda's reserved concurrency to 0. The static site stays up and the
+API answers with errors until the switch is re-armed. A deploy re-arms it (terraform restores
+`var.web_max_concurrency`), so do not deploy while an attack is still running. To re-arm by hand,
+first check that the alarm is back to OK (CloudWatch runs an alarm's actions only on a state change, so
+an alarm still in ALARM cannot trip again, and a flood that is still going keeps it there):
+`aws cloudwatch describe-alarms --alarm-names undergroundbb-costguard-<workspace>-invocations --query 'MetricAlarms[0].StateValue'`;
+then:
+`aws lambda put-function-concurrency --function-name undergroundbb-<workspace> --reserved-concurrent-executions 50`.
+The alarm is the fast trip (minutes); Budgets data lags by hours, so the budget is the backstop. The
+budget notifies once per month after it crosses the limit, so after a trip and a mid-month re-arm only
+the alarm can trip again until next month, and it counts the whole account's spend, not just this
+project's. The trade-off is deliberate: a flood of about 20,000 requests in five minutes from 10 or more
+IPs, each under the WAF's per-IP rate rule, takes the API down until a deploy or a manual re-arm. That
+costs availability, not money, which is the right failure at this budget. Not
+covered by the alarm: requests CloudFront or WAF answer without reaching the Lambda are billed but not
+counted, and only the budget sees them. The trip emails `ALARM_EMAIL` if its subscription was confirmed.
+The limits are Terraform variables; change one and deploy.
 
 **The test-account purge** is a second Lambda (`cmd/purge`, `terraform/purge.tf`) that deletes accounts
 created by automated smoke tests (reserved `zz-delete-test-` username prefix) and everything they
