@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/crypto"
@@ -193,4 +195,90 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteInternalError(w, r, err, "could not create the post")
 	}
+}
+
+// Page sizes for GET /api/groups/{groupId}/posts. A post is at most about
+// 14 KB on the wire at the default caps, so a full page of the maximum stays
+// well inside a Lambda response.
+const (
+	defaultPostPageSize = 20
+	maxPostPageSize     = 50
+)
+
+// postEntry is one stored post as the reader needs it. Nothing here is checked
+// by the server beyond what createPost checked when it was written: the reader
+// opens the ciphertext and verifies the signature itself (docs/DESIGN.md,
+// "For the reader").
+type postEntry struct {
+	SortKey      string `json:"sortKey"`
+	AuthorUserID string `json:"authorUserId"`
+	Generation   int64  `json:"generation"`
+	Nonce        string `json:"nonce"`
+	Ciphertext   string `json:"ciphertext"`
+	Signature    string `json:"signature"`
+}
+
+type listPostsResponse struct {
+	Posts      []postEntry `json:"posts"`
+	NextCursor string      `json:"nextCursor,omitempty"`
+}
+
+// listPosts implements GET /api/groups/{groupId}/posts -- #43. Members only,
+// with the roster's 404 for anyone else (a dormant member included: they can
+// read what their keys open, and the client says what it cannot). Newest sort
+// key first; serves the stored rows and verifies nothing.
+func (h *Handler) listPosts(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID := r.PathValue("groupId")
+	if !idgen.ValidUUID(groupID) {
+		groupNotFound(w)
+		return
+	}
+	limit := defaultPostPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxPostPageSize {
+			WriteError(w, http.StatusBadRequest, "limit: must be between 1 and "+strconv.Itoa(maxPostPageSize))
+			return
+		}
+		limit = n
+	}
+	cursor := r.URL.Query().Get("cursor")
+	if cursor != "" {
+		if _, ok := idgen.ValidPostSortKey(cursor); !ok {
+			WriteError(w, http.StatusBadRequest, "cursor: must be a post sort key")
+			return
+		}
+	}
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not list posts")
+		return
+	}
+	if m == nil {
+		groupNotFound(w)
+		return
+	}
+	rows, next, err := h.db.ListPosts(r.Context(), groupID, cursor, limit, time.Now())
+	if err != nil {
+		WriteInternalError(w, r, err, "could not list posts")
+		return
+	}
+	enc := base64.StdEncoding.EncodeToString
+	entries := make([]postEntry, 0, len(rows))
+	for _, p := range rows {
+		entries = append(entries, postEntry{
+			SortKey:      p.SK,
+			AuthorUserID: p.AuthorUserID,
+			Generation:   p.Generation,
+			Nonce:        enc(p.Nonce),
+			Ciphertext:   enc(p.Ciphertext),
+			Signature:    enc(p.Signature),
+		})
+	}
+	WriteJSON(w, http.StatusOK, listPostsResponse{Posts: entries, NextCursor: next})
 }

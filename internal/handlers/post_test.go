@@ -365,3 +365,161 @@ func TestCreatePostResendAfterTheDayAgedOutIsStillOnePost(t *testing.T) {
 		t.Fatalf("%d posts, want 1", n)
 	}
 }
+
+// Listing posts (#43). The server serves the stored rows newest sort key first
+// and verifies nothing; these pin who may read, the paging, and that what a
+// post stored comes back exactly.
+
+func doListPosts(t *testing.T, h *Handler, cookie *http.Cookie, gid, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/groups/"+gid+"/posts"+query, nil)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeList(t *testing.T, rec *httptest.ResponseRecorder) listPostsResponse {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out listPostsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// storePostAt writes a post straight into the table at an address, so a test
+// can lay out several days without signing for each.
+func storePostAt(t *testing.T, gid, sortKey, author string, ttl int64) {
+	t.Helper()
+	item := map[string]types.AttributeValue{
+		"PK": s("GROUP#" + gid), "SK": s(sortKey), "Type": s("POST"),
+		"AuthorUserID": s(author),
+		"Generation":   &types.AttributeValueMemberN{Value: "0"},
+		"Nonce":        &types.AttributeValueMemberB{Value: make([]byte, 12)},
+		"Ciphertext":   &types.AttributeValueMemberB{Value: []byte("ciphertext")},
+		"Signature":    &types.AttributeValueMemberB{Value: []byte("signature")},
+	}
+	if ttl != 0 {
+		item["TTL"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(ttl, 10)}
+	}
+	if _, err := rawDDB(t).PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(testTableName()), Item: item,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListPostsServesWhatWasStoredNewestDayFirst(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	req, _ := signedPost(t, gid, owner, postOpts{})
+	if rec := doPost(t, h, cookie, gid, req); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	storePostAt(t, gid, "POST#2020-01-01#0000000000000001", owner.userID, 0)
+	storePostAt(t, gid, "POST#2020-03-01#0000000000000001", owner.userID, 0)
+
+	out := decodeList(t, doListPosts(t, h, cookie, gid, ""))
+	if len(out.Posts) != 3 {
+		t.Fatalf("got %d posts, want 3", len(out.Posts))
+	}
+	if out.Posts[0].SortKey != req.SortKey || out.Posts[1].SortKey != "POST#2020-03-01#0000000000000001" || out.Posts[2].SortKey != "POST#2020-01-01#0000000000000001" {
+		t.Errorf("order = %s, %s, %s", out.Posts[0].SortKey, out.Posts[1].SortKey, out.Posts[2].SortKey)
+	}
+	first := out.Posts[0]
+	if first.AuthorUserID != owner.userID || first.Generation != 0 || first.Nonce != req.Nonce || first.Ciphertext != req.Ciphertext || first.Signature != req.Signature {
+		t.Errorf("a stored post did not come back exactly: %+v", first)
+	}
+	if out.NextCursor != "" {
+		t.Errorf("nextCursor = %q on the only page", out.NextCursor)
+	}
+}
+
+func TestListPostsPagesByCursorWithoutRepeatsOrGaps(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	var want []string
+	for d := 5; d >= 1; d-- {
+		sk := "POST#2020-01-0" + strconv.Itoa(d) + "#0000000000000001"
+		storePostAt(t, gid, sk, owner.userID, 0)
+		want = append(want, sk)
+	}
+	var got []string
+	cursor := ""
+	for pages := 0; pages < 10; pages++ {
+		q := "?limit=2"
+		if cursor != "" {
+			q += "&cursor=" + cursor
+		}
+		out := decodeList(t, doListPosts(t, h, cookie, gid, q))
+		for _, p := range out.Posts {
+			got = append(got, p.SortKey)
+		}
+		if out.NextCursor == "" {
+			break
+		}
+		cursor = out.NextCursor
+	}
+	if len(got) != len(want) {
+		t.Fatalf("paged %d posts, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("post %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
+func TestListPostsSkipsAPostPastItsTTLAndStillFillsThePage(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	past := time.Now().Add(-time.Hour).Unix()
+	future := time.Now().Add(time.Hour).Unix()
+	storePostAt(t, gid, "POST#2020-01-05#0000000000000001", owner.userID, future)
+	storePostAt(t, gid, "POST#2020-01-04#0000000000000001", owner.userID, past)
+	storePostAt(t, gid, "POST#2020-01-03#0000000000000001", owner.userID, past)
+	storePostAt(t, gid, "POST#2020-01-02#0000000000000001", owner.userID, future)
+	out := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=2"))
+	if len(out.Posts) != 2 || out.Posts[0].SortKey != "POST#2020-01-05#0000000000000001" || out.Posts[1].SortKey != "POST#2020-01-02#0000000000000001" {
+		t.Fatalf("posts = %+v", out.Posts)
+	}
+}
+
+func TestListPostsStaysInsideTheGroupAndTheMembersOnly(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	other := createPrivateGroup(t, h, owner, cookie)
+	storePostAt(t, other, "POST#2020-01-01#0000000000000001", owner.userID, 0)
+	if out := decodeList(t, doListPosts(t, h, cookie, gid, "")); len(out.Posts) != 0 {
+		t.Errorf("another group's post leaked: %+v", out.Posts)
+	}
+	_, strangerCookie := loggedInUser(t, h)
+	if rec := doListPosts(t, h, strangerCookie, other, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("non-member status = %d, want 404", rec.Code)
+	}
+	if rec := doListPosts(t, h, nil, gid, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no session status = %d, want 401", rec.Code)
+	}
+	if rec := doListPosts(t, h, cookie, "not-a-uuid", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("bad group id status = %d, want 404", rec.Code)
+	}
+}
+
+func TestListPostsRefusesABadLimitOrCursor(t *testing.T) {
+	h, gid, _, cookie := postFixture(t)
+	for _, q := range []string{
+		"?limit=0", "?limit=51", "?limit=x", "?limit=-1",
+		"?cursor=DESIGNATION%2321", "?cursor=POST%232026-02-31%2300112233445566ff", "?cursor=POST%232026-10-28%23xyz",
+	} {
+		if rec := doListPosts(t, h, cookie, gid, q); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, rec.Code)
+		}
+	}
+	if rec := doListPosts(t, h, cookie, gid, "?limit=50"); rec.Code != http.StatusOK {
+		t.Errorf("limit=50 status = %d, want 200", rec.Code)
+	}
+}
