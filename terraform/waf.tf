@@ -3,10 +3,15 @@
 # var.aws_region -- same constraint as acm.tf's certificate, and the same
 # aws.use1 provider alias from main.tf.
 #
-# Two AWS managed rule groups (common exploit patterns + known-bad-inputs),
-# plus a rate-based rule scoped to /api/auth/* stricter than the site
-# default. Round 2 review caught this comment previously justifying that
-# rule as a "cost control" against Argon2id compute -- wrong at the time:
+# Two rate-based rules: a site default and one scoped to /api/auth/* and the
+# recovery-code routes, stricter than it. The two AWS managed rule groups
+# (common exploit patterns, known-bad-inputs) were removed to save $2 a
+# month: the API only handles ciphertext and JSON, and the common set's
+# SizeRestrictions_BODY blocks request bodies over 8 KB, which a post near
+# the size cap exceeds. Spend is bounded by costguard.tf, not by this ACL.
+#
+# History of the auth rule: round 2 review caught this comment previously
+# justifying that rule as a "cost control" against Argon2id compute -- wrong at the time:
 # Argon2id ran exclusively in the browser (web/src/lib/crypto/argon2.ts),
 # never on this project's servers, and docs/DESIGN.md said so explicitly
 # ("An attacker hammering the endpoint burns their own CPU, not the
@@ -64,55 +69,6 @@ resource "aws_wafv2_web_acl" "main" {
 
   default_action {
     allow {}
-  }
-
-  # AWS-managed core rule set: SQLi, XSS, and other common exploit patterns
-  # targeting the request line, headers, and body.
-  rule {
-    name     = "aws-common-rule-set"
-    priority = 1
-
-    override_action {
-      none {}
-    }
-
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "undergroundbb-${terraform.workspace}-common"
-      sampled_requests_enabled   = true
-    }
-  }
-
-  # AWS-managed known-bad-inputs rule set: request patterns known to exploit
-  # specific CVEs/vulnerable software, independent of the common rule set
-  # above.
-  rule {
-    name     = "aws-known-bad-inputs"
-    priority = 2
-
-    override_action {
-      none {}
-    }
-
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesKnownBadInputsRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "undergroundbb-${terraform.workspace}-known-bad-inputs"
-      sampled_requests_enabled   = true
-    }
   }
 
   # Site-default rate limit: generous, exists mainly to bound abusive
