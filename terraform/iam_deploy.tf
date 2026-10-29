@@ -447,8 +447,10 @@ resource "aws_iam_role_policy" "deploy" {
 # log group and EventBridge schedule. A SEPARATE policy resource from
 # deploy_policy, for a self-grant ordering reason: Terraform cannot know the
 # deploy role must grant itself a permission before a resource that needs it
-# runs, and depending on the combined deploy_policy would close a cycle
-# through CloudFront's web_acl_id. Every purge.tf resource depends_on this
+# runs, so each such resource needs a depends_on edge to the grant. A narrow
+# policy keeps that edge from pulling in all of deploy_policy (for the old
+# WAF managed-rule-set grant that edge closed a real cycle through
+# CloudFront's web_acl_id). Every purge.tf resource depends_on this
 # policy, so the deploy role holds these permissions before the apply first
 # needs them. That also means this document must not reference any purge.tf
 # resource (their ARNs are built from local.purge_name instead): a reference
