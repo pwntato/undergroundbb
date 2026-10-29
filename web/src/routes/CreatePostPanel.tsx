@@ -44,7 +44,7 @@ export function CreatePostPanel({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex w-full flex-col gap-4 text-left">
+    <form onSubmit={handleSubmit} className="flex w-full max-w-xl flex-col gap-4 text-left">
       {message !== null && (
         <Alert>
           <AlertDescription>{message}</AlertDescription>
