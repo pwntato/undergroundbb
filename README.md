@@ -275,12 +275,16 @@ which caps Lambda and DynamoDB spend. A CloudWatch alarm on its invocations
 spend (`var.cost_guard_budget_usd`, default 20; whole account) publish to one SNS topic that invokes
 `cmd/costguard`, which sets the web Lambda's reserved concurrency to 0. The static site stays up and the
 API answers with errors until the switch is re-armed. A deploy re-arms it (terraform restores
-`var.web_max_concurrency`), so do not deploy while an attack is still running; by hand:
+`var.web_max_concurrency`), so do not deploy while an attack is still running. To re-arm by hand,
+first check that the alarm is back to OK (CloudWatch runs an alarm's actions only on a state change, so
+an alarm still in ALARM cannot trip again, and a flood that is still going keeps it there):
+`aws cloudwatch describe-alarms --alarm-names undergroundbb-costguard-<workspace>-invocations --query 'MetricAlarms[0].StateValue'`;
+then:
 `aws lambda put-function-concurrency --function-name undergroundbb-<workspace> --reserved-concurrent-executions 50`.
 The alarm is the fast trip (minutes); Budgets data lags by hours, so the budget is the backstop. The
 budget notifies once per month after it crosses the limit, so after a trip and a mid-month re-arm only
 the alarm can trip again until next month, and it counts the whole account's spend, not just this
-project's. The trade-off is deliberate: a flood of about 20,000 requests in five minutes from a handful of
+project's. The trade-off is deliberate: a flood of about 20,000 requests in five minutes from 10 or more
 IPs, each under the WAF's per-IP rate rule, takes the API down until a deploy or a manual re-arm. That
 costs availability, not money, which is the right failure at this budget. Not
 covered by the alarm: requests CloudFront or WAF answer without reaching the Lambda are billed but not
