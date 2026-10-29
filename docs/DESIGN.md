@@ -121,14 +121,27 @@ use, which is the group's settled generation, one below a running rotation's; th
 its day is within the usual clock tolerance of today; the nonce is 12 bytes and the ciphertext is within the
 limit; and the signature verifies under the author's **current** signing key over
 `crypto.SignedPayload(author, group, sort key, generation, day, ciphertext)`. The membership, the entry's
-generation and `WrapEpoch`, and the account's `KeyEpoch` are re-checked in the write's own transaction. The TTL
+generation and `WrapEpoch`, the account's `KeyEpoch` **and the group's rotation marker** are re-checked in the
+write's own transaction: without the marker, a post sealed for the generation a running rotation is leaving could
+commit after that rotation completed, on the key the removed member holds. A marker that appears, vanishes or
+moves in the window fails the write (409 `generation_stale`) and the client reseals. The TTL
 is the group's `ExpirationDays` from now, rounded up to the end of its UTC day (none for a group that never
-expires). The same bytes sent twice are one post (a lost response is resent as is); the same address with
-anything different is 409 `post_exists`.
+expires). The same bytes sent twice are one post (a lost response is resent as is), and a resend is answered
+by what was written **before** the generation and day checks: the first send may have committed, and a rotation
+may have completed or the day passed since, so refusing the resend would make the client seal a second post. The
+same address with anything different is 409 `post_exists`, and a different post at an aged address is still
+refused.
 
 **What it cannot check.** That the ciphertext opens, or that it holds what the form said: a patched client can
 store garbage under a valid signature, which readers must treat as an unreadable post, not as a failure of the
 group. `AAD` is `GROUP#<gid>:<sort key>:GEN#<nnnnnn>` (`crypto.PostAAD`, vectors `post_aad`).
+
+**For the reader (#43).** Two things the signature does not give it. (1) The author signs whatever `at` they
+like: a reader must check that the decrypted `at` falls on the sort key's day and show a post that does not as
+suspect, not trust the time. (2) `SignedPayload` covers the ciphertext hash but not the nonce, so someone with
+write access to the table can swap a post's nonce and make a validly signed post fail to open. Changing
+`SignedPayload` is not worth it for this, but the reader must show a post that does not open as **unreadable**,
+in wording that does not blame its author.
 
 ### Login
 
