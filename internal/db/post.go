@@ -88,7 +88,7 @@ func (c *Client) CreatePost(ctx context.Context, in CreatePostInput) error {
 		{ConditionCheck: &types.ConditionCheck{
 			TableName:                aws.String(c.table),
 			Key:                      memberKey(in.GroupID, in.AuthorUserID),
-			ConditionExpression:      aws.String("attribute_exists(PK) AND #gen >= :gen AND " + epochEquals("WrapEpoch", ":wep", in.AuthorKeyEpoch)),
+			ConditionExpression:      aws.String("#gen >= :gen AND " + epochEquals("WrapEpoch", ":wep", in.AuthorKeyEpoch)),
 			ExpressionAttributeNames: map[string]string{"#gen": "Generation"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":gen": genAttr(in.Generation),
