@@ -384,6 +384,19 @@ type groupNameVector struct {
 	CiphertextHex string `json:"ciphertext_hex"`
 }
 
+// postAADVector proves PostAAD's exact encoding (#42).
+type postAADVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	SortKey       string `json:"sort_key"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
 // inviteCreationVector proves InviteCreationPayload's exact encoding (#38)
 // -- the invite handshake's step-1 signed payload. Note there is no
 // ephemeral_pubkey field: docs/DESIGN.md's now-resolved open question
@@ -454,6 +467,7 @@ type vectorFile struct {
 	HandoffWrap          []handoffWrapVector          `json:"handoff_wrap_aad"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
+	PostAAD              []postAADVector              `json:"post_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
@@ -1214,6 +1228,40 @@ func main() {
 				AADHex:        hex.EncodeToString(aad),
 				KeyHex:        hex.EncodeToString(key),
 				PlaintextHex:  hex.EncodeToString(tc.plaintext),
+				NonceHex:      hex.EncodeToString(nonce),
+				CiphertextHex: hex.EncodeToString(ciphertext),
+			})
+		}
+	}
+
+	// --- Post AAD (#42) ---
+	{
+		groupID := "group-uuid-2"
+		key := fixedSeed("post-aad-key-1")[:crypto.KeySize]
+		for _, tc := range []struct {
+			name       string
+			sortKey    string
+			generation uint64
+			nonceLabel string
+		}{
+			{"generation_0", "POST#2026-10-28#00112233445566ff", 0, "post-aad-nonce-0"},
+			{"generation_3", "POST#2026-10-28#00112233445566ff", 3, "post-aad-nonce-3"},
+		} {
+			plaintext := []byte(`{"title":"Hello","body":"First post","at":"2026-10-28T12:34:56.789Z"}`)
+			aad := crypto.PostAAD(groupID, tc.sortKey, tc.generation)
+			nonce := fixedSeed(tc.nonceLabel)[:crypto.NonceSize]
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.PostAAD = append(out.PostAAD, postAADVector{
+				Name:          tc.name,
+				GroupID:       groupID,
+				SortKey:       tc.sortKey,
+				Generation:    tc.generation,
+				AADHex:        hex.EncodeToString(aad),
+				KeyHex:        hex.EncodeToString(key),
+				PlaintextHex:  hex.EncodeToString(plaintext),
 				NonceHex:      hex.EncodeToString(nonce),
 				CiphertextHex: hex.EncodeToString(ciphertext),
 			})

@@ -968,3 +968,21 @@ type RotationCooldown struct {
 
 	TTL int64 `dynamodbav:"TTL"`
 }
+
+// Post is the GROUP#<gid> / POST#<YYYY-MM-DD, UTC>#<rand> item (#42). The title,
+// body and exact time are one AES-256-GCM ciphertext under the group key at
+// Generation, bound to the item's address by crypto.PostAAD and signed by
+// AuthorUserID over crypto.SignedPayload. The sort key discloses only the day;
+// the server never holds the exact time. TTL is the group's ExpirationDays
+// from the write, rounded up to the end of its UTC day, and is absent for a
+// group that never expires.
+type Post struct {
+	Record
+
+	AuthorUserID string `dynamodbav:"AuthorUserID"`
+	Generation   int64  `dynamodbav:"Generation"`
+	Nonce        []byte `dynamodbav:"Nonce"`
+	Ciphertext   []byte `dynamodbav:"Ciphertext"`
+	Signature    []byte `dynamodbav:"Signature"`
+	TTL          int64  `dynamodbav:"TTL,omitempty"`
+}

@@ -17,6 +17,7 @@ import {
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
+  postAAD,
   roleGrantPayload,
   successorClaimPayload,
   admissionPayload,
@@ -28,6 +29,7 @@ import {
   type RekeyReason,
 } from './group.js'
 import { fingerprint } from './fingerprint.js'
+import { bytesToHex } from './hex.js'
 import { handoffWrapAAD } from './key-rotation.js'
 import {
   computeInviteMAC,
@@ -38,6 +40,8 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
+import { encodePost } from './post.js'
+import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
 import {
   deriveRecoveryVerifier,
@@ -1165,6 +1169,75 @@ async function decryptOneGroupName(
     // decryptGroupNames) for why one group's decrypt failure surfaces as
     // null fields here rather than rejecting the whole batch.
     return { groupId: group.groupId, name: null, description: null }
+  }
+}
+
+/**
+ * #42: seals and signs a post. Unwraps the caller's own entry (generation
+ * `generation`), walks the GENKEY# links down to `postGeneration` -- the key new
+ * posts use, one below the caller's own while a rotation runs -- then seals
+ * title, body and the exact time under a fresh random IV with
+ * postAAD(group, sortKey, postGeneration), and signs the address-bound payload
+ * (author, group, sort key, generation, UTC day, ciphertext hash) under the
+ * caller's current signing key. The sort key is chosen here, because the
+ * signature covers it: `POST#<UTC day>#<16 hex>`.
+ */
+export async function sealPost(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly generation: number
+    readonly postGeneration: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly title: string
+    readonly body: string
+  },
+  now: Date = new Date(),
+): Promise<{
+  sortKey: string
+  generation: number
+  nonce: string
+  ciphertext: string
+  signature: string
+}> {
+  const ownKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    {
+      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+    },
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  const groupKey = await walkChainDown(
+    ownKey,
+    req.groupId,
+    req.generation,
+    req.postGeneration,
+    req.chain ?? [],
+  )
+  const day = now.toISOString().slice(0, 10)
+  const sortKey = `POST#${day}#${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`
+  const sealed = await encrypt(
+    groupKey,
+    encodePost({ title: req.title, body: req.body, at: now.toISOString() }),
+    postAAD(req.groupId, sortKey, req.postGeneration),
+  )
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.Post,
+    signedPayload(keys.userId, req.groupId, sortKey, req.postGeneration, day, sealed.ciphertext),
+  )
+  return {
+    sortKey,
+    generation: req.postGeneration,
+    nonce: bytesToBase64(sealed.nonce),
+    ciphertext: bytesToBase64(sealed.ciphertext),
+    signature: bytesToBase64(signature),
   }
 }
 

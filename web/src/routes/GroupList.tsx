@@ -50,6 +50,12 @@ export function GroupList({
               <span className="font-medium">{groupLabel(group)}</span>
               <span className="flex items-center gap-2">
                 <Link
+                  to={`/groups/${group.groupId}/posts/new`}
+                  className="text-xs text-primary underline-offset-4 hover:underline"
+                >
+                  Write a post
+                </Link>
+                <Link
                   to={`/groups/${group.groupId}/members`}
                   className="text-xs text-primary underline-offset-4 hover:underline"
                 >

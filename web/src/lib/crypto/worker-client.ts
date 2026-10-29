@@ -38,6 +38,9 @@ import type {
   DecryptGroupNamesResponse,
   EncryptGroupTextRequest,
   EncryptGroupTextResponse,
+  SealPostRequest,
+  SealPostResponse,
+  SealedPost,
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
   RecoveryMaterial,
@@ -897,6 +900,39 @@ export function encryptGroupText(req: Omit<EncryptGroupTextRequest, 'kind' | 'id
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for encryptGroupText`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Seals and signs a post -- #42. Rejects if liveKeys is cold, a key rotation is
+ * running in this tab, or the wrap or a chain link does not open; see
+ * credential-material.ts's sealPost.
+ */
+export function sealPost(req: Omit<SealPostRequest, 'kind' | 'id'>): Promise<SealedPost> {
+  const id = nextRequestID()
+  const fullReq: SealPostRequest = { kind: 'sealPost', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'sealPostDone') {
+        resolve((msg as SealPostResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPost`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

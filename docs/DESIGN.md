@@ -95,6 +95,54 @@ comment, whose sort key does not**: it is what tells a verifier which key interv
 comment's signature against, and covering it by the signature keeps the server from choosing. A signature covering
 only the plaintext body would survive relocation: real author, real content, rewritten context.
 
+### Posts
+
+`POST /api/groups/{gid}/posts` (#42) stores one item, `GROUP#<gid>` / `POST#<YYYY-MM-DD, UTC>#<16 hex>`,
+with the author's id, the generation, the IV, the ciphertext and the signature. The client chooses the
+sort key, because the signature covers it; the day in it is the only time the server holds.
+
+**The plaintext is binary, not JSON.** `0x01`, then the title, the body and the exact write time (RFC 3339 UTC
+with milliseconds, 24 bytes), each with a 4-byte big-endian length. The overhead is 37 bytes plus the 16-byte
+GCM tag. JSON would escape a byte into as many as six, and the server can only see ciphertext, so its size
+limit would have to be that much looser to be safe; with this layout the limit is the two field caps plus a
+64-byte allowance (`handlers.postEnvelopeOverhead`), and the cap means what it says. The layout is pinned
+by `web/src/lib/crypto/post.test.ts` and must not change once real posts exist.
+
+**Size caps are bytes, and configurable.** `MAX_POST_TITLE_BYTES` (default 200) and `MAX_POST_BODY_BYTES`
+(default 10,000) are served in `GET /api/config`; the compose form enforces each exactly, the server
+enforces their sum as a ciphertext limit. 10,000 bytes is about 7.5 KB of binary whatever the alphabet. A cap
+bounds what a post can hold; it cannot inspect it, since the server never sees plaintext. The other half of
+the protection is structural: posts are plain text, the client never renders a body as markup or loads
+anything from it, and there are no attachments.
+
+**What the server checks.** The caller is a current member, not dormant, whose entry is at or above the post's
+generation (a member ahead of it opens the older key through the chain); the generation is the one new posts
+use, which is the group's settled generation, one below a running rotation's; the sort key is well formed and
+its day is within the usual clock tolerance of today; the nonce is 12 bytes and the ciphertext is within the
+limit; and the signature verifies under the author's **current** signing key over
+`crypto.SignedPayload(author, group, sort key, generation, day, ciphertext)`. The membership, the entry's
+generation and `WrapEpoch`, the account's `KeyEpoch` **and the group's rotation marker** are re-checked in the
+write's own transaction: without the marker, a post sealed for the generation a running rotation is leaving could
+commit after that rotation completed, on the key the removed member holds. A marker that appears, vanishes or
+moves in the window fails the write (409 `generation_stale`) and the client reseals. The TTL
+is the group's `ExpirationDays` from now, rounded up to the end of its UTC day (none for a group that never
+expires). The same bytes sent twice are one post (a lost response is resent as is), and a resend is answered
+by what was written **before** the generation and day checks: the first send may have committed, and a rotation
+may have completed or the day passed since, so refusing the resend would make the client seal a second post. The
+same address with anything different is 409 `post_exists`, and a different post at an aged address is still
+refused.
+
+**What it cannot check.** That the ciphertext opens, or that it holds what the form said: a patched client can
+store garbage under a valid signature, which readers must treat as an unreadable post, not as a failure of the
+group. `AAD` is `GROUP#<gid>:<sort key>:GEN#<nnnnnn>` (`crypto.PostAAD`, vectors `post_aad`).
+
+**For the reader (#43).** Two things the signature does not give it. (1) The author signs whatever `at` they
+like: a reader must check that the decrypted `at` falls on the sort key's day and show a post that does not as
+suspect, not trust the time. (2) `SignedPayload` covers the ciphertext hash but not the nonce, so someone with
+write access to the table can swap a post's nonce and make a validly signed post fail to open. Changing
+`SignedPayload` is not worth it for this, but the reader must show a post that does not open as **unreadable**,
+in wording that does not blame its author.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
@@ -800,9 +848,9 @@ signer, so the holder of an old private key can sign a grant or comment dated in
 interval, and a verifier that accepts any key current on that day will accept it. What stops it is
 on the write path: the server refuses a day outside its skew tolerance of its own clock (it does
 today for grants, claims, designations, admissions and readmits), and the rotation signs the
-session out. For items that do not exist yet, **posts and comments, the handlers must also check
-the signature against the user's current key**; that is a requirement on them, not behaviour on
-main. An attacker without the operator's database access then cannot land a backdated item. **An
+session out. **Posts and comments, the handlers must also check
+the signature against the user's current key**; the post handler does (#42), and the comment handler,
+not built yet, must. An attacker without the operator's database access then cannot land a backdated item. **An
 operator can**, and for grants and comments that is the existing by-day retention design, which
 this does not change; it is stated in the threat model rather than treated as the same boundary.
 Pins and verification records are different, and are handled below. On the rotation day itself both

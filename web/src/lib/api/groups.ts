@@ -807,3 +807,29 @@ export function convertToOpen(groupId: string): Promise<void> {
 export function takeOverRotation(groupId: string, req: TakeOverRotationRequest): Promise<void> {
   return sendNoContent('POST', `/api/groups/${encodeURIComponent(groupId)}/rotation/takeover`, req)
 }
+
+/**
+ * POST /api/groups/{id}/posts -- #42. The body is a sealed post
+ * (credential-material.ts's sealPost). Idempotent for the same bytes, so a
+ * lost response is resent as-is. Refusals carry a code: generation_stale,
+ * member_behind, member_dormant, membership_changed, key_epoch_stale,
+ * post_exists, conflict_retry (all 409), bad_signature (400).
+ */
+export interface CreatePostRequest {
+  readonly sortKey: string
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+export async function createPost(
+  groupId: string,
+  req: CreatePostRequest,
+): Promise<{ sortKey: string }> {
+  return putOrPostJSON<{ sortKey: string }>(
+    'POST',
+    `/api/groups/${encodeURIComponent(groupId)}/posts`,
+    req,
+  )
+}

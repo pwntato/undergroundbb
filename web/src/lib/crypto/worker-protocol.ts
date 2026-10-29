@@ -821,6 +821,39 @@ export interface EncryptGroupTextRequest {
   readonly description: string
 }
 
+/**
+ * #42: seals and signs a post. See credential-material.ts's sealPost. `chain`
+ * holds the GENKEY# links from `postGeneration` to the caller's own
+ * `generation` when the two differ (a rotation is running and the caller has
+ * already been moved up). Same userId/liveKeys guards as the other signing ops.
+ */
+export interface SealPostRequest {
+  readonly kind: 'sealPost'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly generation: number
+  readonly postGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly title: string
+  readonly body: string
+}
+
+export interface SealedPost {
+  readonly sortKey: string
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+export interface SealPostResponse {
+  readonly kind: 'sealPostDone'
+  readonly id: string
+  readonly result: SealedPost
+}
+
 export interface EncryptGroupTextResponse {
   readonly kind: 'encryptGroupTextDone'
   readonly id: string
@@ -946,6 +979,7 @@ export type WorkerRequest =
   | HasLiveKeysRequest
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
+  | SealPostRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
@@ -981,6 +1015,7 @@ export type WorkerResponse =
   | HasLiveKeysResponse
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
+  | SealPostResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse

@@ -41,6 +41,7 @@ type vectorFile struct {
 	HandoffWrap          []handoffWrapVector          `json:"handoff_wrap_aad"`
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
+	PostAAD              []postAADVector              `json:"post_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
@@ -333,6 +334,18 @@ type groupNameVector struct {
 	Name          string `json:"name"`
 	GroupID       string `json:"group_id"`
 	Field         string `json:"field"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+type postAADVector struct {
+	Name          string `json:"name"`
+	GroupID       string `json:"group_id"`
+	SortKey       string `json:"sort_key"`
 	Generation    uint64 `json:"generation"`
 	AADHex        string `json:"aad_hex"`
 	KeyHex        string `json:"key_hex"`
@@ -1101,6 +1114,39 @@ func TestVectorMemberWrap(t *testing.T) {
 			}
 			if !bytes.Equal(decrypted, plaintext) {
 				t.Fatalf("Decrypt = %x, want %x", decrypted, plaintext)
+			}
+		})
+	}
+}
+
+// TestVectorPostAAD pins PostAAD's exact encoding (#42), and that a post
+// ciphertext does not open under another generation's AAD.
+func TestVectorPostAAD(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.PostAAD) < 2 {
+		t.Fatalf("expected at least 2 post_aad vectors, got %d", len(v.PostAAD))
+	}
+	for _, tc := range v.PostAAD {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := PostAAD(tc.GroupID, tc.SortKey, tc.Generation)
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("PostAAD = %x, want %x", gotAAD, wantAAD)
+			}
+			key, nonce := mustHex(t, tc.KeyHex), mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			got, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, mustHex(t, tc.CiphertextHex)) {
+				t.Fatalf("EncryptWithNonce = %x, want %s", got, tc.CiphertextHex)
+			}
+			if _, err := Decrypt(key, nonce, got, PostAAD(tc.GroupID, tc.SortKey, tc.Generation+1)); err == nil {
+				t.Fatal("opened under another generation's AAD")
+			}
+			if _, err := Decrypt(key, nonce, got, PostAAD(tc.GroupID, "POST#2026-10-29#00112233445566ff", tc.Generation)); err == nil {
+				t.Fatal("opened under another day's sort key")
 			}
 		})
 	}

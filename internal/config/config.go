@@ -57,6 +57,15 @@ type Config struct {
 	// belongs to to act, so an uncapped rotation is a way to keep those groups
 	// busy; docs/DESIGN.md sets it at 24 hours.
 	KeyRotationCooldown time.Duration
+	// MaxPostTitleBytes and MaxPostBodyBytes cap a post's title and body in
+	// UTF-8 bytes (#42). The server only ever sees ciphertext, so it enforces
+	// the sum plus a fixed envelope overhead (handlers postCiphertextLimit); the compose
+	// form enforces each field. Bytes, not characters, because the cap is
+	// there to bound size: 10,000 bytes is the same ~7.5 KB of binary
+	// whatever the alphabet. Raise them with the item size limit in mind
+	// (DynamoDB items are capped at 400 KB).
+	MaxPostTitleBytes int
+	MaxPostBodyBytes  int
 
 	// SessionSecret is the HMAC key session.Signer uses to issue and verify
 	// login session cookies -- see internal/session. Treat it as a
@@ -96,6 +105,13 @@ const (
 	// is almost certainly a typo.
 	MinRotatingGroupMembers        = 2
 	MaxRotatingGroupMembersCeiling = 10000
+	// DefaultMaxPostTitleBytes and DefaultMaxPostBodyBytes are the post size
+	// caps' defaults; the Min/Max pairs bound the settings.
+	DefaultMaxPostTitleBytes = 200
+	DefaultMaxPostBodyBytes  = 10000
+	MinPostFieldBytes        = 1
+	MaxPostTitleBytesCeiling = 2000
+	MaxPostBodyBytesCeiling  = 100000
 )
 
 // DefaultSessionTTL is SessionTTL's default: 24 hours. docs/DESIGN.md pins
@@ -140,6 +156,8 @@ func FromEnv() Config {
 		DefaultExpirationDays:   expirationDaysEnvOrDefault("DEFAULT_EXPIRATION_DAYS", DefaultExpirationDays),
 		MaxRotatingGroupMembers: rotatingGroupMembersEnvOrDefault("MAX_ROTATING_GROUP_MEMBERS", DefaultMaxRotatingGroupMembers),
 		KeyRotationCooldown:     keyRotationCooldownEnvOrDefault("KEY_ROTATION_COOLDOWN_HOURS", DefaultKeyRotationCooldown),
+		MaxPostTitleBytes:       postBytesEnvOrDefault("MAX_POST_TITLE_BYTES", DefaultMaxPostTitleBytes, MaxPostTitleBytesCeiling),
+		MaxPostBodyBytes:        postBytesEnvOrDefault("MAX_POST_BODY_BYTES", DefaultMaxPostBodyBytes, MaxPostBodyBytesCeiling),
 		SessionSecret:           sessionSecretBytes,
 		SessionTTL:              sessionTTLEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
 	}
@@ -264,6 +282,23 @@ func rotatingGroupMembersEnvOrDefault(key string, def int) int {
 	case n > MaxRotatingGroupMembersCeiling:
 		log.Printf("warning: %s=%d exceeds the maximum of %d, using the maximum", key, n, MaxRotatingGroupMembersCeiling)
 		return MaxRotatingGroupMembersCeiling
+	}
+	return int(n)
+}
+
+// postBytesEnvOrDefault reads a post field cap. Unset or unparseable falls
+// back to def; a value outside [MinPostFieldBytes, ceiling] is clamped with a
+// warning, like the other tuning knobs. The ceiling keeps a typo from
+// approaching DynamoDB's item size limit.
+func postBytesEnvOrDefault(key string, def, ceiling int) int {
+	n := Int64EnvOrDefault(key, int64(def))
+	switch {
+	case n < MinPostFieldBytes:
+		log.Printf("warning: %s=%d is below the minimum of %d, using the minimum", key, n, MinPostFieldBytes)
+		return MinPostFieldBytes
+	case n > int64(ceiling):
+		log.Printf("warning: %s=%d exceeds the maximum of %d, using the maximum", key, n, ceiling)
+		return ceiling
 	}
 	return int(n)
 }
