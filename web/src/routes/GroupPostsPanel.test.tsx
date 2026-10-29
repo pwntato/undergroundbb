@@ -27,7 +27,7 @@ function post(over: Partial<PostView> = {}): PostView {
 
 function render(
   posts: readonly PostView[],
-  over: { loading?: boolean; error?: string; more?: boolean } = {},
+  over: { loading?: boolean; error?: string; more?: boolean; retry?: boolean } = {},
 ) {
   return renderToStaticMarkup(
     createElement(
@@ -40,6 +40,7 @@ function render(
         error: over.error ?? null,
         hasMore: over.more ?? false,
         onLoadMore: () => {},
+        ...(over.retry === true && { onRetry: () => {} }),
       }),
     ),
   )
@@ -153,5 +154,11 @@ describe('GroupPostsPanel', () => {
     const html = render([])
     expect(html).toContain('href="/groups/g1/posts/new"')
     expect(html).toContain('href="/"')
+  })
+
+  it('offers Try again only when asked to, and not while loading', () => {
+    expect(render([], { error: 'Failed' })).not.toContain('Try again')
+    expect(render([], { error: 'Failed', retry: true })).toContain('Try again')
+    expect(render([], { error: 'Failed', retry: true, loading: true })).not.toContain('Try again')
   })
 })

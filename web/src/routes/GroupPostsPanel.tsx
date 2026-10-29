@@ -21,6 +21,7 @@ export function GroupPostsPanel({
   error,
   hasMore,
   onLoadMore,
+  onRetry,
 }: {
   readonly groupId: string
   readonly posts: readonly PostView[]
@@ -28,6 +29,8 @@ export function GroupPostsPanel({
   readonly error: string | null
   readonly hasMore: boolean
   readonly onLoadMore: () => void
+  /** Set when the first page failed and there is nothing yet to load more from. */
+  readonly onRetry?: (() => void) | undefined
 }) {
   return (
     <div className="flex w-full max-w-xl flex-col gap-4 text-left">
@@ -60,6 +63,11 @@ export function GroupPostsPanel({
           ))}
         </article>
       ))}
+      {onRetry !== undefined && !loading && (
+        <Button type="button" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
       {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {hasMore && !loading && (
         <Button type="button" variant="outline" onClick={onLoadMore}>

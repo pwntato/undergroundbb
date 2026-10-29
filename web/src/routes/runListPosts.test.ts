@@ -241,6 +241,53 @@ describe('loadPostsPage', () => {
     expect(views(res)[0]!.signature).toMatchObject({ kind: 'unchecked' })
   })
 
+  it('tries again on the next author after your own keys or pins could not be read', async () => {
+    const deps = depsFor({ posts: [], pins: [pinOf(ALICE, aliceKey)] })
+    deps.listPins.mockRejectedValueOnce(new Error('blip'))
+    const resolve = makeAuthorResolver(deps)
+    const first = await resolve(ALICE)
+    expect(first).toMatchObject({ kind: 'unchecked' })
+    const again = await resolve(ALICE)
+    expect(again).toMatchObject({ kind: 'keys', anchor: 'pinned' })
+    expect(deps.listPins).toHaveBeenCalledTimes(2)
+  })
+
+  it('tries an author again after their keys could not be read, and keeps a changed key refused', async () => {
+    const deps = depsFor({ posts: [], pins: [pinOf(ALICE, generateSigningKey())] })
+    deps.getUserDetail.mockRejectedValueOnce(new Error('blip'))
+    const resolve = makeAuthorResolver(deps)
+    expect(await resolve(ALICE)).toMatchObject({ kind: 'unchecked', username: null })
+    // The second try reads the keys, which differ from the pin: refused, and remembered.
+    expect(await resolve(ALICE)).toMatchObject({
+      kind: 'unchecked',
+      reason: expect.stringContaining('changed'),
+    })
+    await resolve(ALICE)
+    expect(deps.getUserDetail).toHaveBeenCalledTimes(2)
+  })
+
+  it('sorts a post with a suspect time after the trusted ones and before unreadable', async () => {
+    const trusted = wirePost(ALICE, aliceKey, '2026-10-28')
+    const suspect = wirePost(ALICE, aliceKey, '2026-10-28')
+    const unreadable = wirePost(ALICE, aliceKey, '2026-10-28')
+    const at: Record<string, OpenedPost> = {
+      [trusted.sortKey]: opened('2026-10-28T01:00:00.000Z'),
+      [suspect.sortKey]: opened('2026-10-28T23:00:00.000Z'),
+      [unreadable.sortKey]: { kind: 'unreadable' },
+    }
+    // The suspect post claims a later time than the trusted one; its time is not on the day.
+    at[suspect.sortKey] = opened('9999-12-31T23:59:59.000Z')
+    const { res } = await load({
+      posts: [unreadable, suspect, trusted],
+      open: (p) => at[p.sortKey]!,
+    })
+    expect(views(res).map((v) => v.sortKey)).toEqual([
+      trusted.sortKey,
+      suspect.sortKey,
+      unreadable.sortKey,
+    ])
+  })
+
   it('orders by day as served, and within a day by the decrypted time, unreadable last', async () => {
     const d2a = wirePost(ALICE, aliceKey, '2026-10-29')
     const d2b = wirePost(ALICE, aliceKey, '2026-10-29')

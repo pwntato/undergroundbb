@@ -133,6 +133,13 @@ export type PageResult =
  */
 export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Promise<AuthorCheck> {
   const cache = new Map<string, Promise<AuthorCheck>>()
+  // Answers that came from a failed read, not from the keys: asked again next page.
+  const transient = new WeakSet<AuthorCheck>()
+  const couldNotRead = (reason: string, username: string | null): AuthorCheck => {
+    const check: AuthorCheck = { kind: 'unchecked', reason, username }
+    transient.add(check)
+    return check
+  }
   let ground:
     | Promise<{
         own: Uint8Array
@@ -147,7 +154,12 @@ export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Pro
       const history = (await deps.loadOwnKeyHistory?.(own)) ?? undefined
       return { own, pins, history }
     })()
-    return ground
+    // A failed read is not remembered: the next author tries again.
+    const attempt = ground
+    attempt.catch(() => {
+      if (ground === attempt) ground = undefined
+    })
+    return attempt
   }
 
   async function resolve(userId: string): Promise<AuthorCheck> {
@@ -155,7 +167,7 @@ export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Pro
     try {
       served = await deps.getUserDetail(userId)
     } catch {
-      return { kind: 'unchecked', reason: 'their keys could not be read', username: null }
+      return couldNotRead('their keys could not be read', null)
     }
     const username = served.username === '' ? null : served.username
     const keys: AuthorKeys = {
@@ -166,11 +178,7 @@ export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Pro
     try {
       g = await readGround()
     } catch {
-      return {
-        kind: 'unchecked',
-        reason: 'your own keys or saved keys could not be read',
-        username,
-      }
+      return couldNotRead('your own keys or saved keys could not be read', username)
     }
     if (userId === deps.selfUserId) {
       return sameKey(served.signingPublicKey, g.own)
@@ -203,11 +211,10 @@ export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Pro
           served.keyEpoch,
         )
       } catch {
-        return {
-          kind: 'unchecked',
-          reason: 'their keys could not be saved, so nothing vouches for them yet',
+        return couldNotRead(
+          'their keys could not be saved, so nothing vouches for them yet',
           username,
-        }
+        )
       }
       return { kind: 'keys', keys, anchor: 'first-seen', username }
     }
@@ -217,12 +224,14 @@ export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Pro
   return (userId) => {
     let found = cache.get(userId)
     if (found === undefined) {
-      found = resolve(userId).catch((): AuthorCheck => ({
-        kind: 'unchecked',
-        reason: 'their keys could not be read',
-        username: null,
-      }))
-      cache.set(userId, found)
+      const attempt = resolve(userId).catch((): AuthorCheck =>
+        couldNotRead('their keys could not be read', null),
+      )
+      found = attempt
+      cache.set(userId, attempt)
+      void attempt.then((check) => {
+        if (transient.has(check) && cache.get(userId) === attempt) cache.delete(userId)
+      })
     }
     return found
   }
@@ -355,7 +364,15 @@ function viewOf(p: WirePost, o: OpenedPost, author: AuthorCheck, groupId: string
   }
 }
 
-/** Keeps the server's day order; inside a day, opened posts newest time first, unreadable last. */
+function trustRank(c: PostView['content']): number {
+  if (c.kind === 'unreadable') return 2
+  return c.timeSuspect ? 1 : 0
+}
+
+/**
+ * Keeps the server's day order; inside a day, posts with a trusted time newest
+ * first, then posts whose time is suspect, then unreadable ones.
+ */
 function orderWithinDays(views: readonly PostView[]): PostView[] {
   const days: PostView[][] = []
   for (const v of views) {
@@ -369,8 +386,11 @@ function orderWithinDays(views: readonly PostView[]): PostView[] {
       .sort((a, b) => {
         const ca = a.v.content
         const cb = b.v.content
-        if (ca.kind !== cb.kind) return ca.kind === 'opened' ? -1 : 1
-        if (ca.kind === 'opened' && cb.kind === 'opened' && ca.at !== cb.at) {
+        const ra = trustRank(ca)
+        const rb = trustRank(cb)
+        if (ra !== rb) return ra - rb
+        // Only a trusted time orders posts; a suspect one keeps the served order.
+        if (ca.kind === 'opened' && cb.kind === 'opened' && ra === 0 && ca.at !== cb.at) {
           return ca.at < cb.at ? 1 : -1
         }
         return a.i - b.i

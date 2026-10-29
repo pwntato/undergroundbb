@@ -106,12 +106,17 @@ function PostsList({
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // The first page failed in a way another try can fix: there is no "Load older
+  // posts" button yet to try again with.
+  const [canRetry, setCanRetry] = useState(false)
 
   const apply = useCallback(
     (result: PageResult) => {
       setLoading(false)
+      setCanRetry(false)
       if (!result.ok) {
         setError(PAGE_ERRORS[result.kind])
+        setCanRetry(result.kind === 'failed' || result.kind === 'chain')
         if (result.kind === 'coldKeys') onColdKeys()
         return
       }
@@ -142,6 +147,15 @@ function PostsList({
       loading={loading}
       error={error}
       hasMore={cursor !== undefined}
+      onRetry={
+        canRetry && cursor === undefined && posts.length === 0
+          ? () => {
+              setLoading(true)
+              setError(null)
+              void loadPostsPage(reader.deps, reader.resolveAuthor, groupId).then(apply)
+            }
+          : undefined
+      }
       onLoadMore={() => {
         setLoading(true)
         setError(null)
