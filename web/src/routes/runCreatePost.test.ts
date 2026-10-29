@@ -183,10 +183,16 @@ describe('sendPost', () => {
       'membership_changed',
       'key_epoch_stale',
       'post_exists',
-      'conflict_retry',
     ]) {
       expect(await send(new ApiError(409, 'x', code))).toEqual({ ok: false, kind: 'reseal' })
     }
+  })
+
+  it('resends the same bytes after a conflict with an earlier send', async () => {
+    expect(await send(new ApiError(409, 'x', 'conflict_retry'))).toEqual({
+      ok: false,
+      kind: 'ambiguous',
+    })
   })
 
   it('names a member who is behind or dormant', async () => {

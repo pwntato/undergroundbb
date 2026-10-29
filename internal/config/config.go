@@ -59,7 +59,7 @@ type Config struct {
 	KeyRotationCooldown time.Duration
 	// MaxPostTitleBytes and MaxPostBodyBytes cap a post's title and body in
 	// UTF-8 bytes (#42). The server only ever sees ciphertext, so it enforces
-	// the sum plus a fixed envelope overhead (PostCiphertextMax); the compose
+	// the sum plus a fixed envelope overhead (handlers postCiphertextLimit); the compose
 	// form enforces each field. Bytes, not characters, because the cap is
 	// there to bound size: 10,000 bytes is the same ~7.5 KB of binary
 	// whatever the alphabet. Raise them with the item size limit in mind

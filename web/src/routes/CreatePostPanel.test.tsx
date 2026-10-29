@@ -25,6 +25,13 @@ describe('CreatePostPanel', () => {
     expect(html).toContain('Plain text only')
   })
 
+  it('seeds the fields from initial, so a re-login does not lose the draft', () => {
+    const html = render({ initial: { title: 'My title', body: 'Half-written body' } })
+    expect(html).toContain('value="My title"')
+    expect(html).toContain('Half-written body')
+    expect(html).toContain('8 / 200 bytes')
+  })
+
   it('follows the configured limits', () => {
     const html = render({ limits: { maxTitleBytes: 80, maxBodyBytes: 500 } })
     expect(html).toContain('0 / 80 bytes')

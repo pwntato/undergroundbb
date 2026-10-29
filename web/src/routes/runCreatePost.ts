@@ -163,7 +163,8 @@ export type SendResult =
         | 'authRequired'
         | 'notFound'
         | 'rejected'
-        // No answer: the post may or may not have landed. Send the same bytes again.
+        // No answer, or a conflict with a send still in flight: the post may or
+        // may not have landed. Send the same bytes again.
         | 'ambiguous'
       readonly message?: string
     }
@@ -198,8 +199,12 @@ export async function sendPost(
       case 'membership_changed':
       case 'key_epoch_stale':
       case 'post_exists':
-      case 'conflict_retry':
         return { ok: false, kind: 'reseal' }
+      case 'conflict_retry':
+        // This request wrote nothing, but an earlier send whose response was
+        // lost may still be committing the same item: resend the same bytes
+        // rather than sealing a second post.
+        return { ok: false, kind: 'ambiguous' }
       case 'member_behind':
         return { ok: false, kind: 'behind' }
       case 'member_dormant':

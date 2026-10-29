@@ -61,6 +61,9 @@ export function CreatePostScreen() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [needsReauth, setNeedsReauth] = useState(false)
+  // The fields at the moment of a re-login, kept so the compose form comes
+  // back filled after ReauthenticateStep replaces it. Cleared once posted.
+  const [draft, setDraft] = useState<{ title: string; body: string } | undefined>(undefined)
   // Bumped after a success so the form remounts empty.
   const [round, setRound] = useState(0)
   // The post a send left unanswered, with the form text it came from; sent
@@ -125,6 +128,7 @@ export function CreatePostScreen() {
             setError(PREPARE_ERRORS[prepared.kind])
           }
           if (prepared.kind === 'coldKeys') {
+            setDraft({ title, body })
             setNeedsReauth(true)
           }
           return
@@ -135,6 +139,7 @@ export function CreatePostScreen() {
       setPosting(false)
       if (sent.ok) {
         pending.current = null
+        setDraft(undefined)
         setMessage('Posted.')
         setRound((n) => n + 1)
         return
@@ -167,6 +172,7 @@ export function CreatePostScreen() {
       <h1 className="text-lg font-semibold">New post</h1>
       <CreatePostPanel
         key={round}
+        {...(draft !== undefined && { initial: draft })}
         limits={limits}
         posting={posting}
         message={message}

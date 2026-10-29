@@ -20,6 +20,7 @@ export function CreatePostPanel({
   message,
   error,
   onSubmit,
+  initial,
 }: {
   readonly limits: PostLimits
   readonly posting: boolean
@@ -27,9 +28,11 @@ export function CreatePostPanel({
   readonly message: string | null
   readonly error: string | null
   readonly onSubmit: (title: string, body: string) => void
+  /** Seeds the fields, so a form that was unmounted for a re-login comes back filled. */
+  readonly initial?: { readonly title: string; readonly body: string }
 }) {
-  const [title, setTitle] = useState('')
-  const [body, setBody] = useState('')
+  const [title, setTitle] = useState(initial?.title ?? '')
+  const [body, setBody] = useState(initial?.body ?? '')
   const titleBytes = utf8Length(title)
   const bodyBytes = utf8Length(body)
   const problem = validatePostForm(title, body, limits)
