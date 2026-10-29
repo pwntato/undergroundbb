@@ -286,6 +286,21 @@ func GenKeyAAD(groupID string, generation uint64) []byte {
 	return fmt.Appendf(nil, "GROUP#%s:GENKEY#%06d", groupID, generation)
 }
 
+// PostAAD builds the AAD for a post's ciphertext -- see docs/DESIGN.md's AAD
+// table, "Post | PK + SK (group, day, rand) + generation number." sortKey is
+// the post's full sort key, "POST#<YYYY-MM-DD>#<rand>", so a post copied to
+// another day's key, another group or another generation fails to open.
+//
+// The encoding is "GROUP#<gid>:<sortKey>:GEN#<nnnnnn>", the same convention as
+// MemberWrapAAD and GroupNameAAD. The group id and sort key never contain ':'
+// (a UUID, and a validated "POST#" + date + hex), so the fields cannot run
+// together.
+//
+// This must never change once a real post exists under it.
+func PostAAD(groupID, sortKey string, generation uint64) []byte {
+	return fmt.Appendf(nil, "GROUP#%s:%s:GEN#%06d", groupID, sortKey, generation)
+}
+
 // GroupNameAAD builds the AAD for encrypting or decrypting a private
 // group's name or description -- see docs/DESIGN.md's AAD table, "Group
 // name/description | group id + generation number." field distinguishes

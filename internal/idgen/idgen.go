@@ -155,3 +155,25 @@ func DesignationAdmin(s string) (adminUUID string, day time.Time, ok bool) {
 	}
 	return adminUUID, day, true
 }
+
+// postSortKeyPattern matches a POST# item's sort key, "POST#<YYYY-MM-DD>#<rand>":
+// the day DaySuffix produces and randSuffixBytes' 16 lowercase hex characters.
+// The client chooses and signs it (crypto.SignedPayload covers the item's own
+// sort key), so the server validates its shape like any other client-supplied
+// id.
+var postSortKeyPattern = regexp.MustCompile(`^POST#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$`)
+
+// ValidPostSortKey reports whether s is a well-formed post sort key and, if
+// so, returns its day parsed as a UTC date at midnight. A shape-valid key with
+// an impossible date (2026-02-31) is not valid.
+func ValidPostSortKey(s string) (time.Time, bool) {
+	m := postSortKeyPattern.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, false
+	}
+	day, err := time.Parse("2006-01-02", m[1])
+	if err != nil || day.Format("2006-01-02") != m[1] {
+		return time.Time{}, false
+	}
+	return day, true
+}

@@ -146,6 +146,8 @@ resource "aws_lambda_function" "main" {
       DEFAULT_EXPIRATION_DAYS     = tostring(var.default_expiration_days)
       MAX_ROTATING_GROUP_MEMBERS  = tostring(var.max_rotating_group_members)
       KEY_ROTATION_COOLDOWN_HOURS = tostring(var.key_rotation_cooldown_hours)
+      MAX_POST_TITLE_BYTES        = tostring(var.max_post_title_bytes)
+      MAX_POST_BODY_BYTES         = tostring(var.max_post_body_bytes)
       SESSION_SECRET              = random_id.session_secret.hex
       ORIGIN_VERIFY_SECRET        = random_password.origin_verify.result
       SESSION_TTL_HOURS           = tostring(var.session_ttl_hours)

@@ -21,6 +21,7 @@ import {
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
+  postAAD,
   roleGrantPayload,
   successorClaimPayload,
   rotationRekeyPayload,
@@ -309,6 +310,17 @@ interface VectorFile {
     name: string
     group_id: string
     field: string
+    generation: number
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
+  }[]
+  post_aad: {
+    name: string
+    group_id: string
+    sort_key: string
     generation: number
     aad_hex: string
     key_hex: string
@@ -1004,4 +1016,33 @@ describe('group name AAD vectors', () => {
       DecryptionFailedError,
     )
   })
+})
+
+// Pins postAAD's exact encoding (#42), and that a post does not open under
+// another generation's or another day's AAD.
+describe('post AAD vectors', () => {
+  for (const tc of vectors.post_aad) {
+    it(tc.name, async () => {
+      const gotAad = postAAD(tc.group_id, tc.sort_key, tc.generation)
+      expect(bytesToHex(gotAad)).toBe(tc.aad_hex)
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const ciphertext = await encryptWithNonce(key, nonce, hexToBytes(tc.plaintext_hex), gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+      expect(bytesToHex(await decrypt(key, nonce, ciphertext, gotAad))).toBe(tc.plaintext_hex)
+
+      await expect(
+        decrypt(key, nonce, ciphertext, postAAD(tc.group_id, tc.sort_key, tc.generation + 1)),
+      ).rejects.toThrow(DecryptionFailedError)
+      await expect(
+        decrypt(
+          key,
+          nonce,
+          ciphertext,
+          postAAD(tc.group_id, 'POST#2026-10-29#00112233445566ff', tc.generation),
+        ),
+      ).rejects.toThrow(DecryptionFailedError)
+    })
+  }
 })

@@ -334,6 +334,20 @@ export function genKeyAAD(groupId: string, generation: number): Uint8Array {
   return new TextEncoder().encode(`GROUP#${groupId}:GENKEY#${gen}`)
 }
 
+/**
+ * Builds the AAD for a post's ciphertext -- docs/DESIGN.md's AAD table, "Post |
+ * PK + SK (group, day, rand) + generation number." sortKey is the post's full
+ * sort key, `POST#<YYYY-MM-DD>#<rand>`.
+ *
+ * The encoding is `GROUP#<gid>:<sortKey>:GEN#<nnnnnn>`, matching
+ * internal/crypto/group.go's PostAAD byte-for-byte. This must never change
+ * once a real post exists under it.
+ */
+export function postAAD(groupId: string, sortKey: string, generation: number): Uint8Array {
+  const gen = generation.toString().padStart(6, '0')
+  return new TextEncoder().encode(`GROUP#${groupId}:${sortKey}:GEN#${gen}`)
+}
+
 /** Which of a group's two encrypted text fields groupNameAAD is being built for. */
 export type GroupTextField = 'NAME' | 'DESC'
 

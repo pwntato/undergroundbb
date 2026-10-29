@@ -75,6 +75,28 @@ variable "max_rotating_group_members" {
   }
 }
 
+variable "max_post_title_bytes" {
+  type        = number
+  default     = 200
+  description = "The longest post title, in UTF-8 bytes (#42). The server enforces it as part of a ciphertext size cap, the compose form exactly. See internal/config.DefaultMaxPostTitleBytes."
+
+  validation {
+    condition     = var.max_post_title_bytes >= 1 && var.max_post_title_bytes <= 2000 && floor(var.max_post_title_bytes) == var.max_post_title_bytes
+    error_message = "max_post_title_bytes must be a whole number from 1 to 2000."
+  }
+}
+
+variable "max_post_body_bytes" {
+  type        = number
+  default     = 10000
+  description = "The longest post body, in UTF-8 bytes (#42); 10,000 bytes is about 7.5 KB of binary whatever the alphabet. See internal/config.DefaultMaxPostBodyBytes."
+
+  validation {
+    condition     = var.max_post_body_bytes >= 1 && var.max_post_body_bytes <= 100000 && floor(var.max_post_body_bytes) == var.max_post_body_bytes
+    error_message = "max_post_body_bytes must be a whole number from 1 to 100000."
+  }
+}
+
 variable "key_rotation_cooldown_hours" {
   type        = number
   default     = 24
