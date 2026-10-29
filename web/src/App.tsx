@@ -8,6 +8,7 @@ import { CreateInviteScreen } from '@/routes/CreateInviteScreen'
 import { GroupMembersScreen } from '@/routes/GroupMembersScreen'
 import { SuccessorScreen } from '@/routes/SuccessorScreen'
 import { CreatePostScreen } from '@/routes/CreatePostScreen'
+import { GroupPostsScreen } from '@/routes/GroupPostsScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { InvitesScreen } from '@/routes/InvitesScreen'
@@ -127,6 +128,14 @@ function App() {
               element={
                 <RequireAuth>
                   <GroupSettingsScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/:groupId/posts"
+              element={
+                <RequireAuth>
+                  <GroupPostsScreen />
                 </RequireAuth>
               }
             />
