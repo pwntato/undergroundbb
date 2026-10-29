@@ -40,7 +40,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
-import { encodePost } from './post.js'
+import { decodePost, encodePost } from './post.js'
 import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
 import {
@@ -1239,6 +1239,84 @@ export async function sealPost(
     ciphertext: bytesToBase64(sealed.ciphertext),
     signature: bytesToBase64(signature),
   }
+}
+
+/**
+ * #43: opens stored posts. Unwraps the caller's own entry once, then derives the
+ * key for each distinct post generation by walking the GENKEY# links down, and
+ * decrypts each post under postAAD(group, sortKey, generation). A post that
+ * does not open (a newer generation than the member holds, a missing link, a
+ * failed tag, a layout that does not decode) is `unreadable`; the caller shows
+ * it as such without blaming anyone, because the nonce is not signed and so a
+ * failure to open proves nothing about the author (docs/DESIGN.md, "For the
+ * reader"). Only the unwrap of the caller's own entry rejects: that is not about
+ * any one post.
+ */
+export async function openPosts(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly posts: readonly {
+      readonly sortKey: string
+      readonly generation: number
+      readonly nonce: string
+      readonly ciphertext: string
+    }[]
+  },
+): Promise<
+  ({ kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' })[]
+> {
+  const ownKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    {
+      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+    },
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  // One derivation per generation; a generation that cannot be derived is
+  // remembered as such so every post under it is unreadable without retrying.
+  const byGeneration = new Map<number, Promise<Uint8Array | null>>()
+  const keyFor = (generation: number): Promise<Uint8Array | null> => {
+    let found = byGeneration.get(generation)
+    if (found === undefined) {
+      found = walkChainDown(ownKey, req.groupId, req.generation, generation, req.chain ?? []).catch(
+        () => null,
+      )
+      byGeneration.set(generation, found)
+    }
+    return found
+  }
+  const out: (
+    { kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' }
+  )[] = []
+  for (const p of req.posts) {
+    try {
+      const groupKey = await keyFor(p.generation)
+      if (groupKey === null) {
+        out.push({ kind: 'unreadable' })
+        continue
+      }
+      const plain = await decrypt(
+        groupKey,
+        base64ToBytes(p.nonce),
+        base64ToBytes(p.ciphertext),
+        postAAD(req.groupId, p.sortKey, p.generation),
+      )
+      const content = decodePost(plain)
+      out.push({ kind: 'opened', title: content.title, body: content.body, at: content.at })
+    } catch {
+      out.push({ kind: 'unreadable' })
+    }
+  }
+  return out
 }
 
 /**

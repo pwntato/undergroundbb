@@ -39,6 +39,7 @@ import {
   startApprovalRekey,
   selfWrapFromHandoff,
   sealPost,
+  openPosts,
   startSelfRekey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -608,6 +609,148 @@ describe('decryptGroupNames', () => {
         description: 'y',
       }),
     ).rejects.toThrow()
+  })
+
+  describe('openPosts (#43)', () => {
+    const groupId = 'group-uuid-test-open'
+    const now = new Date('2026-10-28T12:34:56.789Z')
+
+    function asRequest(sealed: Awaited<ReturnType<typeof sealPost>>) {
+      return {
+        sortKey: sealed.sortKey,
+        generation: sealed.generation,
+        nonce: sealed.nonce,
+        ciphertext: sealed.ciphertext,
+      }
+    }
+
+    it('opens what sealPost sealed, in request order, one result per post', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(41),
+      )
+      const base = { groupId, generation: 0, postGeneration: 0, wrappedGroupKey }
+      const a = await sealPost(keys, { ...base, title: 'first', body: 'one' }, now)
+      const b = await sealPost(keys, { ...base, title: 'second', body: 'two' }, now)
+      const out = await openPosts(keys, {
+        groupId,
+        generation: 0,
+        wrappedGroupKey,
+        posts: [asRequest(b), asRequest(a)],
+      })
+      expect(out).toEqual([
+        { kind: 'opened', title: 'second', body: 'two', at: '2026-10-28T12:34:56.789Z' },
+        { kind: 'opened', title: 'first', body: 'one', at: '2026-10-28T12:34:56.789Z' },
+      ])
+    })
+
+    it('shows a post that does not open as unreadable and still opens the rest', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(42),
+      )
+      const base = { groupId, generation: 0, postGeneration: 0, wrappedGroupKey }
+      const good = await sealPost(keys, { ...base, title: 'good', body: 'ok' }, now)
+      const other = await sealPost(keys, { ...base, title: 'x', body: 'y' }, now)
+      const flipped = base64ToBytes(good.ciphertext)
+      flipped[0] = flipped[0]! ^ 1
+      const out = await openPosts(keys, {
+        groupId,
+        generation: 0,
+        wrappedGroupKey,
+        posts: [
+          // The nonce is not signed, so a swapped one is a validly signed post that will not open.
+          { ...asRequest(good), nonce: other.nonce },
+          // Altered ciphertext.
+          { ...asRequest(good), ciphertext: bytesToBase64(flipped) },
+          // Relocated: another address, same bytes.
+          { ...asRequest(good), sortKey: 'POST#2026-10-28#0000000000000000' },
+          // Garbage that is not base64.
+          { ...asRequest(good), nonce: '***' },
+          asRequest(good),
+        ],
+      })
+      expect(out.map((o) => o.kind)).toEqual([
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'opened',
+      ])
+    })
+
+    it('opens an older generation through the chain, and a newer one is unreadable', async () => {
+      const key0 = new Uint8Array(32).fill(43)
+      const key1 = new Uint8Array(32).fill(44)
+      const { keys, wrappedGroupKey: wrapped0 } = await setUpMemberWithGroup(groupId, key0)
+      const wrapped1 = await wrap(
+        keys.wrappingKey.publicKey,
+        key1,
+        memberWrapAAD(groupId, keys.userId, 1),
+      )
+      const link0 = await encrypt(key1, key0, genKeyAAD(groupId, 0))
+      const own1 = {
+        ephemeralPub: bytesToBase64(wrapped1.ephemeralPub),
+        nonce: bytesToBase64(wrapped1.nonce),
+        ciphertext: bytesToBase64(wrapped1.ciphertext),
+      }
+      const chain = [
+        {
+          generation: 0,
+          wrapped: {
+            nonce: bytesToBase64(link0.nonce),
+            ciphertext: bytesToBase64(link0.ciphertext),
+          },
+        },
+      ]
+      const old = await sealPost(
+        keys,
+        {
+          groupId,
+          generation: 0,
+          postGeneration: 0,
+          wrappedGroupKey: wrapped0,
+          title: 'old',
+          body: '',
+        },
+        now,
+      )
+      // The caller holds generation 1 only; a generation-2 post cannot be opened by walking forward.
+      const future = { ...asRequest(old), generation: 2 }
+      const out = await openPosts(keys, {
+        groupId,
+        generation: 1,
+        wrappedGroupKey: own1,
+        chain,
+        posts: [asRequest(old), future],
+      })
+      expect(out.map((o) => o.kind)).toEqual(['opened', 'unreadable'])
+      // Without the link, generation 0 is out of reach.
+      const noChain = await openPosts(keys, {
+        groupId,
+        generation: 1,
+        wrappedGroupKey: own1,
+        posts: [asRequest(old)],
+      })
+      expect(noChain).toEqual([{ kind: 'unreadable' }])
+    })
+
+    it('rejects, rather than reporting every post unreadable, when the caller own entry does not open', async () => {
+      const { keys } = await setUpMemberWithGroup(groupId, new Uint8Array(32).fill(45))
+      const other = await setUpMemberWithGroup(
+        'some-other-group',
+        new Uint8Array(32).fill(46),
+        keys,
+      )
+      await expect(
+        openPosts(keys, {
+          groupId,
+          generation: 0,
+          wrappedGroupKey: other.wrappedGroupKey,
+          posts: [],
+        }),
+      ).rejects.toThrow()
+    })
   })
 
   describe('sealPost (#42)', () => {

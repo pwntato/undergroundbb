@@ -38,6 +38,7 @@ import {
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
   sealPost as sealPostPure,
+  openPosts as openPostsPure,
   signWrapRecord as signWrapRecordPure,
   signVerification as signVerificationPure,
   signReadmission as signReadmissionPure,
@@ -68,6 +69,7 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   SealPostRequest,
+  OpenPostsRequest,
   GenerateSignupMaterialRequest,
   GetOwnFingerprintRequest,
   GetOwnSigningKeyRequest,
@@ -185,6 +187,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'sealPost':
       await sealPost(req)
+      return
+    case 'openPosts':
+      await openPosts(req)
       return
     case 'signInviteCreation':
       await signInviteCreation(req)
@@ -328,6 +333,17 @@ async function sealPost(req: SealPostRequest): Promise<void> {
   const keys = requireLiveKeys(req.userId, 'write a post')
   const result = await sealPostPure(keys, req)
   post({ kind: 'sealPostDone', id: req.id, result })
+}
+
+/**
+ * Opens stored posts -- #43. Reading needs the live keys but not an idle
+ * rotation: nothing is signed, and a post is read with the keys the member
+ * already holds.
+ */
+async function openPosts(req: OpenPostsRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'read posts')
+  const result = await openPostsPure(keys, req)
+  post({ kind: 'openPostsDone', id: req.id, result })
 }
 
 /** Signs a role grant -- issue #37. Same liveKeys-unset/wrong-account guards as signGroupCreation. */
