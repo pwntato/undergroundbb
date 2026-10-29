@@ -38,6 +38,7 @@ import {
   startGroupRotation,
   startApprovalRekey,
   selfWrapFromHandoff,
+  sealPost,
   startSelfRekey,
 } from './credential-material.js'
 import * as ed25519 from './ed25519.js'
@@ -46,6 +47,7 @@ import {
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
+  postAAD,
   roleGrantPayload,
   rotationRekeyPayload,
   rotationStartPayload,
@@ -64,6 +66,8 @@ import { decodeKeyBundle, type KeyBundle } from './keybundle.js'
 import { handoffWrapAAD } from './key-rotation.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { evaluatePin } from './pin.js'
+import { signedPayload } from './payload.js'
+import { decodePost } from './post.js'
 import { unwrap, wrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
@@ -604,6 +608,154 @@ describe('decryptGroupNames', () => {
         description: 'y',
       }),
     ).rejects.toThrow()
+  })
+
+  describe('sealPost (#42)', () => {
+    const groupId = 'group-uuid-test-post'
+    const now = new Date('2026-10-28T12:34:56.789Z')
+
+    async function openPost(
+      groupKey: Uint8Array,
+      sealed: Awaited<ReturnType<typeof sealPost>>,
+      aad = postAAD(groupId, sealed.sortKey, sealed.generation),
+    ) {
+      return decodePost(
+        await decrypt(groupKey, base64ToBytes(sealed.nonce), base64ToBytes(sealed.ciphertext), aad),
+      )
+    }
+
+    function signatureVerifies(
+      keys: Awaited<ReturnType<typeof setUpMemberWithGroup>>['keys'],
+      sealed: Awaited<ReturnType<typeof sealPost>>,
+      over: { sortKey?: string; generation?: number; day?: string; ciphertext?: Uint8Array } = {},
+    ): boolean {
+      return ed25519.verify(
+        keys.signingKey.publicKey,
+        ed25519.SigningContext.Post,
+        signedPayload(
+          keys.userId,
+          groupId,
+          over.sortKey ?? sealed.sortKey,
+          over.generation ?? sealed.generation,
+          over.day ?? '2026-10-28',
+          over.ciphertext ?? base64ToBytes(sealed.ciphertext),
+        ),
+        base64ToBytes(sealed.signature),
+      )
+    }
+
+    it('seals title, body and the exact time under the address, and signs the address', async () => {
+      const groupKey = new Uint8Array(32).fill(21)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const sealed = await sealPost(
+        keys,
+        { groupId, generation: 0, postGeneration: 0, wrappedGroupKey, title: 'Hi', body: 'There' },
+        now,
+      )
+      expect(sealed.sortKey).toMatch(/^POST#2026-10-28#[0-9a-f]{16}$/)
+      expect(sealed.generation).toBe(0)
+      expect(await openPost(groupKey, sealed)).toEqual({
+        title: 'Hi',
+        body: 'There',
+        at: '2026-10-28T12:34:56.789Z',
+      })
+      expect(signatureVerifies(keys, sealed)).toBe(true)
+
+      // Each binding is real: a relocated or altered post does not verify or open.
+      const other = 'POST#2026-10-28#0000000000000000'
+      expect(signatureVerifies(keys, sealed, { sortKey: other })).toBe(false)
+      expect(signatureVerifies(keys, sealed, { generation: 1 })).toBe(false)
+      expect(signatureVerifies(keys, sealed, { day: '2026-10-29' })).toBe(false)
+      expect(signatureVerifies(keys, sealed, { ciphertext: new Uint8Array(40) })).toBe(false)
+      await expect(
+        openPost(groupKey, sealed, postAAD(groupId, other, sealed.generation)),
+      ).rejects.toThrow()
+      await expect(
+        openPost(groupKey, sealed, postAAD(groupId, sealed.sortKey, sealed.generation + 1)),
+      ).rejects.toThrow()
+    })
+
+    it('takes a fresh sort key and IV every time', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(22),
+      )
+      const req = {
+        groupId,
+        generation: 0,
+        postGeneration: 0,
+        wrappedGroupKey,
+        title: 'a',
+        body: 'b',
+      }
+      const [x, y] = [await sealPost(keys, req, now), await sealPost(keys, req, now)]
+      expect(x.nonce).not.toEqual(y.nonce)
+      expect(x.sortKey).not.toEqual(y.sortKey)
+    })
+
+    it('walks the chain down when the caller is ahead of the generation new posts use', async () => {
+      // Mid-rotation: the caller's entry is at generation 1, new posts use generation 0.
+      const key0 = new Uint8Array(32).fill(23)
+      const key1 = new Uint8Array(32).fill(24)
+      const { keys } = await setUpMemberWithGroup(groupId, key0)
+      const wrapped1 = await wrap(
+        keys.wrappingKey.publicKey,
+        key1,
+        memberWrapAAD(groupId, keys.userId, 1),
+      )
+      const link0 = await encrypt(key1, key0, genKeyAAD(groupId, 0))
+      const wrappedGroupKey = {
+        ephemeralPub: bytesToBase64(wrapped1.ephemeralPub),
+        nonce: bytesToBase64(wrapped1.nonce),
+        ciphertext: bytesToBase64(wrapped1.ciphertext),
+      }
+      const chain = [
+        {
+          generation: 0,
+          wrapped: {
+            nonce: bytesToBase64(link0.nonce),
+            ciphertext: bytesToBase64(link0.ciphertext),
+          },
+        },
+      ]
+      const req = {
+        groupId,
+        generation: 1,
+        postGeneration: 0,
+        wrappedGroupKey,
+        chain,
+        title: 't',
+        body: 'b',
+      }
+      const sealed = await sealPost(keys, req, now)
+      expect(sealed.generation).toBe(0)
+      expect((await openPost(key0, sealed)).title).toBe('t')
+      // Without the link the walk cannot reach generation 0.
+      await expect(sealPost(keys, { ...req, chain: [] }, now)).rejects.toThrow()
+    })
+
+    it('rejects a wrap made for another group', async () => {
+      const { keys } = await setUpMemberWithGroup(groupId, new Uint8Array(32).fill(25))
+      const other = await setUpMemberWithGroup(
+        'some-other-group',
+        new Uint8Array(32).fill(26),
+        keys,
+      )
+      await expect(
+        sealPost(
+          keys,
+          {
+            groupId,
+            generation: 0,
+            postGeneration: 0,
+            wrappedGroupKey: other.wrappedGroupKey,
+            title: 'a',
+            body: 'b',
+          },
+          now,
+        ),
+      ).rejects.toThrow()
+    })
   })
 
   it('returns null fields for one bad entry without failing the rest of the batch', async () => {

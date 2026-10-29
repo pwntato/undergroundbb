@@ -37,6 +37,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  sealPost as sealPostPure,
   signWrapRecord as signWrapRecordPure,
   signVerification as signVerificationPure,
   signReadmission as signReadmissionPure,
@@ -66,6 +67,7 @@ import type {
   CompleteRecoveryRequest,
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
+  SealPostRequest,
   GenerateSignupMaterialRequest,
   GetOwnFingerprintRequest,
   GetOwnSigningKeyRequest,
@@ -180,6 +182,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'encryptGroupText':
       await encryptGroupText(req)
+      return
+    case 'sealPost':
+      await sealPost(req)
       return
     case 'signInviteCreation':
       await signInviteCreation(req)
@@ -315,6 +320,14 @@ async function encryptGroupText(req: EncryptGroupTextRequest): Promise<void> {
   }
   const { nameCiphertext, descriptionCiphertext } = await encryptGroupTextPure(liveKeys, req)
   post({ kind: 'encryptGroupTextDone', id: req.id, nameCiphertext, descriptionCiphertext })
+}
+
+/** Seals and signs a post -- #42. Same guards as signWrapRecord: no signing mid-rotation. */
+async function sealPost(req: SealPostRequest): Promise<void> {
+  rotation.assertIdle('write a post')
+  const keys = requireLiveKeys(req.userId, 'write a post')
+  const result = await sealPostPure(keys, req)
+  post({ kind: 'sealPostDone', id: req.id, result })
 }
 
 /** Signs a role grant -- issue #37. Same liveKeys-unset/wrong-account guards as signGroupCreation. */
