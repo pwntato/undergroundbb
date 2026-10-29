@@ -219,3 +219,30 @@ func TestDesignationAdmin(t *testing.T) {
 		}
 	}
 }
+
+func TestValidPostSortKey(t *testing.T) {
+	day, ok := ValidPostSortKey("POST#2026-10-28#00112233445566ff")
+	if !ok || !day.Equal(time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("valid key = %v, %v", day, ok)
+	}
+	// What DaySuffix produces must always be accepted.
+	suffix, err := DaySuffix(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ValidPostSortKey("POST#" + suffix); !ok {
+		t.Errorf("DaySuffix output %q rejected", suffix)
+	}
+	for _, bad := range []string{
+		"", "POST#", "POST#2026-10-28", "POST#2026-10-28#", "POST#2026-10-28#00112233445566f",
+		"POST#2026-10-28#00112233445566fff", "POST#2026-10-28#00112233445566FF",
+		"POST#2026-02-31#00112233445566ff", "POST#2026-13-01#00112233445566ff",
+		"post#2026-10-28#00112233445566ff", "GRANT#2026-10-28#00112233445566ff",
+		"POST#2026-10-28#00112233445566ff\n", " POST#2026-10-28#00112233445566ff",
+		"POST#26-10-28#00112233445566ff", "POST#2026-10-28#00112233445566ff#x",
+	} {
+		if _, ok := ValidPostSortKey(bad); ok {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

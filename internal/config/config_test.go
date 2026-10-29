@@ -322,3 +322,32 @@ func TestFromEnvReadsTheKeyRotationCooldown(t *testing.T) {
 		t.Errorf("FromEnv().KeyRotationCooldown = %s, want 48h", got)
 	}
 }
+
+func TestPostBytesEnvOrDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        int
+	}{
+		{"unset", "", DefaultMaxPostTitleBytes},
+		{"set", "300", 300},
+		{"the minimum", "1", MinPostFieldBytes},
+		{"zero is clamped up", "0", MinPostFieldBytes},
+		{"negative is clamped up", "-5", MinPostFieldBytes},
+		{"the ceiling", "2000", MaxPostTitleBytesCeiling},
+		{"above the ceiling is clamped down", "2001", MaxPostTitleBytesCeiling},
+		{"not a number falls back to the default", "lots", DefaultMaxPostTitleBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UBB_TEST_POST_BYTES", tc.value)
+			if got := postBytesEnvOrDefault("UBB_TEST_POST_BYTES", DefaultMaxPostTitleBytes, MaxPostTitleBytesCeiling); got != tc.want {
+				t.Errorf("value %q = %d, want %d", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPostCapsDefaultsAreWhatTheReadmeSays(t *testing.T) {
+	if DefaultMaxPostTitleBytes != 200 || DefaultMaxPostBodyBytes != 10000 {
+		t.Fatalf("defaults = %d/%d; update README.md and terraform/variables.tf with them", DefaultMaxPostTitleBytes, DefaultMaxPostBodyBytes)
+	}
+}
