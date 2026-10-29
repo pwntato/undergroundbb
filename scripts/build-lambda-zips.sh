@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds lambda.zip and purge.zip at the repo root, the artifacts
-# terraform/lambda.tf and terraform/purge.tf hash into source_code_hash.
+# Builds lambda.zip, purge.zip and costguard.zip at the repo root, the artifacts
+# terraform/lambda.tf, purge.tf and costguard.tf hash into source_code_hash.
 #
 # The zips are byte-for-byte reproducible: the hash only changes when the Go
 # code they are built from does, so a push that touches nothing under cmd/ or
@@ -33,3 +33,4 @@ build_zip() { # <package> <output zip>
 
 build_zip ./cmd/lambda lambda.zip
 build_zip ./cmd/purge purge.zip
+build_zip ./cmd/costguard costguard.zip

@@ -123,6 +123,10 @@ resource "aws_lambda_function" "main" {
   timeout          = 10
   memory_size      = 256
 
+  # Caps how fast the API can run, and so what a flood can cost (costguard.tf).
+  # cmd/costguard sets this to 0 to stop the API; a deploy restores it.
+  reserved_concurrent_executions = var.web_max_concurrency
+
   # #113: SITE_NAME/DOMAIN/REGISTRATION_POLICY/ALLOW_GROUP_EXPIRATION_OFF/
   # DEFAULT_EXPIRATION_DAYS previously had no Terraform variable at all, so a
   # deployed Lambda could never actually be configured with them -- it always

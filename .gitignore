@@ -1,6 +1,7 @@
 # Go
 /lambda.zip
 /purge.zip
+/costguard.zip
 *.test
 vectors.log
 # Root-anchored: ignores a stray compiled binary from

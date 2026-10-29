@@ -667,6 +667,116 @@ resource "aws_iam_role_policy" "deploy_purge" {
   policy = data.aws_iam_policy_document.deploy_purge.json
 }
 
+# The cost guard (costguard.tf). Same shape as deploy_purge: it must exist
+# before the resources it permits, so those depend on it and their names come
+# from local.costguard_name.
+data "aws_iam_policy_document" "deploy_costguard" {
+  statement {
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.costguard_name}"]
+  }
+
+  statement {
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.costguard_name}"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["lambda.amazonaws.com"]
+    }
+  }
+
+  statement {
+    actions = [
+      "lambda:GetFunction",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetPolicy",
+      "lambda:ListVersionsByFunction",
+      "lambda:CreateFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:DeleteFunction",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+    ]
+    resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.costguard_name}"]
+  }
+
+  # The web Lambda's reserved concurrency, set from var.web_max_concurrency.
+  statement {
+    actions = [
+      "lambda:PutFunctionConcurrency",
+      "lambda:DeleteFunctionConcurrency",
+      "lambda:GetFunctionConcurrency",
+    ]
+    resources = ["arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:undergroundbb-${terraform.workspace}"]
+  }
+
+  statement {
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:ListTagsForResource",
+      "cloudwatch:TagResource",
+      "cloudwatch:UntagResource",
+    ]
+    resources = ["arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm:${local.costguard_name}-*"]
+  }
+
+  statement {
+    actions = [
+      "sns:CreateTopic",
+      "sns:DeleteTopic",
+      "sns:GetTopicAttributes",
+      "sns:SetTopicAttributes",
+      "sns:ListTagsForResource",
+      "sns:TagResource",
+      "sns:UntagResource",
+      "sns:Subscribe",
+      "sns:Unsubscribe",
+      "sns:GetSubscriptionAttributes",
+      "sns:SetSubscriptionAttributes",
+      "sns:ListSubscriptionsByTopic",
+    ]
+    resources = [
+      "arn:aws:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.costguard_name}",
+      "arn:aws:sns:${var.aws_region}:${data.aws_caller_identity.current.account_id}:${local.costguard_name}:*",
+    ]
+  }
+
+  statement {
+    actions = [
+      "budgets:ViewBudget",
+      "budgets:ModifyBudget",
+      "budgets:ListTagsForResource",
+      "budgets:TagResource",
+      "budgets:UntagResource",
+    ]
+    resources = ["arn:aws:budgets::${data.aws_caller_identity.current.account_id}:budget/${local.costguard_name}"]
+  }
+}
+
+resource "aws_iam_role_policy" "deploy_costguard" {
+  name   = "undergroundbb-deploy-costguard"
+  role   = aws_iam_role.deploy.id
+  policy = data.aws_iam_policy_document.deploy_costguard.json
+}
+
 output "deploy_role_arn" {
   value       = aws_iam_role.deploy.arn
   description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub Actions environment secret (production)."

@@ -155,3 +155,25 @@ variable "purge_schedule" {
   default     = "rate(1 hour)"
   description = "EventBridge schedule expression for the test-account purge."
 }
+
+variable "web_max_concurrency" {
+  type        = number
+  default     = 50
+  description = "Reserved concurrency of the web Lambda: the most requests it runs at once, which caps what a flood can cost (costguard.tf). Requests over it are throttled (429/5xx). The account's unreserved pool must stay at or above AWS's floor of 100."
+  validation {
+    condition     = var.web_max_concurrency >= 1 && var.web_max_concurrency <= 800
+    error_message = "web_max_concurrency must be between 1 and 800."
+  }
+}
+
+variable "flood_invocations_per_5min" {
+  type        = number
+  default     = 20000
+  description = "Web Lambda invocations in five minutes (about 67 a second) above which the cost kill switch sets the API's concurrency to 0. Normal use here is a few thousand a day."
+}
+
+variable "cost_guard_budget_usd" {
+  type        = number
+  default     = 20
+  description = "Monthly actual spend in USD for the whole account at which the cost kill switch sets the API's concurrency to 0. AWS Budgets data lags by hours, so this is the backstop; the invocation alarm is the fast trip."
+}
