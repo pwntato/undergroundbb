@@ -205,6 +205,30 @@ export function keysCarriedFrom(history: OwnKeyHistory, admittedSigning: Uint8Ar
   return start < 0 ? [] : history.links.slice(start).map((l) => l.newSigning)
 }
 
+/**
+ * The signing keys that may have signed on `day` (a UTC "YYYY-MM-DD"): the
+ * current key from the day it was introduced, and each superseded key from the
+ * day it was introduced up to the rotation that ended it. Both keys are
+ * candidates on a rotation day, because a day is the finest resolution a signed
+ * day carries. `history` must already have verified against `current`.
+ */
+export function signingKeysOn(
+  history: OwnKeyHistory,
+  current: Uint8Array,
+  day: string,
+): Uint8Array[] {
+  const candidates: Uint8Array[] = []
+  const last = history.links[history.links.length - 1]
+  if (last === undefined || day >= last.day) candidates.push(current)
+  history.links.forEach((link, i) => {
+    const introduced = i > 0 ? history.links[i - 1]!.day : undefined
+    if (day <= link.day && (introduced === undefined || day >= introduced)) {
+      candidates.push(link.oldSigning)
+    }
+  })
+  return candidates
+}
+
 /** Every signing key the history says the caller held: the current one, then each superseded one. */
 export function ownKeys(history: OwnKeyHistory): Uint8Array[] {
   return [history.current, ...history.links.map((l) => l.oldSigning)]

@@ -28,7 +28,7 @@
 import { base64ToBytes } from './base64.js'
 import { SigningContext, verify } from './ed25519.js'
 import { wrapRecordPayload } from './group.js'
-import { buildOwnKeyHistory, type WireKeyChange } from './own-history.js'
+import { buildOwnKeyHistory, signingKeysOn, type WireKeyChange } from './own-history.js'
 
 export interface WireWrapRecord {
   readonly wrapperUserId: string
@@ -102,17 +102,9 @@ export function checkWrapRecord(input: {
     record.reason as 'self' | 'approval',
     record.day,
   )
-  // Interval of each key: [introduced, retired], open ends for the first and last.
-  const candidates: Uint8Array[] = []
-  const last = history.links[history.links.length - 1]
-  if (last === undefined || record.day >= last.day) candidates.push(current)
-  history.links.forEach((link, i) => {
-    const introduced = i > 0 ? history.links[i - 1]!.day : undefined
-    if (record.day <= link.day && (introduced === undefined || record.day >= introduced)) {
-      candidates.push(link.oldSigning)
-    }
-  })
-  return candidates.some((k) => verify(k, SigningContext.WrapRecord, payload, signature))
+  return signingKeysOn(history, current, record.day).some((k) =>
+    verify(k, SigningContext.WrapRecord, payload, signature),
+  )
     ? isSelf
       ? { kind: 'self' }
       : { kind: 'approved', wrapperUserId: record.wrapperUserId }
