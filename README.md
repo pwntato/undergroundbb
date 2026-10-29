@@ -277,7 +277,12 @@ spend (`var.cost_guard_budget_usd`, default 20; whole account) publish to one SN
 API answers with errors until the switch is re-armed. A deploy re-arms it (terraform restores
 `var.web_max_concurrency`), so do not deploy while an attack is still running; by hand:
 `aws lambda put-function-concurrency --function-name undergroundbb-<workspace> --reserved-concurrent-executions 50`.
-The alarm is the fast trip (minutes); Budgets data lags by hours, so the budget is the backstop. Not
+The alarm is the fast trip (minutes); Budgets data lags by hours, so the budget is the backstop. The
+budget notifies once per month after it crosses the limit, so after a trip and a mid-month re-arm only
+the alarm can trip again until next month, and it counts the whole account's spend, not just this
+project's. The trade-off is deliberate: a flood of about 20,000 requests in five minutes from a handful of
+IPs, each under the WAF's per-IP rate rule, takes the API down until a deploy or a manual re-arm. That
+costs availability, not money, which is the right failure at this budget. Not
 covered by the alarm: requests CloudFront or WAF answer without reaching the Lambda are billed but not
 counted, and only the budget sees them. The trip emails `ALARM_EMAIL` if its subscription was confirmed.
 The limits are Terraform variables; change one and deploy.

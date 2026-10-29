@@ -158,7 +158,15 @@ resource "aws_lambda_function" "main" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy.lambda]
+  # deploy_costguard holds the deploy role's PutFunctionConcurrency grant on
+  # this function; without that edge the first apply can set the concurrency
+  # before the grant exists (the #118/#119 self-grant race). IAM propagation
+  # can still fail the first run once; a retry passes.
+  depends_on = [
+    aws_cloudwatch_log_group.lambda,
+    aws_iam_role_policy.lambda,
+    aws_iam_role_policy.deploy_costguard,
+  ]
 }
 
 # authorization_type = "NONE" per #6 -- CloudFront (#8) is the intended

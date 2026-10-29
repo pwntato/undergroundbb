@@ -54,8 +54,9 @@ jobs:
       - name: build
         # Builds lambda.zip, purge.zip and costguard.zip (the scheduled
         # test-account purge and the cost kill switch are extra Lambdas; their
-        # zips must exist before terraform plan reads their hashes). Reproducible, so a push that changes no Go code plans no
-        # Lambda update (#98).
+        # zips must exist before terraform plan reads their hashes).
+        # Reproducible, so a push that changes no Go code plans no Lambda
+        # update (#98).
         run: ./scripts/build-lambda-zips.sh
 
       - uses: aws-actions/configure-aws-credentials@v4
