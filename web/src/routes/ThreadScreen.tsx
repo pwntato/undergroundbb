@@ -23,7 +23,7 @@ import { useSession } from '@/lib/session/useSession'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
-import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
+import { INITIAL_REPLY_STATE, nextReplyState, TARGET_GONE_MESSAGE } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import {
   attachParent,
@@ -58,7 +58,7 @@ const SEND_ERRORS: Record<Exclude<SubmitResult, { ok: true }>['kind'], string> =
   unreadable:
     "Couldn't open this group's key, so the comment was not sent. Reload the page and try again.",
   repliesFull: "This comment can't take any more replies.",
-  parentGone: 'The comment you replied to is no longer there. The comments have been reloaded.',
+  parentGone: TARGET_GONE_MESSAGE,
   busy: 'Others are replying at the same moment. Press Send again.',
   rejected: 'The server rejected the comment.',
   ambiguous:
@@ -194,8 +194,12 @@ function Thread({
   } | null>(null)
 
   const apply = useCallback(
-    (result: ThreadPageResult) => {
+    (result: ThreadPageResult, first: boolean) => {
       dispatch({ type: 'pageLoaded', result })
+      // Everything on screen is this page, so a reply target missing from it is gone from view.
+      if (first && result.ok) {
+        dispatchReply({ type: 'firstPageLoaded', paths: result.comments.map((c) => c.path) })
+      }
       if (!result.ok && result.kind === 'coldKeys') onColdKeys()
     },
     [onColdKeys],
@@ -206,7 +210,7 @@ function Thread({
       dispatch({ type: 'loadStarted' })
       void loadThreadPage(reader.deps, reader.resolveAuthor, groupId, postId, cursor).then(
         (result) => {
-          if (mine === epoch.current) apply(result)
+          if (mine === epoch.current) apply(result, cursor === undefined)
         },
       )
     },
@@ -304,7 +308,7 @@ function Thread({
   useEffect(() => {
     let cancelled = false
     void loadThreadPage(reader.deps, reader.resolveAuthor, groupId, postId).then((result) => {
-      if (!cancelled && epoch.current === 0) apply(result)
+      if (!cancelled && epoch.current === 0) apply(result, true)
     })
     return () => {
       cancelled = true

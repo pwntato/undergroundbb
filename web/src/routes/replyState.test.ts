@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { INITIAL_REPLY_STATE, nextReplyState, type ReplyState } from './replyState'
+import {
+  INITIAL_REPLY_STATE,
+  nextReplyState,
+  TARGET_GONE_MESSAGE,
+  type ReplyEvent,
+  type ReplyState,
+} from './replyState'
+import { attachParent, guessPath } from './runCreateComment'
 
 const typed: ReplyState = { ...INITIAL_REPLY_STATE, draft: 'half a thought' }
 
@@ -52,5 +59,43 @@ describe('nextReplyState', () => {
       error: null,
       notice: 'Comment sent.',
     })
+  })
+})
+
+describe('firstPageLoaded', () => {
+  const run = (events: ReplyEvent[], from: ReplyState = INITIAL_REPLY_STATE) =>
+    events.reduce(nextReplyState, from)
+
+  it('after parent_gone, drops the gone target, keeps the draft and sends as top-level', () => {
+    // The sequence the reviewer reproduced: open 0001, type, send, the parent is gone, reload.
+    const failed = run([
+      { type: 'opened', replyTo: '0001' },
+      { type: 'edited', draft: 'my reply' },
+      { type: 'sendStarted' },
+      { type: 'sendFailed', error: TARGET_GONE_MESSAGE },
+    ])
+    expect(failed.replyTo).toBe('0001')
+    const reloaded = nextReplyState(failed, { type: 'firstPageLoaded', paths: ['0002'] })
+    expect(reloaded).toMatchObject({ replyTo: null, draft: 'my reply', error: TARGET_GONE_MESSAGE })
+    // The next Send aims at the top level, not under the gone comment.
+    expect(guessPath(attachParent(reloaded.replyTo), ['0002'])).toBe('0003')
+  })
+
+  it('drops a restored target that is on a later page', () => {
+    const restored: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0060', draft: 'typed before' }
+    expect(
+      nextReplyState(restored, { type: 'firstPageLoaded', paths: ['0001', '0002'] }),
+    ).toMatchObject({ replyTo: null, draft: 'typed before', error: TARGET_GONE_MESSAGE })
+  })
+
+  it('keeps a target that is on the page, and leaves a top-level box alone', () => {
+    const under: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0001', draft: 'x' }
+    expect(nextReplyState(under, { type: 'firstPageLoaded', paths: ['0001'] })).toBe(under)
+    expect(nextReplyState(typed, { type: 'firstPageLoaded', paths: [] })).toBe(typed)
+  })
+
+  it('does not move the target under a send in flight', () => {
+    const sending = run([{ type: 'opened', replyTo: '0001' }, { type: 'sendStarted' }])
+    expect(nextReplyState(sending, { type: 'firstPageLoaded', paths: [] })).toBe(sending)
   })
 })
