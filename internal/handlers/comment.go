@@ -155,6 +155,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		GroupID:        groupID,
 		PostID:         postID,
 		PostSortKey:    postSortKey,
+		PostTTL:        post.TTL,
 		Path:           req.Path,
 		AuthorUserID:   userID,
 		Generation:     req.Generation,
@@ -198,23 +199,39 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "your keys changed and an admin has not approved them for this group yet", "member_dormant")
 		return
 	}
+	// A path may be at most one past the highest sibling, so numbers are never
+	// skipped: a member cannot take 9999 first and leave no room under a parent,
+	// or choose where a comment sorts. The segments are fixed width under one
+	// parent, so string order is numeric order. This cannot go stale: the
+	// highest sibling only grows, so a path no more than one past it now is no
+	// more than one past it when written, and two writers at the same number
+	// still meet the write's own condition.
+	next, nerr := h.db.NextCommentPath(r.Context(), postID, idgen.CommentParentPath(req.Path))
+	switch {
+	case errors.Is(nerr, db.ErrCommentSiblingsFull):
+		writeRepliesFull(w)
+		return
+	case nerr != nil:
+		WriteInternalError(w, r, nerr, "could not create the comment")
+		return
+	case req.Path > next:
+		writeNextPath(w, "comment_path_skips", "this path skips a number; seal again with the next free one", next)
+		return
+	}
 	err = h.db.CreateComment(r.Context(), in)
 	switch {
 	case err == nil:
 		WriteJSON(w, http.StatusCreated, map[string]string{"path": req.Path})
 	case errors.Is(err, db.ErrCommentPathTaken):
+		// Another writer took the number between the check and the write.
 		next, nerr := h.db.NextCommentPath(r.Context(), postID, idgen.CommentParentPath(req.Path))
 		switch {
 		case errors.Is(nerr, db.ErrCommentSiblingsFull):
-			WriteErrorWithCode(w, http.StatusConflict, "this comment already has as many replies as it can number", "replies_full")
+			writeRepliesFull(w)
 		case nerr != nil:
 			WriteInternalError(w, r, nerr, "could not create the comment")
 		default:
-			WriteJSON(w, http.StatusConflict, map[string]string{
-				"error":    "another comment already has this path; seal again with the next free one",
-				"code":     "comment_path_taken",
-				"nextPath": next,
-			})
+			writeNextPath(w, "comment_path_taken", "another comment already has this path; seal again with the next free one", next)
 		}
 	case errors.Is(err, db.ErrCommentPostGone):
 		postNotFound(w)
@@ -231,6 +248,15 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteInternalError(w, r, err, "could not create the comment")
 	}
+}
+
+func writeRepliesFull(w http.ResponseWriter) {
+	WriteErrorWithCode(w, http.StatusConflict, "this comment already has as many replies as it can number", "replies_full")
+}
+
+// writeNextPath answers a path the client must change, with the one to use.
+func writeNextPath(w http.ResponseWriter, code, msg, nextPath string) {
+	WriteJSON(w, http.StatusConflict, map[string]string{"error": msg, "code": code, "nextPath": nextPath})
 }
 
 // Page sizes for GET /api/posts/{postId}/thread. A comment is about 14 KB on

@@ -47,9 +47,12 @@ func PostPartition(postID string) string { return "POST#" + postID }
 // CreateCommentInput is one signed comment. The handler has verified Signature
 // against the author's current key and checked the signing day; db does not.
 type CreateCommentInput struct {
-	GroupID      string
-	PostID       string
-	PostSortKey  string
+	GroupID     string
+	PostID      string
+	PostSortKey string
+	// PostTTL is the post's TTL as the handler just read it, copied onto the
+	// comment; the transaction still checks the post exists and has not expired.
+	PostTTL      int64
 	Path         string
 	AuthorUserID string
 	Generation   int64
@@ -115,13 +118,6 @@ func commentKey(postID, path string) map[string]types.AttributeValue {
 // The TTL is the parent post's, copied rather than computed from now, so the
 // row says when the post expires and nothing about when the comment was made.
 func (c *Client) CreateComment(ctx context.Context, in CreateCommentInput) error {
-	post, err := c.GetPost(ctx, in.GroupID, in.PostSortKey)
-	if err != nil {
-		return err
-	}
-	if post == nil || PostExpired(post, in.Now) {
-		return ErrCommentPostGone
-	}
 	comment := models.Comment{
 		Record: models.Record{
 			PK:   PostPartition(in.PostID),
@@ -134,7 +130,7 @@ func (c *Client) CreateComment(ctx context.Context, in CreateCommentInput) error
 		Nonce:        in.Nonce,
 		Ciphertext:   in.Ciphertext,
 		Signature:    in.Signature,
-		TTL:          post.TTL,
+		TTL:          in.PostTTL,
 	}
 	item, err := attributevalue.MarshalMap(comment)
 	if err != nil {

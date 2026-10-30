@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
+	"github.com/pwntato/undergroundbb/internal/db"
 )
 
 // copts shapes one signed comment. Zero values give a valid top-level comment
@@ -371,6 +373,51 @@ func TestNextPathHintLooksPastTheLastChildsDescendants(t *testing.T) {
 	}
 }
 
+func TestCreateCommentRefusesAPathThatSkipsNumbers(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	storeCommentAt(t, pid, "0001", owner.userID, 0)
+	storeCommentAt(t, pid, "0001.0001", owner.userID, 0)
+	for _, tc := range []struct{ path, wantNext string }{
+		{"0003", "0002"},           // one past the next free number at the top
+		{"9999", "0002"},           // the lock: 9999 first would leave no room after it
+		{"0001.0003", "0001.0002"}, // the same rule under a parent
+		{"0001.9999", "0001.0002"},
+	} {
+		rec := doComment(t, h, cookie, pid, signedComment(t, gid, owner, copts{path: tc.path}))
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "comment_path_skips" {
+			t.Fatalf("%s: %d %s", tc.path, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			NextPath string `json:"nextPath"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if body.NextPath != tc.wantNext {
+			t.Errorf("%s: nextPath = %q, want %q", tc.path, body.NextPath, tc.wantNext)
+		}
+		if getRow(t, "POST#"+pid, "CMT#"+tc.path) != nil {
+			t.Errorf("%s: a refused comment left a row", tc.path)
+		}
+	}
+	// The first number at each level is allowed, and then the next.
+	for _, path := range []string{"0002", "0001.0002", "0003"} {
+		if rec := doComment(t, h, cookie, pid, signedComment(t, gid, owner, copts{path: path})); rec.Code != http.StatusCreated {
+			t.Fatalf("%s in order: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	out := decodeThread(t, doThread(t, h, cookie, pid, ""))
+	if got := strings.Join(threadPaths(out), ","); got != "0001,0001.0001,0001.0002,0002,0003" {
+		t.Fatalf("thread = %s", got)
+	}
+}
+
+func TestCreateCommentAsTheFirstOfAThreadMustBeNumberOne(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	rec := doComment(t, h, cookie, pid, signedComment(t, gid, owner, copts{path: "0002"}))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "comment_path_skips" {
+		t.Fatalf("first at 0002: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestACommentWithNoRoomForANewSiblingSaysSo(t *testing.T) {
 	h, gid, pid, owner, cookie := commentFixture(t)
 	storeCommentAt(t, pid, "9999", owner.userID, 0)
@@ -392,6 +439,30 @@ func TestCreateCommentAcceptsAReplyUnderAnExistingParentToTheDepthCap(t *testing
 	deeper := strings.TrimSuffix(path, ".0001") + ".0001"
 	if rec := doComment(t, h, cookie, pid, signedComment(t, gid, owner, copts{path: deeper})); rec.Code != http.StatusBadRequest {
 		t.Fatalf("ninth level %s: %d %s", deeper, rec.Code, rec.Body.String())
+	}
+}
+
+// The handler reads the post and refuses a missing or expired one before the
+// write; this is the write's own guard, the one a post that vanishes between
+// the read and the write meets.
+func TestCreateCommentTransactionRefusesAMissingOrExpiredPost(t *testing.T) {
+	h, gid, owner, _ := postFixture(t)
+	missing := "POST#2026-10-28#00112233445566f1"
+	expired := "POST#2026-10-28#00112233445566f2"
+	storePostAt(t, gid, expired, owner.userID, time.Now().Add(-time.Hour).Unix())
+	for name, postKey := range map[string]string{"missing": missing, "expired": expired} {
+		in := db.CreateCommentInput{
+			GroupID: gid, PostID: pidOf(gid, postKey), PostSortKey: postKey, Path: "0001",
+			AuthorUserID: owner.userID, SignedDay: time.Now().UTC().Format("2006-01-02"),
+			Nonce: make([]byte, crypto.NonceSize), Ciphertext: make([]byte, 80), Signature: make([]byte, 64),
+			Now: time.Now(),
+		}
+		if err := h.db.CreateComment(context.Background(), in); !errors.Is(err, db.ErrCommentPostGone) {
+			t.Errorf("%s post: err = %v, want ErrCommentPostGone", name, err)
+		}
+		if getRow(t, "POST#"+in.PostID, "CMT#0001") != nil {
+			t.Errorf("%s post: a refused comment left a row", name)
+		}
 	}
 }
 
