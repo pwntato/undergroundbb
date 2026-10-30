@@ -83,3 +83,14 @@ describe('nextThreadState', () => {
     }
   })
 })
+
+describe('reset', () => {
+  it('goes back to the first page, dropping comments, cursor and failure', () => {
+    const loaded = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'pageLoaded',
+      result: page(['0001', '0002'], 'cur'),
+    })
+    expect(loaded.comments).toHaveLength(2)
+    expect(nextThreadState(loaded, { type: 'reset' })).toEqual(INITIAL_THREAD_STATE)
+  })
+})

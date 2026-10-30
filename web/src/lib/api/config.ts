@@ -7,6 +7,7 @@ import { ApiError } from './auth.js'
 export interface PublicConfig {
   readonly maxPostTitleBytes: number
   readonly maxPostBodyBytes: number
+  readonly maxCommentBytes: number
 }
 
 export async function getPublicConfig(): Promise<PublicConfig> {

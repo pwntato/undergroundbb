@@ -840,6 +840,36 @@ export interface SealPostRequest {
   readonly body: string
 }
 
+/** #44: seals and signs a comment. See credential-material.ts's sealComment. */
+export interface SealCommentRequest {
+  readonly kind: 'sealComment'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly postId: string
+  readonly path: string
+  readonly generation: number
+  readonly commentGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly text: string
+}
+
+export interface SealedComment {
+  readonly path: string
+  readonly generation: number
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+export interface SealCommentResponse {
+  readonly kind: 'sealCommentDone'
+  readonly id: string
+  readonly result: SealedComment
+}
+
 export interface SealedPost {
   readonly sortKey: string
   readonly generation: number
@@ -1046,6 +1076,7 @@ export type WorkerRequest =
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SealPostRequest
+  | SealCommentRequest
   | OpenPostsRequest
   | OpenCommentsRequest
   | SignInviteCreationRequest
@@ -1084,6 +1115,7 @@ export type WorkerResponse =
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SealPostResponse
+  | SealCommentResponse
   | OpenPostsResponse
   | OpenCommentsResponse
   | SignInviteCreationResponse
