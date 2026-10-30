@@ -38,6 +38,9 @@ import type {
   DecryptGroupNamesResponse,
   EncryptGroupTextRequest,
   EncryptGroupTextResponse,
+  SealCommentRequest,
+  SealCommentResponse,
+  SealedComment,
   SealPostRequest,
   SealPostResponse,
   OpenCommentsRequest,
@@ -939,6 +942,35 @@ export function sealPost(req: Omit<SealPostRequest, 'kind' | 'id'>): Promise<Sea
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPost`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Seals and signs a comment -- #44. See credential-material.ts's sealComment. */
+export function sealComment(req: Omit<SealCommentRequest, 'kind' | 'id'>): Promise<SealedComment> {
+  const id = nextRequestID()
+  const fullReq: SealCommentRequest = { kind: 'sealComment', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'sealCommentDone') {
+        resolve((msg as SealCommentResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for sealComment`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

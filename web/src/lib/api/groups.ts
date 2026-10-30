@@ -891,6 +891,64 @@ export async function getThread(postId: string, cursor?: string): Promise<Thread
   return handleJSON<ThreadResponse>(res)
 }
 
+/** The body of POST /api/posts/{pid}/comments; the group comes from the post id. */
+export interface CreateCommentRequest {
+  readonly path: string
+  readonly generation: number
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+/**
+ * 409 `comment_path_taken` or `comment_path_skips`: the path the client sealed
+ * is not the next free one. The signature and the AAD cover the path, so the
+ * client seals again at `nextPath`.
+ */
+export class CommentPathError extends ApiError {
+  readonly nextPath: string
+  constructor(message: string, code: string, nextPath: string) {
+    super(409, message, code)
+    this.name = 'CommentPathError'
+    this.nextPath = nextPath
+  }
+}
+
+/** Stores a sealed comment (#44). The `#`s of the post id travel as %23. */
+export async function createComment(
+  postId: string,
+  req: CreateCommentRequest,
+): Promise<{ path: string }> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(postId)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(req),
+  })
+  if (res.status === 409) {
+    // handleJSON keeps only the message and code; nextPath needs the body.
+    const body: unknown = await res
+      .clone()
+      .json()
+      .catch(() => null)
+    if (typeof body === 'object' && body !== null) {
+      const { code, nextPath, error } = body as Record<string, unknown>
+      if (
+        (code === 'comment_path_taken' || code === 'comment_path_skips') &&
+        typeof nextPath === 'string'
+      ) {
+        throw new CommentPathError(
+          typeof error === 'string' ? error : 'path conflict',
+          code,
+          nextPath,
+        )
+      }
+    }
+  }
+  return handleJSON<{ path: string }>(res)
+}
+
 export async function createPost(
   groupId: string,
   req: CreatePostRequest,

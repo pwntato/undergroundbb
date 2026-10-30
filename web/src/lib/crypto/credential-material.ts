@@ -41,7 +41,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
-import { decodeComment } from './comment.js'
+import { decodeComment, encodeComment } from './comment.js'
 import { decodePost, encodePost } from './post.js'
 import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
@@ -1342,6 +1342,83 @@ export async function openPosts(
     }
   }
   return out
+}
+
+/**
+ * #44: seals and signs a comment. Same shape as sealPost: unwraps the caller's
+ * own entry, walks the GENKEY# links down to `commentGeneration`, seals the text
+ * and exact time under commentAAD(post, path, generation) and signs
+ * (author, group, `CMT#<path>`, generation, UTC day, ciphertext) under
+ * ContextComment. The CLIENT picks the path (the signature and the AAD cover
+ * it); on 409 `comment_path_taken` / `comment_path_skips` the caller seals again
+ * with the `nextPath` the server answered.
+ */
+export async function sealComment(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly postId: string
+    readonly path: string
+    readonly generation: number
+    readonly commentGeneration: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly text: string
+  },
+  now: Date = new Date(),
+): Promise<{
+  path: string
+  generation: number
+  signedDay: string
+  nonce: string
+  ciphertext: string
+  signature: string
+}> {
+  const ownKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    {
+      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+    },
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  const groupKey = await walkChainDown(
+    ownKey,
+    req.groupId,
+    req.generation,
+    req.commentGeneration,
+    req.chain ?? [],
+  )
+  const day = now.toISOString().slice(0, 10)
+  const sealed = await encrypt(
+    groupKey,
+    encodeComment({ text: req.text, at: now.toISOString() }),
+    commentAAD(req.postId, req.path, req.commentGeneration),
+  )
+  const signature = ed25519.sign(
+    keys.signingKey,
+    ed25519.SigningContext.Comment,
+    signedPayload(
+      keys.userId,
+      req.groupId,
+      `CMT#${req.path}`,
+      req.commentGeneration,
+      day,
+      sealed.ciphertext,
+    ),
+  )
+  return {
+    path: req.path,
+    generation: req.commentGeneration,
+    signedDay: day,
+    nonce: bytesToBase64(sealed.nonce),
+    ciphertext: bytesToBase64(sealed.ciphertext),
+    signature: bytesToBase64(signature),
+  }
 }
 
 /**

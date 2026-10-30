@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import { ThreadPanel } from './ThreadPanel'
+import { ThreadPanel, type ThreadReply } from './ThreadPanel'
 import type { CommentView } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
 
@@ -33,6 +33,7 @@ function render(
     more?: boolean
     retry?: boolean
     title?: string
+    reply?: Partial<ThreadReply>
   } = {},
 ) {
   return renderToStaticMarkup(
@@ -48,6 +49,20 @@ function render(
         hasMore: over.more ?? false,
         onLoadMore: () => {},
         ...(over.retry === true && { onRetry: () => {} }),
+        ...(over.reply !== undefined && {
+          reply: {
+            replyTo: null,
+            draft: '',
+            maxBytes: 100,
+            sending: false,
+            error: null,
+            notice: null,
+            onOpen: () => {},
+            onEdit: () => {},
+            onSend: () => {},
+            ...over.reply,
+          },
+        }),
       }),
     ),
   )
@@ -153,5 +168,78 @@ describe('commentNotes', () => {
 
   it('labels an author whose profile could not be read', () => {
     expect(commentAuthorLabel(comment({ authorName: null }))).toBe('an unknown member')
+  })
+})
+
+describe('ThreadPanel reply box', () => {
+  const deep = Array(8).fill('0001').join('.')
+
+  it('has no reply controls when the screen passes none', () => {
+    const html = render([comment()])
+    expect(html).not.toContain('Reply')
+    expect(html).not.toContain('<textarea')
+  })
+
+  it('shows a Reply button per comment and one top-level box at the bottom', () => {
+    const html = render([comment(), comment({ path: '0002' })], { reply: {} })
+    expect(html.match(/>Reply</g)).toHaveLength(2)
+    expect(html.match(/<textarea/g)).toHaveLength(1)
+    expect(html).toContain('Add a comment')
+    expect(html).toContain('0 / 100 bytes. Plain text only.')
+  })
+
+  it('asks for the first comment on an empty thread', () => {
+    expect(render([], { reply: {} })).toContain('Write the first comment')
+  })
+
+  it('moves the box under the comment being replied to, and keeps the draft in it', () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reply: { replyTo: '0001', draft: 'my draft' },
+    })
+    expect(html.match(/<textarea/g)).toHaveLength(1)
+    expect(html).toContain('Your reply')
+    expect(html).not.toContain('Add a comment')
+    expect(html).toContain('my draft')
+    // The comment with the box open has no Reply button; the other one does.
+    expect(html.match(/>Reply</g)).toHaveLength(1)
+    expect(html.indexOf('Your reply')).toBeGreaterThan(html.indexOf('First line'))
+    expect(html).toContain('>Cancel<')
+  })
+
+  it('says where a reply to a comment at the depth cap will appear', () => {
+    const at = comment({ path: deep, depth: 8 })
+    const html = render([at], { reply: { replyTo: deep } })
+    expect(html).toContain('will appear beside this comment')
+    expect(render([comment()], { reply: { replyTo: '0001' } })).not.toContain('beside')
+  })
+
+  it('falls back to the bottom box when the target is not on the page', () => {
+    const html = render([comment()], { reply: { replyTo: '0042' } })
+    expect(html).toContain('Add a comment')
+    expect(html).not.toContain('Your reply')
+  })
+
+  it('shows the notice, the error and the byte count, and flags a draft over the limit', () => {
+    const html = render([comment()], {
+      reply: { notice: 'Comment sent.', error: 'It failed.', draft: '€'.repeat(40), maxBytes: 100 },
+    })
+    expect(html).toContain('Comment sent.')
+    expect(html).toContain('It failed.')
+    expect(html).toContain('120 / 100 bytes')
+    expect(html).toContain('The comment is too long.')
+    expect(html).toContain('disabled=""')
+  })
+
+  it('disables the box and the Reply buttons while sending', () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reply: { sending: true, draft: 'x' },
+    })
+    expect(html).toContain('Sending…')
+    expect(html).not.toMatch(/<button type="button"[^>]*>Reply</)
+  })
+
+  it('offers no Reply on a comment whose path is malformed', () => {
+    const html = render([comment({ path: 'junk', depth: 0 })], { reply: {} })
+    expect(html).not.toContain('>Reply<')
   })
 })

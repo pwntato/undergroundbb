@@ -37,6 +37,7 @@ import {
   signInviteAcceptance as signInviteAcceptancePure,
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
+  sealComment as sealCommentPure,
   sealPost as sealPostPure,
   openComments as openCommentsPure,
   openPosts as openPostsPure,
@@ -69,6 +70,7 @@ import type {
   CompleteRecoveryRequest,
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
+  SealCommentRequest,
   SealPostRequest,
   OpenCommentsRequest,
   OpenPostsRequest,
@@ -189,6 +191,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'sealPost':
       await sealPost(req)
+      return
+    case 'sealComment':
+      await sealComment(req)
       return
     case 'openPosts':
       await openPosts(req)
@@ -333,6 +338,13 @@ async function encryptGroupText(req: EncryptGroupTextRequest): Promise<void> {
 }
 
 /** Seals and signs a post -- #42. Same guards as signWrapRecord: no signing mid-rotation. */
+async function sealComment(req: SealCommentRequest): Promise<void> {
+  rotation.assertIdle('write a comment')
+  const keys = requireLiveKeys(req.userId, 'write a comment')
+  const result = await sealCommentPure(keys, req)
+  post({ kind: 'sealCommentDone', id: req.id, result })
+}
+
 async function sealPost(req: SealPostRequest): Promise<void> {
   rotation.assertIdle('write a post')
   const keys = requireLiveKeys(req.userId, 'write a post')

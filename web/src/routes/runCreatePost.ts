@@ -85,18 +85,32 @@ export type PrepareResult =
       readonly problem?: PostFormProblem
     }
 
-/** Loads the group, works out which generation new posts use, and seals the post. Never throws. */
-export async function preparePost(
-  deps: PrepareDeps,
+export type PostingKeyResult =
+  | {
+      readonly ok: true
+      /** The generation of the caller's own wrap. */
+      readonly generation: number
+      /** The generation new posts and comments are sealed under. */
+      readonly postGeneration: number
+      readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+      readonly chain?: readonly {
+        readonly generation: number
+        readonly wrapped: { nonce: string; ciphertext: string }
+      }[]
+    }
+  | {
+      readonly ok: false
+      readonly kind: 'notFound' | 'authRequired' | 'behind' | 'unreadable' | 'failed'
+    }
+
+/**
+ * Loads the group and works out which generation new posts (and comments) use
+ * and the chain that reaches it. Never throws.
+ */
+export async function loadPostingKey(
+  deps: Pick<PrepareDeps, 'getGroup' | 'getChain'>,
   groupId: string,
-  title: string,
-  body: string,
-  limits: PostLimits,
-): Promise<PrepareResult> {
-  const problem = validatePostForm(title, body, limits)
-  if (problem !== null) {
-    return { ok: false, kind: 'invalid', problem }
-  }
+): Promise<PostingKeyResult> {
   let detail: GroupDetail
   try {
     detail = await deps.getGroup(groupId)
@@ -127,14 +141,39 @@ export async function preparePost(
       return { ok: false, kind: 'unreadable' }
     }
   }
+  return {
+    ok: true,
+    generation: detail.generation,
+    postGeneration,
+    wrappedGroupKey: detail.wrappedGroupKey,
+    ...(chain.length > 0 && { chain }),
+  }
+}
+
+/** Loads the group, works out which generation new posts use, and seals the post. Never throws. */
+export async function preparePost(
+  deps: PrepareDeps,
+  groupId: string,
+  title: string,
+  body: string,
+  limits: PostLimits,
+): Promise<PrepareResult> {
+  const problem = validatePostForm(title, body, limits)
+  if (problem !== null) {
+    return { ok: false, kind: 'invalid', problem }
+  }
+  const key = await loadPostingKey(deps, groupId)
+  if (!key.ok) {
+    return key
+  }
   try {
     const sealed = await deps.sealPost({
       userId: deps.userId,
       groupId,
-      generation: detail.generation,
-      postGeneration,
-      wrappedGroupKey: detail.wrappedGroupKey,
-      ...(chain !== undefined && chain.length > 0 && { chain }),
+      generation: key.generation,
+      postGeneration: key.postGeneration,
+      wrappedGroupKey: key.wrappedGroupKey,
+      ...(key.chain !== undefined && { chain: key.chain }),
       title,
       body,
     })

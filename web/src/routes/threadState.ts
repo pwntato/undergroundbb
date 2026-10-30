@@ -32,9 +32,12 @@ export const INITIAL_THREAD_STATE: ThreadState = {
 
 export type ThreadEvent =
   | { readonly type: 'loadStarted' }
+  /** Start over from the first page, e.g. after a comment was added. */
+  | { readonly type: 'reset' }
   | { readonly type: 'pageLoaded'; readonly result: ThreadPageResult }
 
 export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadState {
+  if (event.type === 'reset') return INITIAL_THREAD_STATE
   if (event.type === 'loadStarted') return { ...state, loading: true, failure: null }
   const { result } = event
   if (!result.ok) return { ...state, loading: false, failure: result.kind }
