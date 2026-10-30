@@ -17,6 +17,7 @@ import {
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
+  commentAAD,
   postAAD,
   roleGrantPayload,
   successorClaimPayload,
@@ -40,6 +41,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
+import { decodeComment } from './comment.js'
 import { decodePost, encodePost } from './post.js'
 import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
@@ -1242,6 +1244,50 @@ export async function sealPost(
 }
 
 /**
+ * Unwraps the caller's own entry once and returns a lookup of the group key for
+ * a generation, derived down the GENKEY# chain and remembered. A generation
+ * that cannot be derived (newer than the member holds, a missing or failed
+ * link) is remembered as null, so everything under it is unreadable without
+ * retrying. Only the unwrap of the caller's own entry rejects.
+ */
+async function generationKeys(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+  },
+): Promise<(generation: number) => Promise<Uint8Array | null>> {
+  const ownKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    {
+      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+    },
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  // One derivation per generation; a generation that cannot be derived is
+  // remembered as such so every post under it is unreadable without retrying.
+  const byGeneration = new Map<number, Promise<Uint8Array | null>>()
+  const keyFor = (generation: number): Promise<Uint8Array | null> => {
+    let found = byGeneration.get(generation)
+    if (found === undefined) {
+      found = walkChainDown(ownKey, req.groupId, req.generation, generation, req.chain ?? []).catch(
+        () => null,
+      )
+      byGeneration.set(generation, found)
+    }
+    return found
+  }
+  return keyFor
+}
+
+/**
  * #43: opens stored posts. Unwraps the caller's own entry once, then derives the
  * key for each distinct post generation by walking the GENKEY# links down, and
  * decrypts each post under postAAD(group, sortKey, generation). A post that
@@ -1272,28 +1318,7 @@ export async function openPosts(
 ): Promise<
   ({ kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' })[]
 > {
-  const ownKey = await unwrap(
-    keys.wrappingKey.privateKey,
-    {
-      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
-      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
-      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
-    },
-    memberWrapAAD(req.groupId, keys.userId, req.generation),
-  )
-  // One derivation per generation; a generation that cannot be derived is
-  // remembered as such so every post under it is unreadable without retrying.
-  const byGeneration = new Map<number, Promise<Uint8Array | null>>()
-  const keyFor = (generation: number): Promise<Uint8Array | null> => {
-    let found = byGeneration.get(generation)
-    if (found === undefined) {
-      found = walkChainDown(ownKey, req.groupId, req.generation, generation, req.chain ?? []).catch(
-        () => null,
-      )
-      byGeneration.set(generation, found)
-    }
-    return found
-  }
+  const keyFor = await generationKeys(keys, req)
   const out: (
     { kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' }
   )[] = []
@@ -1312,6 +1337,57 @@ export async function openPosts(
       )
       const content = decodePost(plain)
       out.push({ kind: 'opened', title: content.title, body: content.body, at: content.at })
+    } catch {
+      out.push({ kind: 'unreadable' })
+    }
+  }
+  return out
+}
+
+/**
+ * #44: opens a page of a post's comments. Same rules as openPosts: one unwrap,
+ * one derivation per generation, and a comment that does not open (a newer
+ * generation than the member holds, a missing link, a failed tag, a layout that
+ * does not decode) is `unreadable` without blaming anyone. The AAD binds the
+ * post, the path and the generation (commentAAD), so a comment moved under
+ * another post or path lands here too.
+ */
+export async function openComments(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly postId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly comments: readonly {
+      readonly path: string
+      readonly generation: number
+      readonly nonce: string
+      readonly ciphertext: string
+    }[]
+  },
+): Promise<({ kind: 'opened'; text: string; at: string } | { kind: 'unreadable' })[]> {
+  const keyFor = await generationKeys(keys, req)
+  const out: ({ kind: 'opened'; text: string; at: string } | { kind: 'unreadable' })[] = []
+  for (const c of req.comments) {
+    try {
+      const groupKey = await keyFor(c.generation)
+      if (groupKey === null) {
+        out.push({ kind: 'unreadable' })
+        continue
+      }
+      const plain = await decrypt(
+        groupKey,
+        base64ToBytes(c.nonce),
+        base64ToBytes(c.ciphertext),
+        commentAAD(req.postId, c.path, c.generation),
+      )
+      const content = decodeComment(plain)
+      out.push({ kind: 'opened', text: content.text, at: content.at })
     } catch {
       out.push({ kind: 'unreadable' })
     }

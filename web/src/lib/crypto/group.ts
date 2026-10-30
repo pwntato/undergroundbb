@@ -348,6 +348,19 @@ export function postAAD(groupId: string, sortKey: string, generation: number): U
   return new TextEncoder().encode(`GROUP#${groupId}:${sortKey}:GEN#${gen}`)
 }
 
+/**
+ * AAD for a comment's ciphertext -- #44. `postId` is the post's full address,
+ * `<gid>#<YYYY-MM-DD>#<16 hex>`, and `path` the comment's materialized path, so
+ * a comment moved under another post, to another path or to another generation
+ * fails to open. `POST#<pid>:CMT#<path>:GEN#<nnnnnn>`, matching
+ * internal/crypto/group.go's CommentAAD byte-for-byte; it must never change
+ * once a real comment exists under it.
+ */
+export function commentAAD(postId: string, path: string, generation: number): Uint8Array {
+  const gen = generation.toString().padStart(6, '0')
+  return new TextEncoder().encode(`POST#${postId}:CMT#${path}:GEN#${gen}`)
+}
+
 /** Which of a group's two encrypted text fields groupNameAAD is being built for. */
 export type GroupTextField = 'NAME' | 'DESC'
 

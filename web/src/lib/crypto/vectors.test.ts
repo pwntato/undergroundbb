@@ -21,6 +21,7 @@ import {
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
+  commentAAD,
   postAAD,
   roleGrantPayload,
   successorClaimPayload,
@@ -321,6 +322,17 @@ interface VectorFile {
     name: string
     group_id: string
     sort_key: string
+    generation: number
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
+  }[]
+  comment_aad: {
+    name: string
+    post_id: string
+    path: string
     generation: number
     aad_hex: string
     key_hex: string
@@ -1043,6 +1055,31 @@ describe('post AAD vectors', () => {
           postAAD(tc.group_id, 'POST#2026-10-29#00112233445566ff', tc.generation),
         ),
       ).rejects.toThrow(DecryptionFailedError)
+    })
+  }
+})
+
+// Pins commentAAD's exact encoding (#44), and that a comment does not open
+// under another post's, another path's or another generation's AAD.
+describe('comment AAD vectors', () => {
+  for (const tc of vectors.comment_aad) {
+    it(tc.name, async () => {
+      const gotAad = commentAAD(tc.post_id, tc.path, tc.generation)
+      expect(bytesToHex(gotAad)).toBe(tc.aad_hex)
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const ciphertext = await encryptWithNonce(key, nonce, hexToBytes(tc.plaintext_hex), gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+      expect(bytesToHex(await decrypt(key, nonce, ciphertext, gotAad))).toBe(tc.plaintext_hex)
+
+      for (const wrong of [
+        commentAAD(tc.post_id, tc.path, tc.generation + 1),
+        commentAAD(tc.post_id, '0009', tc.generation),
+        commentAAD(tc.post_id.replace('2026-10-28', '2026-10-29'), tc.path, tc.generation),
+      ]) {
+        await expect(decrypt(key, nonce, ciphertext, wrong)).rejects.toThrow(DecryptionFailedError)
+      }
     })
   }
 })

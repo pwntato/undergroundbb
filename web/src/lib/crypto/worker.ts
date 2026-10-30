@@ -38,6 +38,7 @@ import {
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
   sealPost as sealPostPure,
+  openComments as openCommentsPure,
   openPosts as openPostsPure,
   signWrapRecord as signWrapRecordPure,
   signVerification as signVerificationPure,
@@ -69,6 +70,7 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   SealPostRequest,
+  OpenCommentsRequest,
   OpenPostsRequest,
   GenerateSignupMaterialRequest,
   GetOwnFingerprintRequest,
@@ -190,6 +192,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'openPosts':
       await openPosts(req)
+      return
+    case 'openComments':
+      await openComments(req)
       return
     case 'signInviteCreation':
       await signInviteCreation(req)
@@ -344,6 +349,13 @@ async function openPosts(req: OpenPostsRequest): Promise<void> {
   const keys = requireLiveKeys(req.userId, 'read posts')
   const result = await openPostsPure(keys, req)
   post({ kind: 'openPostsDone', id: req.id, result })
+}
+
+/** Opens a page of a post's comments -- #44. Same guards as openPosts. */
+async function openComments(req: OpenCommentsRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'read comments')
+  const result = await openCommentsPure(keys, req)
+  post({ kind: 'openCommentsDone', id: req.id, result })
 }
 
 /** Signs a role grant -- issue #37. Same liveKeys-unset/wrong-account guards as signGroupCreation. */

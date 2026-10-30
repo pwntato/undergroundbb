@@ -874,6 +874,39 @@ export type OpenedPost =
   | { readonly kind: 'opened'; readonly title: string; readonly body: string; readonly at: string }
   | { readonly kind: 'unreadable' }
 
+/**
+ * #44: opens a page of a post's comments. See credential-material.ts's
+ * openComments. `postId` is the post's full address (`<gid>#<day>#<hex>`), which
+ * the AAD binds. A comment that does not open is `unreadable`, never an error.
+ */
+export interface OpenCommentsRequest {
+  readonly kind: 'openComments'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly postId: string
+  readonly generation: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly comments: readonly {
+    readonly path: string
+    readonly generation: number
+    readonly nonce: string
+    readonly ciphertext: string
+  }[]
+}
+
+export type OpenedComment =
+  | { readonly kind: 'opened'; readonly text: string; readonly at: string }
+  | { readonly kind: 'unreadable' }
+
+export interface OpenCommentsResponse {
+  readonly kind: 'openCommentsDone'
+  readonly id: string
+  /** One entry per requested comment, in the same order. */
+  readonly result: readonly OpenedComment[]
+}
+
 export interface OpenPostsResponse {
   readonly kind: 'openPostsDone'
   readonly id: string
@@ -1014,6 +1047,7 @@ export type WorkerRequest =
   | EncryptGroupTextRequest
   | SealPostRequest
   | OpenPostsRequest
+  | OpenCommentsRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
@@ -1051,6 +1085,7 @@ export type WorkerResponse =
   | EncryptGroupTextResponse
   | SealPostResponse
   | OpenPostsResponse
+  | OpenCommentsResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse

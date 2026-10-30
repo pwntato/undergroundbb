@@ -39,12 +39,15 @@ import {
   startApprovalRekey,
   selfWrapFromHandoff,
   sealPost,
+  openComments,
   openPosts,
   startSelfRekey,
 } from './credential-material.js'
+import { encodeComment } from './comment.js'
 import * as ed25519 from './ed25519.js'
 import {
   admissionPayload,
+  commentAAD,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
@@ -609,6 +612,127 @@ describe('decryptGroupNames', () => {
         description: 'y',
       }),
     ).rejects.toThrow()
+  })
+
+  describe('openComments (#44)', () => {
+    const groupId = 'group-uuid-test-comments'
+    const postId = `${groupId}#2026-10-28#00112233445566ff`
+    const at = '2026-10-28T12:34:56.789Z'
+
+    async function sealComment(
+      groupKey: Uint8Array,
+      path: string,
+      generation: number,
+      text: string,
+    ) {
+      const sealed = await encrypt(
+        groupKey,
+        encodeComment({ text, at }),
+        commentAAD(postId, path, generation),
+      )
+      return {
+        path,
+        generation,
+        nonce: bytesToBase64(sealed.nonce),
+        ciphertext: bytesToBase64(sealed.ciphertext),
+      }
+    }
+
+    it('opens what was sealed, in request order, one result per comment', async () => {
+      const groupKey = new Uint8Array(32).fill(51)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const a = await sealComment(groupKey, '0001', 0, 'first')
+      const b = await sealComment(groupKey, '0001.0001', 0, 'a reply')
+      expect(
+        await openComments(keys, {
+          groupId,
+          postId,
+          generation: 0,
+          wrappedGroupKey,
+          comments: [b, a],
+        }),
+      ).toEqual([
+        { kind: 'opened', text: 'a reply', at },
+        { kind: 'opened', text: 'first', at },
+      ])
+    })
+
+    it('shows a comment that does not open as unreadable and still opens the rest', async () => {
+      const groupKey = new Uint8Array(32).fill(52)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const good = await sealComment(groupKey, '0001', 0, 'good')
+      const other = await sealComment(groupKey, '0002', 0, 'other')
+      const flipped = base64ToBytes(good.ciphertext)
+      flipped[0] = flipped[0]! ^ 1
+      const out = await openComments(keys, {
+        groupId,
+        postId,
+        generation: 0,
+        wrappedGroupKey,
+        comments: [
+          { ...good, nonce: other.nonce }, // the nonce is not signed
+          { ...good, ciphertext: bytesToBase64(flipped) },
+          { ...good, path: '0002' }, // moved to another path
+          { ...good, generation: 1 }, // claims another generation (also not derivable)
+          { ...good, nonce: '***' },
+          good,
+        ],
+      })
+      expect(out.map((o) => o.kind)).toEqual([
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'opened',
+      ])
+    })
+
+    it('does not open a comment under another post', async () => {
+      const groupKey = new Uint8Array(32).fill(53)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const c = await sealComment(groupKey, '0001', 0, 'hello')
+      const out = await openComments(keys, {
+        groupId,
+        postId: `${groupId}#2026-10-29#00112233445566ff`,
+        generation: 0,
+        wrappedGroupKey,
+        comments: [c],
+      })
+      expect(out).toEqual([{ kind: 'unreadable' }])
+    })
+
+    it('opens an older generation through the chain', async () => {
+      const key0 = new Uint8Array(32).fill(54)
+      const key1 = new Uint8Array(32).fill(55)
+      const { keys } = await setUpMemberWithGroup(groupId, key0)
+      const wrapped1 = await wrap(
+        keys.wrappingKey.publicKey,
+        key1,
+        memberWrapAAD(groupId, keys.userId, 1),
+      )
+      const link0 = await encrypt(key1, key0, genKeyAAD(groupId, 0))
+      const own1 = {
+        ephemeralPub: bytesToBase64(wrapped1.ephemeralPub),
+        nonce: bytesToBase64(wrapped1.nonce),
+        ciphertext: bytesToBase64(wrapped1.ciphertext),
+      }
+      const chain = [
+        {
+          generation: 0,
+          wrapped: {
+            nonce: bytesToBase64(link0.nonce),
+            ciphertext: bytesToBase64(link0.ciphertext),
+          },
+        },
+      ]
+      const old = await sealComment(key0, '0001', 0, 'old')
+      const req = { groupId, postId, generation: 1, wrappedGroupKey: own1, comments: [old] }
+      expect(await openComments(keys, { ...req, chain })).toEqual([
+        { kind: 'opened', text: 'old', at },
+      ])
+      expect(await openComments(keys, req)).toEqual([{ kind: 'unreadable' }])
+    })
   })
 
   describe('openPosts (#43)', () => {

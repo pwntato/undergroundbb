@@ -58,6 +58,27 @@ export function checkPostSignature(input: {
 }): SignatureVerdict {
   const day = sortKeyDay(input.sortKey)
   if (day === undefined) return { kind: 'invalid' }
+  return checkSignedItem({ ...input, day, context: SigningContext.Post })
+}
+
+/**
+ * The check a post and a comment share: the signature covers the author, group,
+ * sort key, generation, signing day and ciphertext under `context`, and is tried
+ * under each signing key the author held on `day`. A post's day is the one in
+ * its sort key; a comment's is stored beside it (routes/runLoadThread).
+ */
+export function checkSignedItem(input: {
+  readonly groupId: string
+  readonly authorUserId: string
+  readonly sortKey: string
+  readonly generation: number
+  readonly ciphertext: string
+  readonly signature: string
+  readonly day: string
+  readonly context: SigningContext
+  readonly author: AuthorKeys | undefined
+}): SignatureVerdict {
+  const { day } = input
   if (input.author === undefined) {
     return { kind: 'unchecked', reason: 'their keys were not read' }
   }
@@ -89,7 +110,7 @@ export function checkPostSignature(input: {
     ciphertext,
   )
   return signingKeysOn(history, current, day).some((k) =>
-    verify(k, SigningContext.Post, payload, signature),
+    verify(k, input.context, payload, signature),
   )
     ? { kind: 'valid' }
     : { kind: 'invalid' }
