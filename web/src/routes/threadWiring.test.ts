@@ -272,6 +272,17 @@ describe('sendReply', () => {
     expect(s2.pending.current).toBeNull()
   })
 
+  it('does not reuse a kept seal for the same text aimed at another comment', async () => {
+    const h = harness({ replyTo: null, draft: 'same words' })
+    const created = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    created.mockResolvedValue({ path: 'ok' })
+    const s = sendHarness(h, created)
+    await s.send()
+    await s.send({ replyTo: '0001' })
+    expect(s.sealComment).toHaveBeenCalledTimes(2)
+    expect(created.mock.calls.map((c) => c[1].path)).toEqual(['0001', '0001.0001'])
+  })
+
   it('hands the password step the reply it was sending', async () => {
     const h = harness({ replyTo: '0004', draft: 'half written' })
     const s = sendHarness(h)
