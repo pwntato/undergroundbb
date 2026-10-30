@@ -301,6 +301,21 @@ func PostAAD(groupID, sortKey string, generation uint64) []byte {
 	return fmt.Appendf(nil, "GROUP#%s:%s:GEN#%06d", groupID, sortKey, generation)
 }
 
+// CommentAAD builds the AAD for a comment's ciphertext -- see docs/DESIGN.md's
+// AAD table, "Comment | POST#<pid> + CMT#<path> + generation number." postID is
+// the post's full address, "<gid>#<YYYY-MM-DD>#<rand>", and path the comment's
+// materialized path, "0003.0001.0002", so a comment moved under another post,
+// to another path or to another generation fails to open.
+//
+// The encoding is "POST#<pid>:CMT#<path>:GEN#<nnnnnn>", the same convention as
+// PostAAD. A post id is a UUID, a date and hex joined by '#', and a path is
+// digits and dots, so neither contains ':' and the fields cannot run together.
+//
+// This must never change once a real comment exists under it.
+func CommentAAD(postID, path string, generation uint64) []byte {
+	return fmt.Appendf(nil, "POST#%s:CMT#%s:GEN#%06d", postID, path, generation)
+}
+
 // GroupNameAAD builds the AAD for encrypting or decrypting a private
 // group's name or description -- see docs/DESIGN.md's AAD table, "Group
 // name/description | group id + generation number." field distinguishes

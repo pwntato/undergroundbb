@@ -78,7 +78,7 @@ relocated ciphertext fail loudly:
 | Item | AAD binds |
 |---|---|
 | Post | `PK` + `SK` (group, day, rand) + generation number |
-| Comment | `POST#<pid>` + `CMT#<path>` + generation number |
+| Comment | `POST#<pid>` + `CMT#<path>` + generation number — `CommentAAD` in `internal/crypto/group.go` |
 | Reaction | `POST#<pid>` + `RXN#<cmtpath>#<reactor>` + generation |
 | Generation key | group id + generation number |
 | Wrapped private keys | user uuid + which copy (`PROFILE` or `RECOVERY`) — `CredentialWrapAAD` in `internal/crypto/credential.go`. The user uuid is client-generated at registration (not server-assigned) specifically so it exists before the client wraps under it; `POST /api/auth/register` validates the client-supplied id's shape and the schema's `attribute_not_exists(PK)` condition on the `PROFILE` write guards against a collision. That guard only holds while `PROFILE` exists for every uuid ever used, though — user uuids are never reused, so account deletion (`DELETE /api/account`, below) tombstones `PROFILE` rather than deleting it, or a re-registration on a stale uuid could inherit another user's still-live memberships, invites, and other items keyed on it. |
@@ -169,6 +169,49 @@ following for every post:
   its time is not shown (the filed day is).
 - **Renders as text.** Title and body are React text nodes, with the author's line breaks kept by CSS. Nothing in a
   post is a link, an image or markup, and `GroupPostsPanel.test.tsx` pins that with a hostile body.
+
+**Comments (#44).** `POST /api/posts/{pid}/comments` stores `POST#<pid>` / `CMT#<path>`; the `#` in a post id travels as
+`%23`. The server takes the group from the post id and checks the caller's membership against it, so a request cannot
+name a group it is not in. Its checks are the post's: a current, non-dormant member at the settled generation, a signing
+day within the usual tolerance, a nonce of 12 bytes, a ciphertext within `MAX_COMMENT_BYTES` plus the envelope
+(`handlers.commentEnvelopeOverhead`), and a signature that verifies under the author's **current** key over
+`crypto.SignedPayload(author, group, "CMT#<path>", generation, signed day, ciphertext)` with `ContextComment`. The post's
+address is bound by the ciphertext's AAD, `crypto.CommentAAD`, not by the signature. The plaintext is binary, like a
+post's: `0x01`, then the text and the exact write time (RFC 3339 UTC, 24 bytes), each with a 4-byte big-endian length (33
+bytes of envelope plus the 16-byte tag). The row stores the **signed day**, because a comment's sort key has none and a
+verifier needs it to pick the key interval. In one transaction the post must still exist and be unexpired, the parent
+comment must exist (for a reply), and the member, key epoch and rotation marker are re-checked as for a post. The TTL is
+copied from the post, so the row says when the post expires and nothing about when the comment was made.
+
+**The client chooses the path, not the server.** The signature and the AAD both cover the path, so the server cannot
+renumber a comment after the client has sealed it. Two people replying to the same comment can pick the same next number;
+the write is conditional on the path being free, and the loser gets 409 `comment_path_taken` with `nextPath`, the first
+free number under that parent, and seals again. `nextPath` is one past the highest direct child, read with one
+descending query of one item (the highest key under a parent is its last child or a descendant of it, and its next
+segments name that child). **A path may be at most one past that number**, checked before the write (409
+`comment_path_skips`, with `nextPath`). Without the rule one request could write `9999` first, leaving nobody room to
+reply under that parent for as long as the post lives, and a member could choose where their comment sorts; with it,
+sibling order is write order and filling a parent takes 9,999 writes. The check cannot go stale: the highest sibling only
+grows, so a path no more than one past it when checked is still no more than one past it when written, and two writers
+at the same number meet the write's own condition (409 `comment_path_taken`). A parent whose 9,999 numbers are used is
+409 `replies_full`. The depth cap is 8 and enforced by the path's shape; a reply to a comment at the cap is sent by
+the client as a sibling of it ("attaches at the cap level"). A resend of the same bytes is answered by what was
+written, before the freshness checks.
+
+**A thread is read in pages, two small queries each.** `GET /api/posts/{pid}/thread?cursor=&limit=` (default 50, at most
+100) serves a page of comments in display order, the cursor being the last comment's path, and **the reactions that
+belong to exactly those comments**. A reaction's key is `RXN#<cmtpath>#<reactor>` and the cmtpath order is the thread's
+order, so a page's comments are a contiguous slice of the reaction block: one range query from the first comment's path
+to `RXN#<last>$` reads it (`$` sorts after the `#` that follows a path and before the `.` that begins a reply's path, so
+the last comment's reactions are in and its replies' are out). The first page also carries the post's own reactions
+(target `0000`). This replaces the single query the issue described: a long thread never loads in one response, and
+there is no cap on comments per post. A page can be shorter than `limit` and still carry a cursor, because one DynamoDB
+query returns at most 1 MB; a cursor means "keep going", never "this page was full". The reaction read is not capped:
+a page's reactions are bounded by the page size times the group's members (one reaction per user per target), and the
+whole response by a Lambda's response limit. Nothing writes reactions yet (#46), so whoever builds it should size the
+default page against the member cap. Truncating the reaction read to stay under a limit is the wrong fix, because it
+would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
+dormant member can read what their keys open).
 
 ### Login
 
@@ -2709,7 +2752,7 @@ The cost is a longer partition key and a pid that is not opaque — it reveals t
 to anyone holding a link, both of which that person can see anyway if they can read the post.
 
 **Comments use a materialized path.** Because lexicographic ordering of `CMT#0003.0001.0002` *is*
-depth-first traversal order, one query returns an entire thread already in display order. Depth is
+depth-first traversal order, a query returns a thread already in display order (in pages; see "Comments (#44)"). Depth is
 capped at 8 — **past the cap a reply attaches at the cap level** rather than being refused, so a
 conversation never dead-ends on a structural limit — and each segment is **four digits,
 zero-padded** — the padding is what makes the

@@ -80,6 +80,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/selfwrap", h.requireSession(h.selfWrap))
 	mux.HandleFunc("POST /api/groups/{groupId}/posts", h.requireSession(h.createPost))
 	mux.HandleFunc("GET /api/groups/{groupId}/posts", h.requireSession(h.listPosts))
+	mux.HandleFunc("POST /api/posts/{postId}/comments", h.requireSession(h.createComment))
+	mux.HandleFunc("GET /api/posts/{postId}/thread", h.requireSession(h.getThread))
 	mux.HandleFunc("POST /api/groups/{groupId}/rewrap/{userId}", h.requireSession(h.approveRewrap))
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/approve/{userId}", h.requireSession(h.approveRekey))
 	mux.HandleFunc("POST /api/groups/{groupId}/leave", h.requireSession(h.leaveGroup))
@@ -120,6 +122,7 @@ type publicConfig struct {
 	DefaultExpirationDays   int64  `json:"defaultExpirationDays"`
 	MaxPostTitleBytes       int    `json:"maxPostTitleBytes"`
 	MaxPostBodyBytes        int    `json:"maxPostBodyBytes"`
+	MaxCommentBytes         int    `json:"maxCommentBytes"`
 }
 
 // getConfig serves the public, unauthenticated subset of the deployment's
@@ -136,6 +139,7 @@ func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
 		DefaultExpirationDays:   h.cfg.DefaultExpirationDays,
 		MaxPostTitleBytes:       h.cfg.MaxPostTitleBytes,
 		MaxPostBodyBytes:        h.cfg.MaxPostBodyBytes,
+		MaxCommentBytes:         h.cfg.MaxCommentBytes,
 	})
 }
 

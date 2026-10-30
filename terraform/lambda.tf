@@ -152,6 +152,7 @@ resource "aws_lambda_function" "main" {
       KEY_ROTATION_COOLDOWN_HOURS = tostring(var.key_rotation_cooldown_hours)
       MAX_POST_TITLE_BYTES        = tostring(var.max_post_title_bytes)
       MAX_POST_BODY_BYTES         = tostring(var.max_post_body_bytes)
+      MAX_COMMENT_BYTES           = tostring(var.max_comment_bytes)
       SESSION_SECRET              = random_id.session_secret.hex
       ORIGIN_VERIFY_SECRET        = random_password.origin_verify.result
       SESSION_TTL_HOURS           = tostring(var.session_ttl_hours)
