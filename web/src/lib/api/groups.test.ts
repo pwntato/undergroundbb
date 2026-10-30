@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './auth'
-import { getKeychain, listGroups, removeMember } from './groups'
+import { CommentPathError, createComment, getKeychain, listGroups, removeMember } from './groups'
 
 function stubFetch(status: number, body: unknown) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -133,5 +133,69 @@ describe('getKeychain', () => {
   it('rejects with ApiError on a non-2xx response', async () => {
     stubFetch(404, { error: 'group not found' })
     await expect(getKeychain('g1', 0, 0)).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('createComment', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  // Real Response objects: the 409 body is read twice (once for nextPath, once by
+  // the shared error path), which a hand-made stub would not catch.
+  const respond = (status: number, body: unknown) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+  const req = {
+    path: '0001',
+    generation: 0,
+    signedDay: '2026-10-29',
+    nonce: 'n',
+    ciphertext: 'c',
+    signature: 's',
+  }
+  const POST = 'g#2026-10-29#00112233445566ff'
+
+  it('POSTs the sealed comment to the post, with the # escaped', async () => {
+    const fetchMock = respond(201, { path: '0001' })
+    expect(await createComment(POST, req)).toEqual({ path: '0001' })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/posts/g%232026-10-29%2300112233445566ff/comments')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual(req)
+  })
+
+  it.each(['comment_path_taken', 'comment_path_skips'])(
+    'throws a CommentPathError carrying nextPath on %s',
+    async (code) => {
+      respond(409, { error: 'move on', code, nextPath: '0001.0004' })
+      const err = await createComment(POST, req).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(CommentPathError)
+      expect(err).toMatchObject({ status: 409, code, nextPath: '0001.0004', message: 'move on' })
+    },
+  )
+
+  it('keeps other 409 codes as a plain ApiError', async () => {
+    respond(409, { error: 'full', code: 'replies_full' })
+    const err = await createComment(POST, req).catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(CommentPathError)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 409, code: 'replies_full' })
+  })
+
+  it('ignores a nextPath that comes with any other code', async () => {
+    respond(409, { error: 'full', code: 'replies_full', nextPath: '0001.0004' })
+    const err = await createComment(POST, req).catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(CommentPathError)
+    expect(err).toMatchObject({ status: 409, code: 'replies_full' })
+  })
+
+  it('does not treat a path conflict without a nextPath as one', async () => {
+    respond(409, { error: 'x', code: 'comment_path_taken' })
+    const err = await createComment(POST, req).catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(CommentPathError)
+    expect(err).toMatchObject({ status: 409, code: 'comment_path_taken' })
   })
 })
