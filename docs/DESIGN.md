@@ -194,9 +194,9 @@ reply under that parent for as long as the post lives, and a member could choose
 sibling order is write order and filling a parent takes 9,999 writes. The check cannot go stale: the highest sibling only
 grows, so a path no more than one past it when checked is still no more than one past it when written, and two writers
 at the same number meet the write's own condition (409 `comment_path_taken`). A parent whose 9,999 numbers are used is
-409 `replies_full`. The depth cap is 8 and enforced by the path's shape; a reply to a comment at the cap is sent by the client as a sibling of
-it ("attaches at the cap level"). A resend of the same bytes is answered by what was written, before the freshness
-checks.
+409 `replies_full`. The depth cap is 8 and enforced by the path's shape; a reply to a comment at the cap is sent by
+the client as a sibling of it ("attaches at the cap level"). A resend of the same bytes is answered by what was
+written, before the freshness checks.
 
 **A thread is read in pages, two small queries each.** `GET /api/posts/{pid}/thread?cursor=&limit=` (default 50, at most
 100) serves a page of comments in display order, the cursor being the last comment's path, and **the reactions that
