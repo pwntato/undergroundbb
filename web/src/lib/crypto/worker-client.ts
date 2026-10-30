@@ -40,6 +40,9 @@ import type {
   EncryptGroupTextResponse,
   SealPostRequest,
   SealPostResponse,
+  OpenPostsRequest,
+  OpenPostsResponse,
+  OpenedPost,
   SealedPost,
   GenerateSignupMaterialRequest,
   GenerateSignupMaterialResponse,
@@ -933,6 +936,41 @@ export function sealPost(req: Omit<SealPostRequest, 'kind' | 'id'>): Promise<Sea
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPost`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Opens stored posts -- #43. Rejects if liveKeys is cold or the caller's own
+ * entry does not open; a single post that does not open is `unreadable` in the
+ * result, in request order. See credential-material.ts's openPosts.
+ */
+export function openPosts(
+  req: Omit<OpenPostsRequest, 'kind' | 'id'>,
+): Promise<readonly OpenedPost[]> {
+  const id = nextRequestID()
+  const fullReq: OpenPostsRequest = { kind: 'openPosts', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'openPostsDone') {
+        resolve((msg as OpenPostsResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for openPosts`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

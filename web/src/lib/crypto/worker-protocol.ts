@@ -848,6 +848,39 @@ export interface SealedPost {
   readonly signature: string
 }
 
+/**
+ * #43: opens stored posts. See credential-material.ts's openPosts. `chain`
+ * holds the GENKEY# links from the oldest post generation to the caller's own
+ * `generation`. A post that does not open is `unreadable`, never an error: one
+ * bad post must not hide the rest.
+ */
+export interface OpenPostsRequest {
+  readonly kind: 'openPosts'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly generation: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly posts: readonly {
+    readonly sortKey: string
+    readonly generation: number
+    readonly nonce: string
+    readonly ciphertext: string
+  }[]
+}
+
+export type OpenedPost =
+  | { readonly kind: 'opened'; readonly title: string; readonly body: string; readonly at: string }
+  | { readonly kind: 'unreadable' }
+
+export interface OpenPostsResponse {
+  readonly kind: 'openPostsDone'
+  readonly id: string
+  /** One entry per requested post, in the same order. */
+  readonly result: readonly OpenedPost[]
+}
+
 export interface SealPostResponse {
   readonly kind: 'sealPostDone'
   readonly id: string
@@ -980,6 +1013,7 @@ export type WorkerRequest =
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SealPostRequest
+  | OpenPostsRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
@@ -1016,6 +1050,7 @@ export type WorkerResponse =
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SealPostResponse
+  | OpenPostsResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse

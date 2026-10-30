@@ -823,6 +823,32 @@ export interface CreatePostRequest {
   readonly signature: string
 }
 
+/** One stored post as GET /api/groups/{id}/posts serves it; nothing in it is checked server-side. */
+export interface WirePost {
+  readonly sortKey: string
+  readonly authorUserId: string
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+export interface ListPostsResponse {
+  /** Newest sort key first. */
+  readonly posts: readonly WirePost[]
+  /** Empty on the last page; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+/** GET /api/groups/{id}/posts -- #43. Members only; 404 for anyone else. */
+export async function listPosts(groupId: string, cursor?: string): Promise<ListPostsResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/posts${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ListPostsResponse>(res)
+}
+
 export async function createPost(
   groupId: string,
   req: CreatePostRequest,

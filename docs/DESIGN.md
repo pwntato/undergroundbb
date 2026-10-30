@@ -143,6 +143,30 @@ write access to the table can swap a post's nonce and make a validly signed post
 `SignedPayload` is not worth it for this, but the reader must show a post that does not open as **unreadable**,
 in wording that does not blame its author.
 
+**Listing (#43).** `GET /api/groups/{gid}/posts?limit=&cursor=` serves the stored rows (author, generation, nonce,
+ciphertext, signature) newest sort key first, to any member, and verifies nothing. The cursor is a post sort key and
+can only move inside the group's own partition; `limit` is 1 to 50 (default 20). A post past its TTL is skipped even
+though DynamoDB has not deleted it yet. The sort key orders by day, then by a random suffix, so **within a day the
+server's order means nothing**: each page is re-sorted within each day by the decrypted time, newest first, with
+unreadable posts last. A day that runs over a page boundary is ordered within each page only; the screen does not
+re-sort across pages. The reader (`routes/runListPosts.ts`) does the following for every post:
+
+- **Opens it under the key of its own generation** (the caller's entry, walked down the `GENKEY#` chain), in the
+  crypto worker (`openPosts`). A post that does not open is shown as unreadable ("could not be opened") with no word
+  about its author, because the nonce is not signed. A chain that could not be read is a page error, not a row of
+  unreadable posts.
+- **Verifies the signature** under the author's signing keys for the sort key's day (`lib/crypto/post-check.ts`:
+  the current key from the day it was introduced, each superseded key up to the rotation that ended it, both on a
+  rotation day). The author's served keys are anchored first, by the same trust-on-first-use rule as the roster's
+  grant check: your own key from the worker; anyone else's against your signed pin. A match is `pinned`; no pin yet is
+  saved and shown once as `first-seen`; a pin that mismatches, rolled back or does not verify is never re-pinned over
+  and the post says it **could not be checked**, with the reason. A failed read is likewise `could not check`, never
+  `signature failed`.
+- **Checks that the decrypted `at` is on the sort key's UTC day.** A post whose time is not is flagged as suspect and
+  its time is not shown (the filed day is).
+- **Renders as text.** Title and body are React text nodes, with the author's line breaks kept by CSS. Nothing in a
+  post is a link, an image or markup, and `GroupPostsPanel.test.tsx` pins that with a hostile body.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.

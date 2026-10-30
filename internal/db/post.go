@@ -180,3 +180,62 @@ func (c *Client) storedPostMatches(ctx context.Context, in CreatePostInput) (sam
 		bytes.Equal(have.Signature, in.Signature)
 	return same, true, nil
 }
+
+// ListPosts returns one page of a group's posts, newest sort key first (the
+// day, then the random suffix: within a day the order means nothing), starting
+// strictly after afterSortKey (empty for the first page), plus the last sort
+// key returned when more may follow. The cursor is a sort key rather than a
+// DynamoDB key, so a caller-supplied one can only ever move within this group's
+// partition.
+//
+// A post past its TTL is skipped: DynamoDB deletes expired items some time
+// after the fact, and a reader must not be shown a post the group's policy has
+// already expired. Skipped items are read past, so a page is full unless the
+// group has no more.
+func (c *Client) ListPosts(ctx context.Context, groupID, afterSortKey string, limit int, now time.Time) ([]models.Post, string, error) {
+	var posts []models.Post
+	var start map[string]types.AttributeValue
+	if afterSortKey != "" {
+		start = map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK": &types.AttributeValueMemberS{Value: afterSortKey},
+		}
+	}
+	for len(posts) <= limit {
+		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(c.table),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+				":sk": &types.AttributeValueMemberS{Value: PostSortKeyPrefix},
+			},
+			ScanIndexForward:  aws.Bool(false),
+			ConsistentRead:    aws.Bool(true),
+			Limit:             aws.Int32(int32(limit + 1)),
+			ExclusiveStartKey: start,
+		})
+		if err != nil {
+			return nil, "", fmt.Errorf("db: list posts: %w", err)
+		}
+		var page []models.Post
+		if err := attributevalue.UnmarshalListOfMaps(out.Items, &page); err != nil {
+			return nil, "", fmt.Errorf("db: unmarshal posts: %w", err)
+		}
+		for _, p := range page {
+			if p.TTL != 0 && p.TTL <= now.Unix() {
+				continue
+			}
+			posts = append(posts, p)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		start = out.LastEvaluatedKey
+	}
+	next := ""
+	if len(posts) > limit {
+		posts = posts[:limit]
+		next = posts[limit-1].SK
+	}
+	return posts, next, nil
+}
