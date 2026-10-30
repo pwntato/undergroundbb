@@ -255,8 +255,8 @@ func (c *Client) storedCommentMatches(ctx context.Context, in CreateCommentInput
 // top-level comment): one past the highest direct child. The highest key
 // beneath a parent is either its last child or a descendant of it, and either
 // way its first segments past the parent name that child, so one descending
-// query of one item is enough. Gaps left by a client that skipped numbers are
-// not filled.
+// query of one item is enough. The handler refuses a path past this one, so
+// the numbers under a parent have no gaps.
 func (c *Client) NextCommentPath(ctx context.Context, postID, parentPath string) (string, error) {
 	prefix := CommentSortKeyPrefix
 	if parentPath != "" {

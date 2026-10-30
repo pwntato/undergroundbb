@@ -188,9 +188,13 @@ renumber a comment after the client has sealed it. Two people replying to the sa
 the write is conditional on the path being free, and the loser gets 409 `comment_path_taken` with `nextPath`, the first
 free number under that parent, and seals again. `nextPath` is one past the highest direct child, read with one
 descending query of one item (the highest key under a parent is its last child or a descendant of it, and its next
-segments name that child). Numbers a client skipped are not filled, so a member can write `9999` and leave no room under
-that parent (409 `replies_full`); only members can do this, and it costs them nothing a garbage post would not. The
-depth cap is 8 and enforced by the path's shape; a reply to a comment at the cap is sent by the client as a sibling of
+segments name that child). **A path may be at most one past that number**, checked before the write (409
+`comment_path_skips`, with `nextPath`). Without the rule one request could write `9999` first, leaving nobody room to
+reply under that parent for as long as the post lives, and a member could choose where their comment sorts; with it,
+sibling order is write order and filling a parent takes 9,999 writes. The check cannot go stale: the highest sibling only
+grows, so a path no more than one past it when checked is still no more than one past it when written, and two writers
+at the same number meet the write's own condition (409 `comment_path_taken`). A parent whose 9,999 numbers are used is
+409 `replies_full`. The depth cap is 8 and enforced by the path's shape; a reply to a comment at the cap is sent by the client as a sibling of
 it ("attaches at the cap level"). A resend of the same bytes is answered by what was written, before the freshness
 checks.
 
