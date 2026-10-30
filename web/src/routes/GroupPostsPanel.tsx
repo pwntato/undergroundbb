@@ -11,6 +11,7 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { postIdOf } from '@/lib/crypto/post-check'
 import { authorLabel, postNotes, postTimeLabel } from './postNotes'
 import type { PostView } from './runListPosts'
 
@@ -66,6 +67,7 @@ export function GroupPostsPanel({
               {note.text}
             </p>
           ))}
+          <PostCommentsLink groupId={groupId} post={post} />
         </article>
       ))}
       {onRetry !== undefined && !loading && (
@@ -89,5 +91,26 @@ export function GroupPostsPanel({
         Back to your groups
       </Link>
     </div>
+  )
+}
+
+/** Opens the post's thread. The `#`s in the post id travel as %23; the title rides along for display only. */
+function PostCommentsLink({
+  groupId,
+  post,
+}: {
+  readonly groupId: string
+  readonly post: PostView
+}) {
+  const postId = postIdOf(groupId, post.sortKey)
+  if (postId === undefined) return null
+  return (
+    <Link
+      to={`/groups/${groupId}/posts/${encodeURIComponent(postId)}`}
+      state={post.content.kind === 'opened' ? { postTitle: post.content.title } : undefined}
+      className="text-sm text-primary underline-offset-4 hover:underline"
+    >
+      Comments
+    </Link>
   )
 }

@@ -3,7 +3,7 @@ import { bytesToBase64 } from './base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from './ed25519'
 import { makeKeyChange } from './own-history.testkit'
 import { signedPayload } from './payload'
-import { atOnSortKeyDay, checkPostSignature, sortKeyDay } from './post-check'
+import { atOnSortKeyDay, checkPostSignature, postIdOf, sortKeyDay } from './post-check'
 
 const GROUP = 'a0000000-0000-4000-8000-000000000001'
 const AUTHOR = 'b0000000-0000-4000-8000-000000000002'
@@ -139,5 +139,23 @@ describe('the sort key’s day', () => {
     expect(atOnSortKeyDay(SORT_KEY, '2026-10-21T00:00:00.000Z')).toBe(false)
     expect(atOnSortKeyDay(SORT_KEY, '2026-10-19T23:59:59.999Z')).toBe(false)
     expect(atOnSortKeyDay('garbage', '2026-10-20T00:00:00.000Z')).toBe(false)
+  })
+})
+
+describe('postIdOf', () => {
+  it('joins the group and the sort key without its POST# prefix', () => {
+    expect(postIdOf(GROUP, SORT_KEY)).toBe(`${GROUP}#${DAY}#00112233445566ff`)
+  })
+
+  it('refuses a sort key that is not a post', () => {
+    for (const bad of [
+      '',
+      'CMT#0001',
+      `POST#${DAY}`,
+      `POST#${DAY}#00112233445566F`,
+      `x${SORT_KEY}`,
+    ]) {
+      expect(postIdOf(GROUP, bad), bad).toBeUndefined()
+    }
   })
 })

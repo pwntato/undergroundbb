@@ -40,6 +40,15 @@ export function sortKeyDay(sortKey: string): string | undefined {
   return SORT_KEY.exec(sortKey)?.[1]
 }
 
+/**
+ * A post's full address, `<gid>#<YYYY-MM-DD>#<16 hex>`: what comments and
+ * reactions are keyed and bound under. The reverse of the server's
+ * idgen.ParsePostID; undefined for a sort key that is not a post's.
+ */
+export function postIdOf(groupId: string, sortKey: string): string | undefined {
+  return SORT_KEY.test(sortKey) ? `${groupId}#${sortKey.slice('POST#'.length)}` : undefined
+}
+
 /** Whether a decrypted RFC 3339 `at` falls on the sort key's UTC day. */
 export function atOnSortKeyDay(sortKey: string, at: string): boolean {
   const day = sortKeyDay(sortKey)
