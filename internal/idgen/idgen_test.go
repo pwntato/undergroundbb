@@ -248,6 +248,22 @@ func TestValidPostSortKey(t *testing.T) {
 	}
 }
 
+func TestPostIDIsTheReverseOfParsePostID(t *testing.T) {
+	gid := "0b6a7b0a-0d07-4f6d-9a52-3f6f0a6b1c11"
+	sk := "POST#2026-10-28#00112233445566ff"
+	pid := PostID(gid, sk)
+	if pid != gid+"#2026-10-28#00112233445566ff" {
+		t.Fatalf("PostID = %q", pid)
+	}
+	g, s, ok := ParsePostID(pid)
+	if !ok || g != gid || s != sk {
+		t.Errorf("ParsePostID(PostID) = %q, %q, %v, want the inputs back", g, s, ok)
+	}
+	if got := PostID(gid, "CMT#0001"); got != "" {
+		t.Errorf("PostID of a non-post sort key = %q, want empty", got)
+	}
+}
+
 func TestParsePostID(t *testing.T) {
 	gid := "0b6a7b0a-0d07-4f6d-9a52-3f6f0a6b1c11"
 	groupID, sk, ok := ParsePostID(gid + "#2026-10-28#00112233445566ff")

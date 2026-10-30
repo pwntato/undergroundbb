@@ -3127,22 +3127,25 @@ left, stops verifying for every member if `PROFILE` goes. User ids are also clie
 `PROFILE` would let anyone re-register the id and inherit its key history (see the AAD table). One small
 tombstone per test account is the price.
 
-Because anyone can mint a test account, a test account can create groups, become a group's last admin,
-or sit in a group real users belong to. The purge therefore never touches a group that has a real
-member, and never raw-deletes a membership (leaving needs the user's own signature, which the server
-cannot produce). A group whose members are all test accounts is deleted whole. A test account that is
-also in a group with a real member is still removed, but that one membership row stays: the "member
-whose profile is deleted" state described under account deletion, which an admin clears with the
-ordinary removal flow. A test account cannot be given a role in a real group without a real admin's
-signature, so this should be rare. Such a tombstone keeps its index keys, so every run looks at it
-again and deletes that group once the last real member has left; with nothing left to wait on, the keys
-are removed and it is never examined again. Waiting accounts count against the per-run cap. A test
-account younger than the cutoff counts like a real member for this purpose, so an old account never
-deletes a group a still-running test is using; it waits until the younger one is old enough too.
+Because anyone can mint a test account, a test account can create groups, become a group's last
+admin, or sit in a group real users belong to. The purge therefore never touches a group that has a
+real member, and never raw-deletes a membership (leaving needs the user's own signature, which the
+server cannot produce). A group whose members are all test accounts is deleted whole, including the
+comments and reactions in its posts' `POST#<pid>` partitions, which are deleted first because the
+post rows are how a rerun finds them. A test account that is also in a group with a real member is
+still removed, but that one membership row stays: the "member whose profile is deleted" state
+described under account deletion, which an admin clears with the ordinary removal flow. A test
+account cannot be given a role in a real group without a real admin's signature, so this should be
+rare. Such a tombstone keeps its index keys, so every run looks at it again and deletes that group
+once the last real member has left; with nothing left to wait on, the keys are removed and it is
+never examined again. Waiting accounts count against the per-run cap. A test account younger than
+the cutoff counts like a real member for this purpose, so an old account never deletes a group a
+still-running test is using; it waits until the younger one is old enough too.
 
-Deletion order: for each test-only group, its other rows first and the account's own `MEMBER#` row last
-(that row is how the next run finds the group, so a run that dies partway leaves no unreachable
-orphans, including a public group's directory entry); then the user's other rows and invites, then
+Deletion order: for each test-only group, its posts' comments and reactions first, then its other rows,
+and the account's own `MEMBER#` row last (the post rows are how a rerun finds the comments, and the
+`MEMBER#` row is how it finds the group, so a run that dies partway leaves no unreachable orphans,
+including a public group's directory entry); then the user's other rows and invites, then
 the username claim, then `PROFILE`, which is what the candidate query finds. Membership is read from
 GSI1, which is eventually consistent, so the minimum-age cutoff (default 2 hours) is what keeps a
 just-written membership from being missed.

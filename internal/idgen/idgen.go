@@ -184,6 +184,16 @@ func ValidPostSortKey(s string) (time.Time, bool) {
 // post's sort key (docs/DESIGN.md, "<pid> is a post's full address").
 var postIDPattern = regexp.MustCompile(`^([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#([0-9a-f]{16})$`)
 
+// PostID is the reverse of ParsePostID: the post id of the post row with this
+// sort key in this group. It is "" for a sort key that is not a post's.
+func PostID(groupID, postSortKey string) string {
+	rest, ok := strings.CutPrefix(postSortKey, "POST#")
+	if !ok {
+		return ""
+	}
+	return groupID + "#" + rest
+}
+
 // ParsePostID splits a post id into the group it belongs to and the sort key
 // of the post row it names. The server takes the group from the id it was
 // given and checks membership against that, so a caller cannot name a group
