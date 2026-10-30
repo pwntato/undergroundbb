@@ -3142,9 +3142,10 @@ never examined again. Waiting accounts count against the per-run cap. A test acc
 the cutoff counts like a real member for this purpose, so an old account never deletes a group a
 still-running test is using; it waits until the younger one is old enough too.
 
-Deletion order: for each test-only group, its other rows first and the account's own `MEMBER#` row last
-(that row is how the next run finds the group, so a run that dies partway leaves no unreachable
-orphans, including a public group's directory entry); then the user's other rows and invites, then
+Deletion order: for each test-only group, its posts' comments and reactions first, then its other rows,
+and the account's own `MEMBER#` row last (the post rows are how a rerun finds the comments, and the
+`MEMBER#` row is how it finds the group, so a run that dies partway leaves no unreachable orphans,
+including a public group's directory entry); then the user's other rows and invites, then
 the username claim, then `PROFILE`, which is what the candidate query finds. Membership is read from
 GSI1, which is eventually consistent, so the minimum-age cutoff (default 2 hours) is what keeps a
 just-written membership from being missed.

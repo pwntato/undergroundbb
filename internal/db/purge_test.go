@@ -457,10 +457,10 @@ func TestPurgeCountsTheCommentsAndReactionsItDeletes(t *testing.T) {
 	}
 }
 
-// A run that dies after the comments are gone must still find the group, and
-// one that dies the other way round could not: the post rows are the only way
-// to the comments, so they must outlive them.
-func TestPurgeFindsTheCommentsAgainAfterARunStoppedBeforeThePostRows(t *testing.T) {
+// A run that dies after the comments are gone must still find the group and
+// finish it. Deleting in the other order would strand the comments: the post
+// rows are the only way to them, so they must outlive them.
+func TestPurgeFinishesAfterARunStoppedBetweenTheCommentsAndThePostRows(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a := registerAccount(t, c, true)

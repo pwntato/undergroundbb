@@ -99,8 +99,9 @@ type PurgeReport struct {
 //
 // Order: for each test-only group, its posts' comments and reactions first,
 // then its other rows (the post rows are how the comments are found, so they
-// outlive them), and the account's own MEMBER# row last, because that row is how the next run finds the group; then
-// the user's other rows and invites, then the username claim, then PROFILE.
+// outlive them), and the account's own MEMBER# row last, because that row is
+// how the next run finds the group; then the user's other rows and invites,
+// then the username claim, then PROFILE.
 // PROFILE is what the candidate query finds, so a run that dies partway is
 // finished by the next.
 //
@@ -331,7 +332,7 @@ func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[str
 			// not in the group's partition, so deleting the group alone would
 			// leave them behind.
 			if sk != nil && strings.HasPrefix(sk.Value, PostSortKeyPrefix) {
-				thread, err := c.partitionKeys(ctx, PostPartition(gid+"#"+strings.TrimPrefix(sk.Value, PostSortKeyPrefix)))
+				thread, err := c.partitionKeys(ctx, PostPartition(idgen.PostID(gid, sk.Value)))
 				if err != nil {
 					return plan, "", err
 				}
