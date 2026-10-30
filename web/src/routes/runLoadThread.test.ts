@@ -278,6 +278,13 @@ describe('loadThreadPage', () => {
     expect(deps.openComments.mock.calls[0]![0].chain).toHaveLength(1)
   })
 
+  it('does not ask for the key chain when every comment is from the current generation', async () => {
+    const { res, deps } = await load({ comments: [wireComment(ME, me, '0001', { generation: 0 })] })
+    expect(res.ok).toBe(true)
+    expect(deps.getChain).not.toHaveBeenCalled()
+    expect(deps.openComments.mock.calls[0]![0]).not.toHaveProperty('chain')
+  })
+
   it('reports a chain that could not be read rather than a thread of unreadable comments', async () => {
     const deps = depsFor({ comments: [wireComment(ALICE, aliceKey, '0001', { generation: 0 })] })
     deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 1 })
