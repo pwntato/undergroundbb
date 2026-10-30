@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -176,4 +177,59 @@ func ValidPostSortKey(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return day, true
+}
+
+// postIDPattern is a post's full address as comments and reactions key it:
+// <gid>#<YYYY-MM-DD>#<16 hex>, the group, the day and the random half of the
+// post's sort key (docs/DESIGN.md, "<pid> is a post's full address").
+var postIDPattern = regexp.MustCompile(`^([0-9a-f-]{36})#(\d{4}-\d{2}-\d{2})#([0-9a-f]{16})$`)
+
+// ParsePostID splits a post id into the group it belongs to and the sort key
+// of the post row it names. The server takes the group from the id it was
+// given and checks membership against that, so a caller cannot name a group
+// they are not in and a post in another one. A shape-valid id with an
+// impossible date is not valid.
+func ParsePostID(pid string) (groupID, postSortKey string, ok bool) {
+	m := postIDPattern.FindStringSubmatch(pid)
+	if m == nil || !ValidUUID(m[1]) {
+		return "", "", false
+	}
+	if day, err := time.Parse("2006-01-02", m[2]); err != nil || day.Format("2006-01-02") != m[2] {
+		return "", "", false
+	}
+	return m[1], "POST#" + m[2] + "#" + m[3], true
+}
+
+// MaxCommentDepth is how many segments a comment path may have. Past it a
+// reply attaches at this level (the client picks the path), so a conversation
+// never dead-ends on a structural limit.
+const MaxCommentDepth = 8
+
+// commentPathPattern is one to eight dot-joined segments of four digits,
+// zero-padded so that lexicographic order is depth-first display order.
+var commentPathPattern = regexp.MustCompile(`^\d{4}(\.\d{4}){0,7}$`)
+
+// ValidCommentPath reports whether s is a well-formed comment path and returns
+// its segments' count. No segment is 0000 (that is the sentinel for a reaction
+// on the post itself), so a real path starts at 0001 in every position.
+func ValidCommentPath(s string) (depth int, ok bool) {
+	if !commentPathPattern.MatchString(s) {
+		return 0, false
+	}
+	for i := 0; i < len(s); i += 5 {
+		if s[i:i+4] == "0000" {
+			return 0, false
+		}
+		depth++
+	}
+	return depth, true
+}
+
+// CommentParentPath is the path of a comment's parent, or "" for a top-level
+// comment.
+func CommentParentPath(path string) string {
+	if i := strings.LastIndexByte(path, '.'); i >= 0 {
+		return path[:i]
+	}
+	return ""
 }

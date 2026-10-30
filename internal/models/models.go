@@ -986,3 +986,39 @@ type Post struct {
 	Signature    []byte `dynamodbav:"Signature"`
 	TTL          int64  `dynamodbav:"TTL,omitempty"`
 }
+
+// Comment is the POST#<pid> / CMT#<path> item (#44). <pid> is the post's full
+// address, <gid>#<YYYY-MM-DD>#<rand>, and <path> the materialized path
+// "0003.0001.0002", whose lexicographic order is depth-first display order.
+// The text is one AES-256-GCM ciphertext under the group key at Generation,
+// bound to its address by crypto.CommentAAD and signed by AuthorUserID over
+// crypto.SignedPayload with SignedDay, the UTC day it was signed: a comment's
+// sort key carries no day, and the day is what tells a verifier which key
+// interval to check the signature against. TTL is copied from the parent post,
+// so the row discloses when the post expires and nothing about when the
+// comment was made; it is absent for a post that never expires.
+type Comment struct {
+	Record
+
+	AuthorUserID string `dynamodbav:"AuthorUserID"`
+	Generation   int64  `dynamodbav:"Generation"`
+	SignedDay    string `dynamodbav:"SignedDay"`
+	Nonce        []byte `dynamodbav:"Nonce"`
+	Ciphertext   []byte `dynamodbav:"Ciphertext"`
+	Signature    []byte `dynamodbav:"Signature"`
+	TTL          int64  `dynamodbav:"TTL,omitempty"`
+}
+
+// Reaction is the POST#<pid> / RXN#<cmtpath>#<reactor> item (#46), keyed by its
+// reactor so it can be undone and a repeat is idempotent. <cmtpath> is the
+// comment it attaches to, or 0000 for the post itself. The emoji is the one
+// encrypted thing; there is no creation time and no signature, and TTL is
+// copied from the parent post. Only the read side exists so far (#44).
+type Reaction struct {
+	Record
+
+	Generation int64  `dynamodbav:"Generation"`
+	Nonce      []byte `dynamodbav:"Nonce"`
+	Ciphertext []byte `dynamodbav:"Ciphertext"`
+	TTL        int64  `dynamodbav:"TTL,omitempty"`
+}

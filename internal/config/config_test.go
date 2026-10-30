@@ -351,3 +351,14 @@ func TestPostCapsDefaultsAreWhatTheReadmeSays(t *testing.T) {
 		t.Fatalf("defaults = %d/%d; update README.md and terraform/variables.tf with them", DefaultMaxPostTitleBytes, DefaultMaxPostBodyBytes)
 	}
 }
+
+func TestMaxCommentBytesDefaultsAndIsReadFromItsOwnVariable(t *testing.T) {
+	if DefaultMaxCommentBytes != 10000 || MaxCommentBytesCeiling != 100000 {
+		t.Fatalf("default/ceiling = %d/%d; update README.md and terraform/variables.tf with them", DefaultMaxCommentBytes, MaxCommentBytesCeiling)
+	}
+	t.Setenv("MAX_COMMENT_BYTES", "321")
+	t.Setenv("MAX_POST_BODY_BYTES", "654")
+	if got := postBytesEnvOrDefault("MAX_COMMENT_BYTES", DefaultMaxCommentBytes, MaxCommentBytesCeiling); got != 321 {
+		t.Fatalf("comment cap = %d, want 321 (its own variable, not the post body's)", got)
+	}
+}

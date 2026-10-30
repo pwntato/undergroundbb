@@ -97,6 +97,17 @@ variable "max_post_body_bytes" {
   }
 }
 
+variable "max_comment_bytes" {
+  type        = number
+  default     = 10000
+  description = "The longest comment, in UTF-8 bytes (#44). See internal/config.DefaultMaxCommentBytes."
+
+  validation {
+    condition     = var.max_comment_bytes >= 1 && var.max_comment_bytes <= 100000 && floor(var.max_comment_bytes) == var.max_comment_bytes
+    error_message = "max_comment_bytes must be a whole number from 1 to 100000."
+  }
+}
+
 variable "key_rotation_cooldown_hours" {
   type        = number
   default     = 24

@@ -66,6 +66,11 @@ type Config struct {
 	// (DynamoDB items are capped at 400 KB).
 	MaxPostTitleBytes int
 	MaxPostBodyBytes  int
+	// MaxCommentBytes caps a comment's text in UTF-8 bytes (#44), enforced by
+	// the server as a ciphertext limit plus the envelope overhead, for the same
+	// reason as the post caps. Its own setting so comments and posts can move
+	// apart; the default matches the post body's.
+	MaxCommentBytes int
 
 	// SessionSecret is the HMAC key session.Signer uses to issue and verify
 	// login session cookies -- see internal/session. Treat it as a
@@ -112,6 +117,10 @@ const (
 	MinPostFieldBytes        = 1
 	MaxPostTitleBytesCeiling = 2000
 	MaxPostBodyBytesCeiling  = 100000
+	// DefaultMaxCommentBytes is the comment size cap's default; the same
+	// Min/Ceiling pair as the post body bounds it.
+	DefaultMaxCommentBytes = 10000
+	MaxCommentBytesCeiling = 100000
 )
 
 // DefaultSessionTTL is SessionTTL's default: 24 hours. docs/DESIGN.md pins
@@ -158,6 +167,7 @@ func FromEnv() Config {
 		KeyRotationCooldown:     keyRotationCooldownEnvOrDefault("KEY_ROTATION_COOLDOWN_HOURS", DefaultKeyRotationCooldown),
 		MaxPostTitleBytes:       postBytesEnvOrDefault("MAX_POST_TITLE_BYTES", DefaultMaxPostTitleBytes, MaxPostTitleBytesCeiling),
 		MaxPostBodyBytes:        postBytesEnvOrDefault("MAX_POST_BODY_BYTES", DefaultMaxPostBodyBytes, MaxPostBodyBytesCeiling),
+		MaxCommentBytes:         postBytesEnvOrDefault("MAX_COMMENT_BYTES", DefaultMaxCommentBytes, MaxCommentBytesCeiling),
 		SessionSecret:           sessionSecretBytes,
 		SessionTTL:              sessionTTLEnvOrDefault("SESSION_TTL_HOURS", DefaultSessionTTL),
 	}

@@ -42,6 +42,7 @@ type vectorFile struct {
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	PostAAD              []postAADVector              `json:"post_aad"`
+	CommentAAD           []commentAADVector           `json:"comment_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
@@ -346,6 +347,18 @@ type postAADVector struct {
 	Name          string `json:"name"`
 	GroupID       string `json:"group_id"`
 	SortKey       string `json:"sort_key"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+type commentAADVector struct {
+	Name          string `json:"name"`
+	PostID        string `json:"post_id"`
+	Path          string `json:"path"`
 	Generation    uint64 `json:"generation"`
 	AADHex        string `json:"aad_hex"`
 	KeyHex        string `json:"key_hex"`
@@ -1147,6 +1160,44 @@ func TestVectorPostAAD(t *testing.T) {
 			}
 			if _, err := Decrypt(key, nonce, got, PostAAD(tc.GroupID, "POST#2026-10-29#00112233445566ff", tc.Generation)); err == nil {
 				t.Fatal("opened under another day's sort key")
+			}
+		})
+	}
+}
+
+// TestVectorCommentAAD pins CommentAAD's exact encoding (#44), and that a
+// comment ciphertext does not open when moved to another generation, another
+// path or another post.
+func TestVectorCommentAAD(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.CommentAAD) < 2 {
+		t.Fatalf("expected at least 2 comment_aad vectors, got %d", len(v.CommentAAD))
+	}
+	for _, tc := range v.CommentAAD {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := CommentAAD(tc.PostID, tc.Path, tc.Generation)
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("CommentAAD = %x, want %x", gotAAD, wantAAD)
+			}
+			key, nonce := mustHex(t, tc.KeyHex), mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			got, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, mustHex(t, tc.CiphertextHex)) {
+				t.Fatalf("EncryptWithNonce = %x, want %s", got, tc.CiphertextHex)
+			}
+			for name, other := range map[string][]byte{
+				"another generation": CommentAAD(tc.PostID, tc.Path, tc.Generation+1),
+				"another path":       CommentAAD(tc.PostID, "0009", tc.Generation),
+				"another post":       CommentAAD("group-uuid-2#2026-10-29#00112233445566ff", tc.Path, tc.Generation),
+				"as a post":          PostAAD("group-uuid-2", "POST#2026-10-28#00112233445566ff", tc.Generation),
+			} {
+				if _, err := Decrypt(key, nonce, got, other); err == nil {
+					t.Fatalf("opened under %s", name)
+				}
 			}
 		})
 	}

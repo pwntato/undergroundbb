@@ -2,6 +2,7 @@ package idgen
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -243,6 +244,59 @@ func TestValidPostSortKey(t *testing.T) {
 	} {
 		if _, ok := ValidPostSortKey(bad); ok {
 			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestParsePostID(t *testing.T) {
+	gid := "0b6a7b0a-0d07-4f6d-9a52-3f6f0a6b1c11"
+	groupID, sk, ok := ParsePostID(gid + "#2026-10-28#00112233445566ff")
+	if !ok || groupID != gid || sk != "POST#2026-10-28#00112233445566ff" {
+		t.Fatalf("ParsePostID = %q, %q, %v", groupID, sk, ok)
+	}
+	for _, bad := range []string{
+		"",
+		gid,
+		gid + "#2026-10-28",
+		gid + "#2026-02-31#00112233445566ff", // impossible date
+		gid + "#2026-10-28#00112233445566F",  // short and uppercase
+		gid + "#2026-10-28#00112233445566ff#extra",            // trailing field
+		"not-a-uuid#2026-10-28#00112233445566ff",              // not a group id
+		strings.ToUpper(gid) + "#2026-10-28#00112233445566ff", // uppercase group id
+	} {
+		if _, _, ok := ParsePostID(bad); ok {
+			t.Errorf("ParsePostID(%q) accepted", bad)
+		}
+	}
+}
+
+func TestValidCommentPath(t *testing.T) {
+	for path, depth := range map[string]int{
+		"0001":           1,
+		"0003.0001.0002": 3,
+		"9999":           1,
+		"0001.0001.0001.0001.0001.0001.0001.0001": 8,
+	} {
+		if got, ok := ValidCommentPath(path); !ok || got != depth {
+			t.Errorf("ValidCommentPath(%q) = %d, %v; want %d, true", path, got, ok, depth)
+		}
+	}
+	for _, bad := range []string{
+		"", "0000", "0001.0000", "0000.0001", // 0000 is the post-level sentinel
+		"1", "001", "00001", "0001.", ".0001", "0001..0001", "0001-0001", "0001.01",
+		"0001.0001.0001.0001.0001.0001.0001.0001.0001", // nine deep
+		" 0001", "0001 ", "000a",
+	} {
+		if _, ok := ValidCommentPath(bad); ok {
+			t.Errorf("ValidCommentPath(%q) accepted", bad)
+		}
+	}
+}
+
+func TestCommentParentPath(t *testing.T) {
+	for path, want := range map[string]string{"0001": "", "0001.0002": "0001", "0003.0001.0002": "0003.0001"} {
+		if got := CommentParentPath(path); got != want {
+			t.Errorf("CommentParentPath(%q) = %q, want %q", path, got, want)
 		}
 	}
 }
