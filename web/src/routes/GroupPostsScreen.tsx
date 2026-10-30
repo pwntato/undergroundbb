@@ -17,10 +17,9 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Button } from '@/components/ui/button'
 import { GroupPostsPanel } from './GroupPostsPanel'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
+import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { makePinKeys } from './rotationDeps'
 import {
@@ -69,20 +68,12 @@ export function GroupPostsScreen() {
     return (
       <>
         <h1 className="text-lg font-semibold">Posts</h1>
-        <div className="flex w-full max-w-xl flex-col gap-4 text-left">
-          <Alert variant="destructive">
-            <AlertDescription>{PAGE_ERRORS.coldKeys}</AlertDescription>
-          </Alert>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              send('askAgain')
-            }}
-          >
-            Enter password
-          </Button>
-        </div>
+        <PostsPasswordDeclined
+          message={PAGE_ERRORS.coldKeys}
+          onAskAgain={() => {
+            send('askAgain')
+          }}
+        />
       </>
     )
   }
