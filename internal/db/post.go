@@ -32,6 +32,10 @@ var (
 // PostSortKeyPrefix begins every POST# sort key.
 const PostSortKeyPrefix = "POST#"
 
+// ListPostsMaxPasses bounds the queries one ListPosts call makes (each reads
+// up to limit+1 items), however many expired posts are still stored.
+const ListPostsMaxPasses = 10
+
 // CreatePostInput is one signed post. The handler has already verified
 // Signature against the author's current key and checked the day; like every
 // signature this package stores, db does not check it.
@@ -191,7 +195,10 @@ func (c *Client) storedPostMatches(ctx context.Context, in CreatePostInput) (sam
 // A post past its TTL is skipped: DynamoDB deletes expired items some time
 // after the fact, and a reader must not be shown a post the group's policy has
 // already expired. Skipped items are read past, so a page is full unless the
-// group has no more.
+// group has no more -- but only up to ListPostsMaxPasses queries: a long run of
+// expired-but-undeleted posts would otherwise cost one consistent read after
+// another on a single request. Past the cap the page may be short, even empty,
+// and the cursor then points at the last key read, so the caller asks again.
 func (c *Client) ListPosts(ctx context.Context, groupID, afterSortKey string, limit int, now time.Time) ([]models.Post, string, error) {
 	var posts []models.Post
 	var start map[string]types.AttributeValue
@@ -201,7 +208,12 @@ func (c *Client) ListPosts(ctx context.Context, groupID, afterSortKey string, li
 			"SK": &types.AttributeValueMemberS{Value: afterSortKey},
 		}
 	}
-	for len(posts) <= limit {
+	for pass := 0; len(posts) <= limit; pass++ {
+		if pass == ListPostsMaxPasses {
+			// start is the last key read: every item up to it is in posts or was
+			// skipped, so resuming strictly after it loses nothing.
+			return posts, start["SK"].(*types.AttributeValueMemberS).Value, nil
+		}
 		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
 			TableName:              aws.String(c.table),
 			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),

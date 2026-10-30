@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -487,6 +488,41 @@ func TestListPostsSkipsAPostPastItsTTLAndStillFillsThePage(t *testing.T) {
 	out := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=2"))
 	if len(out.Posts) != 2 || out.Posts[0].SortKey != "POST#2020-01-05#0000000000000001" || out.Posts[1].SortKey != "POST#2020-01-02#0000000000000001" {
 		t.Fatalf("posts = %+v", out.Posts)
+	}
+}
+
+func TestListPostsBoundsItsQueriesOverAnExpiredRunAndResumesFromTheCursor(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	past := time.Now().Add(-time.Hour).Unix()
+	// The numbers are spelled out on purpose, so that changing the cap fails this
+	// test rather than reshaping it. At limit=1 a pass reads two items, so the
+	// cap of 10 passes reads 20 of these 21 expired posts (newest first, suffix
+	// 21 down to 2), all newer than the one live post.
+	const expired = 21
+	for i := 1; i <= expired; i++ {
+		storePostAt(t, gid, fmt.Sprintf("POST#2021-01-01#%016x", i), owner.userID, past)
+	}
+	live := "POST#2020-01-01#0000000000000001"
+	storePostAt(t, gid, live, owner.userID, 0)
+
+	first := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=1"))
+	if len(first.Posts) != 0 || first.NextCursor == "" {
+		t.Fatalf("first page = %d posts, cursor %q; want none and a cursor to resume from", len(first.Posts), first.NextCursor)
+	}
+	if want := fmt.Sprintf("POST#2021-01-01#%016x", 2); first.NextCursor != want {
+		t.Fatalf("first cursor = %s, want %s (the last of the 20 keys 10 passes read)", first.NextCursor, want)
+	}
+	var got []string
+	cursor := first.NextCursor
+	for pages := 0; cursor != "" && pages < 10; pages++ {
+		out := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=1&cursor="+cursor))
+		for _, p := range out.Posts {
+			got = append(got, p.SortKey)
+		}
+		cursor = out.NextCursor
+	}
+	if len(got) != 1 || got[0] != live || cursor != "" {
+		t.Fatalf("resumed pages = %v, cursor %q; want only %s and the end", got, cursor, live)
 	}
 }
 

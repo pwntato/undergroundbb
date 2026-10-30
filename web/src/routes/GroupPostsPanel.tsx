@@ -39,8 +39,13 @@ export function GroupPostsPanel({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      {posts.length === 0 && !loading && error === null && (
+      {posts.length === 0 && !loading && error === null && !hasMore && (
         <p className="text-sm text-muted-foreground">No posts yet.</p>
+      )}
+      {posts.length === 0 && !loading && error === null && hasMore && (
+        <p className="text-sm text-muted-foreground">
+          No posts to show here yet. Older posts may follow.
+        </p>
       )}
       {posts.map((post) => (
         <article key={post.sortKey} className="flex flex-col gap-1.5 rounded-md border px-3 py-2">

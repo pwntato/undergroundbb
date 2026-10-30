@@ -140,6 +140,13 @@ describe('GroupPostsPanel', () => {
     expect(authorLabel(post({ authorName: null }))).toBe('an unknown member')
   })
 
+  it('does not call a short page the end: empty with a cursor offers more instead of "No posts yet"', () => {
+    const html = render([], { more: true })
+    expect(html).not.toContain('No posts yet.')
+    expect(html).toContain('Older posts may follow.')
+    expect(html).toContain('Load older posts')
+  })
+
   it('shows the empty state, the error, loading, and the load-more button only when they apply', () => {
     expect(render([])).toContain('No posts yet.')
     expect(render([], { error: 'Boom' })).toContain('Boom')
