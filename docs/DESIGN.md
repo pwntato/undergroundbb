@@ -151,7 +151,8 @@ so over a long run of such posts a page may be short or even empty while still c
 the last key read, and an empty page with a cursor means "keep going", not "no posts". The sort key orders by day,
 then by a random suffix, so **within a day the server's order means nothing**: each page is re-sorted within each day
 by the decrypted time, newest first, with unreadable posts last. A day that runs over a page boundary is ordered
-within each page only; the screen does not re-sort across pages. The reader (`routes/runListPosts.ts`) does the following for every post:
+within each page only; the screen does not re-sort across pages. The reader (`routes/runListPosts.ts`) does the
+following for every post:
 
 - **Opens it under the key of its own generation** (the caller's entry, walked down the `GENKEY#` chain), in the
   crypto worker (`openPosts`). A post that does not open is shown as unreadable ("could not be opened") with no word
