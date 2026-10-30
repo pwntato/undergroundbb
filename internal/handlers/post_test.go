@@ -494,9 +494,11 @@ func TestListPostsSkipsAPostPastItsTTLAndStillFillsThePage(t *testing.T) {
 func TestListPostsBoundsItsQueriesOverAnExpiredRunAndResumesFromTheCursor(t *testing.T) {
 	h, gid, owner, cookie := postFixture(t)
 	past := time.Now().Add(-time.Hour).Unix()
-	// One more expired post than the cap's passes can read at limit=1 (two
-	// items a pass), all newer than the one live post.
-	expired := db.ListPostsMaxPasses*2 + 5
+	// The numbers are spelled out on purpose, so that changing the cap fails this
+	// test rather than reshaping it. At limit=1 a pass reads two items, so the
+	// cap of 10 passes reads 20 of these 21 expired posts (newest first, suffix
+	// 21 down to 2), all newer than the one live post.
+	const expired = 21
 	for i := 1; i <= expired; i++ {
 		storePostAt(t, gid, fmt.Sprintf("POST#2021-01-01#%016x", i), owner.userID, past)
 	}
@@ -506,6 +508,9 @@ func TestListPostsBoundsItsQueriesOverAnExpiredRunAndResumesFromTheCursor(t *tes
 	first := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=1"))
 	if len(first.Posts) != 0 || first.NextCursor == "" {
 		t.Fatalf("first page = %d posts, cursor %q; want none and a cursor to resume from", len(first.Posts), first.NextCursor)
+	}
+	if want := fmt.Sprintf("POST#2021-01-01#%016x", 2); first.NextCursor != want {
+		t.Fatalf("first cursor = %s, want %s (the last of the 20 keys 10 passes read)", first.NextCursor, want)
 	}
 	var got []string
 	cursor := first.NextCursor

@@ -148,10 +148,10 @@ ciphertext, signature) newest sort key first, to any member, and verifies nothin
 can only move inside the group's own partition; `limit` is 1 to 50 (default 20). A post past its TTL is skipped even
 though DynamoDB has not deleted it yet, and one request makes at most `db.ListPostsMaxPasses` (10) queries doing so,
 so over a long run of such posts a page may be short or even empty while still carrying `nextCursor`: the cursor is
-the last key read, and an empty page with a cursor means "keep going", not "no posts". The sort key orders by day, then by a random suffix, so **within a day the
-server's order means nothing**: each page is re-sorted within each day by the decrypted time, newest first, with
-unreadable posts last. A day that runs over a page boundary is ordered within each page only; the screen does not
-re-sort across pages. The reader (`routes/runListPosts.ts`) does the following for every post:
+the last key read, and an empty page with a cursor means "keep going", not "no posts". The sort key orders by day,
+then by a random suffix, so **within a day the server's order means nothing**: each page is re-sorted within each day
+by the decrypted time, newest first, with unreadable posts last. A day that runs over a page boundary is ordered
+within each page only; the screen does not re-sort across pages. The reader (`routes/runListPosts.ts`) does the following for every post:
 
 - **Opens it under the key of its own generation** (the caller's entry, walked down the `GENKEY#` chain), in the
   crypto worker (`openPosts`). A post that does not open is shown as unreadable ("could not be opened") with no word
