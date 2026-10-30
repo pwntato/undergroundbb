@@ -201,7 +201,13 @@ order, so a page's comments are a contiguous slice of the reaction block: one ra
 to `RXN#<last>$` reads it (`$` sorts after the `#` that follows a path and before the `.` that begins a reply's path, so
 the last comment's reactions are in and its replies' are out). The first page also carries the post's own reactions
 (target `0000`). This replaces the single query the issue described: a long thread never loads in one response, and
-there is no cap on comments per post. Members only, 404 otherwise (a dormant member can read what their keys open).
+there is no cap on comments per post. A page can be shorter than `limit` and still carry a cursor, because one DynamoDB
+query returns at most 1 MB; a cursor means "keep going", never "this page was full". The reaction read is not capped:
+a page's reactions are bounded by the page size times the group's members (one reaction per user per target), and the
+whole response by a Lambda's response limit. Nothing writes reactions yet (#46), so whoever builds it should size the
+default page against the member cap. Truncating the reaction read to stay under a limit is the wrong fix, because it
+would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
+dormant member can read what their keys open).
 
 ### Login
 
