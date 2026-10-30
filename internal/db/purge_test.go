@@ -372,6 +372,123 @@ func TestPurgeFinishesAfterARunStoppedMidGroup(t *testing.T) {
 	requireFinishedTombstone(t, c, a)
 }
 
+// putThread writes a post row in the group and, in the post's own partition,
+// a comment and a reaction on it. It returns the post row's key and the two
+// thread keys, and removes the partition when the test ends.
+func putThread(t *testing.T, c *Client, gid string) (post [2]string, thread [][2]string) {
+	t.Helper()
+	pid := gid + "#2026-10-30#0123456789abcdef"
+	post = [2]string{"GROUP#" + gid, "POST#2026-10-30#0123456789abcdef"}
+	putRaw(t, c, map[string]types.AttributeValue{"PK": s(post[0]), "SK": s(post[1]), "Type": s("Post")})
+	thread = [][2]string{{"POST#" + pid, "CMT#0001"}, {"POST#" + pid, "RXN#0001#someone"}}
+	for _, k := range thread {
+		putRaw(t, c, map[string]types.AttributeValue{"PK": s(k[0]), "SK": s(k[1])})
+	}
+	t.Cleanup(func() { removePartitions(t, c, "POST#"+pid) })
+	return post, thread
+}
+
+func TestPurgeRemovesTheCommentsAndReactionsOfATestOnlyGroup(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, b := registerAccount(t, c, true), registerAccount(t, c, true)
+	gid := putGroup(t, c, a.UserID, b.UserID)
+	post, thread := putThread(t, c, gid)
+
+	rep, err := c.PurgeTestAccounts(ctx, purgeOnly(a.UserID, b.UserID))
+	if err != nil || rep.Purged != 2 || rep.Groups != 1 {
+		t.Fatalf("report = %+v err = %v, want 2 purged, 1 group", rep, err)
+	}
+	for _, k := range append([][2]string{post}, thread...) {
+		if itemExists(t, c, k[0], k[1]) {
+			t.Errorf("%s / %s still exists", k[0], k[1])
+		}
+	}
+}
+
+func TestPurgeLeavesTheCommentsOfAGroupWithARealMember(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, real := registerAccount(t, c, true), registerAccount(t, c, false)
+	gid := putGroup(t, c, a.UserID, real.UserID)
+	post, thread := putThread(t, c, gid)
+
+	if _, err := c.PurgeTestAccounts(ctx, purgeOnly(a.UserID)); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range append([][2]string{post}, thread...) {
+		if !itemExists(t, c, k[0], k[1]) {
+			t.Errorf("%s / %s was deleted from a group with a real member", k[0], k[1])
+		}
+	}
+}
+
+// The report counts the thread rows: the same group with and without a
+// comment and a reaction differs by exactly those two, in a dry run and a real
+// one.
+func TestPurgeCountsTheCommentsAndReactionsItDeletes(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	run := func(withThread bool) (dry, real PurgeReport) {
+		a := registerAccount(t, c, true)
+		gid := putGroup(t, c, a.UserID)
+		putRaw(t, c, map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("POST#2026-10-30#fedcba9876543210")})
+		if withThread {
+			pid := gid + "#2026-10-30#fedcba9876543210"
+			putRaw(t, c, map[string]types.AttributeValue{"PK": s("POST#" + pid), "SK": s("CMT#0001")})
+			putRaw(t, c, map[string]types.AttributeValue{"PK": s("POST#" + pid), "SK": s("RXN#0001#someone")})
+			t.Cleanup(func() { removePartitions(t, c, "POST#"+pid) })
+		}
+		d := purgeOnly(a.UserID)
+		d.DryRun = true
+		var err error
+		if dry, err = c.PurgeTestAccounts(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		if real, err = c.PurgeTestAccounts(ctx, purgeOnly(a.UserID)); err != nil {
+			t.Fatal(err)
+		}
+		return dry, real
+	}
+	dryWithout, realWithout := run(false)
+	dryWith, realWith := run(true)
+	if dryWith.Rows-dryWithout.Rows != 2 || realWith.Rows-realWithout.Rows != 2 {
+		t.Errorf("rows with a thread minus without = %d dry, %d real, want 2 each", dryWith.Rows-dryWithout.Rows, realWith.Rows-realWithout.Rows)
+	}
+}
+
+// A run that dies after the comments are gone must still find the group, and
+// one that dies the other way round could not: the post rows are the only way
+// to the comments, so they must outlive them.
+func TestPurgeFindsTheCommentsAgainAfterARunStoppedBeforeThePostRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a := registerAccount(t, c, true)
+	gid := putGroup(t, c, a.UserID)
+	post, thread := putThread(t, c, gid)
+
+	opts := purgeOnly(a.UserID)
+	stop := errors.New("simulated crash")
+	opts.afterThreadRows = func(string) error { return stop }
+	if _, err := c.PurgeTestAccounts(ctx, opts); !errors.Is(err, stop) {
+		t.Fatalf("err = %v, want the simulated crash", err)
+	}
+	for _, k := range thread {
+		if itemExists(t, c, k[0], k[1]) {
+			t.Fatalf("setup: %s / %s should already be deleted", k[0], k[1])
+		}
+	}
+	if !itemExists(t, c, post[0], post[1]) {
+		t.Fatal("the post row must outlive its comments")
+	}
+	if _, err := c.PurgeTestAccounts(ctx, purgeOnly(a.UserID)); err != nil {
+		t.Fatal(err)
+	}
+	if itemExists(t, c, post[0], post[1]) {
+		t.Error("post row still exists after the rerun")
+	}
+}
+
 func TestPurgeDryRunReportMatchesARealRun(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
@@ -569,6 +686,7 @@ var purgeKnownPartitions = map[string]string{
 	"USERNAME": "purged: the claim",
 	"GROUP":    "purged whole when every member is a test account",
 	"INVITE":   "purged: invites the test user sent or was sent",
+	"POST":     "purged with its group: comments and reactions, before the post rows",
 }
 
 func TestEveryPartitionKindIsKnownToThePurge(t *testing.T) {
@@ -579,6 +697,8 @@ func TestEveryPartitionKindIsKnownToThePurge(t *testing.T) {
 	// "PK": ...Value: "X#" and PK: "X#" as written in the db package.
 	re := regexp.MustCompile(`(?:"(?:PK|:pk)":\s*&types\.AttributeValueMemberS\{Value:\s*|\bPK:\s*)"([A-Z]+)#"`)
 	found := map[string]string{}
+	// A partition built by a helper, as in "func PostPartition(id) string { return "POST#" + id }".
+	helper := regexp.MustCompile(`func \w*Partition\(\w+ string\) string \{ return "([A-Z]+)#"`)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -587,7 +707,7 @@ func TestEveryPartitionKindIsKnownToThePurge(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		for _, m := range append(re.FindAllStringSubmatch(string(src), -1), helper.FindAllStringSubmatch(string(src), -1)...) {
 			if found[m[1]] == "" {
 				found[m[1]] = f
 			}

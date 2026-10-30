@@ -38,6 +38,9 @@ type PurgeOptions struct {
 	// beforeMemberRow, if set, runs after a group's other rows are deleted and
 	// before the account's own MEMBER# row is. Tests use it to stop a run there.
 	beforeMemberRow func(groupID string) error
+	// afterThreadRows, if set, runs after a group's comments and reactions are
+	// deleted and before its other rows are.
+	afterThreadRows func(groupID string) error
 }
 
 // PurgeSkip records an account the purge examined and left alone.
@@ -94,8 +97,9 @@ type PurgeReport struct {
 // the keys are removed and it is never examined again. Waiting accounts count
 // against MaxAccounts; a great many of them would crowd out new work.
 //
-// Order: for each test-only group, its other rows first and the account's own
-// MEMBER# row last, because that row is how the next run finds the group; then
+// Order: for each test-only group, its posts' comments and reactions first,
+// then its other rows (the post rows are how the comments are found, so they
+// outlive them), and the account's own MEMBER# row last, because that row is how the next run finds the group; then
 // the user's other rows and invites, then the username claim, then PROFILE.
 // PROFILE is what the candidate query finds, so a run that dies partway is
 // finished by the next.
@@ -143,7 +147,10 @@ func (c *Client) PurgeTestAccounts(ctx context.Context, opts PurgeOptions) (Purg
 				plannedGroups[g.id] = true
 				groups = append(groups, g)
 				report.Groups++
-				report.Rows += len(g.rows) + 1 // + the member row
+				report.Rows += len(g.threadRows) + len(g.rows) + 1 // + the member row
+				for _, k := range g.threadRows {
+					plannedRows[keyID(k)] = true
+				}
 				for _, k := range g.rows {
 					plannedRows[keyID(k)] = true
 				}
@@ -188,11 +195,14 @@ func keyID(k map[string]types.AttributeValue) string {
 }
 
 // groupPlan is one test-only group: every row but the account's own MEMBER#
-// row, which is deleted last.
+// row, which is deleted last. threadRows are the comments and reactions in the
+// POST# partitions of the group's posts; they go before the post rows, because
+// a post row is the only way to find them.
 type groupPlan struct {
-	id        string
-	rows      []map[string]types.AttributeValue
-	memberKey map[string]types.AttributeValue
+	id         string
+	threadRows []map[string]types.AttributeValue
+	rows       []map[string]types.AttributeValue
+	memberKey  map[string]types.AttributeValue
 }
 
 type purgePlan struct {
@@ -312,10 +322,21 @@ func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[str
 			"SK": &types.AttributeValueMemberS{Value: own},
 		}}
 		for _, k := range keys {
-			if sk, _ := k["SK"].(*types.AttributeValueMemberS); sk != nil && sk.Value == own {
+			sk, _ := k["SK"].(*types.AttributeValueMemberS)
+			if sk != nil && sk.Value == own {
 				continue
 			}
 			g.rows = append(g.rows, k)
+			// A post's comments and reactions live in POST#<gid>#<day>#<hex>,
+			// not in the group's partition, so deleting the group alone would
+			// leave them behind.
+			if sk != nil && strings.HasPrefix(sk.Value, PostSortKeyPrefix) {
+				thread, err := c.partitionKeys(ctx, PostPartition(gid+"#"+strings.TrimPrefix(sk.Value, PostSortKeyPrefix)))
+				if err != nil {
+					return plan, "", err
+				}
+				g.threadRows = append(g.threadRows, thread...)
+			}
 		}
 		plan.groups = append(plan.groups, g)
 	}
@@ -380,6 +401,14 @@ func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[str
 
 func (c *Client) executePurge(ctx context.Context, plan purgePlan, now time.Time, opts PurgeOptions) error {
 	for _, g := range plan.groups {
+		if err := c.batchDelete(ctx, dedupeKeys(g.threadRows)); err != nil {
+			return err
+		}
+		if opts.afterThreadRows != nil {
+			if err := opts.afterThreadRows(g.id); err != nil {
+				return err
+			}
+		}
 		if err := c.batchDelete(ctx, dedupeKeys(g.rows)); err != nil {
 			return err
 		}
