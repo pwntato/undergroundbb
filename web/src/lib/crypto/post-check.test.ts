@@ -3,7 +3,13 @@ import { bytesToBase64 } from './base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from './ed25519'
 import { makeKeyChange } from './own-history.testkit'
 import { signedPayload } from './payload'
-import { atOnSortKeyDay, checkPostSignature, postIdOf, sortKeyDay } from './post-check'
+import {
+  atOnSortKeyDay,
+  checkPostSignature,
+  groupOfPostId,
+  postIdOf,
+  sortKeyDay,
+} from './post-check'
 
 const GROUP = 'a0000000-0000-4000-8000-000000000001'
 const AUTHOR = 'b0000000-0000-4000-8000-000000000002'
@@ -156,6 +162,26 @@ describe('postIdOf', () => {
       `x${SORT_KEY}`,
     ]) {
       expect(postIdOf(GROUP, bad), bad).toBeUndefined()
+    }
+  })
+})
+
+describe('groupOfPostId', () => {
+  it('reads the group out of a post id, the reverse of postIdOf', () => {
+    expect(groupOfPostId(postIdOf(GROUP, SORT_KEY)!)).toBe(GROUP)
+  })
+
+  it('refuses anything that is not a post id', () => {
+    for (const bad of [
+      '',
+      GROUP,
+      `${GROUP}#${DAY}`,
+      `${GROUP}#${DAY}#00112233445566F`,
+      `${GROUP}#${DAY}#00112233445566ff#extra`,
+      `x${GROUP}#${DAY}#00112233445566ff`,
+      `short#${DAY}#00112233445566ff`,
+    ]) {
+      expect(groupOfPostId(bad), bad).toBeUndefined()
     }
   })
 })

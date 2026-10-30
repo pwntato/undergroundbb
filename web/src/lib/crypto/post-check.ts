@@ -49,6 +49,17 @@ export function postIdOf(groupId: string, sortKey: string): string | undefined {
   return SORT_KEY.test(sortKey) ? `${groupId}#${sortKey.slice('POST#'.length)}` : undefined
 }
 
+const POST_ID = /^([0-9a-f-]{36})#\d{4}-\d{2}-\d{2}#[0-9a-f]{16}$/
+
+/**
+ * The group a post id names, or undefined for anything that is not a post id.
+ * The server takes the group from the id (idgen.ParsePostID), so a screen that
+ * was given a group and a post separately checks they agree.
+ */
+export function groupOfPostId(postId: string): string | undefined {
+  return POST_ID.exec(postId)?.[1]
+}
+
 /** Whether a decrypted RFC 3339 `at` falls on the sort key's UTC day. */
 export function atOnSortKeyDay(sortKey: string, at: string): boolean {
   const day = sortKeyDay(sortKey)

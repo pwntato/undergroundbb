@@ -55,6 +55,11 @@ describe('nextThreadState', () => {
     expect(again.comments.map((c) => c.path)).toEqual(['0001', '0002', '0003'])
   })
 
+  it('does not show a comment twice when one page repeats a path', () => {
+    const s = apply(INITIAL_THREAD_STATE, page(['0001', '0001', '0002', '0001']))
+    expect(s.comments.map((c) => c.path)).toEqual(['0001', '0002'])
+  })
+
   it('marks a load as started and clears the last failure', () => {
     const failed = apply(INITIAL_THREAD_STATE, { ok: false, kind: 'failed' })
     expect(nextThreadState(failed, { type: 'loadStarted' })).toMatchObject({

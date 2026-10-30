@@ -285,6 +285,18 @@ describe('loadThreadPage', () => {
     expect(deps.openComments.mock.calls[0]![0]).not.toHaveProperty('chain')
   })
 
+  it('says not found, and asks for nothing, when the post belongs to another group', async () => {
+    const other = 'd0000000-0000-4000-8000-000000000004'
+    for (const postId of [`${other}#2026-10-28#00112233445566ff`, 'not-a-post-id', '']) {
+      const deps = depsFor({ comments: [wireComment(ME, me, '0001')] })
+      const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, postId)
+      expect(res, postId).toEqual({ ok: false, kind: 'notFound' })
+      expect(deps.getGroup).not.toHaveBeenCalled()
+      expect(deps.getThread).not.toHaveBeenCalled()
+      expect(deps.openComments).not.toHaveBeenCalled()
+    }
+  })
+
   it('reports a chain that could not be read rather than a thread of unreadable comments', async () => {
     const deps = depsFor({ comments: [wireComment(ALICE, aliceKey, '0001', { generation: 0 })] })
     deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 1 })

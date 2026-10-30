@@ -6,8 +6,9 @@
 //   - A cursor means there is more, whatever the page held. A page can be short
 //     or empty and still carry one (the server stops a page at its read limit),
 //     so "no comments here" is never the end of a thread; only a missing cursor is.
-//   - A comment already shown (same path) is dropped, never shown twice, so a
-//     cursor served twice cannot duplicate it.
+//   - A comment already shown (same path), or repeated within one page, is
+//     dropped, never shown twice, so a cursor served twice or an untrusted page
+//     cannot duplicate it (two rows with one key would also confuse React).
 //   - A failed page keeps what is already shown and the cursor it was loaded
 //     with, so the same page can be asked for again.
 
@@ -37,9 +38,15 @@ export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadS
   if (event.type === 'loadStarted') return { ...state, loading: true, failure: null }
   const { result } = event
   if (!result.ok) return { ...state, loading: false, failure: result.kind }
+  // A path is added as it is kept, so a repeat inside one page is dropped too.
   const seen = new Set(state.comments.map((c) => c.path))
+  const fresh = result.comments.filter((c) => {
+    if (seen.has(c.path)) return false
+    seen.add(c.path)
+    return true
+  })
   return {
-    comments: [...state.comments, ...result.comments.filter((c) => !seen.has(c.path))],
+    comments: [...state.comments, ...fresh],
     cursor: result.nextCursor,
     loading: false,
     failure: null,

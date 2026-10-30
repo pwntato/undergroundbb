@@ -24,6 +24,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail, ThreadResponse, WireComment } from '@/lib/api/groups'
 import { checkCommentSignature, atOnSignedDay } from '@/lib/crypto/comment-check'
+import { groupOfPostId } from '@/lib/crypto/post-check'
 import type { OpenedComment } from '@/lib/crypto/worker-protocol'
 import { isLiveKeysError } from './runListGroups'
 import type { AuthorCheck, ListPostsDeps, PostSignature } from './runListPosts'
@@ -100,6 +101,10 @@ export async function loadThreadPage(
   postId: string,
   cursor?: string,
 ): Promise<ThreadPageResult> {
+  // The group comes from one URL parameter and the post from another, and the
+  // server authorizes the post against ITS group, so a mismatched pair would
+  // read another group's comments under this group's key.
+  if (groupOfPostId(postId) !== groupId) return { ok: false, kind: 'notFound' }
   let detail: GroupDetail
   let page: ThreadResponse
   try {
