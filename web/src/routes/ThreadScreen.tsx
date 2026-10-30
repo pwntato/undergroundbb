@@ -15,7 +15,6 @@ import { createComment, getGroup, getKeychain, getThread } from '@/lib/api/group
 import { listAllPins } from '@/lib/api/pins'
 import { getUserDetail } from '@/lib/api/users'
 import { getOwnSigningKey, openComments, sealComment } from '@/lib/crypto/worker-client'
-import type { SealedComment } from '@/lib/crypto/worker-protocol'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
@@ -23,20 +22,20 @@ import { useSession } from '@/lib/session/useSession'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
-import { INITIAL_REPLY_STATE, nextReplyState, TARGET_GONE_MESSAGE } from './replyState'
+import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
-import {
-  attachParent,
-  DEFAULT_MAX_COMMENT_BYTES,
-  guessPath,
-  loadSealContext,
-  submitComment,
-  type SubmitResult,
-} from './runCreateComment'
+import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
 import { makeAuthorResolver } from './runListPosts'
 import { loadThreadPage, type LoadThreadDeps, type ThreadPageResult } from './runLoadThread'
 import { ThreadPanel, type ThreadReply } from './ThreadPanel'
 import { canRetryFailure, INITIAL_THREAD_STATE, nextThreadState } from './threadState'
+import {
+  loadPageInto,
+  sendReply,
+  type PendingReply,
+  type SavedReply,
+  type ThreadIO,
+} from './threadWiring'
 
 const PAGE_ERRORS: Record<Exclude<ThreadPageResult, { ok: true }>['kind'], string> = {
   notFound: 'This post no longer exists, or you are no longer a member of its group.',
@@ -44,39 +43,6 @@ const PAGE_ERRORS: Record<Exclude<ThreadPageResult, { ok: true }>['kind'], strin
   coldKeys: 'This tab needs your password again to read or write comments.',
   chain: "Couldn't read this group's older keys, so older comments can't be opened. Try again.",
   failed: "Couldn't load the comments. Try again.",
-}
-
-const SEND_ERRORS: Record<Exclude<SubmitResult, { ok: true }>['kind'], string> = {
-  reseal: 'The group changed while you were writing. Press Send again to send it with the new key.',
-  behind:
-    'Your key for this group is behind. Wait for the key rotation to reach you, then try again.',
-  dormant:
-    'You rotated your keys and an admin has not approved them for this group yet. Ask an admin to approve you from Members.',
-  authRequired: 'Your session has expired. Log in again and retry.',
-  notFound: 'This post no longer exists, or you are no longer a member of its group.',
-  coldKeys: 'This tab needs your password again to write a comment.',
-  unreadable:
-    "Couldn't open this group's key, so the comment was not sent. Reload the page and try again.",
-  repliesFull: "This comment can't take any more replies.",
-  parentGone: TARGET_GONE_MESSAGE,
-  busy: 'Others are replying at the same moment. Press Send again.',
-  rejected: 'The server rejected the comment.',
-  ambiguous:
-    "We couldn't confirm whether the comment was saved. Press Send again to send the same comment; it will not be sent twice.",
-}
-
-const CONTEXT_ERRORS = {
-  notFound: SEND_ERRORS.notFound,
-  authRequired: SEND_ERRORS.authRequired,
-  behind: SEND_ERRORS.behind,
-  unreadable: SEND_ERRORS.unreadable,
-  failed: "Couldn't load this group. Try again.",
-} as const
-
-/** A reply in progress, kept across the password step. */
-interface SavedReply {
-  readonly replyTo: string | null
-  readonly draft: string
 }
 
 /** What the post list passes along so the thread can name the post; display only. */
@@ -89,11 +55,13 @@ export function ThreadScreen() {
   const userId = useSession().userId
   const location = useLocation()
   const [gate, send] = useReducer(nextPostsGate, INITIAL_POSTS_GATE)
-  // Stable, so the thread's load effect does not restart when this component re-renders.
+  // The reply in the box when the password step was asked for, so it comes back
+  // after it. Replaced on every ask, with nothing when the box was empty, so an
+  // old draft that was already sent is never brought back.
   const [saved, setSaved] = useState<SavedReply | undefined>(undefined)
+  // Stable, so the thread's load effect does not restart when this component re-renders.
   const handleColdKeys = useCallback((reply?: SavedReply) => {
-    // A reply typed before the password step is asked for comes back after it.
-    if (reply !== undefined) setSaved(reply)
+    setSaved(reply)
     send('coldKeys')
   }, [])
 
@@ -185,36 +153,36 @@ function Thread({
   const [maxBytes, setMaxBytes] = useState(DEFAULT_MAX_COMMENT_BYTES)
   // Bumped when the thread starts over, so a page still in flight is dropped.
   const epoch = useRef(0)
-  // The comment a send left unanswered, with what it came from; sent again
-  // unchanged while the box still matches.
-  const pending = useRef<{
-    sealed: SealedComment
-    text: string
-    replyTo: string | null
-  } | null>(null)
-
-  const apply = useCallback(
-    (result: ThreadPageResult, first: boolean) => {
-      dispatch({ type: 'pageLoaded', result })
-      // Everything on screen is this page, so a reply target missing from it is gone from view.
-      if (first && result.ok) {
-        dispatchReply({ type: 'firstPageLoaded', paths: result.comments.map((c) => c.path) })
-      }
-      if (!result.ok && result.kind === 'coldKeys') onColdKeys()
-    },
+  // The comment a send left unanswered; sent again unchanged while the box still matches.
+  const pending = useRef<PendingReply | null>(null)
+  // What the reply box holds right now, for a password step asked for by a page load.
+  const replyNow = useRef(replyState)
+  useEffect(() => {
+    replyNow.current = replyState
+  })
+  const io: ThreadIO = useMemo(
+    () => ({
+      dispatch,
+      dispatchReply,
+      onColdKeys,
+      liveReply: () =>
+        replyNow.current.draft === ''
+          ? undefined
+          : { replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
+    }),
     [onColdKeys],
+  )
+  const loadPage = useCallback(
+    (cursor: string | undefined) =>
+      loadThreadPage(reader.deps, reader.resolveAuthor, groupId, postId, cursor),
+    [reader, groupId, postId],
   )
   const load = useCallback(
     (cursor: string | undefined) => {
       const mine = epoch.current
-      dispatch({ type: 'loadStarted' })
-      void loadThreadPage(reader.deps, reader.resolveAuthor, groupId, postId, cursor).then(
-        (result) => {
-          if (mine === epoch.current) apply(result, cursor === undefined)
-        },
-      )
+      void loadPageInto(io, loadPage, () => mine === epoch.current, cursor, true)
     },
-    [reader, groupId, postId, apply],
+    [io, loadPage],
   )
   // Starts over from the first page: a new comment may sit on any page.
   const reload = useCallback(() => {
@@ -238,55 +206,17 @@ function Thread({
   }, [])
 
   const handleSend = () => {
-    const { replyTo, draft: text } = replyState
-    dispatchReply({ type: 'sendStarted' })
-    void (async () => {
-      const again = pending.current
-      const resend = again?.text === text && again.replyTo === replyTo ? again.sealed : undefined
-      if (resend === undefined) pending.current = null
-      const fail = (message: string) => {
-        dispatchReply({ type: 'sendFailed', error: message })
-      }
-      const loaded = await loadSealContext(reader.deps, groupId)
-      if (!loaded.ok) {
-        fail(CONTEXT_ERRORS[loaded.kind])
-        return
-      }
-      const result = await submitComment(
-        { userId, sealComment, createComment },
-        {
-          groupId,
-          postId,
-          context: loaded.context,
-          text,
-          firstPath:
-            resend?.path ??
-            guessPath(
-              attachParent(replyTo),
-              state.comments.map((c) => c.path),
-            ),
-          ...(resend !== undefined && { resend }),
-        },
-      )
-      if (result.ok) {
-        pending.current = null
-        dispatchReply({ type: 'sent', notice: 'Comment sent.' })
-        reload()
-        return
-      }
-      pending.current =
-        result.kind === 'ambiguous' && result.sealed !== undefined
-          ? { sealed: result.sealed, text, replyTo }
-          : null
-      fail(
-        result.kind === 'rejected'
-          ? (result.message ?? SEND_ERRORS.rejected)
-          : SEND_ERRORS[result.kind],
-      )
-      if (result.kind === 'coldKeys') onColdKeys({ replyTo, draft: text })
-      // The comment replied to is gone: show the thread as it is now.
-      if (result.kind === 'parentGone') reload()
-    })()
+    void sendReply(
+      { ...io, reload },
+      { context: reader.deps, submit: { userId, sealComment, createComment }, pending },
+      {
+        groupId,
+        postId,
+        replyTo: replyState.replyTo,
+        text: replyState.draft,
+        loadedPaths: state.comments.map((c) => c.path),
+      },
+    )
   }
 
   const reply: ThreadReply = {
@@ -307,13 +237,11 @@ function Thread({
 
   useEffect(() => {
     let cancelled = false
-    void loadThreadPage(reader.deps, reader.resolveAuthor, groupId, postId).then((result) => {
-      if (!cancelled && epoch.current === 0) apply(result, true)
-    })
+    void loadPageInto(io, loadPage, () => !cancelled && epoch.current === 0, undefined, false)
     return () => {
       cancelled = true
     }
-  }, [reader, groupId, postId, apply])
+  }, [io, loadPage])
 
   return (
     <ThreadPanel
