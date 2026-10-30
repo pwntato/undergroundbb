@@ -76,8 +76,8 @@ describe('GroupPostsPanel', () => {
     expect(html).not.toContain('src="https://evil.example')
     expect(html).toContain('&lt;img src=')
     expect(html).toContain('&lt;script&gt;')
-    // Only the two links the page itself owns.
-    expect(html.match(/<a /g)?.length).toBe(2)
+    // Only the links the page itself owns: the post's Comments, Write a post, Back to your groups.
+    expect(html.match(/<a /g)?.length).toBe(3)
   })
 
   it('says an unopened post could not be opened, hides nothing else, and blames no one', () => {
@@ -167,5 +167,12 @@ describe('GroupPostsPanel', () => {
     expect(render([], { error: 'Failed' })).not.toContain('Try again')
     expect(render([], { error: 'Failed', retry: true })).toContain('Try again')
     expect(render([], { error: 'Failed', retry: true, loading: true })).not.toContain('Try again')
+  })
+
+  it('links each post to its thread, with the # of the post id as %23, and not for a malformed key', () => {
+    const html = render([post()])
+    expect(html).toContain('href="/groups/g1/posts/g1%232026-10-28%2300112233445566ff"')
+    expect(html).toContain('>Comments</a>')
+    expect(render([post({ sortKey: 'garbage' })])).not.toContain('>Comments</a>')
   })
 })

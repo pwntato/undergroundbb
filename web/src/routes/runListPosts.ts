@@ -79,6 +79,12 @@ export interface ListPostsDeps {
   ) => Promise<void>
 }
 
+/** What anchoring an author's keys needs; the thread reader (runLoadThread) shares it. */
+export type AuthorResolverDeps = Pick<
+  ListPostsDeps,
+  'getUserDetail' | 'selfUserId' | 'ownSigningKey' | 'loadOwnKeyHistory' | 'listPins' | 'pinKeys'
+>
+
 /** How an author's keys were anchored before their signature was checked. */
 export type KeyAnchor = 'own' | 'pinned' | 'first-seen'
 
@@ -131,7 +137,9 @@ export type PageResult =
  * single time. The pins and the caller's own key are read lazily, on the first
  * author who is not the caller.
  */
-export function makeAuthorResolver(deps: ListPostsDeps): (userId: string) => Promise<AuthorCheck> {
+export function makeAuthorResolver(
+  deps: AuthorResolverDeps,
+): (userId: string) => Promise<AuthorCheck> {
   const cache = new Map<string, Promise<AuthorCheck>>()
   // Answers that came from a failed read, not from the keys: asked again next page.
   const transient = new WeakSet<AuthorCheck>()

@@ -849,6 +849,48 @@ export async function listPosts(groupId: string, cursor?: string): Promise<ListP
   return handleJSON<ListPostsResponse>(res)
 }
 
+/** One stored comment as GET /api/posts/{pid}/thread serves it; nothing in it is checked server-side. */
+export interface WireComment {
+  readonly path: string
+  readonly authorUserId: string
+  readonly generation: number
+  /** The UTC day the author signed, `YYYY-MM-DD`; a comment's sort key has no day. */
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+/** One stored reaction; read by #46, typed here so the response is whole. */
+export interface WireReaction {
+  /** The comment path it is on, or `0000` for the post itself. */
+  readonly target: string
+  readonly reactorUserId: string
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+}
+
+export interface ThreadResponse {
+  /** In display order: depth first, by path. */
+  readonly comments: readonly WireComment[]
+  readonly reactions: readonly WireReaction[]
+  /** Present while there is more, even on a page with no comments; pass it back as `cursor`. */
+  readonly nextCursor?: string
+}
+
+/**
+ * GET /api/posts/{pid}/thread -- #44. Members only; 404 for anyone else. The
+ * `#`s in a post id travel as `%23`.
+ */
+export async function getThread(postId: string, cursor?: string): Promise<ThreadResponse> {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  const res = await fetch(`/api/posts/${encodeURIComponent(postId)}/thread${query}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<ThreadResponse>(res)
+}
+
 export async function createPost(
   groupId: string,
   req: CreatePostRequest,

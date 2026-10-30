@@ -40,6 +40,9 @@ import type {
   EncryptGroupTextResponse,
   SealPostRequest,
   SealPostResponse,
+  OpenCommentsRequest,
+  OpenCommentsResponse,
+  OpenedComment,
   OpenPostsRequest,
   OpenPostsResponse,
   OpenedPost,
@@ -971,6 +974,41 @@ export function openPosts(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for openPosts`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/**
+ * Opens a page of a post's comments -- #44. Rejects if liveKeys is cold or the
+ * caller's own entry does not open; a comment that does not open is
+ * `unreadable` in the result, in request order.
+ */
+export function openComments(
+  req: Omit<OpenCommentsRequest, 'kind' | 'id'>,
+): Promise<readonly OpenedComment[]> {
+  const id = nextRequestID()
+  const fullReq: OpenCommentsRequest = { kind: 'openComments', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'openCommentsDone') {
+        resolve((msg as OpenCommentsResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for openComments`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
