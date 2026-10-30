@@ -7,7 +7,7 @@
 // component, keyed by group and by re-login, so its state starts fresh by
 // remounting rather than by an effect resetting it.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import { useParams } from 'react-router'
 import { getGroup, getKeychain, listPosts } from '@/lib/api/groups'
 import { listAllPins } from '@/lib/api/pins'
@@ -17,7 +17,10 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { GroupPostsPanel } from './GroupPostsPanel'
+import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { makePinKeys } from './rotationDeps'
 import {
@@ -39,36 +42,55 @@ const PAGE_ERRORS: Record<Exclude<PageResult, { ok: true }>['kind'], string> = {
 export function GroupPostsScreen() {
   const { groupId } = useParams<{ groupId: string }>()
   const userId = useSession().userId
-  const [needsReauth, setNeedsReauth] = useState(false)
-  // Bumped after a re-login so the list remounts and loads from the first page.
-  const [round, setRound] = useState(0)
+  const [gate, send] = useReducer(nextPostsGate, INITIAL_POSTS_GATE)
   // Stable, so the list's load effect does not restart when this component re-renders.
   const handleColdKeys = useCallback(() => {
-    setNeedsReauth(true)
+    send('coldKeys')
   }, [])
 
   if (groupId === undefined) return null
-  if (needsReauth && userId !== null) {
+  if (userId === null) return null
+  if (gate.step === 'password') {
     return (
       <ReauthenticateStep
         sessionUserId={userId}
         action="read posts"
         onDone={() => {
-          setNeedsReauth(false)
-          setRound((n) => n + 1)
+          send('reauthenticated')
         }}
         onCancel={() => {
-          setNeedsReauth(false)
+          send('cancel')
         }}
       />
     )
   }
-  if (userId === null) return null
+  if (gate.step === 'declined') {
+    // The list stays unmounted: mounting it loads page 1, which asks again.
+    return (
+      <>
+        <h1 className="text-lg font-semibold">Posts</h1>
+        <div className="flex w-full max-w-xl flex-col gap-4 text-left">
+          <Alert variant="destructive">
+            <AlertDescription>{PAGE_ERRORS.coldKeys}</AlertDescription>
+          </Alert>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              send('askAgain')
+            }}
+          >
+            Enter password
+          </Button>
+        </div>
+      </>
+    )
+  }
   return (
     <>
       <h1 className="text-lg font-semibold">Posts</h1>
       <PostsList
-        key={`${groupId}:${String(round)}`}
+        key={`${groupId}:${String(gate.round)}`}
         groupId={groupId}
         userId={userId}
         onColdKeys={handleColdKeys}
