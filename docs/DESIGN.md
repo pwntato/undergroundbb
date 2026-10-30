@@ -213,6 +213,17 @@ default page against the member cap. Truncating the reaction read to stay under 
 would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
 dormant member can read what their keys open).
 
+**For the comment reader (#44).** `/groups/:gid/posts/:pid` (the `#`s of the post id as `%23`) reads a thread with the
+rules of the post list, in `web/src/routes/runLoadThread.ts`. A comment opens under `commentAAD` (post, path,
+generation) or is shown as one that could not be opened, which blames no one: the nonce is not signed. Its signature is
+checked under the author's keys for the **signed day stored on the row** (a comment's sort key has no day), after
+anchoring those keys the way the post list does (your own key, your signed pin, or first sight saved); a failed read of
+the keys is "could not check", never "invalid". A decrypted time that is not on the signed day is flagged and not shown.
+A path that is not well formed is shown unreadable and unnested. Pages keep the server's order and are appended; a
+comment already shown is dropped, and a cursor, even on an empty page, keeps "Load more comments" on screen. Text is a
+plain text node. The post's title comes from the list's navigation state for display only, so a thread opened in a new
+tab has none; nothing is trusted from it.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
