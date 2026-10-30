@@ -41,7 +41,7 @@ import { canRetryFailure, INITIAL_THREAD_STATE, nextThreadState } from './thread
 const PAGE_ERRORS: Record<Exclude<ThreadPageResult, { ok: true }>['kind'], string> = {
   notFound: 'This post no longer exists, or you are no longer a member of its group.',
   authRequired: 'Your session has expired. Log in again and retry.',
-  coldKeys: 'This tab needs your password again to read comments.',
+  coldKeys: 'This tab needs your password again to read or write comments.',
   chain: "Couldn't read this group's older keys, so older comments can't be opened. Try again.",
   failed: "Couldn't load the comments. Try again.",
 }
@@ -103,7 +103,7 @@ export function ThreadScreen() {
     return (
       <ReauthenticateStep
         sessionUserId={userId}
-        action="read comments"
+        action="read or write comments"
         onDone={() => {
           send('reauthenticated')
         }}

@@ -224,6 +224,18 @@ comment already shown is dropped, and a cursor, even on an empty page, keeps "Lo
 plain text node. The post's title comes from the list's navigation state for display only, so a thread opened in a new
 tab has none; nothing is trusted from it.
 
+**For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
+direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
+On 409 `comment_path_taken` or `comment_path_skips` it seals again at `nextPath`, at most four seals per send, and
+accepts a `nextPath` only if it is well formed, under the same parent and not already tried (otherwise the send is
+refused rather than looped or misplaced). A reply to a comment at depth 8 is written as its sibling, and the box says
+so. A resend after a lost answer sends the **same sealed bytes**, never a new seal, so the server's "identical bytes
+are one comment" rule makes it safe; a changed draft or a different target drops the kept seal. `replies_full` and
+`parent_gone` have their own messages (a gone parent reloads the thread). There is one draft: moving the box to
+another comment keeps it, and it survives the password step. The counter counts UTF-8 bytes, the unit of
+`MAX_COMMENT_BYTES` (served by `GET /api/config`). After a send the thread restarts from its first page, since the new
+comment may sit on any page.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
