@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -487,6 +488,36 @@ func TestListPostsSkipsAPostPastItsTTLAndStillFillsThePage(t *testing.T) {
 	out := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=2"))
 	if len(out.Posts) != 2 || out.Posts[0].SortKey != "POST#2020-01-05#0000000000000001" || out.Posts[1].SortKey != "POST#2020-01-02#0000000000000001" {
 		t.Fatalf("posts = %+v", out.Posts)
+	}
+}
+
+func TestListPostsBoundsItsQueriesOverAnExpiredRunAndResumesFromTheCursor(t *testing.T) {
+	h, gid, owner, cookie := postFixture(t)
+	past := time.Now().Add(-time.Hour).Unix()
+	// One more expired post than the cap's passes can read at limit=1 (two
+	// items a pass), all newer than the one live post.
+	expired := db.ListPostsMaxPasses*2 + 5
+	for i := 1; i <= expired; i++ {
+		storePostAt(t, gid, fmt.Sprintf("POST#2021-01-01#%016x", i), owner.userID, past)
+	}
+	live := "POST#2020-01-01#0000000000000001"
+	storePostAt(t, gid, live, owner.userID, 0)
+
+	first := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=1"))
+	if len(first.Posts) != 0 || first.NextCursor == "" {
+		t.Fatalf("first page = %d posts, cursor %q; want none and a cursor to resume from", len(first.Posts), first.NextCursor)
+	}
+	var got []string
+	cursor := first.NextCursor
+	for pages := 0; cursor != "" && pages < 10; pages++ {
+		out := decodeList(t, doListPosts(t, h, cookie, gid, "?limit=1&cursor="+cursor))
+		for _, p := range out.Posts {
+			got = append(got, p.SortKey)
+		}
+		cursor = out.NextCursor
+	}
+	if len(got) != 1 || got[0] != live || cursor != "" {
+		t.Fatalf("resumed pages = %v, cursor %q; want only %s and the end", got, cursor, live)
 	}
 }
 
