@@ -453,6 +453,26 @@ func TestThreadPagesByCursorWithoutRepeatsOrGapsAndReactionsFollowTheirComments(
 	}
 }
 
+func TestThreadReactionsOnARepliesOfAPagesLastCommentWaitForTheirOwnPage(t *testing.T) {
+	h, _, pid, owner, cookie := commentFixture(t)
+	for _, p := range []string{"0001", "0001.0001", "0002"} {
+		storeCommentAt(t, pid, p, owner.userID, 0)
+	}
+	for _, target := range []string{"0001", "0001.0001", "0002"} {
+		storeReactionAt(t, pid, target, "aaaa")
+	}
+	// The page ends at 0001; 0001.0001 sorts right after it and so do its
+	// reactions, but they belong with their comment on the next page.
+	page1 := decodeThread(t, doThread(t, h, cookie, pid, "?limit=1"))
+	if got := strings.Join(reactionTargets(page1), ","); got != "0001" {
+		t.Fatalf("page 1 reactions = %s, want only 0001's", got)
+	}
+	page2 := decodeThread(t, doThread(t, h, cookie, pid, "?limit=1&cursor="+page1.NextCursor))
+	if got := strings.Join(reactionTargets(page2), ","); got != "0001.0001" {
+		t.Fatalf("page 2 reactions = %s, want only 0001.0001's", got)
+	}
+}
+
 func TestThreadWithNoCommentsStillServesThePostsOwnReactions(t *testing.T) {
 	h, _, pid, owner, cookie := commentFixture(t)
 	storeReactionAt(t, pid, "0000", owner.userID)
