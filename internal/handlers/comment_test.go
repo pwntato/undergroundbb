@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -135,12 +136,19 @@ func commentFixture(t *testing.T) (h *Handler, gid, pid string, owner registered
 
 func storeCommentAt(t *testing.T, pid, path, author string, ttl int64) {
 	t.Helper()
+	storeCommentSized(t, pid, path, author, ttl, len("ciphertext"))
+}
+
+// storeCommentSized stores a comment whose ciphertext is n bytes, to put a
+// page near the 1 MB a single DynamoDB query returns.
+func storeCommentSized(t *testing.T, pid, path, author string, ttl int64, n int) {
+	t.Helper()
 	item := map[string]types.AttributeValue{
 		"PK": s("POST#" + pid), "SK": s("CMT#" + path), "Type": s("COMMENT"),
 		"AuthorUserID": s(author), "SignedDay": s("2026-10-28"),
 		"Generation": &types.AttributeValueMemberN{Value: "0"},
 		"Nonce":      &types.AttributeValueMemberB{Value: make([]byte, 12)},
-		"Ciphertext": &types.AttributeValueMemberB{Value: []byte("ciphertext")},
+		"Ciphertext": &types.AttributeValueMemberB{Value: make([]byte, n)},
 		"Signature":  &types.AttributeValueMemberB{Value: []byte("signature")},
 	}
 	if ttl != 0 {
@@ -470,6 +478,40 @@ func TestThreadReactionsOnARepliesOfAPagesLastCommentWaitForTheirOwnPage(t *test
 	page2 := decodeThread(t, doThread(t, h, cookie, pid, "?limit=1&cursor="+page1.NextCursor))
 	if got := strings.Join(reactionTargets(page2), ","); got != "0001.0001" {
 		t.Fatalf("page 2 reactions = %s, want only 0001.0001's", got)
+	}
+}
+
+func TestThreadPageCutShortByTheQuerySizeLimitStillHasACursor(t *testing.T) {
+	h, _, pid, owner, cookie := commentFixture(t)
+	// 60 comments of 40,000 bytes are 2.4 MB: a query stops at 1 MB with fewer
+	// than the 50 asked for, and says so only through LastEvaluatedKey.
+	const total = 60
+	var want []string
+	for i := 1; i <= total; i++ {
+		path := fmt.Sprintf("%04d", i)
+		storeCommentSized(t, pid, path, owner.userID, 0, 40000)
+		want = append(want, path)
+	}
+	first := decodeThread(t, doThread(t, h, cookie, pid, ""))
+	if len(first.Comments) >= defaultCommentPageSize || first.NextCursor == "" {
+		t.Fatalf("first page = %d comments, cursor %q; want a page cut short by size with a cursor to continue", len(first.Comments), first.NextCursor)
+	}
+	var got []string
+	cursor := ""
+	for pages := 0; pages < 20; pages++ {
+		q := ""
+		if cursor != "" {
+			q = "?cursor=" + cursor
+		}
+		out := decodeThread(t, doThread(t, h, cookie, pid, q))
+		got = append(got, threadPaths(out)...)
+		if out.NextCursor == "" {
+			break
+		}
+		cursor = out.NextCursor
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("paged %d comments, want all %d in order: %v", len(got), total, got)
 	}
 }
 

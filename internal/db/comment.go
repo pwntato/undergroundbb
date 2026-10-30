@@ -306,8 +306,10 @@ func (c *Client) NextCommentPath(ctx context.Context, postID, parentPath string)
 // (depth-first), starting strictly after the comment at afterPath ("" for the
 // first page), plus the last path returned when more follow. The cursor is a
 // path rather than a DynamoDB key, so a caller-supplied one can only move
-// within this post's partition. Comments share their post's TTL, so a caller
-// that has checked the post is live needs no per-comment expiry test.
+// within this post's partition. A page may be shorter than limit and still
+// carry a cursor: a query returns at most 1 MB. Comments share their post's
+// TTL, so a caller that has checked the post is live needs no per-comment
+// expiry test.
 func (c *Client) ListComments(ctx context.Context, postID, afterPath string, limit int) ([]models.Comment, string, error) {
 	in := &dynamodb.QueryInput{
 		TableName:              aws.String(c.table),
@@ -331,9 +333,16 @@ func (c *Client) ListComments(ctx context.Context, postID, afterPath string, lim
 		return nil, "", fmt.Errorf("db: unmarshal comments: %w", err)
 	}
 	next := ""
-	if len(comments) > limit {
+	switch {
+	case len(comments) > limit:
 		comments = comments[:limit]
 		next = strings.TrimPrefix(comments[limit-1].SK, CommentSortKeyPrefix)
+	case len(out.LastEvaluatedKey) > 0 && len(comments) > 0:
+		// A query stops at 1 MB however high Limit is, and says so only through
+		// LastEvaluatedKey. Large comments can fill a page short of limit+1
+		// items; without this the reader would take the short page for the end
+		// of the thread.
+		next = strings.TrimPrefix(comments[len(comments)-1].SK, CommentSortKeyPrefix)
 	}
 	return comments, next, nil
 }
