@@ -22,10 +22,10 @@
 // carry a cursor; both mean "keep going", never "the end".
 
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, ThreadResponse, WireComment } from '@/lib/api/groups'
+import type { GroupDetail, ThreadResponse, WireComment, WireReaction } from '@/lib/api/groups'
 import { checkCommentSignature, atOnSignedDay } from '@/lib/crypto/comment-check'
 import { groupOfPostId } from '@/lib/crypto/post-check'
-import type { OpenedComment } from '@/lib/crypto/worker-protocol'
+import type { OpenedComment, OpenedReaction } from '@/lib/crypto/worker-protocol'
 import { isLiveKeysError } from './runListGroups'
 import type { AuthorCheck, ListPostsDeps, PostSignature } from './runListPosts'
 
@@ -50,7 +50,40 @@ export interface LoadThreadDeps {
       readonly ciphertext: string
     }[]
   }) => Promise<readonly OpenedComment[]>
+  readonly openReactions: (req: {
+    readonly userId: string
+    readonly groupId: string
+    readonly postId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      readonly generation: number
+      readonly wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly reactions: readonly {
+      readonly target: string
+      readonly reactorUserId: string
+      readonly generation: number
+      readonly nonce: string
+      readonly ciphertext: string
+    }[]
+  }) => Promise<readonly OpenedReaction[]>
   readonly selfUserId: string
+}
+
+/** The target of a reaction on the post itself. */
+export const POST_TARGET = '0000'
+
+/**
+ * One reaction as shown: who, on what, and which table index (reaction.ts), or
+ * null when it did not open or holds a byte this build has no reaction for.
+ * Unsigned, so nothing here vouches for the reactor beyond the server's word.
+ */
+export interface ReactionView {
+  /** The comment path it is on, or POST_TARGET. */
+  readonly target: string
+  readonly reactorUserId: string
+  readonly index: number | null
 }
 
 export interface CommentView {
@@ -78,7 +111,13 @@ export interface CommentView {
 }
 
 export type ThreadPageResult =
-  | { readonly ok: true; readonly comments: readonly CommentView[]; readonly nextCursor?: string }
+  | {
+      readonly ok: true
+      readonly comments: readonly CommentView[]
+      /** The page's reactions: the post's own on the first page, then those on this page's comments. */
+      readonly reactions: readonly ReactionView[]
+      readonly nextCursor?: string
+    }
   | {
       readonly ok: false
       readonly kind: 'notFound' | 'authRequired' | 'coldKeys' | 'chain' | 'failed'
@@ -122,33 +161,69 @@ export async function loadThreadPage(
       ? { nextCursor: page.nextCursor }
       : undefined
   const wire = page.comments
-  if (wire.length === 0) return { ok: true, comments: [], ...nextCursor }
+  // A reaction on a target that is neither the post nor a well-formed comment path
+  // cannot be placed anywhere, so it is not opened or shown.
+  const wireReactions = page.reactions.filter(
+    (x) => x.target === POST_TARGET || commentDepth(x.target) > 0,
+  )
+  // The first page can hold only the post's own reactions, so an empty page of
+  // comments is not an empty page.
+  if (wire.length === 0 && wireReactions.length === 0) {
+    return { ok: true, comments: [], reactions: [], ...nextCursor }
+  }
 
-  const oldest = Math.min(...wire.map((c) => c.generation))
+  const oldest = Math.min(
+    ...wire.map((c) => c.generation),
+    ...wireReactions.map((x) => x.generation),
+  )
   let chain: Awaited<ReturnType<LoadThreadDeps['getChain']>> = []
   if (oldest < detail.generation) {
     chain = await deps.getChain(groupId, oldest, detail.generation)
     // A failed read of the chain is not a comment that does not open.
     if (chain === undefined) return { ok: false, kind: 'chain' }
   }
-  let opened: readonly OpenedComment[]
-  try {
-    opened = await deps.openComments({
-      userId: deps.selfUserId,
-      groupId,
-      postId,
-      generation: detail.generation,
-      wrappedGroupKey: detail.wrappedGroupKey,
-      ...(chain.length > 0 && { chain }),
-      comments: wire.map((c) => ({
-        path: c.path,
-        generation: c.generation,
-        nonce: c.nonce,
-        ciphertext: c.ciphertext,
-      })),
-    })
-  } catch (err) {
-    return { ok: false, kind: isLiveKeysError(err) ? 'coldKeys' : 'failed' }
+  const keyed = {
+    userId: deps.selfUserId,
+    groupId,
+    postId,
+    generation: detail.generation,
+    wrappedGroupKey: detail.wrappedGroupKey,
+    ...(chain.length > 0 && { chain }),
+  }
+  let opened: readonly OpenedComment[] = []
+  if (wire.length > 0) {
+    try {
+      opened = await deps.openComments({
+        ...keyed,
+        comments: wire.map((c) => ({
+          path: c.path,
+          generation: c.generation,
+          nonce: c.nonce,
+          ciphertext: c.ciphertext,
+        })),
+      })
+    } catch (err) {
+      return { ok: false, kind: isLiveKeysError(err) ? 'coldKeys' : 'failed' }
+    }
+  }
+  // A reaction that cannot be opened is not worth losing the comments over: a
+  // cold tab still asks for the password, anything else shows them unreadable.
+  let openedReactions: readonly OpenedReaction[] = []
+  if (wireReactions.length > 0) {
+    try {
+      openedReactions = await deps.openReactions({
+        ...keyed,
+        reactions: wireReactions.map((x) => ({
+          target: x.target,
+          reactorUserId: x.reactorUserId,
+          generation: x.generation,
+          nonce: x.nonce,
+          ciphertext: x.ciphertext,
+        })),
+      })
+    } catch (err) {
+      if (isLiveKeysError(err)) return { ok: false, kind: 'coldKeys' }
+    }
   }
   const authors = new Map(
     await Promise.all(
@@ -162,7 +237,16 @@ export async function loadThreadPage(
     comments: wire.map((c, i) =>
       viewOf(c, opened[i] ?? { kind: 'unreadable' }, authors.get(c.authorUserId)!, groupId),
     ),
+    reactions: wireReactions.map((x, i) => reactionViewOf(x, openedReactions[i])),
     ...nextCursor,
+  }
+}
+
+function reactionViewOf(x: WireReaction, o: OpenedReaction | undefined): ReactionView {
+  return {
+    target: x.target,
+    reactorUserId: x.reactorUserId,
+    index: o?.kind === 'opened' ? o.index : null,
   }
 }
 

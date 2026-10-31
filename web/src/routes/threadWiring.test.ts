@@ -36,6 +36,7 @@ const view = (path: string): CommentView => ({
 const page = (paths: string[], nextCursor?: string): ThreadPageResult => ({
   ok: true,
   comments: paths.map(view),
+  reactions: [],
   ...(nextCursor !== undefined && { nextCursor }),
 })
 

@@ -949,6 +949,52 @@ export async function createComment(
   return handleJSON<{ path: string }>(res)
 }
 
+/** The body of PUT /api/posts/{pid}/reactions/{target}; the reactor is the session's user. */
+export interface PutReactionRequest {
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+}
+
+/** Answers 204 with no body, which handleJSON would take for a malformed response. */
+async function handleNoContent(res: Response): Promise<void> {
+  if (res.ok) return
+  await handleJSON<unknown>(res)
+}
+
+function reactionPath(postId: string, target: string): string {
+  return `/api/posts/${encodeURIComponent(postId)}/reactions/${encodeURIComponent(target)}`
+}
+
+/**
+ * Sets the caller's reaction on a post (`target` 0000) or one of its comments,
+ * replacing any they had there (#46). The same bytes sent twice are one
+ * reaction. A write that collides with another on the same item answers 409
+ * `conflict_retry`; the caller retries.
+ */
+export async function putReaction(
+  postId: string,
+  target: string,
+  req: PutReactionRequest,
+): Promise<void> {
+  const res = await fetch(reactionPath(postId, target), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(req),
+  })
+  await handleNoContent(res)
+}
+
+/** Takes back the caller's own reaction; a reaction that is not there is the same 204. */
+export async function deleteReaction(postId: string, target: string): Promise<void> {
+  const res = await fetch(reactionPath(postId, target), {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  })
+  await handleNoContent(res)
+}
+
 export async function createPost(
   groupId: string,
   req: CreatePostRequest,

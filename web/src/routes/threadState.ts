@@ -11,8 +11,13 @@
 //     cannot duplicate it (two rows with one key would also confuse React).
 //   - A failed page keeps what is already shown and the cursor it was loaded
 //     with, so the same page can be asked for again.
+//   - Reactions (#46) arrive with the comments they are on, so a page adds its
+//     own. One per reactor per target: a repeat is dropped, the first kept, so a
+//     page cannot override what this reader just did. What this reader does is
+//     applied only after the server accepted it (reactionSaved / reactionRemoved),
+//     never ahead of it.
 
-import type { CommentView, ThreadPageResult } from './runLoadThread'
+import type { CommentView, ReactionView, ThreadPageResult } from './runLoadThread'
 
 export interface ThreadState {
   readonly comments: readonly CommentView[]
@@ -21,6 +26,11 @@ export interface ThreadState {
   readonly loading: boolean
   /** Why the last page failed, or null. */
   readonly failure: Extract<ThreadPageResult, { ok: false }>['kind'] | null
+  readonly reactions: readonly ReactionView[]
+  /** Targets whose reaction is being saved or taken back right now. */
+  readonly reacting: readonly string[]
+  /** Why the last reaction on `target` did not go through, or null. */
+  readonly reactionError: { readonly target: string; readonly message: string } | null
 }
 
 export const INITIAL_THREAD_STATE: ThreadState = {
@@ -28,6 +38,9 @@ export const INITIAL_THREAD_STATE: ThreadState = {
   cursor: undefined,
   loading: true,
   failure: null,
+  reactions: [],
+  reacting: [],
+  reactionError: null,
 }
 
 export type ThreadEvent =
@@ -35,10 +48,58 @@ export type ThreadEvent =
   /** Start over from the first page, e.g. after a comment was added. */
   | { readonly type: 'reset' }
   | { readonly type: 'pageLoaded'; readonly result: ThreadPageResult }
+  | { readonly type: 'reactionStarted'; readonly target: string }
+  | { readonly type: 'reactionFailed'; readonly target: string; readonly message: string }
+  /** The server accepted this reader's reaction (set, or changed to another). */
+  | {
+      readonly type: 'reactionSaved'
+      readonly target: string
+      readonly reactorUserId: string
+      readonly index: number
+    }
+  /** The server accepted taking this reader's reaction back. */
+  | {
+      readonly type: 'reactionRemoved'
+      readonly target: string
+      readonly reactorUserId: string
+    }
 
 export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadState {
   if (event.type === 'reset') return INITIAL_THREAD_STATE
   if (event.type === 'loadStarted') return { ...state, loading: true, failure: null }
+  if (event.type === 'reactionStarted') {
+    return {
+      ...state,
+      reacting: state.reacting.includes(event.target)
+        ? state.reacting
+        : [...state.reacting, event.target],
+      reactionError: null,
+    }
+  }
+  if (event.type === 'reactionFailed') {
+    return {
+      ...state,
+      reacting: state.reacting.filter((t) => t !== event.target),
+      reactionError: { target: event.target, message: event.message },
+    }
+  }
+  if (event.type === 'reactionSaved' || event.type === 'reactionRemoved') {
+    const others = state.reactions.filter(
+      (x) => !(x.target === event.target && x.reactorUserId === event.reactorUserId),
+    )
+    return {
+      ...state,
+      reactions:
+        event.type === 'reactionSaved'
+          ? [
+              ...others,
+              { target: event.target, reactorUserId: event.reactorUserId, index: event.index },
+            ]
+          : others,
+      reacting: state.reacting.filter((t) => t !== event.target),
+      reactionError: null,
+    }
+  }
   const { result } = event
   if (!result.ok) return { ...state, loading: false, failure: result.kind }
   // A path is added as it is kept, so a repeat inside one page is dropped too.
@@ -48,12 +109,25 @@ export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadS
     seen.add(c.path)
     return true
   })
+  const have = new Set(state.reactions.map(reactionKey))
+  const freshReactions = result.reactions.filter((x) => {
+    const key = reactionKey(x)
+    if (have.has(key)) return false
+    have.add(key)
+    return true
+  })
   return {
+    ...state,
     comments: [...state.comments, ...fresh],
+    reactions: [...state.reactions, ...freshReactions],
     cursor: result.nextCursor,
     loading: false,
     failure: null,
   }
+}
+
+function reactionKey(x: ReactionView): string {
+  return `${x.target}|${x.reactorUserId}`
 }
 
 /** Another try can fix these; the rest need a login or mean the thread is gone. */

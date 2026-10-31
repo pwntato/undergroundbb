@@ -9,7 +9,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './auth'
-import { CommentPathError, createComment, getKeychain, listGroups, removeMember } from './groups'
+import {
+  CommentPathError,
+  createComment,
+  deleteReaction,
+  getKeychain,
+  listGroups,
+  putReaction,
+  removeMember,
+} from './groups'
 
 function stubFetch(status: number, body: unknown) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -197,5 +205,67 @@ describe('createComment', () => {
     const err = await createComment(POST, req).catch((e: unknown) => e)
     expect(err).not.toBeInstanceOf(CommentPathError)
     expect(err).toMatchObject({ status: 409, code: 'comment_path_taken' })
+  })
+})
+
+describe('reactions', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const POST = 'g#2026-10-29#00112233445566ff'
+  const body = { generation: 0, nonce: 'n', ciphertext: 'c' }
+  // A real 204 has no body, which is what a JSON-only helper chokes on.
+  const reply = (status: number, json?: unknown) => {
+    const res =
+      json === undefined
+        ? new Response(null, { status })
+        : new Response(JSON.stringify(json), { status })
+    const fetchMock = vi.fn().mockResolvedValue(res)
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('PUTs the sealed reaction to the target, with the # escaped, and accepts a 204', async () => {
+    const fetchMock = reply(204)
+    await expect(putReaction(POST, '0001.0002', body)).resolves.toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/posts/g%232026-10-29%2300112233445566ff/reactions/0001.0002')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body as string)).toEqual(body)
+    expect(init.credentials).toBe('same-origin')
+  })
+
+  it('DELETEs the reaction on the post itself and accepts a 204', async () => {
+    const fetchMock = reply(204)
+    await expect(deleteReaction(POST, '0000')).resolves.toBeUndefined()
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/posts/g%232026-10-29%2300112233445566ff/reactions/0000')
+    expect(init.method).toBe('DELETE')
+  })
+
+  it.each([
+    [409, { error: 'retry', code: 'conflict_retry' }, 'conflict_retry'],
+    [409, { error: 'gone', code: 'parent_gone' }, 'parent_gone'],
+    [409, { error: 'stale', code: 'generation_stale' }, 'generation_stale'],
+    [404, { error: 'no post' }, undefined],
+    [401, { error: 'no session' }, undefined],
+  ])('turns a %i into an ApiError carrying its code', async (status, json, code) => {
+    reply(status, json)
+    const err = await putReaction(POST, '0000', body).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status, code })
+    reply(status, json)
+    expect(await deleteReaction(POST, '0000').catch((e: unknown) => e)).toMatchObject({
+      status,
+      code,
+    })
+  })
+
+  it('does not take a failed answer with no body for success', async () => {
+    reply(502)
+    expect(await putReaction(POST, '0000', body).catch((e: unknown) => e)).toMatchObject({
+      status: 502,
+    })
   })
 })
