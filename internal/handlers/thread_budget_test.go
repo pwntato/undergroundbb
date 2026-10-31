@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
@@ -84,6 +86,49 @@ func TestThreadSizeEstimatesNeverUndercountTheJSON(t *testing.T) {
 		if est := reactionWireSize(rxns[i]); est < len(b) {
 			t.Errorf("reaction %d: estimate %d is below the %d bytes of JSON", i, est, len(b))
 		}
+	}
+}
+
+// generation is the one number in an entry, so only the overhead constants
+// cover it. The longest it can be is the most negative int64, 20 characters.
+func TestThreadSizeEstimatesCoverTheLongestGeneration(t *testing.T) {
+	h, _, pid, owner, cookie := commentFixture(t)
+	const minInt64 = "-9223372036854775808"
+	gen := &types.AttributeValueMemberN{Value: minInt64}
+	putCommentRow(t, map[string]types.AttributeValue{
+		"PK": s("POST#" + pid), "SK": s("CMT#0001"), "Type": s("COMMENT"),
+		"AuthorUserID": s(owner.userID), "SignedDay": s("2026-10-28"), "Generation": gen,
+		"Nonce":      &types.AttributeValueMemberB{Value: make([]byte, 12)},
+		"Ciphertext": &types.AttributeValueMemberB{Value: make([]byte, 60)},
+		"Signature":  &types.AttributeValueMemberB{Value: make([]byte, 64)},
+	})
+	putCommentRow(t, map[string]types.AttributeValue{
+		"PK": s("POST#" + pid), "SK": s("RXN#0001#" + owner.userID), "Type": s("REACTION"), "Generation": gen,
+		"Nonce":      &types.AttributeValueMemberB{Value: make([]byte, 12)},
+		"Ciphertext": &types.AttributeValueMemberB{Value: make([]byte, 17)},
+	})
+	out := decodeThread(t, doThread(t, h, cookie, pid, ""))
+	rows, _, err := h.db.ListComments(context.Background(), pid, "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rxns, err := h.db.ListReactions(context.Background(), pid, "0001", "0001", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Comments) != 1 || len(rows) != 1 || len(out.Reactions) != 1 || len(rxns) != 1 {
+		t.Fatalf("got %d/%d comments, %d/%d reactions", len(out.Comments), len(rows), len(out.Reactions), len(rxns))
+	}
+	if out.Comments[0].Generation != math.MinInt64 || out.Reactions[0].Generation != math.MinInt64 {
+		t.Fatalf("generations = %d, %d, want the most negative int64", out.Comments[0].Generation, out.Reactions[0].Generation)
+	}
+	cb, _ := json.Marshal(out.Comments[0])
+	if est := commentWireSize(rows[0]); est < len(cb) {
+		t.Errorf("comment: estimate %d is below the %d bytes of JSON", est, len(cb))
+	}
+	xb, _ := json.Marshal(out.Reactions[0])
+	if est := reactionWireSize(rxns[0]); est < len(xb) {
+		t.Errorf("reaction: estimate %d is below the %d bytes of JSON", est, len(xb))
 	}
 }
 
