@@ -387,3 +387,37 @@ func TestADeletedPostTakesNothingNewButItsCommentsCanStillBeDeleted(t *testing.T
 		t.Errorf("deleting a comment under a deleted post: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The handler answers 404 for an expired post, so the write's own expiry check
+// is reached only when the post expires between the read and the write. It
+// must still refuse, or an edit would revive text the group's policy expired.
+func TestEditPostWriteRefusesAPostThatExpiredMeanwhile(t *testing.T) {
+	h, gid, pid, owner, _ := commentFixture(t)
+	self, err := h.db.GetUserByIDConsistent(context.Background(), owner.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sortKey, _ := idgen.ParsePostID(pid)
+	original := postRow(t, pid)["Nonce"].(*types.AttributeValueMemberB).Value
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:                aws.String(testTableName()),
+		Key:                      map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s(sortKey)},
+		UpdateExpression:         aws.String("SET #t = :past"),
+		ExpressionAttributeNames: map[string]string{"#t": "TTL"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":past": &types.AttributeValueMemberN{Value: fmt.Sprint(time.Now().Add(-time.Hour).Unix())},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = h.db.EditPost(context.Background(), db.EditPostInput{
+		GroupID: gid, SortKey: sortKey, AuthorUserID: owner.userID, SignedDay: today(), Nonce: nonceOf(2),
+		Ciphertext: ctOf(2), Signature: []byte("sig"), PriorNonce: original, AuthorKeyEpoch: self.KeyEpoch, Now: time.Now(),
+	})
+	if !errors.Is(err, db.ErrPostGone) {
+		t.Errorf("edit of an expired post: %v, want ErrPostGone", err)
+	}
+	if got := postRow(t, pid)["Nonce"].(*types.AttributeValueMemberB).Value; !bytes.Equal(got, original) {
+		t.Error("a refused edit changed the stored post")
+	}
+}
