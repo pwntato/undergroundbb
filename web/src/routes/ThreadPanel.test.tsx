@@ -2,6 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
+import { ReactionBar } from './ReactionBar'
+import { elementsOf } from './elementTree.testkit'
 import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
 import type { CommentView, ReactionView } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
@@ -325,5 +327,35 @@ describe('ThreadPanel reactions (#46)', () => {
     expect(rows[2]).toContain('Could not save your reaction.')
     expect(rows[0]).not.toContain('Could not save')
     expect(rows[1]).not.toContain('Could not save')
+  })
+})
+
+describe('ThreadPanel reports reaction presses', () => {
+  it('names the target and the button pressed, for the post and for each comment', () => {
+    const calls: [string, number][] = []
+    const tree = ThreadPanel({
+      groupId: 'g1',
+      comments: [comment(), comment({ path: '0001.0001', depth: 2 })],
+      loading: false,
+      error: null,
+      hasMore: false,
+      onLoadMore: () => {},
+      reactions: {
+        reactions: [],
+        selfUserId: 'me',
+        reacting: [],
+        error: null,
+        ready: true,
+        onPress: (target, index) => calls.push([target, index]),
+      },
+    })
+    const bars = elementsOf(tree).filter((e) => e.type === ReactionBar)
+    expect(bars).toHaveLength(3)
+    bars.forEach((bar, i) => (bar.props['onPress'] as (n: number) => void)(i + 3))
+    expect(calls).toEqual([
+      ['0000', 3],
+      ['0001', 4],
+      ['0001.0001', 5],
+    ])
   })
 })

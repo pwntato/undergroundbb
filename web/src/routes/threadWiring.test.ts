@@ -349,8 +349,15 @@ function reactHarness(
     getChain: vi.fn(),
   }
   const deps = { userId: 'u1', context, sealReaction, putReaction, deleteReaction } as ReactDeps
-  const press = (target: string, index: number, mine: number | null = null) =>
-    toggleReaction({ ...h.io, reload }, deps, { groupId: 'g', postId: POST, target, index, mine })
+  // The press reads what is on screen, as the screen passes it.
+  const press = (target: string, index: number) =>
+    toggleReaction({ ...h.io, reload }, deps, {
+      groupId: 'g',
+      postId: POST,
+      target,
+      index,
+      reactions: h.thread().reactions,
+    })
   return { press, sealReaction, putReaction, deleteReaction, reload, context }
 }
 
@@ -422,7 +429,7 @@ describe('toggleReaction', () => {
     const h = harness()
     withReaction(h, '0001', 2)
     const r = reactHarness(h)
-    await r.press('0001', 5, 2)
+    await r.press('0001', 5)
     expect(r.putReaction).toHaveBeenCalledTimes(1)
     expect(r.deleteReaction).not.toHaveBeenCalled()
     expect(h.thread().reactions.filter((x) => x.target === '0001')).toEqual([
@@ -435,7 +442,7 @@ describe('toggleReaction', () => {
     withReaction(h, '0001', 2)
     withReaction(h, '0002', 4)
     const r = reactHarness(h)
-    await r.press('0001', 2, 2)
+    await r.press('0001', 2)
     expect(r.deleteReaction).toHaveBeenCalledWith(POST, '0001')
     expect(r.putReaction).not.toHaveBeenCalled()
     expect(r.sealReaction).not.toHaveBeenCalled()
@@ -457,7 +464,7 @@ describe('toggleReaction', () => {
       const h = harness()
       withReaction(h, '0001', 2)
       const r = reactHarness(h, { put: vi.fn().mockRejectedValue(new ApiError(status, 'x', code)) })
-      await r.press('0001', 5, 2)
+      await r.press('0001', 5)
       expect(h.thread().reactionError).toEqual({ target: '0001', message })
       expect(h.thread()).toMatchObject({ reacting: [] })
       expect(mineOn(h, '0001')).toBe(2)
@@ -526,7 +533,7 @@ describe('toggleReaction', () => {
       .mockRejectedValueOnce(new ApiError(409, 'busy', 'conflict_retry'))
       .mockResolvedValue(undefined)
     const r = reactHarness(h, { del })
-    await r.press('0001', 2, 2)
+    await r.press('0001', 2)
     expect(del).toHaveBeenCalledTimes(2)
     expect(mineOn(h, '0001')).toBeUndefined()
   })
@@ -558,11 +565,63 @@ describe('toggleReaction', () => {
     expect(h.thread().reactionError?.message).toBe(REACTION_ERRORS.reseal)
   })
 
+  it('does not seal again when taking back, even if the server says the group moved', async () => {
+    const h = harness()
+    withReaction(h, '0001', 2)
+    const del = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError(409, 'stale', 'generation_stale'))
+      .mockResolvedValue(undefined)
+    const r = reactHarness(h, { del })
+    await r.press('0001', 2)
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(r.sealReaction).not.toHaveBeenCalled()
+    expect(h.thread().reactionError?.message).toBe(REACTION_ERRORS.reseal)
+    expect(mineOn(h, '0001')).toBe(2)
+  })
+
+  it('sets, not takes back, when only someone else has the pressed reaction on the target', async () => {
+    const h = harness()
+    h.io.dispatch({ type: 'reactionSaved', target: '0001', reactorUserId: 'other', index: 2 })
+    const r = reactHarness(h)
+    await r.press('0001', 2)
+    expect(r.putReaction).toHaveBeenCalledTimes(1)
+    expect(r.deleteReaction).not.toHaveBeenCalled()
+    expect(mineOn(h, '0001')).toBe(2)
+  })
+
+  it('sets, not takes back, when the reader has the pressed reaction on another target', async () => {
+    const h = harness()
+    withReaction(h, '0002', 2)
+    const r = reactHarness(h)
+    await r.press('0001', 2)
+    expect(r.putReaction).toHaveBeenCalledTimes(1)
+    expect(r.deleteReaction).not.toHaveBeenCalled()
+    expect(mineOn(h, '0001')).toBe(2)
+    expect(mineOn(h, '0002')).toBe(2)
+  })
+
+  it("sets over a reaction of the reader's own that could not be read", async () => {
+    const h = harness()
+    h.io.dispatch({
+      type: 'pageLoaded',
+      result: {
+        ok: true,
+        comments: [],
+        reactions: [{ target: '0001', reactorUserId: 'u1', index: null }],
+      },
+    })
+    const r = reactHarness(h)
+    await r.press('0001', 3)
+    expect(r.putReaction).toHaveBeenCalledTimes(1)
+    expect(r.deleteReaction).not.toHaveBeenCalled()
+  })
+
   it('shows a failed take-back in its own words and keeps the reaction', async () => {
     const h = harness()
     withReaction(h, '0001', 2)
     const r = reactHarness(h, { del: vi.fn().mockRejectedValue(new ApiError(500, 'x')) })
-    await r.press('0001', 2, 2)
+    await r.press('0001', 2)
     expect(h.thread().reactionError).toEqual({
       target: '0001',
       message: REACTION_ERRORS.removeFailed,

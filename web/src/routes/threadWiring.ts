@@ -28,7 +28,8 @@ import {
   type SubmitResult,
 } from './runCreateComment'
 import { isLiveKeysError } from './runListGroups'
-import type { ThreadPageResult } from './runLoadThread'
+import { summarizeReactions } from './reactionSummary'
+import type { ReactionView, ThreadPageResult } from './runLoadThread'
 import type { ThreadEvent } from './threadState'
 
 /** A reply in progress, kept across the password step. */
@@ -234,7 +235,9 @@ export interface ReactDeps {
 
 /**
  * One press of reaction button `index` on `target` (the post's 0000, or a comment
- * path). `mine` is the reader's current reaction there. Never throws.
+ * path). `reactions` is what is on screen: the reader's own reaction on the
+ * target decides whether this press sets a reaction (it differs, or there is
+ * none) or takes it back (it is the same one). Never throws.
  */
 export async function toggleReaction(
   io: Pick<ThreadIO, 'dispatch' | 'onColdKeys' | 'liveReply'> & { readonly reload: () => void },
@@ -244,11 +247,11 @@ export async function toggleReaction(
     readonly postId: string
     readonly target: string
     readonly index: number
-    readonly mine: number | null
+    readonly reactions: readonly ReactionView[]
   },
 ): Promise<void> {
   const { target, index } = input
-  const removing = input.mine === index
+  const removing = summarizeReactions(input.reactions, target, deps.userId).mine === index
   io.dispatch({ type: 'reactionStarted', target })
   const fail = (message: string) => {
     io.dispatch({ type: 'reactionFailed', target, message })

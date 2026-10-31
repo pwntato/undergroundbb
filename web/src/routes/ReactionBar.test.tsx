@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { REACTIONS } from '@/lib/crypto/reaction'
 import { ReactionBar } from './ReactionBar'
+import { elementsOf } from './elementTree.testkit'
 import { summarizeReactions } from './reactionSummary'
 import type { ReactionView } from './runLoadThread'
 
@@ -81,5 +82,22 @@ describe('ReactionBar', () => {
   it('puts a reaction on another target nowhere', () => {
     const html = render([rx('0002', 'me', 1), rx('0000', 'you', 2)])
     expect(html).not.toContain('<span aria-hidden="true">1</span>')
+  })
+})
+
+describe('ReactionBar presses', () => {
+  it('reports the table index of the button pressed, and no other', () => {
+    const pressed: number[] = []
+    const tree = ReactionBar({
+      label: 'x',
+      summary: summarizeReactions([], '0001', 'me'),
+      busy: false,
+      error: null,
+      onPress: (i) => pressed.push(i),
+    })
+    const buttons = elementsOf(tree).filter((e) => 'data-reaction' in e.props)
+    expect(buttons).toHaveLength(REACTIONS.length)
+    for (const b of buttons) (b.props['onClick'] as () => void)()
+    expect(pressed).toEqual(REACTIONS.map((r) => r.index))
   })
 })

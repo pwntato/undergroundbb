@@ -234,7 +234,7 @@ function Thread({
     )
   }
 
-  const handleReact = (target: string, index: number, mine: number | null) => {
+  const handleReact = (target: string, index: number) => {
     void toggleReaction(
       { ...io, reload },
       {
@@ -244,7 +244,7 @@ function Thread({
         putReaction,
         deleteReaction,
       },
-      { groupId, postId, target, index, mine },
+      { groupId, postId, target, index, reactions: state.reactions },
     )
   }
 

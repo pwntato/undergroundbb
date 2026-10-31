@@ -449,22 +449,25 @@ describe('loadThreadPage reactions (#46)', () => {
   })
 
   it('walks the key chain for an older reaction even when every comment is current', async () => {
-    const { deps } = await load({
-      comments: [wireComment(ME, me, '0001')],
-      reactions: [wireReaction('0001', ALICE, { generation: 0 })],
-    })
-    expect(deps.getChain).not.toHaveBeenCalled()
     const world: World = {
-      comments: [wireComment(ME, me, '0001')],
+      comments: [wireComment(ME, me, '0001', { generation: 2 })],
       reactions: [wireReaction('0001', ALICE, { generation: 0 })],
     }
-    const older = depsFor(world)
-    older.getGroup.mockResolvedValue({ ...DETAIL, generation: 2 })
-    older.getChain.mockResolvedValue([{ generation: 0, wrapped: { nonce: 'n', ciphertext: 'c' } }])
-    const res = await loadThreadPage(older, makeAuthorResolver(older), GROUP, POST_ID)
+    const deps = depsFor(world)
+    deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 2 })
+    deps.getChain.mockResolvedValue([{ generation: 0, wrapped: { nonce: 'n', ciphertext: 'c' } }])
+    const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
     expect(res.ok).toBe(true)
-    expect(older.getChain).toHaveBeenCalledWith(GROUP, 0, 2)
-    expect(older.openReactions.mock.calls[0]![0].chain).toHaveLength(1)
+    expect(deps.getChain).toHaveBeenCalledWith(GROUP, 0, 2)
+    expect(deps.openReactions.mock.calls[0]![0].chain).toHaveLength(1)
+  })
+
+  it('does not walk the chain when comments and reactions are all current', async () => {
+    const { deps } = await load({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [wireReaction('0001', ALICE)],
+    })
+    expect(deps.getChain).not.toHaveBeenCalled()
   })
 
   it('asks for the password when the keys are cold for reactions', async () => {

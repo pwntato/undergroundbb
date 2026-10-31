@@ -47,8 +47,8 @@ export interface ThreadReactions {
   readonly error: { readonly target: string; readonly message: string } | null
   /** False until the first page is in: the post's own reactions come with it. */
   readonly ready: boolean
-  /** `mine` is the reader's current reaction on the target, or null. */
-  readonly onPress: (target: string, index: number, mine: number | null) => void
+  /** A press of reaction button `index` on `target`; whether it sets or takes back is decided from what is shown. */
+  readonly onPress: (target: string, index: number) => void
 }
 
 export function ThreadPanel({
@@ -86,7 +86,7 @@ export function ThreadPanel({
         busy={reactions.reacting.includes(target)}
         error={reactions.error?.target === target ? reactions.error.message : null}
         onPress={(index) => {
-          reactions.onPress(target, index, summary.mine)
+          reactions.onPress(target, index)
         }}
       />
     )
