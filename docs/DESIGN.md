@@ -217,9 +217,9 @@ twice. The first comment is always kept, so every page makes progress, and the p
 the first page, so one target's reactions are never split. The limit this leaves is a single target with so many
 reactors (about 20,000 at roughly 200 bytes each) that its reactions alone pass the budget (the response itself fails
 at about 30,000); that would take an Open group of that many members all reacting to one comment. The read still
-fetches the whole range before cutting, which costs reads, not response size. Truncating the reaction read to stay under a limit is the wrong fix, because it would
-drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
-dormant member can read what their keys open).
+fetches the whole range before cutting, which costs reads, not response size. Truncating the reaction read to stay
+under a limit is the wrong fix, because it would drop reactions silently, the way an unflagged short page would drop
+comments. Members only, 404 otherwise (a dormant member can read what their keys open).
 
 **For the comment reader (#44).** `/groups/:gid/posts/:pid` (the `#`s of the post id as `%23`) reads a thread with the
 rules of the post list, in `web/src/routes/runLoadThread.ts`. A comment opens under `commentAAD` (post, path,
