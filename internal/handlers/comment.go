@@ -358,6 +358,14 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not read the thread")
 		return
 	}
+	// A page that would outgrow the response budget is cut short, not capped
+	// reaction by reaction: the comments after the cut, with their reactions,
+	// come on the next page, because the cursor moves back to the last comment
+	// kept. Dropping a reaction instead would be silent.
+	if keep, keepRxns := fitThreadPage(rows, rxns, h.threadBudgetBytes()); keep < len(rows) {
+		rows, rxns = rows[:keep], rxns[:keepRxns]
+		next = strings.TrimPrefix(rows[keep-1].SK, db.CommentSortKeyPrefix)
+	}
 	enc := base64.StdEncoding.EncodeToString
 	out := threadResponse{
 		Comments:   make([]commentEntry, 0, len(rows)),
