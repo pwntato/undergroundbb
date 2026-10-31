@@ -78,11 +78,16 @@ func (in EditCommentInput) Matches(have *models.Comment) bool {
 // client signing a lost-response resend after midnight); any other use of it,
 // or any use of an earlier edition's nonce, is a reuse.
 func (in EditCommentInput) ReusesNonce(have *models.Comment) bool {
-	if bytes.Equal(in.Nonce, have.Nonce) {
-		return !bytes.Equal(in.Ciphertext, have.Ciphertext)
+	return reusesNonce(have.Nonce, have.Ciphertext, have.UsedNonces, in.Nonce, in.Ciphertext)
+}
+
+// reusesNonce is the rule both comments and posts follow; see ReusesNonce.
+func reusesNonce(curNonce, curCiphertext []byte, used [][]byte, nonce, ciphertext []byte) bool {
+	if bytes.Equal(nonce, curNonce) {
+		return !bytes.Equal(ciphertext, curCiphertext)
 	}
-	for _, used := range have.UsedNonces {
-		if bytes.Equal(in.Nonce, used) {
+	for _, u := range used {
+		if bytes.Equal(nonce, u) {
 			return true
 		}
 	}
@@ -129,7 +134,7 @@ func (c *Client) EditComment(ctx context.Context, in EditCommentInput) error {
 		{ConditionCheck: &types.ConditionCheck{
 			TableName:                aws.String(c.table),
 			Key:                      map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID}, "SK": &types.AttributeValueMemberS{Value: in.PostSortKey}},
-			ConditionExpression:      aws.String("attribute_exists(PK) AND (attribute_not_exists(#ttl) OR #ttl > :now)"),
+			ConditionExpression:      aws.String("attribute_exists(PK) AND attribute_not_exists(Deleted) AND (attribute_not_exists(#ttl) OR #ttl > :now)"),
 			ExpressionAttributeNames: map[string]string{"#ttl": "TTL"},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Now.Unix(), 10)},

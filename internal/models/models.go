@@ -985,6 +985,15 @@ type Post struct {
 	Ciphertext   []byte `dynamodbav:"Ciphertext"`
 	Signature    []byte `dynamodbav:"Signature"`
 	TTL          int64  `dynamodbav:"TTL,omitempty"`
+	// SignedDay is the UTC day of the signature on an EDITED post. A new post
+	// has none, because its sort key already carries the day it was signed; an
+	// edit signs on a later day, which the sort key cannot say, so the edit
+	// writes it here and a reader uses it in place of the sort key's day.
+	SignedDay string `dynamodbav:"SignedDay,omitempty"`
+	// Deleted marks a tombstone (#45); see Comment.Deleted. UsedNonces are the
+	// nonces earlier editions were sealed under; see Comment.UsedNonces.
+	Deleted    bool     `dynamodbav:"Deleted,omitempty"`
+	UsedNonces [][]byte `dynamodbav:"UsedNonces,omitempty,binaryset"`
 }
 
 // Comment is the POST#<pid> / CMT#<path> item (#44). <pid> is the post's full

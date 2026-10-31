@@ -82,6 +82,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/groups/{groupId}/rotation/selfwrap", h.requireSession(h.selfWrap))
 	mux.HandleFunc("POST /api/groups/{groupId}/posts", h.requireSession(h.createPost))
 	mux.HandleFunc("GET /api/groups/{groupId}/posts", h.requireSession(h.listPosts))
+	mux.HandleFunc("PUT /api/posts/{postId}", h.requireSession(h.editPost))
+	mux.HandleFunc("DELETE /api/posts/{postId}", h.requireSession(h.deletePost))
 	mux.HandleFunc("POST /api/posts/{postId}/comments", h.requireSession(h.createComment))
 	mux.HandleFunc("PUT /api/posts/{postId}/comments/{path}", h.requireSession(h.editComment))
 	mux.HandleFunc("DELETE /api/posts/{postId}/comments/{path}", h.requireSession(h.deleteComment))
