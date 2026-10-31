@@ -1007,6 +1007,10 @@ type Comment struct {
 	Ciphertext   []byte `dynamodbav:"Ciphertext"`
 	Signature    []byte `dynamodbav:"Signature"`
 	TTL          int64  `dynamodbav:"TTL,omitempty"`
+	// Deleted marks a tombstone (#45): the row stays so replies keep their
+	// place, and everything but the author, path and TTL is removed. It is a
+	// flag, not a time, so the row does not say when the delete happened.
+	Deleted bool `dynamodbav:"Deleted,omitempty"`
 }
 
 // Reaction is the POST#<pid> / RXN#<cmtpath>#<reactor> item (#46), keyed by its

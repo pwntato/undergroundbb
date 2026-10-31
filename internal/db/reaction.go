@@ -16,7 +16,8 @@ import (
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
-// ErrReactionTargetGone: the comment the reaction is on does not exist. Nothing
+// ErrReactionTargetGone: the comment the reaction is on does not exist or has
+// been deleted. Nothing
 // was written.
 var ErrReactionTargetGone = errors.New("db: the comment being reacted to is gone")
 
@@ -107,7 +108,7 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 		items = append(items, types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 			TableName:           aws.String(c.table),
 			Key:                 commentKey(in.PostID, in.Target),
-			ConditionExpression: aws.String("attribute_exists(PK)"),
+			ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(Deleted)"),
 		}})
 	}
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
