@@ -12,7 +12,7 @@ import (
 )
 
 // putReactionRequest is the body of PUT /api/posts/{postId}/reactions/{target}.
-// A reaction is not signed (docs/DESIGN.md "Reactions"): the server takes the
+// A reaction is not signed (docs/DESIGN.md, "Writing a reaction" under "Posts"): the server takes the
 // reactor from the session, and the ciphertext's AAD binds it.
 type putReactionRequest struct {
 	Generation int64  `json:"generation"`

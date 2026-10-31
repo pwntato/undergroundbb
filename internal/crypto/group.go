@@ -318,7 +318,7 @@ func CommentAAD(postID, path string, generation uint64) []byte {
 
 // ReactionPlaintextSize and ReactionCiphertextSize pin a sealed reaction's
 // length. The plaintext is one byte, an index into the client's fixed emoji
-// table (docs/DESIGN.md "Reactions"), so every reaction seals to the same
+// table (docs/DESIGN.md, "Writing a reaction" under "Posts"), so every reaction seals to the same
 // length and the ciphertext's size says nothing about which one it is. The
 // server refuses any other length.
 const (

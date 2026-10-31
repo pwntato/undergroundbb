@@ -208,9 +208,10 @@ the last comment's reactions are in and its replies' are out). The first page al
 there is no cap on comments per post. A page can be shorter than `limit` and still carry a cursor, because one DynamoDB
 query returns at most 1 MB; a cursor means "keep going", never "this page was full". The reaction read is not capped:
 a page's reactions are bounded by the page size times the group's members (one reaction per user per target), and the
-whole response by a Lambda's response limit. Nothing writes reactions yet (#46), so whoever builds it should size the
-default page against the member cap. Truncating the reaction read to stay under a limit is the wrong fix, because it
-would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
+whole response by a Lambda's response limit. Sizing the default page against the member cap is not enough, since an
+Open or public group has no cap; #46 slice 2 bounds the response by bytes instead, shortening the comment page (the
+cursor then continues from the last comment kept). Truncating the reaction read to stay under a limit is the wrong fix,
+because it would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
 dormant member can read what their keys open).
 
 **For the comment reader (#44).** `/groups/:gid/posts/:pid` (the `#`s of the post id as `%23`) reads a thread with the
@@ -234,7 +235,9 @@ which emoji it is (UTF-8 emoji vary from 3 to 8+ bytes), and a client cannot par
 freshness rules as a comment apply (non-dormant member, the generation new items use, the rotation marker pinned in the
 transaction), and the comment must still exist (409 `parent_gone`). `DELETE` on the same path removes the caller's own
 reaction, answers 204 whether or not one existed, and needs membership and a live post but no key, so a dormant member
-can still take one back. The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
+can still take one back. Two requests that write the same item at the same moment can make DynamoDB cancel one of them
+with a transaction conflict, which answers 409 `conflict_retry`; a client retries on it, so a double click is harmless
+once retried (this comes from the AWS documentation; DynamoDB Local does not model the conflict, so it is untested). The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
