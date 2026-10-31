@@ -268,6 +268,23 @@ func TestPutReactionWorksOnceRotatedKeysAreApprovedForTheGroup(t *testing.T) {
 	}
 }
 
+func TestPutReactionInAGroupWhoseRecordIsGoneIsNotFound(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	if _, err := rawDDB(t).DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(testTableName()),
+		Key:       map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("META")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := doReaction(t, h, http.MethodPut, cookie, pid, "0000", sealedReaction(t, 0))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("no group: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "POST#"+pid, "RXN#0000#"+owner.userID) != nil {
+		t.Error("a refused reaction left a row")
+	}
+}
+
 func TestPutReactionOnAnExpiredPostIsNotFound(t *testing.T) {
 	h, gid, owner, cookie := postFixture(t)
 	postKey := "POST#2026-10-28#00112233445566e3"

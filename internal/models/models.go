@@ -1013,7 +1013,7 @@ type Comment struct {
 // reactor so it can be undone and a repeat is idempotent. <cmtpath> is the
 // comment it attaches to, or 0000 for the post itself. The emoji is the one
 // encrypted thing; there is no creation time and no signature, and TTL is
-// copied from the parent post. Only the read side exists so far (#44).
+// copied from the parent post. The ciphertext is always crypto.ReactionCiphertextSize bytes.
 type Reaction struct {
 	Record
 

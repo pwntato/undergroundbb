@@ -224,6 +224,18 @@ comment already shown is dropped, and a cursor, even on an empty page, keeps "Lo
 plain text node. The post's title comes from the list's navigation state for display only, so a thread opened in a new
 tab has none; nothing is trusted from it.
 
+**Writing a reaction (#46).** `PUT /api/posts/{pid}/reactions/{target}` (target `0000` for the post, else a comment path)
+takes `{generation, nonce, ciphertext}` and sets the caller's reaction there, replacing any earlier one, so a resend or a
+second click is harmless and answers 204. The reactor is the session's user, never a field, and there is no signature
+(the sort key and AAD already bind the reactor; see "A reaction's target is plaintext" below). The plaintext is **one
+byte**, an index into a fixed emoji table kept by the client, so every reaction seals to exactly
+`crypto.ReactionCiphertextSize` (17) bytes and the server refuses any other length: the ciphertext's size cannot say
+which emoji it is (UTF-8 emoji vary from 3 to 8+ bytes), and a client cannot park other data in these rows. The same
+freshness rules as a comment apply (non-dormant member, the generation new items use, the rotation marker pinned in the
+transaction), and the comment must still exist (409 `parent_gone`). `DELETE` on the same path removes the caller's own
+reaction, answers 204 whether or not one existed, and needs membership and a live post but no key, so a dormant member
+can still take one back. The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
+
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
 On 409 `comment_path_taken` or `comment_path_skips` it seals again at `nextPath`, at most four seals per send, and
