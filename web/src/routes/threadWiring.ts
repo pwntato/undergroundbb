@@ -276,10 +276,13 @@ export async function toggleReaction(
       fail(removing ? REACTION_ERRORS.removeFailed : REACTION_ERRORS.failed)
     } else if (kind === 'rejected') {
       fail(err instanceof ApiError ? err.message : REACTION_ERRORS.rejected)
+    } else if (kind === 'parentGone') {
+      // The comment reacted to is gone: say so for the page (its own row is about
+      // to disappear), then show the thread as it is now.
+      io.dispatch({ type: 'reactionTargetGone', target, message: REACTION_ERRORS.parentGone })
+      io.reload()
     } else {
       fail(REACTION_ERRORS[kind])
-      // The comment reacted to is gone: show the thread as it is now.
-      if (kind === 'parentGone') io.reload()
     }
     return 'stop'
   }

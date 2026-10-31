@@ -45,6 +45,8 @@ export interface ThreadReactions {
   /** Targets whose reaction is being saved or taken back. */
   readonly reacting: readonly string[]
   readonly error: { readonly target: string; readonly message: string } | null
+  /** Said once for the whole page, e.g. the comment reacted to is gone. */
+  readonly notice: string | null
   /** False until the first page is in: the post's own reactions come with it. */
   readonly ready: boolean
   /** A press of reaction button `index` on `target`; whether it sets or takes back is decided from what is shown. */
@@ -105,6 +107,11 @@ export function ThreadPanel({
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {reactions?.notice != null && (
+        <Alert>
+          <AlertDescription>{reactions.notice}</AlertDescription>
         </Alert>
       )}
       {reactions?.ready === true && barFor(POST_TARGET, 'Reactions to the post')}

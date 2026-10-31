@@ -33,6 +33,12 @@ export interface ThreadState {
   readonly reacting: readonly string[]
   /** Why the last reaction on `target` did not go through, or null. */
   readonly reactionError: { readonly target: string; readonly message: string } | null
+  /**
+   * Something the thread says about itself, for the whole page: the comment a
+   * reaction was aimed at is gone. It outlives the reload that follows (a reset
+   * keeps it) and clears when the reader's next reaction starts.
+   */
+  readonly notice: string | null
 }
 
 export const INITIAL_THREAD_STATE: ThreadState = {
@@ -44,6 +50,7 @@ export const INITIAL_THREAD_STATE: ThreadState = {
   loaded: false,
   reacting: [],
   reactionError: null,
+  notice: null,
 }
 
 export type ThreadEvent =
@@ -53,6 +60,8 @@ export type ThreadEvent =
   | { readonly type: 'pageLoaded'; readonly result: ThreadPageResult }
   | { readonly type: 'reactionStarted'; readonly target: string }
   | { readonly type: 'reactionFailed'; readonly target: string; readonly message: string }
+  /** The comment a reaction was aimed at no longer exists; says so for the whole page. */
+  | { readonly type: 'reactionTargetGone'; readonly target: string; readonly message: string }
   /** The server accepted this reader's reaction (set, or changed to another). */
   | {
       readonly type: 'reactionSaved'
@@ -68,7 +77,7 @@ export type ThreadEvent =
     }
 
 export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadState {
-  if (event.type === 'reset') return INITIAL_THREAD_STATE
+  if (event.type === 'reset') return { ...INITIAL_THREAD_STATE, notice: state.notice }
   if (event.type === 'loadStarted') return { ...state, loading: true, failure: null }
   if (event.type === 'reactionStarted') {
     return {
@@ -77,6 +86,15 @@ export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadS
         ? state.reacting
         : [...state.reacting, event.target],
       reactionError: null,
+      notice: null,
+    }
+  }
+  if (event.type === 'reactionTargetGone') {
+    return {
+      ...state,
+      reacting: state.reacting.filter((t) => t !== event.target),
+      reactionError: null,
+      notice: event.message,
     }
   }
   if (event.type === 'reactionFailed') {

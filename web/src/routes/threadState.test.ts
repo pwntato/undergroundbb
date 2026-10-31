@@ -211,6 +211,25 @@ describe('reactions in the thread state (#46)', () => {
     expect(s.reacting).toEqual([])
   })
 
+  it("says a reaction's comment is gone for the whole page, frees the target, and keeps it through the reset", () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionTargetGone', target: '0001', message: 'gone' })
+    expect(s).toMatchObject({ notice: 'gone', reacting: [], reactionError: null })
+    const reloaded = nextThreadState(s, { type: 'reset' })
+    expect(reloaded).toEqual({ ...INITIAL_THREAD_STATE, notice: 'gone' })
+  })
+
+  it("clears the notice when the reader's next reaction starts, and starts with none", () => {
+    expect(INITIAL_THREAD_STATE.notice).toBeNull()
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionTargetGone',
+      target: '0001',
+      message: 'gone',
+    })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0002' })
+    expect(s.notice).toBeNull()
+  })
+
   it('does not let a later page undo what this reader just did', () => {
     let s = apply(INITIAL_THREAD_STATE, withReactions(['0001'], [rx('0001', 'me', 2)], 'c'))
     s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })

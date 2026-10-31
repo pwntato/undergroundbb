@@ -253,6 +253,7 @@ function Thread({
     selfUserId: userId,
     reacting: state.reacting,
     error: state.reactionError,
+    notice: state.notice,
     ready: state.loaded,
     onPress: handleReact,
   }

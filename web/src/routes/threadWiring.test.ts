@@ -495,7 +495,9 @@ describe('toggleReaction', () => {
       put: vi.fn().mockRejectedValue(new ApiError(409, 'gone', 'parent_gone')),
     })
     await r.press('0001', 1)
-    expect(h.thread().reactionError?.message).toBe(REACTION_ERRORS.parentGone)
+    expect(h.thread().notice).toBe(REACTION_ERRORS.parentGone)
+    expect(h.thread().reactionError).toBeNull()
+    expect(h.thread().reacting).toEqual([])
     expect(r.reload).toHaveBeenCalledTimes(1)
   })
 

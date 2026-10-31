@@ -58,6 +58,7 @@ function render(
             selfUserId: 'me',
             reacting: [],
             error: null,
+            notice: null,
             ready: true,
             onPress: () => {},
             ...over.reactions,
@@ -319,6 +320,17 @@ describe('ThreadPanel reactions (#46)', () => {
     expect(rows[1]).not.toContain(' disabled=""')
   })
 
+  it('says a page-wide notice once, above the rows, and says nothing without one', () => {
+    const html = render([comment()], {
+      reactions: { notice: 'The comment you reacted to is gone.' },
+    })
+    expect(html.match(/The comment you reacted to is gone\./g)).toHaveLength(1)
+    expect(html.indexOf('The comment you reacted to is gone.')).toBeLessThan(
+      html.indexOf('role="group"'),
+    )
+    expect(render([comment()], { reactions: {} })).not.toContain('is gone')
+  })
+
   it('shows a failure under the target it happened on, and nowhere else', () => {
     const html = render([comment(), comment({ path: '0002' })], {
       reactions: { error: { target: '0002', message: 'Could not save your reaction.' } },
@@ -345,6 +357,7 @@ describe('ThreadPanel reports reaction presses', () => {
         selfUserId: 'me',
         reacting: [],
         error: null,
+        notice: null,
         ready: true,
         onPress: (target, index) => calls.push([target, index]),
       },
