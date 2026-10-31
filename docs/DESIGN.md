@@ -216,8 +216,8 @@ reactions of the comments cut are not sent: the next page reads them with their 
 twice. The first comment is always kept, so every page makes progress, and the post's own reactions always go out with
 the first page, so one target's reactions are never split. The limit this leaves is a single target with so many
 reactors (about 20,000 at roughly 200 bytes each) that its reactions alone pass the budget (the response itself fails
-at about 30,000); that would take an Open group of that many members all reacting to one comment. The read still fetches the whole range before cutting, which
-costs reads, not response size. Truncating the reaction read to stay under a limit is the wrong fix, because it would
+at about 30,000); that would take an Open group of that many members all reacting to one comment. The read still
+fetches the whole range before cutting, which costs reads, not response size. Truncating the reaction read to stay under a limit is the wrong fix, because it would
 drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
 dormant member can read what their keys open).
 
