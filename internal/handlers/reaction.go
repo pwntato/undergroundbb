@@ -12,8 +12,9 @@ import (
 )
 
 // putReactionRequest is the body of PUT /api/posts/{postId}/reactions/{target}.
-// A reaction is not signed (docs/DESIGN.md, "Writing a reaction" under "Posts"): the server takes the
-// reactor from the session, and the ciphertext's AAD binds it.
+// A reaction is not signed (docs/DESIGN.md, "Reactions are not signed"): the
+// server takes the reactor from the session, and nothing else ties a reaction
+// to its reactor, since the AAD is public and every member holds the group key.
 type putReactionRequest struct {
 	Generation int64  `json:"generation"`
 	Nonce      string `json:"nonce"`
