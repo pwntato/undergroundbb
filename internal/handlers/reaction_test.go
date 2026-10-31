@@ -231,6 +231,43 @@ func TestPutReactionRefusesADormantMember(t *testing.T) {
 	}
 }
 
+// While a rotation is under way new items use the generation before the one
+// being rotated to, and the write is pinned to that marker.
+func TestPutReactionDuringARotationUsesTheGenerationBeforeTheMarker(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	putRotationMarker(t, gid, 1)
+	if rec := doReaction(t, h, http.MethodPut, cookie, pid, "0000", sealedReaction(t, 1)); rec.Code != http.StatusConflict || errCode(t, rec) != "generation_stale" {
+		t.Fatalf("sealed at the marker's generation: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReaction(t, h, http.MethodPut, cookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("sealed one before the marker's: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "POST#"+pid, "RXN#0000#"+owner.userID) == nil {
+		t.Error("no row stored")
+	}
+}
+
+func TestPutReactionRefusesAMemberBehindTheGeneration(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	putRotationMarker(t, gid, 2) // new items use generation 1; the member holds 0
+	rec := doReaction(t, h, http.MethodPut, cookie, pid, "0000", sealedReaction(t, 1))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "member_behind" {
+		t.Fatalf("behind: %d %s", rec.Code, rec.Body.String())
+	}
+	if getRow(t, "POST#"+pid, "RXN#0000#"+owner.userID) != nil {
+		t.Error("a refused reaction left a row")
+	}
+}
+
+func TestPutReactionWorksOnceRotatedKeysAreApprovedForTheGroup(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	setProfileKeyEpoch(t, owner.userID, 1)
+	setMemberWrapEpoch(t, gid, owner.userID, 1)
+	if rec := doReaction(t, h, http.MethodPut, cookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("approved keys: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPutReactionOnAnExpiredPostIsNotFound(t *testing.T) {
 	h, gid, owner, cookie := postFixture(t)
 	postKey := "POST#2026-10-28#00112233445566e3"
