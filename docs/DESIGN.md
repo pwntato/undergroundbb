@@ -158,7 +158,8 @@ following for every post:
   crypto worker (`openPosts`). A post that does not open is shown as unreadable ("could not be opened") with no word
   about its author, because the nonce is not signed. A chain that could not be read is a page error, not a row of
   unreadable posts.
-- **Verifies the signature** under the author's signing keys for the sort key's day (`lib/crypto/post-check.ts`:
+- **Verifies the signature** under the author's signing keys for the sort key's day, or for the row's `signedDay` when
+  the post was edited (#45: the server stores and serves it; the reader uses it from the web slice on) (`lib/crypto/post-check.ts`:
   the current key from the day it was introduced, each superseded key up to the rotation that ended it, both on a
   rotation day). The author's served keys are anchored first, by the same trust-on-first-use rule as the roster's
   grant check: your own key from the worker; anyone else's against your signed pin. A match is `pinned`; no pin yet is
@@ -271,6 +272,19 @@ is never answered with a "next free path" under nothing. **Deletion is advisory*
 the UI says so. **A rollback is possible and not detectable**: an old edition of a comment, or the original of a deleted
 one, carries a signature that still verifies at the same address, so an operator holding a copy can put it back (see
 THREAT_MODEL).
+
+**Editing and deleting a post (#45).** `PUT /api/posts/{pid}` and `DELETE /api/posts/{pid}` follow the comment rules
+above, with these differences. A post's sort key carries the day it was created, which an edit cannot change, so an edit
+signs over the same sort key and **the day it signs today** and stores that day on the row as `SignedDay`; the list serves
+it as `signedDay`, and a reader picks the key interval from it when present and from the sort key's day when absent (a
+post never edited has none). The `at` inside the ciphertext stays the original time. Deleting leaves a tombstone served by
+the list as its sort key and `deleted: true` and nothing else; the post's own reactions (target `0000`) are swept the way
+a comment's are, and the thread drops strays. **A deleted post takes nothing new**: its comments stay readable, but a new
+comment, a reaction on the post or on any of its comments, and an edit of one of its comments are all refused (404), by
+the same transactions that refuse a tombstoned comment; an author can still delete their own comment under it. **An edit
+has room for the time it was made.** The edited item carries `edited_at` inside the ciphertext (a 4-byte length prefix
+and a 24-byte timestamp, 28 bytes), so an edit's ciphertext may be 28 bytes longer than a new item's limit allows;
+without that, an item written at its size cap could not be edited. New items get no such room.
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
