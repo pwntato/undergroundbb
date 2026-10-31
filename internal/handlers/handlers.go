@@ -20,6 +20,8 @@ type Handler struct {
 	cfg      config.Config
 	db       *db.Client
 	sessions *session.Signer
+	// threadBudget overrides defaultThreadBudget; zero means the default.
+	threadBudget int
 }
 
 // New builds a Handler. dbClient must not be nil: New has no way to serve a
