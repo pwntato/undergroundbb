@@ -382,7 +382,7 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not read the thread")
 		return
 	}
-	rxns = withoutDeletedTargets(rows, rxns)
+	rxns = withoutDeletedTargets(rows, rxns, post.Deleted)
 	// A page that would outgrow the response budget is cut short, not capped
 	// reaction by reaction: the comments after the cut, with their reactions,
 	// come on the next page, because the cursor moves back to the last comment
@@ -431,11 +431,15 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, out)
 }
 
-// withoutDeletedTargets drops reactions on the page's tombstones. DeleteComment
+// withoutDeletedTargets drops reactions on the page's tombstones, and the
+// post's own when the post is one. DeleteComment
 // removes them, but it does so after writing the tombstone, so for a moment
 // (or for good, if the sweep failed) some may remain; they must not be served.
-func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction) []models.Reaction {
+func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction, postDeleted bool) []models.Reaction {
 	gone := map[string]bool{}
+	if postDeleted {
+		gone[db.PostLevelReactionTarget] = true
+	}
 	for _, c := range rows {
 		if c.Deleted {
 			gone[strings.TrimPrefix(c.SK, db.CommentSortKeyPrefix)] = true

@@ -24,6 +24,17 @@ type editCommentRequest struct {
 	Signature  string `json:"signature"`
 }
 
+// editedAtOverhead is what an edit's ciphertext carries beyond a new item's: the
+// time the edit was made, a 4-byte length prefix and the 24-byte timestamp
+// (docs/DESIGN.md "Editing and deleting a comment"). Without this room an edit
+// of an item written at its size cap could not be sealed.
+const editedAtOverhead = 28
+
+// commentEditCiphertextLimit is the longest ciphertext an edit may carry.
+func (h *Handler) commentEditCiphertextLimit() int {
+	return h.commentCiphertextLimit() + editedAtOverhead
+}
+
 func writeCommentGone(w http.ResponseWriter) {
 	WriteErrorWithCode(w, http.StatusConflict, "this comment is gone; reload and try again", "comment_gone")
 }
@@ -50,7 +61,7 @@ func (h *Handler) editComment(w http.ResponseWriter, r *http.Request) {
 		postNotFound(w)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, int64(h.commentCiphertextLimit())*2+4096)
+	r.Body = http.MaxBytesReader(w, r.Body, int64(h.commentEditCiphertextLimit())*2+4096)
 	var req editCommentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, "malformed request body")
@@ -107,7 +118,7 @@ func (h *Handler) editComment(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "nonce: "+err.Error())
 		return
 	}
-	ciphertext, err := decodeBase64Field(req.Ciphertext, 0, h.commentCiphertextLimit())
+	ciphertext, err := decodeBase64Field(req.Ciphertext, 0, h.commentEditCiphertextLimit())
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "ciphertext: "+err.Error())
 		return

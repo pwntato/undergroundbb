@@ -216,6 +216,11 @@ type postEntry struct {
 	Nonce        string `json:"nonce"`
 	Ciphertext   string `json:"ciphertext"`
 	Signature    string `json:"signature"`
+	// SignedDay is the UTC day an EDITED post was signed on, which the reader
+	// uses in place of the sort key's day; absent for a post never edited.
+	SignedDay string `json:"signedDay,omitempty"`
+	// Deleted marks a tombstone: the fields above (but the sort key) are empty.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 type listPostsResponse struct {
@@ -271,6 +276,11 @@ func (h *Handler) listPosts(w http.ResponseWriter, r *http.Request) {
 	enc := base64.StdEncoding.EncodeToString
 	entries := make([]postEntry, 0, len(rows))
 	for _, p := range rows {
+		if p.Deleted {
+			// Nothing but the place: who wrote it, and who deleted it, is not served.
+			entries = append(entries, postEntry{SortKey: p.SK, Deleted: true})
+			continue
+		}
 		entries = append(entries, postEntry{
 			SortKey:      p.SK,
 			AuthorUserID: p.AuthorUserID,
@@ -278,6 +288,7 @@ func (h *Handler) listPosts(w http.ResponseWriter, r *http.Request) {
 			Nonce:        enc(p.Nonce),
 			Ciphertext:   enc(p.Ciphertext),
 			Signature:    enc(p.Signature),
+			SignedDay:    p.SignedDay,
 		})
 	}
 	WriteJSON(w, http.StatusOK, listPostsResponse{Posts: entries, NextCursor: next})

@@ -139,7 +139,7 @@ func (c *Client) CreateComment(ctx context.Context, in CreateCommentInput) error
 	postCheck := types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 		TableName:                aws.String(c.table),
 		Key:                      map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID}, "SK": &types.AttributeValueMemberS{Value: in.PostSortKey}},
-		ConditionExpression:      aws.String("attribute_exists(PK) AND (attribute_not_exists(#ttl) OR #ttl > :now)"),
+		ConditionExpression:      aws.String("attribute_exists(PK) AND attribute_not_exists(Deleted) AND (attribute_not_exists(#ttl) OR #ttl > :now)"),
 		ExpressionAttributeNames: map[string]string{"#ttl": "TTL"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(in.Now.Unix(), 10)},
