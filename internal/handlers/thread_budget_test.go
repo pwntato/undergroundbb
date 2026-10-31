@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -215,5 +216,43 @@ func TestDefaultThreadBudgetLeavesRoomUnderALambdaResponse(t *testing.T) {
 	h.threadBudget = 1234
 	if h.threadBudgetBytes() != 1234 {
 		t.Error("an override must be used")
+	}
+}
+
+func TestBase64LenIsTheEncodedLength(t *testing.T) {
+	for n := 0; n < 40; n++ {
+		if got, want := base64Len(n), base64.StdEncoding.EncodedLen(n); got != want {
+			t.Errorf("base64Len(%d) = %d, want %d", n, got, want)
+		}
+	}
+}
+
+// The overhead constants hide a field that is not counted at all, so also check
+// that every field the entry carries moves the estimate by what it adds to the
+// JSON.
+func TestThreadSizeEstimatesCountEveryField(t *testing.T) {
+	c := models.Comment{Record: models.Record{SK: "CMT#0001"}, AuthorUserID: "u", SignedDay: "2026-10-28"}
+	c0 := commentWireSize(c)
+	for name, grown := range map[string]func(models.Comment) models.Comment{
+		"nonce":      func(c models.Comment) models.Comment { c.Nonce = make([]byte, 3); return c },
+		"ciphertext": func(c models.Comment) models.Comment { c.Ciphertext = make([]byte, 3); return c },
+		"signature":  func(c models.Comment) models.Comment { c.Signature = make([]byte, 3); return c },
+		"path":       func(c models.Comment) models.Comment { c.SK += "1234"; return c },
+		"author":     func(c models.Comment) models.Comment { c.AuthorUserID += "1234"; return c },
+	} {
+		if got := commentWireSize(grown(c)) - c0; got != 4 {
+			t.Errorf("comment %s: estimate grew by %d, want 4", name, got)
+		}
+	}
+	x := models.Reaction{Record: models.Record{SK: "RXN#0000#u"}}
+	x0 := reactionWireSize(x)
+	for name, grown := range map[string]func(models.Reaction) models.Reaction{
+		"nonce":      func(x models.Reaction) models.Reaction { x.Nonce = make([]byte, 3); return x },
+		"ciphertext": func(x models.Reaction) models.Reaction { x.Ciphertext = make([]byte, 3); return x },
+		"key":        func(x models.Reaction) models.Reaction { x.SK += "1234"; return x },
+	} {
+		if got := reactionWireSize(grown(x)) - x0; got != 4 {
+			t.Errorf("reaction %s: estimate grew by %d, want 4", name, got)
+		}
 	}
 }
