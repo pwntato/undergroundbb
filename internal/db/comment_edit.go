@@ -44,33 +44,49 @@ func (c *Client) GetComment(ctx context.Context, postID, path string) (*models.C
 // EditCommentInput is a comment's new sealed text. The handler has verified the
 // signature, the signing day and that the caller wrote the comment.
 type EditCommentInput struct {
-	GroupID          string
-	PostID           string
-	PostSortKey      string
-	Path             string
-	AuthorUserID     string
-	Generation       int64
-	SignedDay        string
-	Nonce            []byte
-	Ciphertext       []byte
-	Signature        []byte
+	GroupID      string
+	PostID       string
+	PostSortKey  string
+	Path         string
+	AuthorUserID string
+	Generation   int64
+	SignedDay    string
+	Nonce        []byte
+	Ciphertext   []byte
+	Signature    []byte
+	// PriorNonce is the nonce of the edition the handler read and is replacing;
+	// the write is conditional on it still being the stored one, so two edits
+	// racing cannot both replace the same edition.
+	PriorNonce       []byte
 	AuthorKeyEpoch   uint64
 	MarkerPresent    bool
 	MarkerGeneration int64
 	Now              time.Time
 }
 
-// EditCommentSame reports whether the stored comment already holds exactly
-// these bytes, so a resend after a lost response is answered by what was
-// written.
-func (c *Client) EditCommentSame(ctx context.Context, in EditCommentInput) (bool, error) {
-	have, err := c.GetComment(ctx, in.PostID, in.Path)
-	if err != nil || have == nil || have.Deleted {
-		return false, err
-	}
-	return have.AuthorUserID == in.AuthorUserID && have.Generation == in.Generation &&
+// Matches reports whether the stored comment already holds exactly these
+// bytes, so a resend after a lost response is answered by what was written.
+func (in EditCommentInput) Matches(have *models.Comment) bool {
+	return have != nil && !have.Deleted && have.AuthorUserID == in.AuthorUserID && have.Generation == in.Generation &&
 		have.SignedDay == in.SignedDay && bytes.Equal(have.Nonce, in.Nonce) &&
-		bytes.Equal(have.Ciphertext, in.Ciphertext) && bytes.Equal(have.Signature, in.Signature), nil
+		bytes.Equal(have.Ciphertext, in.Ciphertext) && bytes.Equal(have.Signature, in.Signature)
+}
+
+// ReusesNonce reports whether the edit would seal under a nonce the comment has
+// already used. The current nonce may be repeated only with the same
+// ciphertext, which is the same plaintext sealed once and signed again (a
+// client signing a lost-response resend after midnight); any other use of it,
+// or any use of an earlier edition's nonce, is a reuse.
+func (in EditCommentInput) ReusesNonce(have *models.Comment) bool {
+	if bytes.Equal(in.Nonce, have.Nonce) {
+		return !bytes.Equal(in.Ciphertext, have.Ciphertext)
+	}
+	for _, used := range have.UsedNonces {
+		if bytes.Equal(in.Nonce, used) {
+			return true
+		}
+	}
+	return false
 }
 
 // EditComment replaces a comment's sealed text in one transaction with the
@@ -79,21 +95,34 @@ func (c *Client) EditCommentSame(ctx context.Context, in EditCommentInput) (bool
 // still be a live comment written by AuthorUserID. A tombstone cannot be
 // edited back to life.
 func (c *Client) EditComment(ctx context.Context, in EditCommentInput) error {
+	// The row must still hold the edition the handler read (PriorNonce) and the
+	// new nonce must not be a superseded one. A new nonce files the old one
+	// away; the same nonce is only a fresh signature over the same ciphertext.
+	values := map[string]types.AttributeValue{
+		":gen":    genAttr(in.Generation),
+		":day":    &types.AttributeValueMemberS{Value: in.SignedDay},
+		":nonce":  &types.AttributeValueMemberB{Value: in.Nonce},
+		":ct":     &types.AttributeValueMemberB{Value: in.Ciphertext},
+		":sig":    &types.AttributeValueMemberB{Value: in.Signature},
+		":author": &types.AttributeValueMemberS{Value: in.AuthorUserID},
+		":prior":  &types.AttributeValueMemberB{Value: in.PriorNonce},
+	}
+	expr := "SET #gen = :gen, SignedDay = :day, Nonce = :nonce, Ciphertext = :ct, Signature = :sig"
+	cond := "attribute_exists(PK) AND attribute_not_exists(Deleted) AND AuthorUserID = :author AND Nonce = :prior" +
+		" AND NOT contains(UsedNonces, :nonce)"
+	if bytes.Equal(in.Nonce, in.PriorNonce) {
+		cond += " AND Ciphertext = :ct"
+	} else {
+		expr += " ADD UsedNonces :used"
+		values[":used"] = &types.AttributeValueMemberBS{Value: [][]byte{in.PriorNonce}}
+	}
 	update := types.TransactWriteItem{Update: &types.Update{
-		TableName: aws.String(c.table),
-		Key:       commentKey(in.PostID, in.Path),
-		UpdateExpression: aws.String("SET #gen = :gen, SignedDay = :day, Nonce = :nonce, " +
-			"Ciphertext = :ct, Signature = :sig"),
-		ConditionExpression:      aws.String("attribute_exists(PK) AND attribute_not_exists(Deleted) AND AuthorUserID = :author"),
-		ExpressionAttributeNames: map[string]string{"#gen": "Generation"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":gen":    genAttr(in.Generation),
-			":day":    &types.AttributeValueMemberS{Value: in.SignedDay},
-			":nonce":  &types.AttributeValueMemberB{Value: in.Nonce},
-			":ct":     &types.AttributeValueMemberB{Value: in.Ciphertext},
-			":sig":    &types.AttributeValueMemberB{Value: in.Signature},
-			":author": &types.AttributeValueMemberS{Value: in.AuthorUserID},
-		},
+		TableName:                 aws.String(c.table),
+		Key:                       commentKey(in.PostID, in.Path),
+		UpdateExpression:          aws.String(expr),
+		ConditionExpression:       aws.String(cond),
+		ExpressionAttributeNames:  map[string]string{"#gen": "Generation"},
+		ExpressionAttributeValues: values,
 	}}
 	items := []types.TransactWriteItem{
 		update,
@@ -131,7 +160,12 @@ func (c *Client) EditComment(ctx context.Context, in EditCommentInput) error {
 	case err == nil:
 		return nil
 	case isConditionalCheckFailure(err, commentIndex):
-		return ErrCommentGone
+		// Gone, or another edit got there first (or the nonce was filed away
+		// meanwhile); the client reads again to find out which.
+		if have, gerr := c.GetComment(ctx, in.PostID, in.Path); gerr == nil && (have == nil || have.Deleted) {
+			return ErrCommentGone
+		}
+		return ErrRoleChangeConflict
 	case isConditionalCheckFailure(err, postIndex):
 		return ErrCommentPostGone
 	case isConditionalCheckFailure(err, memberIndex):
@@ -161,7 +195,7 @@ func (c *Client) DeleteComment(ctx context.Context, postID, path string) error {
 	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                aws.String(c.table),
 		Key:                      commentKey(postID, path),
-		UpdateExpression:         aws.String("SET Deleted = :t REMOVE Nonce, Ciphertext, Signature, SignedDay, #gen"),
+		UpdateExpression:         aws.String("SET Deleted = :t REMOVE Nonce, Ciphertext, Signature, SignedDay, UsedNonces, #gen"),
 		ConditionExpression:      aws.String("attribute_exists(PK)"),
 		ExpressionAttributeNames: map[string]string{"#gen": "Generation"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{

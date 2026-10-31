@@ -16,9 +16,8 @@ import (
 	"github.com/pwntato/undergroundbb/internal/models"
 )
 
-// ErrReactionTargetGone: the comment the reaction is on does not exist or has
-// been deleted. Nothing
-// was written.
+// ErrReactionTargetGone: the comment the reaction is on does not exist or has been
+// deleted. Nothing was written.
 var ErrReactionTargetGone = errors.New("db: the comment being reacted to is gone")
 
 func reactionKey(postID, target, reactorID string) map[string]types.AttributeValue {

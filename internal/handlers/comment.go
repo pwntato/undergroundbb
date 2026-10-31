@@ -413,7 +413,6 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 			Nonce:        enc(c.Nonce),
 			Ciphertext:   enc(c.Ciphertext),
 			Signature:    enc(c.Signature),
-			Deleted:      c.Deleted,
 		})
 	}
 	for _, x := range rxns {

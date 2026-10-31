@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -149,14 +148,12 @@ func (h *Handler) editComment(w http.ResponseWriter, r *http.Request) {
 	if marker != nil {
 		in.MarkerGeneration = marker.Generation
 	}
-	if same, err := h.db.EditCommentSame(r.Context(), in); err != nil {
-		WriteInternalError(w, r, err, fail)
-		return
-	} else if same {
+	in.PriorNonce = have.Nonce
+	if in.Matches(have) {
 		WriteJSON(w, http.StatusOK, map[string]string{"path": path})
 		return
 	}
-	if bytes.Equal(have.Nonce, nonce) {
+	if in.ReusesNonce(have) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "nonce: an edit must be sealed under a new nonce", "nonce_reused")
 		return
 	}

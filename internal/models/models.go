@@ -1011,6 +1011,11 @@ type Comment struct {
 	// place, and everything but the author, path and TTL is removed. It is a
 	// flag, not a time, so the row does not say when the delete happened.
 	Deleted bool `dynamodbav:"Deleted,omitempty"`
+	// UsedNonces are the nonces earlier editions were sealed under, kept so an
+	// edit can never go back to one: every edition shares the key and the AAD,
+	// and a nonce used twice under one key breaks GCM. Added by an edit,
+	// removed by a delete.
+	UsedNonces [][]byte `dynamodbav:"UsedNonces,omitempty,binaryset"`
 }
 
 // Reaction is the POST#<pid> / RXN#<cmtpath>#<reactor> item (#46), keyed by its
