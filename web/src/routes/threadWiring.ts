@@ -9,8 +9,13 @@
 //   - sendReply: one press of Send. The send target comes from the reply state,
 //     the path guess from the comments on screen, and a gone parent reloads the
 //     thread.
+//   - toggleReaction: one press of a reaction button (#46). Pressing your own
+//     reaction takes it back; pressing another sets it, replacing the one you
+//     had. What is shown changes only after the server said yes.
 
-import type { SealedComment } from '@/lib/crypto/worker-protocol'
+import { ApiError } from '@/lib/api/auth'
+import type { PutReactionRequest } from '@/lib/api/groups'
+import type { SealedComment, SealedReaction } from '@/lib/crypto/worker-protocol'
 import { TARGET_GONE_MESSAGE, type ReplyEvent } from './replyState'
 import {
   attachParent,
@@ -18,9 +23,11 @@ import {
   loadSealContext,
   submitComment,
   type ContextDeps,
+  type SealContext,
   type SubmitDeps,
   type SubmitResult,
 } from './runCreateComment'
+import { isLiveKeysError } from './runListGroups'
 import type { ThreadPageResult } from './runLoadThread'
 import type { ThreadEvent } from './threadState'
 
@@ -151,4 +158,184 @@ export async function sendReply(
   if (result.kind === 'coldKeys') io.onColdKeys({ replyTo, draft: text })
   // The comment replied to is gone: show the thread as it is now.
   if (result.kind === 'parentGone') io.reload()
+}
+
+/** Seals again at most this many times for one press, after the group's key moved. */
+export const MAX_REACTION_RESEALS = 2
+/** Sends the same bytes again at most this many times after a write collision. */
+export const MAX_REACTION_RETRIES = 3
+
+export const REACTION_ERRORS = {
+  authRequired: SEND_ERRORS.authRequired,
+  notFound: SEND_ERRORS.notFound,
+  behind: SEND_ERRORS.behind,
+  dormant: SEND_ERRORS.dormant,
+  coldKeys: 'This tab needs your password again to react.',
+  unreadable:
+    "Couldn't open this group's key, so the reaction was not saved. Reload the page and try again.",
+  parentGone: 'The comment you reacted to is gone. The thread was reloaded.',
+  reseal: 'The group changed while you were reacting. Try again.',
+  busy: 'Others are reacting at the same moment. Try again.',
+  failed: "Couldn't save your reaction. Try again.",
+  removeFailed: "Couldn't take your reaction back. Try again.",
+  rejected: 'The server rejected the reaction.',
+} as const
+
+type ReactionFailure = Exclude<
+  keyof typeof REACTION_ERRORS,
+  'coldKeys' | 'unreadable' | 'removeFailed'
+>
+
+/**
+ * What an error from PUT or DELETE reaction means. `retry` is a write collision:
+ * the same bytes go again. `reseal` is the group's key or the member's entry
+ * having moved: load the context and seal again.
+ */
+export function classifyReactionError(err: unknown): ReactionFailure | 'retry' | 'reseal' {
+  if (!(err instanceof ApiError) || err.status >= 500) return 'failed'
+  if (err.status === 401) return 'authRequired'
+  if (err.status === 404) return 'notFound'
+  if (err.status === 409) {
+    switch (err.code) {
+      case 'conflict_retry':
+        return 'retry'
+      case 'generation_stale':
+      case 'membership_changed':
+      case 'key_epoch_stale':
+        return 'reseal'
+      case 'member_behind':
+        return 'behind'
+      case 'member_dormant':
+        return 'dormant'
+      case 'parent_gone':
+        return 'parentGone'
+    }
+  }
+  return 'rejected'
+}
+
+export interface ReactDeps {
+  readonly userId: string
+  readonly context: ContextDeps
+  readonly sealReaction: (req: {
+    readonly userId: string
+    readonly groupId: string
+    readonly postId: string
+    readonly target: string
+    readonly generation: number
+    readonly reactionGeneration: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: NonNullable<SealContext['chain']>
+    readonly index: number
+  }) => Promise<SealedReaction>
+  readonly putReaction: (postId: string, target: string, req: PutReactionRequest) => Promise<void>
+  readonly deleteReaction: (postId: string, target: string) => Promise<void>
+}
+
+/**
+ * One press of reaction button `index` on `target` (the post's 0000, or a comment
+ * path). `mine` is the reader's current reaction there. Never throws.
+ */
+export async function toggleReaction(
+  io: Pick<ThreadIO, 'dispatch' | 'onColdKeys' | 'liveReply'> & { readonly reload: () => void },
+  deps: ReactDeps,
+  input: {
+    readonly groupId: string
+    readonly postId: string
+    readonly target: string
+    readonly index: number
+    readonly mine: number | null
+  },
+): Promise<void> {
+  const { target, index } = input
+  const removing = input.mine === index
+  io.dispatch({ type: 'reactionStarted', target })
+  const fail = (message: string) => {
+    io.dispatch({ type: 'reactionFailed', target, message })
+  }
+  const done = () => {
+    io.dispatch(
+      removing
+        ? { type: 'reactionRemoved', target, reactorUserId: deps.userId }
+        : { type: 'reactionSaved', target, reactorUserId: deps.userId, index },
+    )
+  }
+  // Decides what a failed write means; returns true when the write should go again.
+  const settle = (err: unknown, retries: number, reseals: number): 'again' | 'reseal' | 'stop' => {
+    const kind = classifyReactionError(err)
+    if (kind === 'retry') {
+      if (retries < MAX_REACTION_RETRIES) return 'again'
+      fail(REACTION_ERRORS.busy)
+    } else if (kind === 'reseal') {
+      if (!removing && reseals < MAX_REACTION_RESEALS) return 'reseal'
+      fail(REACTION_ERRORS.reseal)
+    } else if (kind === 'failed') {
+      fail(removing ? REACTION_ERRORS.removeFailed : REACTION_ERRORS.failed)
+    } else if (kind === 'rejected') {
+      fail(err instanceof ApiError ? err.message : REACTION_ERRORS.rejected)
+    } else {
+      fail(REACTION_ERRORS[kind])
+      // The comment reacted to is gone: show the thread as it is now.
+      if (kind === 'parentGone') io.reload()
+    }
+    return 'stop'
+  }
+
+  if (removing) {
+    for (let retries = 0; ; retries++) {
+      try {
+        await deps.deleteReaction(input.postId, target)
+        done()
+        return
+      } catch (err) {
+        if (settle(err, retries, 0) === 'stop') return
+      }
+    }
+  }
+
+  for (let reseals = 0; ; reseals++) {
+    const loaded = await loadSealContext(deps.context, input.groupId)
+    if (!loaded.ok) {
+      fail(CONTEXT_ERRORS[loaded.kind])
+      return
+    }
+    let sealed: SealedReaction
+    try {
+      sealed = await deps.sealReaction({
+        userId: deps.userId,
+        groupId: input.groupId,
+        postId: input.postId,
+        target,
+        generation: loaded.context.generation,
+        reactionGeneration: loaded.context.commentGeneration,
+        wrappedGroupKey: loaded.context.wrappedGroupKey,
+        ...(loaded.context.chain !== undefined && { chain: loaded.context.chain }),
+        index,
+      })
+    } catch (err) {
+      if (isLiveKeysError(err)) {
+        fail(REACTION_ERRORS.coldKeys)
+        io.onColdKeys(io.liveReply())
+      } else {
+        fail(REACTION_ERRORS.unreadable)
+      }
+      return
+    }
+    // The same bytes go again after a collision: a resend is one reaction.
+    for (let retries = 0; ; retries++) {
+      try {
+        await deps.putReaction(input.postId, target, {
+          generation: sealed.generation,
+          nonce: sealed.nonce,
+          ciphertext: sealed.ciphertext,
+        })
+        done()
+        return
+      } catch (err) {
+        const next = settle(err, retries, reseals)
+        if (next === 'stop') return
+        if (next === 'reseal') break
+      }
+    }
+  }
 }
