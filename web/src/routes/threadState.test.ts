@@ -230,6 +230,81 @@ describe('reactions in the thread state (#46)', () => {
     expect(s.notice).toBeNull()
   })
 
+  it('keeps a target busy through a reset, and does not free it until the server answers', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reset' })
+    expect(s.reacting).toEqual(['0001'])
+    // The reset starts everything else over.
+    expect(s).toMatchObject({ reactions: [], comments: [], loading: true, removed: [] })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 2 })
+    expect(s.reacting).toEqual([])
+    expect(s.reactions).toEqual([rx('0001', 'me', 2)])
+  })
+
+  it('does not let a page read before a take-back put the reaction back', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reset' })
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0000', reactorUserId: 'me' })
+    s = apply(s, withReactions(['0001'], [rx('0000', 'me', 1), rx('0000', 'you', 1)]))
+    expect(s.reactions).toEqual([rx('0000', 'you', 1)])
+  })
+
+  it('drops the taken-back reaction from a later page as well', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = apply(s, withReactions(['0001'], [], 'c'))
+    s = apply(s, withReactions(['0002'], [rx('0001', 'me', 4)]))
+    expect(s.reactions).toEqual([])
+  })
+
+  it('forgets a take-back when the reader sets a reaction there again', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 3 })
+    expect(s.removed).toEqual([])
+    s = apply(s, withReactions(['0001'], [rx('0001', 'me', 5)]))
+    expect(s.reactions).toEqual([rx('0001', 'me', 3)])
+  })
+
+  it('forgets take-backs when the thread starts over, so a fresh page shows what the server holds', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reset' })
+    s = apply(s, withReactions(['0001'], [rx('0001', 'me', 2)]))
+    expect(s.reactions).toEqual([rx('0001', 'me', 2)])
+  })
+
+  it('drops a take-back only for that reactor on that target', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = apply(
+      s,
+      withReactions(['0001'], [rx('0001', 'you', 1), rx('0002', 'me', 2), rx('0000', 'me', 3)]),
+    )
+    expect(s.reactions).toEqual([rx('0001', 'you', 1), rx('0002', 'me', 2), rx('0000', 'me', 3)])
+  })
+
+  it('does not take back the same reaction twice in the list', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })
+    expect(s.removed).toEqual(['0001|me'])
+  })
+
   it('does not let a later page undo what this reader just did', () => {
     let s = apply(INITIAL_THREAD_STATE, withReactions(['0001'], [rx('0001', 'me', 2)], 'c'))
     s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })
