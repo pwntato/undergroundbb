@@ -240,12 +240,37 @@ byte**, an index into a fixed emoji table kept by the client, so every reaction 
 `crypto.ReactionCiphertextSize` (17) bytes and the server refuses any other length: the ciphertext's size cannot say
 which emoji it is (UTF-8 emoji vary from 3 to 8+ bytes), and a client cannot park other data in these rows. The same
 freshness rules as a comment apply (non-dormant member, the generation new items use, the rotation marker pinned in the
-transaction), and the comment must still exist (409 `parent_gone`). `DELETE` on the same path removes the caller's own
+transaction), and the comment must still exist and not be deleted (409 `parent_gone`). `DELETE` on the same path removes the caller's own
 reaction, answers 204 whether or not one existed, and needs membership and a live post but no key, so a dormant member
 can still take one back. Two requests that write the same item at the same moment can make DynamoDB cancel one of them
 with a transaction conflict, which answers 409 `conflict_retry`; a client retries on it, so a double click is harmless
 once retried (this comes from the AWS documentation; DynamoDB Local does not model the conflict, so it is untested).
 The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
+
+**Editing and deleting a comment (#45).** `PUT /api/posts/{pid}/comments/{path}` takes the body of a new comment without
+a path (the URL's is used): the author seals the new text under a **fresh nonce**, with the same AAD, and signs it again
+over the same `CMT#<path>` and the day it signs today, so a verifier picks the key interval of the edit and not of the
+original. Only the author may edit (403), only while the comment is not a tombstone (409 `comment_gone`), and the freshness
+rules are a new comment's. Every edition shares the key and the AAD, and a nonce used twice under one key breaks GCM, so the row keeps the
+nonces of the editions it replaced (`UsedNonces`, 12 bytes an edit) and the server refuses any of them, or the current
+one over different bytes (400 `nonce_reused`). The write is conditional on the edition the handler read and on the new
+nonce not being filed, so two edits racing cannot both replace one edition (409 `conflict_retry`, and the client reads
+again). Exactly the stored bytes answer 200, so a resend after a lost response is harmless, even when its signing day
+has since passed; the current nonce over the same ciphertext with a new signature is the same plaintext sealed once and
+is allowed. A delete removes the list with the rest. When the edit happened is inside the ciphertext, like the original time, so the row says nothing about it.
+`DELETE` on the same path turns the comment into a **tombstone** and answers 204 (also for a tombstone, so a repeat is
+safe): the author or an admin of the group may, and it needs membership and a live post but no key. The row stays, with
+only its path, author and TTL and a `Deleted` flag (a flag, not a time); the text, nonce, signature, signing day and
+generation are removed, so replies keep their place and may still be added under it. The thread serves a tombstone as its
+path and `deleted: true` and nothing else: neither who wrote it nor who deleted it. **A deleted comment has no reactions.**
+The delete writes the tombstone first and then removes every `RXN#<path>#*` row in batches; `PutReaction`'s transaction
+checks the comment is not a tombstone (409 `parent_gone`), so none can land after it and the sweep sees them all. Until
+the sweep ends, and for good if it failed, the thread drops reactions on its tombstones, and repeating the delete
+finishes the sweep. A reply under a comment that does not exist at all is `parent_gone` before any numbering rule, so it
+is never answered with a "next free path" under nothing. **Deletion is advisory**: any member may have kept a copy, and
+the UI says so. **A rollback is possible and not detectable**: an old edition of a comment, or the original of a deleted
+one, carries a signature that still verifies at the same address, so an operator holding a copy can put it back (see
+THREAT_MODEL).
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.

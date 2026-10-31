@@ -12,6 +12,7 @@ import (
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // commentEnvelopeOverhead is what a comment's ciphertext adds to its text:
@@ -206,6 +207,22 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	// highest sibling only grows, so a path no more than one past it now is no
 	// more than one past it when written, and two writers at the same number
 	// still meet the write's own condition.
+	//
+	// A reply under a comment that does not exist is parent_gone, whatever its
+	// number: asked first, so the skip rule below never sends such a reply to a
+	// "next free path" under nothing. A deleted comment is a tombstone and is
+	// still there, so replies under it are fine.
+	if parent := idgen.CommentParentPath(req.Path); parent != "" {
+		have, perr := h.db.GetComment(r.Context(), postID, parent)
+		if perr != nil {
+			WriteInternalError(w, r, perr, "could not create the comment")
+			return
+		}
+		if have == nil {
+			writeParentGone(w)
+			return
+		}
+	}
 	next, nerr := h.db.NextCommentPath(r.Context(), postID, idgen.CommentParentPath(req.Path))
 	switch {
 	case errors.Is(nerr, db.ErrCommentSiblingsFull):
@@ -236,7 +253,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, db.ErrCommentPostGone):
 		postNotFound(w)
 	case errors.Is(err, db.ErrCommentParentGone):
-		WriteErrorWithCode(w, http.StatusConflict, "the comment you replied to is gone; reload and try again", "parent_gone")
+		writeParentGone(w)
 	case errors.Is(err, db.ErrPostMarkerChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "the group's key rotation changed; reload and try again", "generation_stale")
 	case errors.Is(err, db.ErrPostMemberChanged):
@@ -248,6 +265,10 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteInternalError(w, r, err, "could not create the comment")
 	}
+}
+
+func writeParentGone(w http.ResponseWriter) {
+	WriteErrorWithCode(w, http.StatusConflict, "the comment you replied to is gone; reload and try again", "parent_gone")
 }
 
 func writeRepliesFull(w http.ResponseWriter) {
@@ -277,6 +298,9 @@ type commentEntry struct {
 	Nonce        string `json:"nonce"`
 	Ciphertext   string `json:"ciphertext"`
 	Signature    string `json:"signature"`
+	// Deleted marks a tombstone: the fields above are empty and the reader
+	// shows only that the comment was deleted.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // reactionEntry is one stored reaction. Target is the comment path it is on, or
@@ -358,6 +382,7 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not read the thread")
 		return
 	}
+	rxns = withoutDeletedTargets(rows, rxns)
 	// A page that would outgrow the response budget is cut short, not capped
 	// reaction by reaction: the comments after the cut, with their reactions,
 	// come on the next page, because the cursor moves back to the last comment
@@ -373,6 +398,13 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 		NextCursor: next,
 	}
 	for _, c := range rows {
+		if c.Deleted {
+			// Nothing but the place: who wrote it, and who deleted it, is not served.
+			out.Comments = append(out.Comments, commentEntry{
+				Path: strings.TrimPrefix(c.SK, db.CommentSortKeyPrefix), Deleted: true,
+			})
+			continue
+		}
 		out.Comments = append(out.Comments, commentEntry{
 			Path:         strings.TrimPrefix(c.SK, db.CommentSortKeyPrefix),
 			AuthorUserID: c.AuthorUserID,
@@ -397,4 +429,27 @@ func (h *Handler) getThread(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	WriteJSON(w, http.StatusOK, out)
+}
+
+// withoutDeletedTargets drops reactions on the page's tombstones. DeleteComment
+// removes them, but it does so after writing the tombstone, so for a moment
+// (or for good, if the sweep failed) some may remain; they must not be served.
+func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction) []models.Reaction {
+	gone := map[string]bool{}
+	for _, c := range rows {
+		if c.Deleted {
+			gone[strings.TrimPrefix(c.SK, db.CommentSortKeyPrefix)] = true
+		}
+	}
+	if len(gone) == 0 {
+		return rxns
+	}
+	kept := make([]models.Reaction, 0, len(rxns))
+	for _, x := range rxns {
+		target, _, _ := strings.Cut(strings.TrimPrefix(x.SK, db.ReactionSortKeyPrefix), "#")
+		if !gone[target] {
+			kept = append(kept, x)
+		}
+	}
+	return kept
 }
