@@ -13,10 +13,12 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { ReactionBar } from './ReactionBar'
+import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
 import { attachesBeside } from './runCreateComment'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
-import type { CommentView } from './runLoadThread'
+import { POST_TARGET, type CommentView, type ReactionView } from './runLoadThread'
 
 /** Indent steps drawn; deeper replies share the last one. */
 const MAX_INDENT = 4
@@ -35,6 +37,20 @@ export interface ThreadReply {
   readonly onSend: () => void
 }
 
+/** What the reaction buttons need from the screen; absent where reacting makes no sense. */
+export interface ThreadReactions {
+  readonly reactions: readonly ReactionView[]
+  /** The reader, whose own reaction on each target is pressed. */
+  readonly selfUserId: string
+  /** Targets whose reaction is being saved or taken back. */
+  readonly reacting: readonly string[]
+  readonly error: { readonly target: string; readonly message: string } | null
+  /** False until the first page is in: the post's own reactions come with it. */
+  readonly ready: boolean
+  /** `mine` is the reader's current reaction on the target, or null. */
+  readonly onPress: (target: string, index: number, mine: number | null) => void
+}
+
 export function ThreadPanel({
   groupId,
   postTitle,
@@ -45,6 +61,7 @@ export function ThreadPanel({
   onLoadMore,
   onRetry,
   reply,
+  reactions,
 }: {
   readonly groupId: string
   /** The post's title when the list passed it along; a thread opened cold has none. */
@@ -57,7 +74,23 @@ export function ThreadPanel({
   /** Set when a page failed in a way another try can fix. */
   readonly onRetry?: (() => void) | undefined
   readonly reply?: ThreadReply | undefined
+  readonly reactions?: ThreadReactions | undefined
 }) {
+  const barFor = (target: string, label: string) => {
+    if (reactions === undefined) return null
+    const summary = summarizeReactions(reactions.reactions, target, reactions.selfUserId)
+    return (
+      <ReactionBar
+        label={label}
+        summary={summary}
+        busy={reactions.reacting.includes(target)}
+        error={reactions.error?.target === target ? reactions.error.message : null}
+        onPress={(index) => {
+          reactions.onPress(target, index, summary.mine)
+        }}
+      />
+    )
+  }
   // A box left pointing at a comment that is not on the page falls back to the bottom one.
   const inlineAt =
     reply?.replyTo !== null && reply?.replyTo !== undefined
@@ -74,6 +107,7 @@ export function ThreadPanel({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {reactions?.ready === true && barFor(POST_TARGET, 'Reactions to the post')}
       {empty && !hasMore && <p className="text-sm text-muted-foreground">No comments yet.</p>}
       {empty && hasMore && (
         <p className="text-sm text-muted-foreground">
@@ -103,6 +137,7 @@ export function ThreadPanel({
                 {note.text}
               </p>
             ))}
+            {comment.depth > 0 && barFor(comment.path, 'Reactions to this comment')}
           </article>
           {reply !== undefined && comment.depth > 0 && (
             <div

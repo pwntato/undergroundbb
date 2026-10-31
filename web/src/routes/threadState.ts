@@ -27,6 +27,8 @@ export interface ThreadState {
   /** Why the last page failed, or null. */
   readonly failure: Extract<ThreadPageResult, { ok: false }>['kind'] | null
   readonly reactions: readonly ReactionView[]
+  /** True once a page has been read: the post's own reactions come with the first. */
+  readonly loaded: boolean
   /** Targets whose reaction is being saved or taken back right now. */
   readonly reacting: readonly string[]
   /** Why the last reaction on `target` did not go through, or null. */
@@ -39,6 +41,7 @@ export const INITIAL_THREAD_STATE: ThreadState = {
   loading: true,
   failure: null,
   reactions: [],
+  loaded: false,
   reacting: [],
   reactionError: null,
 }
@@ -120,6 +123,7 @@ export function nextThreadState(state: ThreadState, event: ThreadEvent): ThreadS
     ...state,
     comments: [...state.comments, ...fresh],
     reactions: [...state.reactions, ...freshReactions],
+    loaded: true,
     cursor: result.nextCursor,
     loading: false,
     failure: null,

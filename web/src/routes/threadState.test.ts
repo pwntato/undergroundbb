@@ -109,6 +109,15 @@ describe('reactions in the thread state (#46)', () => {
     expect(INITIAL_THREAD_STATE).toMatchObject({ reactions: [], reacting: [], reactionError: null })
   })
 
+  it('is loaded once a page has been read, even an empty one, and not before or after a reset', () => {
+    expect(INITIAL_THREAD_STATE.loaded).toBe(false)
+    const failed = apply(INITIAL_THREAD_STATE, { ok: false, kind: 'failed' })
+    expect(failed.loaded).toBe(false)
+    const empty = apply(INITIAL_THREAD_STATE, page([]))
+    expect(empty.loaded).toBe(true)
+    expect(nextThreadState(empty, { type: 'reset' }).loaded).toBe(false)
+  })
+
   it("adds each page's reactions to those already shown, in order", () => {
     let s = apply(
       INITIAL_THREAD_STATE,

@@ -993,8 +993,7 @@ export interface OpenReactionsRequest {
 }
 
 export type OpenedReaction =
-  | { readonly kind: 'opened'; readonly index: number }
-  | { readonly kind: 'unreadable' }
+  { readonly kind: 'opened'; readonly index: number } | { readonly kind: 'unreadable' }
 
 export interface OpenReactionsResponse {
   readonly kind: 'openReactionsDone'
