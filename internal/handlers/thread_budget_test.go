@@ -239,6 +239,7 @@ func TestThreadSizeEstimatesCountEveryField(t *testing.T) {
 		"signature":  func(c models.Comment) models.Comment { c.Signature = make([]byte, 3); return c },
 		"path":       func(c models.Comment) models.Comment { c.SK += "1234"; return c },
 		"author":     func(c models.Comment) models.Comment { c.AuthorUserID += "1234"; return c },
+		"signed day": func(c models.Comment) models.Comment { c.SignedDay += "1234"; return c },
 	} {
 		if got := commentWireSize(grown(c)) - c0; got != 4 {
 			t.Errorf("comment %s: estimate grew by %d, want 4", name, got)

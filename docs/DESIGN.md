@@ -206,12 +206,19 @@ to `RXN#<last>$` reads it (`$` sorts after the `#` that follows a path and befor
 the last comment's reactions are in and its replies' are out). The first page also carries the post's own reactions
 (target `0000`). This replaces the single query the issue described: a long thread never loads in one response, and
 there is no cap on comments per post. A page can be shorter than `limit` and still carry a cursor, because one DynamoDB
-query returns at most 1 MB; a cursor means "keep going", never "this page was full". The reaction read is not capped:
-a page's reactions are bounded by the page size times the group's members (one reaction per user per target), and the
-whole response by a Lambda's response limit. Sizing the default page against the member cap is not enough, since an
-Open or public group has no cap; #46 slice 2 bounds the response by bytes instead, shortening the comment page (the
-cursor then continues from the last comment kept). Truncating the reaction read to stay under a limit is the wrong fix,
-because it would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
+query returns at most 1 MB; a cursor means "keep going", never "this page was full". **A page is also bounded by response
+size.** The reaction read itself is not capped (a page's reactions are at most the page size times the group's members,
+one per user per target), and sizing the default page against the member cap would not help, since an Open or public
+group has no cap. Instead the handler weighs the page (a base64-and-key estimate of each comment and reaction, checked
+by a test never to undercount the real JSON) against `defaultThreadBudget`, 4 MB under a Lambda's 6 MB response limit,
+and cuts the comments from the first one that no longer fits. The cursor moves back to the last comment kept, and the
+reactions of the comments cut are not sent: the next page reads them with their comments, so none is lost or sent
+twice. The first comment is always kept, so every page makes progress, and the post's own reactions always go out with
+the first page, so one target's reactions are never split. The limit this leaves is a single target with so many
+reactors (about 20,000 at roughly 190 bytes each) that its reactions alone pass the budget; that would take an Open
+group of that many members all reacting to one comment. The read still fetches the whole range before cutting, which
+costs reads, not response size. Truncating the reaction read to stay under a limit is the wrong fix, because it would
+drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
 dormant member can read what their keys open).
 
 **For the comment reader (#44).** `/groups/:gid/posts/:pid` (the `#`s of the post id as `%23`) reads a thread with the
