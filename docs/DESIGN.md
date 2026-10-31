@@ -2820,16 +2820,18 @@ rendered from would break.
 
 Three consequences the rest of this document constrains:
 
-- **An edit re-signs, and it re-encrypts under the generation the item already records.** A post
-  records the generation it was encrypted under, and an edit must keep that field and the ciphertext
-  agreeing — re-encrypting under the *current* generation while the item still claims an older one
-  produces content nobody can read, and the reverse strands a reader walking the chain. The
-  signature is regenerated with the author's current key, which is also the only mechanism in the
-  design by which a user re-signs their own content: it does not rescue history after a rotation,
-  because it requires the author to still be able to read and re-encrypt the item.
-- **A tombstone inherits `group policy`**, like the content it replaces, since it is an item state
-  and not a new row. In a group with expiration disabled that makes it permanent, and a permanent
-  tombstone is a durable record that a post existed, by whom, and on what day it was removed.
+- **An edit re-signs, and it re-encrypts under the generation new items use now, and the row's recorded generation moves
+  with it.** The field and the ciphertext must agree: sealing under the current generation while the row still claimed an
+  older one produces content nobody can read, and the reverse strands a reader walking the chain. So the edit seals under
+  the generation new items use, rewrites `Generation` to match in the same write, and is refused (409
+  `generation_stale`, `member_behind`) unless the author holds that generation. The signature is regenerated with the
+  author's current key, which is also the only mechanism in the design by which a user re-signs their own content: it does
+  not rescue history after a rotation, because it requires the author to still be able to read and re-encrypt the item.
+- **A tombstone keeps the item's TTL**, like the content it replaces, since it is an item state and not a new row. In a
+  group with expiration disabled that makes it permanent, and a permanent tombstone is a durable record that an item
+  existed at that place. It does not say when it was deleted (a flag, not a time), who deleted it, or who wrote it (the
+  row keeps the author only so the server can check who may delete it, and never serves it), and its text, nonces,
+  signature and signing day are gone.
 - **Deletion is advisory.** It removes the copy the server holds; it cannot remove what any member
   already decrypted and kept. This is the same limit removal has, and it is stated in the threat
   model beside it.

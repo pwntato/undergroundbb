@@ -449,3 +449,26 @@ func TestDeletePostForgetsAnEditsDayAndEarlierNonces(t *testing.T) {
 		}
 	}
 }
+
+// An edit seals under the generation new items use now, so the row's recorded
+// generation must move with it: a row that kept the old one would make every
+// reader open the edit with the wrong key and AAD, and the post would show as
+// unreadable to everyone.
+func TestEditPostAfterARotationMovesTheRowsGenerationWithTheCiphertext(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	putGenKey(t, gid, 0) // the 0 -> 1 link: the group has rotated, new items use generation 1
+	setMemberGeneration(t, gid, owner.userID, 1)
+	if rec := doPostAt(t, h, http.MethodPut, cookie, pid, postEditAtGeneration(t, pid, owner, 0, today(), nonceOf(2), ctOf(2))); rec.Code != 409 ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"generation_stale"`)) {
+		t.Fatalf("an edit still at generation 0: %d %s, want generation_stale", rec.Code, rec.Body.String())
+	}
+	if rec := doPostAt(t, h, http.MethodPut, cookie, pid, postEditAtGeneration(t, pid, owner, 1, today(), nonceOf(3), ctOf(3))); rec.Code != 200 {
+		t.Fatalf("edit at generation 1: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := numAttr(postRow(t, pid), "Generation"); got != "1" {
+		t.Errorf("the row's generation = %s, want 1", got)
+	}
+	if list := decodeList(t, doListPosts(t, h, cookie, gid, "")); len(list.Posts) != 1 || list.Posts[0].Generation != 1 {
+		t.Errorf("the list serves %+v, want generation 1", list.Posts)
+	}
+}

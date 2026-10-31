@@ -512,3 +512,23 @@ func TestDeleteCommentForgetsTheNoncesOfEarlierEditions(t *testing.T) {
 		t.Error("the tombstone still lists earlier nonces")
 	}
 }
+
+// See TestEditPostAfterARotationMovesTheRowsGenerationWithTheCiphertext.
+func TestEditCommentAfterARotationMovesTheRowsGenerationWithTheCiphertext(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	writeComment(t, h, gid, pid, owner, cookie, "0001")
+	putGenKey(t, gid, 0) // the 0 -> 1 link: the group has rotated, new items use generation 1
+	setMemberGeneration(t, gid, owner.userID, 1)
+	if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", edited(signedComment(t, gid, owner, copts{path: "0001"}))); rec.Code != 409 {
+		t.Fatalf("an edit still at generation 0: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", edited(signedComment(t, gid, owner, copts{path: "0001", generation: 1}))); rec.Code != 200 {
+		t.Fatalf("edit at generation 1: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := numAttr(getRow(t, "POST#"+pid, "CMT#0001"), "Generation"); got != "1" {
+		t.Errorf("the row's generation = %s, want 1", got)
+	}
+	if out := decodeThread(t, doThread(t, h, cookie, pid, "")); len(out.Comments) != 1 || out.Comments[0].Generation != 1 {
+		t.Errorf("the thread serves %+v, want generation 1", out.Comments)
+	}
+}
