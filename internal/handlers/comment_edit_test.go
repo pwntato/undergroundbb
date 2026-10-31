@@ -459,3 +459,56 @@ func TestEditCommentWriteIsRefusedWhenAnotherEditGotThereFirst(t *testing.T) {
 		t.Error("a refused write changed the stored edition")
 	}
 }
+
+// A resend of an edit that already landed is answered by what was written,
+// before the freshness checks, as a resent comment is: a lost response is
+// retried hours later, when its signing day is long out of tolerance.
+func TestEditCommentResendOfALandedEditIsAnsweredEvenWhenItsDayHasPassed(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	today := time.Now().UTC().Format("2006-01-02")
+	first := editWith(t, gid, owner, "0001", today, nonceOf(1), ctOf(1))
+	if rec := doComment(t, h, cookie, pid, createCommentRequest{Path: "0001", SignedDay: first.SignedDay, Nonce: first.Nonce, Ciphertext: first.Ciphertext, Signature: first.Signature}); rec.Code != http.StatusCreated {
+		t.Fatal(rec.Body.String())
+	}
+	old := editWith(t, gid, owner, "0001", "2020-01-01", nonceOf(2), ctOf(2))
+	if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", old); rec.Code != 400 {
+		t.Fatalf("a new edit signed in 2020: %d, want 400", rec.Code)
+	}
+	// The edit "landed" earlier, when its day was current.
+	nonce, _ := base64.StdEncoding.DecodeString(old.Nonce)
+	ct, _ := base64.StdEncoding.DecodeString(old.Ciphertext)
+	sig, _ := base64.StdEncoding.DecodeString(old.Signature)
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:        aws.String(testTableName()),
+		Key:              map[string]types.AttributeValue{"PK": s("POST#" + pid), "SK": s("CMT#0001")},
+		UpdateExpression: aws.String("SET SignedDay = :d, Nonce = :n, Ciphertext = :c, Signature = :g"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":d": s(old.SignedDay), ":n": &types.AttributeValueMemberB{Value: nonce},
+			":c": &types.AttributeValueMemberB{Value: ct}, ":g": &types.AttributeValueMemberB{Value: sig},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", old); rec.Code != 200 {
+		t.Errorf("resend of the landed edit: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteCommentForgetsTheNoncesOfEarlierEditions(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	today := time.Now().UTC().Format("2006-01-02")
+	first := editWith(t, gid, owner, "0001", today, nonceOf(1), ctOf(1))
+	doComment(t, h, cookie, pid, createCommentRequest{Path: "0001", SignedDay: first.SignedDay, Nonce: first.Nonce, Ciphertext: first.Ciphertext, Signature: first.Signature})
+	if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", editWith(t, gid, owner, "0001", today, nonceOf(2), ctOf(2))); rec.Code != 200 {
+		t.Fatal(rec.Body.String())
+	}
+	if !rowHas(getRow(t, "POST#"+pid, "CMT#0001"), "UsedNonces") {
+		t.Fatal("the edit filed no nonce, so this test proves nothing")
+	}
+	if rec := doCommentAt(t, h, http.MethodDelete, cookie, pid, "0001", nil); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body.String())
+	}
+	if rowHas(getRow(t, "POST#"+pid, "CMT#0001"), "UsedNonces") {
+		t.Error("the tombstone still lists earlier nonces")
+	}
+}
