@@ -251,9 +251,13 @@ The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>
 a path (the URL's is used): the author seals the new text under a **fresh nonce**, with the same AAD, and signs it again
 over the same `CMT#<path>` and the day it signs today, so a verifier picks the key interval of the edit and not of the
 original. Only the author may edit (403), only while the comment is not a tombstone (409 `comment_gone`), and the freshness
-rules are a new comment's. The server refuses the stored nonce with different bytes (400 `nonce_reused`; a reused nonce
-is the one thing GCM does not survive), and answers 200 to exactly the stored bytes, so a resend after a lost response
-is harmless. When the edit happened is inside the ciphertext, like the original time, so the row says nothing about it.
+rules are a new comment's. Every edition shares the key and the AAD, and a nonce used twice under one key breaks GCM, so the row keeps the
+nonces of the editions it replaced (`UsedNonces`, 12 bytes an edit) and the server refuses any of them, or the current
+one over different bytes (400 `nonce_reused`). The write is conditional on the edition the handler read and on the new
+nonce not being filed, so two edits racing cannot both replace one edition (409 `conflict_retry`, and the client reads
+again). Exactly the stored bytes answer 200, so a resend after a lost response is harmless, even when its signing day
+has since passed; the current nonce over the same ciphertext with a new signature is the same plaintext sealed once and
+is allowed. A delete removes the list with the rest. When the edit happened is inside the ciphertext, like the original time, so the row says nothing about it.
 `DELETE` on the same path turns the comment into a **tombstone** and answers 204 (also for a tombstone, so a repeat is
 safe): the author or an admin of the group may, and it needs membership and a live post but no key. The row stays, with
 only its path, author and TTL and a `Deleted` flag (a flag, not a time); the text, nonce, signature, signing day and
