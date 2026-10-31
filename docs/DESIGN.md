@@ -208,9 +208,10 @@ the last comment's reactions are in and its replies' are out). The first page al
 there is no cap on comments per post. A page can be shorter than `limit` and still carry a cursor, because one DynamoDB
 query returns at most 1 MB; a cursor means "keep going", never "this page was full". The reaction read is not capped:
 a page's reactions are bounded by the page size times the group's members (one reaction per user per target), and the
-whole response by a Lambda's response limit. Nothing writes reactions yet (#46), so whoever builds it should size the
-default page against the member cap. Truncating the reaction read to stay under a limit is the wrong fix, because it
-would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
+whole response by a Lambda's response limit. Sizing the default page against the member cap is not enough, since an
+Open or public group has no cap; #46 slice 2 bounds the response by bytes instead, shortening the comment page (the
+cursor then continues from the last comment kept). Truncating the reaction read to stay under a limit is the wrong fix,
+because it would drop reactions silently, the way an unflagged short page would drop comments. Members only, 404 otherwise (a
 dormant member can read what their keys open).
 
 **For the comment reader (#44).** `/groups/:gid/posts/:pid` (the `#`s of the post id as `%23`) reads a thread with the
@@ -223,6 +224,21 @@ A path that is not well formed is shown unreadable and unnested. Pages keep the 
 comment already shown is dropped, and a cursor, even on an empty page, keeps "Load more comments" on screen. Text is a
 plain text node. The post's title comes from the list's navigation state for display only, so a thread opened in a new
 tab has none; nothing is trusted from it.
+
+**Writing a reaction (#46).** `PUT /api/posts/{pid}/reactions/{target}` (target `0000` for the post, else a comment path)
+takes `{generation, nonce, ciphertext}` and sets the caller's reaction there, replacing any earlier one, so a resend or a
+second click is harmless and answers 204. The reactor is the session's user, never a field, and there is no signature
+(see "Reactions are not signed" below: nothing but the server ties a reaction to its reactor). The plaintext is **one
+byte**, an index into a fixed emoji table kept by the client, so every reaction seals to exactly
+`crypto.ReactionCiphertextSize` (17) bytes and the server refuses any other length: the ciphertext's size cannot say
+which emoji it is (UTF-8 emoji vary from 3 to 8+ bytes), and a client cannot park other data in these rows. The same
+freshness rules as a comment apply (non-dormant member, the generation new items use, the rotation marker pinned in the
+transaction), and the comment must still exist (409 `parent_gone`). `DELETE` on the same path removes the caller's own
+reaction, answers 204 whether or not one existed, and needs membership and a live post but no key, so a dormant member
+can still take one back. Two requests that write the same item at the same moment can make DynamoDB cancel one of them
+with a transaction conflict, which answers 409 `conflict_retry`; a client retries on it, so a double click is harmless
+once retried (this comes from the AWS documentation; DynamoDB Local does not model the conflict, so it is untested).
+The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
@@ -2851,6 +2867,18 @@ key so reactions order among themselves in thread order, but which emoji was cho
 under the group key like any other content. The server therefore knows that a user reacted to a
 particular comment, and not what they said by it. The cost is that reaction counts are computed
 client-side after decryption rather than aggregated by the server.
+
+**Reactions are not signed, so they are as trustworthy as the server.** The AAD stops a stored reaction from being moved
+to another post, target, reactor or generation, but it proves nothing about who sealed it: it is public, and every
+member holds the group key, so any key holder can seal a valid reaction under anyone's AAD. The only thing tying a
+reaction to its reactor is the server writing the session's user into the sort key. Two things follow. The server alone
+can bring back a reaction its reactor removed, or put back the emoji they replaced, by rewriting a copy of an old row:
+the row has no time and no counter, so nothing about it is fresh. The server together with any group key (an operator
+who is also a member, or a removed member who still has the key before a rotation) can make up reactions from any member
+with any emoji. This was chosen over signing: a signature would close only the second, and it cannot carry a signing day
+without dating the reaction, so it would have to be checked against the reactor's current key and an old reaction would
+stop verifying after that member rotated keys. Reactions are low stakes, so they are left unsigned (#46). Signing them
+later would mean migrating stored rows.
 
 **Reactions carry no creation time**, which is a smaller disclosure than posts make and is
 deliberate. Their sort key holds the target path and the reactor's id — no day prefix — and the item
