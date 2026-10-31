@@ -45,14 +45,19 @@ func doPostAt(t *testing.T, h *Handler, method string, cookie *http.Cookie, pid 
 // over the post's own sort key and signedDay.
 func postEdit(t *testing.T, pid string, signer registeredUser, signedDay string, nonce, ct []byte) editPostRequest {
 	t.Helper()
+	return postEditAtGeneration(t, pid, signer, 0, signedDay, nonce, ct)
+}
+
+func postEditAtGeneration(t *testing.T, pid string, signer registeredUser, generation int64, signedDay string, nonce, ct []byte) editPostRequest {
+	t.Helper()
 	gid, sortKey, _ := idgen.ParsePostID(pid)
-	payload := crypto.SignedPayload(signer.userID, gid, sortKey, 0, signedDay, ct)
+	payload := crypto.SignedPayload(signer.userID, gid, sortKey, uint64(generation), signedDay, ct)
 	sig, err := crypto.Sign(signer.signPriv, crypto.ContextPost, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return editPostRequest{
-		Generation: 0, SignedDay: signedDay,
+		Generation: generation, SignedDay: signedDay,
 		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ct),
 		Signature:  base64.StdEncoding.EncodeToString(sig),
@@ -125,6 +130,7 @@ func TestEditPostRefusesWhatItShould(t *testing.T) {
 		{"a tombstone", cookie, gonePid, postEdit(t, gonePid, owner, today(), nonceOf(1), ctOf(1)), 409, `"post_gone"`},
 		{"signed by someone else", cookie, pid, postEdit(t, pid, other, today(), nonceOf(1), ctOf(1)), 400, `"bad_signature"`},
 		{"signed for another post", cookie, pid, postEdit(t, otherPid, owner, today(), nonceOf(1), ctOf(1)), 400, `"bad_signature"`},
+		{"signed for another generation", cookie, pid, postEditAtGeneration(t, pid, owner, 1, today(), nonceOf(1), ctOf(1)), 409, `"generation_stale"`},
 		{"signed on a far day", cookie, pid, postEdit(t, pid, owner, "2020-01-01", nonceOf(1), ctOf(1)), 400, "signedDay: not within tolerance"},
 		{"signed on a malformed day", cookie, pid, postEdit(t, pid, owner, "yesterday", nonceOf(1), ctOf(1)), 400, "signedDay: must be a UTC date"},
 		{"the stored nonce over other text", cookie, pid, reused, 400, `"nonce_reused"`},
@@ -242,11 +248,11 @@ func TestEditsHaveRoomForTheTimeTheyWereMade(t *testing.T) {
 		extra  int
 		status int
 	}{{"at the edit limit", 0, 200}, {"one byte over", 1, 400}} {
-		n := h.postCiphertextLimit() + editedAtOverhead + tc.extra
+		n := h.postCiphertextLimit() + 28 + tc.extra
 		if rec := doPostAt(t, h, http.MethodPut, cookie, pid, postEdit(t, pid, owner, today(), nonceOf(byte(20+tc.extra)), bytes.Repeat([]byte{1}, n))); rec.Code != tc.status {
 			t.Errorf("post %s: %d, want %d: %s", tc.name, rec.Code, tc.status, rec.Body.String())
 		}
-		n = h.commentEditCiphertextLimit() + tc.extra
+		n = h.commentCiphertextLimit() + 28 + tc.extra
 		req := edited(signedComment(t, gid, owner, copts{path: "0001", ctLen: n}))
 		if rec := doCommentAt(t, h, http.MethodPut, cookie, pid, "0001", req); rec.Code != tc.status {
 			t.Errorf("comment %s: %d, want %d: %s", tc.name, rec.Code, tc.status, rec.Body.String())
@@ -419,5 +425,27 @@ func TestEditPostWriteRefusesAPostThatExpiredMeanwhile(t *testing.T) {
 	}
 	if got := postRow(t, pid)["Nonce"].(*types.AttributeValueMemberB).Value; !bytes.Equal(got, original) {
 		t.Error("a refused edit changed the stored post")
+	}
+}
+
+func TestDeletePostForgetsAnEditsDayAndEarlierNonces(t *testing.T) {
+	h, _, pid, owner, cookie := commentFixture(t)
+	for i := byte(2); i < 4; i++ {
+		if rec := doPostAt(t, h, http.MethodPut, cookie, pid, postEdit(t, pid, owner, today(), nonceOf(i), ctOf(i))); rec.Code != 200 {
+			t.Fatal(rec.Body.String())
+		}
+	}
+	row := postRow(t, pid)
+	if !rowHas(row, "SignedDay") || !rowHas(row, "UsedNonces") {
+		t.Fatal("the edits left no SignedDay or UsedNonces, so this test proves nothing")
+	}
+	if rec := doPostAt(t, h, http.MethodDelete, cookie, pid, nil); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body.String())
+	}
+	row = postRow(t, pid)
+	for _, attr := range []string{"SignedDay", "UsedNonces", "Nonce", "Ciphertext", "Signature"} {
+		if rowHas(row, attr) {
+			t.Errorf("the tombstone still holds %s", attr)
+		}
 	}
 }
