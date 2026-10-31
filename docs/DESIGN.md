@@ -237,7 +237,8 @@ transaction), and the comment must still exist (409 `parent_gone`). `DELETE` on 
 reaction, answers 204 whether or not one existed, and needs membership and a live post but no key, so a dormant member
 can still take one back. Two requests that write the same item at the same moment can make DynamoDB cancel one of them
 with a transaction conflict, which answers 409 `conflict_retry`; a client retries on it, so a double click is harmless
-once retried (this comes from the AWS documentation; DynamoDB Local does not model the conflict, so it is untested). The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
+once retried (this comes from the AWS documentation; DynamoDB Local does not model the conflict, so it is untested).
+The AAD is `crypto.ReactionAAD` (`POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`).
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
