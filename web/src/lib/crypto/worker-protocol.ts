@@ -870,6 +870,38 @@ export interface SealCommentResponse {
   readonly result: SealedComment
 }
 
+/**
+ * #46: seals a reaction (one table index byte, reaction.ts) under the group key.
+ * Nothing is signed: reactions are unsigned (docs/DESIGN.md). `target` is the
+ * comment path, or `0000` for the post. See credential-material.ts's sealReaction.
+ */
+export interface SealReactionRequest {
+  readonly kind: 'sealReaction'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly postId: string
+  readonly target: string
+  readonly generation: number
+  readonly reactionGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  /** An index into REACTIONS (reaction.ts). */
+  readonly index: number
+}
+
+export interface SealedReaction {
+  readonly generation: number
+  readonly nonce: string
+  readonly ciphertext: string
+}
+
+export interface SealReactionResponse {
+  readonly kind: 'sealReactionDone'
+  readonly id: string
+  readonly result: SealedReaction
+}
+
 export interface SealedPost {
   readonly sortKey: string
   readonly generation: number
@@ -935,6 +967,39 @@ export interface OpenCommentsResponse {
   readonly id: string
   /** One entry per requested comment, in the same order. */
   readonly result: readonly OpenedComment[]
+}
+
+/**
+ * #46: opens a page's reactions. See credential-material.ts's openReactions. A
+ * reaction that does not open, or holds a byte this build does not know, is
+ * `unreadable`, never an error.
+ */
+export interface OpenReactionsRequest {
+  readonly kind: 'openReactions'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly postId: string
+  readonly generation: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly reactions: readonly {
+    readonly target: string
+    readonly reactorUserId: string
+    readonly generation: number
+    readonly nonce: string
+    readonly ciphertext: string
+  }[]
+}
+
+export type OpenedReaction =
+  { readonly kind: 'opened'; readonly index: number } | { readonly kind: 'unreadable' }
+
+export interface OpenReactionsResponse {
+  readonly kind: 'openReactionsDone'
+  readonly id: string
+  /** One entry per requested reaction, in the same order. */
+  readonly result: readonly OpenedReaction[]
 }
 
 export interface OpenPostsResponse {
@@ -1077,8 +1142,10 @@ export type WorkerRequest =
   | EncryptGroupTextRequest
   | SealPostRequest
   | SealCommentRequest
+  | SealReactionRequest
   | OpenPostsRequest
   | OpenCommentsRequest
+  | OpenReactionsRequest
   | SignInviteCreationRequest
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
@@ -1116,8 +1183,10 @@ export type WorkerResponse =
   | EncryptGroupTextResponse
   | SealPostResponse
   | SealCommentResponse
+  | SealReactionResponse
   | OpenPostsResponse
   | OpenCommentsResponse
+  | OpenReactionsResponse
   | SignInviteCreationResponse
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse

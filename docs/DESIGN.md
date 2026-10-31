@@ -259,6 +259,23 @@ another comment keeps it, and it survives the password step. The counter counts 
 `MAX_COMMENT_BYTES` (served by `GET /api/config`). After a send the thread restarts from its first page, since the new
 comment may sit on any page.
 
+**For the reaction buttons (#46).** The thread screen shows a row of seven buttons under the post and under each
+comment, from the fixed table in `web/src/lib/crypto/reaction.ts`: 1 thumbs up, 2 heart, 3 laughing, 4 surprised, 5 sad,
+6 celebrate, 7 angry (red face, U+1F621). **The table is the wire format**: the sealed byte is the index, so it is
+append-only, never reordered or reused, and `reaction.test.ts` pins every index to its code points. Index 0 is invalid,
+and a byte this build has no reaction for (a newer client added one) is counted as "could not be read", never guessed.
+Pressing your own reaction takes it back (`DELETE`), pressing another changes it (`PUT`, which replaces); which of the
+two it is comes from what is on screen, not from the button. A reaction is shown as yours only after the server
+accepted it, never ahead of it, and the buttons of a target being saved are disabled (also across a reload, so a
+second press cannot race the first). A take-back is remembered until the thread starts over, so a page read before the
+DELETE committed cannot put the reaction back on screen. A page's reactions are opened
+with `openReactions` under the key of each reaction's own generation, as comments are. A write collision (409
+`conflict_retry`) sends the same sealed bytes again, up to three times; a moved group key (`generation_stale`,
+`membership_changed`, `key_epoch_stale`) loads the group and seals again, up to twice. A comment deleted while it was on
+screen answers `parent_gone`: the thread reloads and says so at the top, because the row the message would sit under is
+gone. Reactions are unsigned, so what they show is only as trustworthy as the server (see "Reactions are not signed").
+`web/src/routes/threadWiring.ts` (`toggleReaction`) holds the logic and its tests; `ReactionBar.tsx` is the row.
+
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.

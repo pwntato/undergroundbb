@@ -18,6 +18,7 @@ import {
   groupNameAAD,
   memberWrapAAD,
   commentAAD,
+  reactionAAD,
   postAAD,
   roleGrantPayload,
   successorClaimPayload,
@@ -42,6 +43,7 @@ import {
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
 import { decodeComment, encodeComment } from './comment.js'
+import { decodeReaction, encodeReaction } from './reaction.js'
 import { decodePost, encodePost } from './post.js'
 import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
@@ -1465,6 +1467,107 @@ export async function openComments(
       )
       const content = decodeComment(plain)
       out.push({ kind: 'opened', text: content.text, at: content.at })
+    } catch {
+      out.push({ kind: 'unreadable' })
+    }
+  }
+  return out
+}
+
+/**
+ * #46: seals a reaction. The plaintext is one table index byte (reaction.ts), so
+ * the ciphertext is always 17 bytes, under reactionAAD(post, target, reactor,
+ * generation) with the CALLER as the reactor. Nothing is signed: the AAD is
+ * public and every member holds the key, so it proves nothing about the sealer
+ * (docs/DESIGN.md "Reactions are not signed").
+ */
+export async function sealReaction(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly postId: string
+    readonly target: string
+    readonly generation: number
+    readonly reactionGeneration: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly index: number
+  },
+): Promise<{ generation: number; nonce: string; ciphertext: string }> {
+  const plaintext = encodeReaction(req.index)
+  const ownKey = await unwrap(
+    keys.wrappingKey.privateKey,
+    {
+      ephemeralPub: base64ToBytes(req.wrappedGroupKey.ephemeralPub),
+      nonce: base64ToBytes(req.wrappedGroupKey.nonce),
+      ciphertext: base64ToBytes(req.wrappedGroupKey.ciphertext),
+    },
+    memberWrapAAD(req.groupId, keys.userId, req.generation),
+  )
+  const groupKey = await walkChainDown(
+    ownKey,
+    req.groupId,
+    req.generation,
+    req.reactionGeneration,
+    req.chain ?? [],
+  )
+  const sealed = await encrypt(
+    groupKey,
+    plaintext,
+    reactionAAD(req.postId, req.target, keys.userId, req.reactionGeneration),
+  )
+  return {
+    generation: req.reactionGeneration,
+    nonce: bytesToBase64(sealed.nonce),
+    ciphertext: bytesToBase64(sealed.ciphertext),
+  }
+}
+
+/**
+ * #46: opens a page's reactions, as openComments does: one unwrap, one derivation
+ * per generation, and a reaction that does not open (a newer generation, a moved
+ * row, a byte this build has no reaction for) is `unreadable` without blaming
+ * anyone. The AAD binds the post, the target, the reactor and the generation.
+ */
+export async function openReactions(
+  keys: LiveKeys,
+  req: {
+    readonly groupId: string
+    readonly postId: string
+    readonly generation: number
+    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+    readonly chain?: readonly {
+      generation: number
+      wrapped: { nonce: string; ciphertext: string }
+    }[]
+    readonly reactions: readonly {
+      readonly target: string
+      readonly reactorUserId: string
+      readonly generation: number
+      readonly nonce: string
+      readonly ciphertext: string
+    }[]
+  },
+): Promise<({ kind: 'opened'; index: number } | { kind: 'unreadable' })[]> {
+  const keyFor = await generationKeys(keys, req)
+  const out: ({ kind: 'opened'; index: number } | { kind: 'unreadable' })[] = []
+  for (const x of req.reactions) {
+    try {
+      const groupKey = await keyFor(x.generation)
+      if (groupKey === null) {
+        out.push({ kind: 'unreadable' })
+        continue
+      }
+      const plain = await decrypt(
+        groupKey,
+        base64ToBytes(x.nonce),
+        base64ToBytes(x.ciphertext),
+        reactionAAD(req.postId, x.target, x.reactorUserId, x.generation),
+      )
+      out.push({ kind: 'opened', index: decodeReaction(plain) })
     } catch {
       out.push({ kind: 'unreadable' })
     }

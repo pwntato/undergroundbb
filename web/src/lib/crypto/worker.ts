@@ -38,6 +38,8 @@ import {
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
   sealComment as sealCommentPure,
+  sealReaction as sealReactionPure,
+  openReactions as openReactionsPure,
   sealPost as sealPostPure,
   openComments as openCommentsPure,
   openPosts as openPostsPure,
@@ -71,8 +73,10 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   SealCommentRequest,
+  SealReactionRequest,
   SealPostRequest,
   OpenCommentsRequest,
+  OpenReactionsRequest,
   OpenPostsRequest,
   GenerateSignupMaterialRequest,
   GetOwnFingerprintRequest,
@@ -200,6 +204,12 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'openComments':
       await openComments(req)
+      return
+    case 'sealReaction':
+      await sealReaction(req)
+      return
+    case 'openReactions':
+      await openReactions(req)
       return
     case 'signInviteCreation':
       await signInviteCreation(req)
@@ -361,6 +371,21 @@ async function openPosts(req: OpenPostsRequest): Promise<void> {
   const keys = requireLiveKeys(req.userId, 'read posts')
   const result = await openPostsPure(keys, req)
   post({ kind: 'openPostsDone', id: req.id, result })
+}
+
+/** Seals a reaction -- #46. Same guards as sealComment: nothing is written mid-rotation. */
+async function sealReaction(req: SealReactionRequest): Promise<void> {
+  rotation.assertIdle('react')
+  const keys = requireLiveKeys(req.userId, 'react')
+  const result = await sealReactionPure(keys, req)
+  post({ kind: 'sealReactionDone', id: req.id, result })
+}
+
+/** Opens a page's reactions -- #46. Same guards as openComments. */
+async function openReactions(req: OpenReactionsRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'read reactions')
+  const result = await openReactionsPure(keys, req)
+  post({ kind: 'openReactionsDone', id: req.id, result })
 }
 
 /** Opens a page of a post's comments -- #44. Same guards as openPosts. */

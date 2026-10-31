@@ -20,6 +20,7 @@ const view = (path: string): CommentView => ({
 const page = (paths: string[], nextCursor?: string): ThreadPageResult => ({
   ok: true,
   comments: paths.map(view),
+  reactions: [],
   ...(nextCursor !== undefined && { nextCursor }),
 })
 
@@ -92,5 +93,222 @@ describe('reset', () => {
     })
     expect(loaded.comments).toHaveLength(2)
     expect(nextThreadState(loaded, { type: 'reset' })).toEqual(INITIAL_THREAD_STATE)
+  })
+})
+
+describe('reactions in the thread state (#46)', () => {
+  const rx = (target: string, reactorUserId: string, index: number | null = 1) => ({
+    target,
+    reactorUserId,
+    index,
+  })
+  const withReactions = (paths: string[], reactions: ReturnType<typeof rx>[], cursor?: string) =>
+    ({ ...page(paths, cursor), reactions }) as ThreadPageResult
+
+  it('starts with none and nothing in flight', () => {
+    expect(INITIAL_THREAD_STATE).toMatchObject({ reactions: [], reacting: [], reactionError: null })
+  })
+
+  it('is loaded once a page has been read, even an empty one, and not before or after a reset', () => {
+    expect(INITIAL_THREAD_STATE.loaded).toBe(false)
+    const failed = apply(INITIAL_THREAD_STATE, { ok: false, kind: 'failed' })
+    expect(failed.loaded).toBe(false)
+    const empty = apply(INITIAL_THREAD_STATE, page([]))
+    expect(empty.loaded).toBe(true)
+    expect(nextThreadState(empty, { type: 'reset' }).loaded).toBe(false)
+  })
+
+  it("adds each page's reactions to those already shown, in order", () => {
+    let s = apply(
+      INITIAL_THREAD_STATE,
+      withReactions(['0001'], [rx('0000', 'a'), rx('0001', 'a')], 'c'),
+    )
+    s = apply(s, withReactions(['0002'], [rx('0002', 'b', 3)]))
+    expect(s.reactions).toEqual([rx('0000', 'a'), rx('0001', 'a'), rx('0002', 'b', 3)])
+  })
+
+  it('keeps the first of a repeated reactor on a target, within a page and across pages', () => {
+    let s = apply(
+      INITIAL_THREAD_STATE,
+      withReactions(['0001'], [rx('0001', 'a', 1), rx('0001', 'a', 2)], 'c'),
+    )
+    s = apply(s, withReactions(['0002'], [rx('0001', 'a', 4), rx('0001', 'b', 5)]))
+    expect(s.reactions).toEqual([rx('0001', 'a', 1), rx('0001', 'b', 5)])
+  })
+
+  it("keeps one reactor's reactions on different targets apart", () => {
+    const s = apply(
+      INITIAL_THREAD_STATE,
+      withReactions(['0001'], [rx('0001', 'a'), rx('0000', 'a'), rx('0002', 'a')]),
+    )
+    expect(s.reactions).toHaveLength(3)
+  })
+
+  it('keeps the reactions when a page fails, and drops them on a reset', () => {
+    let s = apply(INITIAL_THREAD_STATE, withReactions(['0001'], [rx('0001', 'a')], 'c'))
+    s = apply(s, { ok: false, kind: 'failed' })
+    expect(s.reactions).toHaveLength(1)
+    expect(nextThreadState(s, { type: 'reset' })).toEqual(INITIAL_THREAD_STATE)
+  })
+
+  it('marks a target busy once, and clears any earlier error', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionFailed',
+      target: '0001',
+      message: 'no',
+    })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0002' })
+    expect(s.reacting).toEqual(['0001', '0002'])
+    expect(s.reactionError).toBeNull()
+  })
+
+  it('shows a failure on its target, frees only that target, and changes no reaction', () => {
+    let s = apply(INITIAL_THREAD_STATE, withReactions(['0001'], [rx('0001', 'me', 2)]))
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0002' })
+    s = nextThreadState(s, { type: 'reactionFailed', target: '0001', message: 'nope' })
+    expect(s.reacting).toEqual(['0002'])
+    expect(s.reactionError).toEqual({ target: '0001', message: 'nope' })
+    expect(s.reactions).toEqual([rx('0001', 'me', 2)])
+  })
+
+  it("applies a saved reaction by replacing the reactor's own on that target only", () => {
+    let s = apply(
+      INITIAL_THREAD_STATE,
+      withReactions(['0001'], [rx('0001', 'me', 2), rx('0001', 'you', 2), rx('0000', 'me', 4)]),
+    )
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 6 })
+    expect(s.reactions).toContainEqual(rx('0001', 'me', 6))
+    expect(s.reactions).not.toContainEqual(rx('0001', 'me', 2))
+    expect(s.reactions).toContainEqual(rx('0001', 'you', 2))
+    expect(s.reactions).toContainEqual(rx('0000', 'me', 4))
+    expect(s.reactions).toHaveLength(3)
+    expect(s.reacting).toEqual([])
+  })
+
+  it('adds a saved reaction when there was none, and clears a stale error', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionFailed',
+      target: '0001',
+      message: 'old',
+    })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 1 })
+    expect(s.reactions).toEqual([rx('0001', 'me', 1)])
+    expect(s.reactionError).toBeNull()
+  })
+
+  it("removes only the reactor's own reaction on that target", () => {
+    let s = apply(
+      INITIAL_THREAD_STATE,
+      withReactions(['0001'], [rx('0001', 'me'), rx('0001', 'you'), rx('0000', 'me')]),
+    )
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })
+    expect(s.reactions).toEqual([rx('0001', 'you'), rx('0000', 'me')])
+    expect(s.reacting).toEqual([])
+  })
+
+  it("says a reaction's comment is gone for the whole page, frees the target, and keeps it through the reset", () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reactionTargetGone', target: '0001', message: 'gone' })
+    expect(s).toMatchObject({ notice: 'gone', reacting: [], reactionError: null })
+    const reloaded = nextThreadState(s, { type: 'reset' })
+    expect(reloaded).toEqual({ ...INITIAL_THREAD_STATE, notice: 'gone' })
+  })
+
+  it("clears the notice when the reader's next reaction starts, and starts with none", () => {
+    expect(INITIAL_THREAD_STATE.notice).toBeNull()
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionTargetGone',
+      target: '0001',
+      message: 'gone',
+    })
+    s = nextThreadState(s, { type: 'reactionStarted', target: '0002' })
+    expect(s.notice).toBeNull()
+  })
+
+  it('keeps a target busy through a reset, and does not free it until the server answers', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reactionStarted', target: '0001' })
+    s = nextThreadState(s, { type: 'reset' })
+    expect(s.reacting).toEqual(['0001'])
+    // The reset starts everything else over.
+    expect(s).toMatchObject({ reactions: [], comments: [], loading: true, removed: [] })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 2 })
+    expect(s.reacting).toEqual([])
+    expect(s.reactions).toEqual([rx('0001', 'me', 2)])
+  })
+
+  it('does not let a page read before a take-back put the reaction back', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, { type: 'reset' })
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0000', reactorUserId: 'me' })
+    s = apply(s, withReactions(['0001'], [rx('0000', 'me', 1), rx('0000', 'you', 1)]))
+    expect(s.reactions).toEqual([rx('0000', 'you', 1)])
+  })
+
+  it('drops the taken-back reaction from a later page as well', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = apply(s, withReactions(['0001'], [], 'c'))
+    s = apply(s, withReactions(['0002'], [rx('0001', 'me', 4)]))
+    expect(s.reactions).toEqual([])
+  })
+
+  it('forgets a take-back when the reader sets a reaction there again', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reactionSaved', target: '0001', reactorUserId: 'me', index: 3 })
+    expect(s.removed).toEqual([])
+    s = apply(s, withReactions(['0001'], [rx('0001', 'me', 5)]))
+    expect(s.reactions).toEqual([rx('0001', 'me', 3)])
+  })
+
+  it('forgets take-backs when the thread starts over, so a fresh page shows what the server holds', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reset' })
+    s = apply(s, withReactions(['0001'], [rx('0001', 'me', 2)]))
+    expect(s.reactions).toEqual([rx('0001', 'me', 2)])
+  })
+
+  it('drops a take-back only for that reactor on that target', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = apply(
+      s,
+      withReactions(['0001'], [rx('0001', 'you', 1), rx('0002', 'me', 2), rx('0000', 'me', 3)]),
+    )
+    expect(s.reactions).toEqual([rx('0001', 'you', 1), rx('0002', 'me', 2), rx('0000', 'me', 3)])
+  })
+
+  it('does not take back the same reaction twice in the list', () => {
+    let s = nextThreadState(INITIAL_THREAD_STATE, {
+      type: 'reactionRemoved',
+      target: '0001',
+      reactorUserId: 'me',
+    })
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })
+    expect(s.removed).toEqual(['0001|me'])
+  })
+
+  it('does not let a later page undo what this reader just did', () => {
+    let s = apply(INITIAL_THREAD_STATE, withReactions(['0001'], [rx('0001', 'me', 2)], 'c'))
+    s = nextThreadState(s, { type: 'reactionRemoved', target: '0001', reactorUserId: 'me' })
+    s = apply(s, withReactions(['0002'], [rx('0002', 'you')]))
+    expect(s.reactions).toEqual([rx('0002', 'you')])
   })
 })

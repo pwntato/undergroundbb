@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, WireComment } from '@/lib/api/groups'
+import type { GroupDetail, WireComment, WireReaction } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from '@/lib/crypto/ed25519'
 import { signedPayload } from '@/lib/crypto/payload'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
-import type { OpenedComment } from '@/lib/crypto/worker-protocol'
+import type { OpenedComment, OpenedReaction } from '@/lib/crypto/worker-protocol'
 import { commentDepth, loadThreadPage, type LoadThreadDeps } from './runLoadThread'
 import { makeAuthorResolver } from './runListPosts'
 
@@ -83,13 +83,22 @@ const opened = (text: string, at = `${DAY}T12:00:00.000Z`): OpenedComment => ({
 
 interface World {
   comments: WireComment[]
+  reactions?: WireReaction[]
+  openReaction?: (x: WireReaction) => OpenedReaction
   nextCursor?: string
   open?: (c: WireComment) => OpenedComment
   pins?: PinRecord[]
 }
 
 type Mocked = Record<
-  'getGroup' | 'getChain' | 'getThread' | 'openComments' | 'getUserDetail' | 'listPins' | 'pinKeys',
+  | 'getGroup'
+  | 'getChain'
+  | 'getThread'
+  | 'openComments'
+  | 'openReactions'
+  | 'getUserDetail'
+  | 'listPins'
+  | 'pinKeys',
   ReturnType<typeof vi.fn>
 >
 
@@ -103,7 +112,7 @@ function depsFor(w: World): LoadThreadDeps & Parameters<typeof makeAuthorResolve
     getChain: vi.fn().mockResolvedValue([]),
     getThread: vi.fn().mockResolvedValue({
       comments: w.comments,
-      reactions: [],
+      reactions: w.reactions ?? [],
       ...(w.nextCursor !== undefined && { nextCursor: w.nextCursor }),
     }),
     openComments: vi.fn().mockImplementation(async (req: { comments: { path: string }[] }) =>
@@ -112,6 +121,18 @@ function depsFor(w: World): LoadThreadDeps & Parameters<typeof makeAuthorResolve
         return w.open ? w.open(c) : opened(`text of ${c.path}`)
       }),
     ),
+    openReactions: vi
+      .fn()
+      .mockImplementation(async (req: { reactions: { target: string; reactorUserId: string }[] }) =>
+        req.reactions.map((rx) => {
+          const x = (w.reactions ?? []).find(
+            (y) => y.target === rx.target && y.reactorUserId === rx.reactorUserId,
+          )!
+          return w.openReaction
+            ? w.openReaction(x)
+            : ({ kind: 'opened', index: 1 } as OpenedReaction)
+        }),
+      ),
     getUserDetail: vi.fn().mockImplementation(async (id: string) => {
       const u = users[id]
       if (u === undefined) throw new ApiError(404, 'no such user')
@@ -190,7 +211,7 @@ describe('loadThreadPage', () => {
 
   it('treats an empty page that carries a cursor as "keep going", and opens nothing', async () => {
     const { res, deps } = await load({ comments: [], nextCursor: 'more' })
-    expect(res).toEqual({ ok: true, comments: [], nextCursor: 'more' })
+    expect(res).toEqual({ ok: true, comments: [], reactions: [], nextCursor: 'more' })
     expect(deps.openComments).not.toHaveBeenCalled()
     expect(deps.getChain).not.toHaveBeenCalled()
   })
@@ -334,5 +355,139 @@ describe('loadThreadPage', () => {
       ok: false,
       kind: 'notFound',
     })
+  })
+})
+
+let rxCounter = 0
+function wireReaction(
+  target: string,
+  reactor: string,
+  over: Partial<WireReaction> = {},
+): WireReaction {
+  rxCounter += 1
+  return {
+    target,
+    reactorUserId: reactor,
+    generation: 0,
+    nonce: b64(new Uint8Array(12)),
+    ciphertext: b64(new Uint8Array(17).fill(rxCounter)),
+    ...over,
+  }
+}
+
+describe('loadThreadPage reactions (#46)', () => {
+  it("opens a page's reactions under the same keys and shows each as its table index", async () => {
+    const rx = [wireReaction('0000', ALICE), wireReaction('0001', ME), wireReaction('0001', ALICE)]
+    const { res, deps } = await load({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: rx,
+      openReaction: (x) => ({ kind: 'opened', index: x.reactorUserId === ME ? 2 : 5 }),
+    })
+    expect(res.ok && res.reactions).toEqual([
+      { target: '0000', reactorUserId: ALICE, index: 5 },
+      { target: '0001', reactorUserId: ME, index: 2 },
+      { target: '0001', reactorUserId: ALICE, index: 5 },
+    ])
+    const req = deps.openReactions.mock.calls[0]![0]
+    expect(req).toMatchObject({
+      userId: ME,
+      groupId: GROUP,
+      postId: POST_ID,
+      generation: 0,
+      wrappedGroupKey: DETAIL.wrappedGroupKey,
+    })
+    expect(req.reactions).toEqual(rx)
+  })
+
+  it('shows a reaction that does not open as unreadable, not as a reaction and not as gone', async () => {
+    const { res } = await load({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [wireReaction('0001', ALICE), wireReaction('0001', ME)],
+      openReaction: (x) =>
+        x.reactorUserId === ALICE ? { kind: 'unreadable' } : { kind: 'opened', index: 3 },
+    })
+    expect(res.ok && res.reactions.map((x) => x.index)).toEqual([null, 3])
+  })
+
+  it('does not ask for reactions when the page has none', async () => {
+    const { deps } = await load({ comments: [wireComment(ME, me, '0001')] })
+    expect(deps.openReactions).not.toHaveBeenCalled()
+  })
+
+  it("shows the post's own reactions even when the page has no comments", async () => {
+    const { res, deps } = await load({
+      comments: [],
+      reactions: [wireReaction('0000', ALICE)],
+      nextCursor: 'more',
+    })
+    expect(res).toEqual({
+      ok: true,
+      comments: [],
+      reactions: [{ target: '0000', reactorUserId: ALICE, index: 1 }],
+      nextCursor: 'more',
+    })
+    expect(deps.openComments).not.toHaveBeenCalled()
+  })
+
+  it('leaves out a reaction whose target is neither the post nor a comment path', async () => {
+    const bad = [
+      '0000.0001',
+      '0001.0000',
+      '1',
+      'CMT#0001',
+      '',
+      '0001.0001.0001.0001.0001.0001.0001.0001.0001',
+    ]
+    const { res, deps } = await load({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [...bad.map((t) => wireReaction(t, ALICE)), wireReaction('0001', ALICE)],
+    })
+    expect(res.ok && res.reactions.map((x) => x.target)).toEqual(['0001'])
+    expect(
+      deps.openReactions.mock.calls[0]![0].reactions.map((x: { target: string }) => x.target),
+    ).toEqual(['0001'])
+  })
+
+  it('walks the key chain for an older reaction even when every comment is current', async () => {
+    const world: World = {
+      comments: [wireComment(ME, me, '0001', { generation: 2 })],
+      reactions: [wireReaction('0001', ALICE, { generation: 0 })],
+    }
+    const deps = depsFor(world)
+    deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 2 })
+    deps.getChain.mockResolvedValue([{ generation: 0, wrapped: { nonce: 'n', ciphertext: 'c' } }])
+    const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
+    expect(res.ok).toBe(true)
+    expect(deps.getChain).toHaveBeenCalledWith(GROUP, 0, 2)
+    expect(deps.openReactions.mock.calls[0]![0].chain).toHaveLength(1)
+  })
+
+  it('does not walk the chain when comments and reactions are all current', async () => {
+    const { deps } = await load({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [wireReaction('0001', ALICE)],
+    })
+    expect(deps.getChain).not.toHaveBeenCalled()
+  })
+
+  it('asks for the password when the keys are cold for reactions', async () => {
+    const deps = depsFor({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [wireReaction('0001', ALICE)],
+    })
+    deps.openReactions.mockRejectedValue(new Error('no live keys cached'))
+    const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
+    expect(res).toEqual({ ok: false, kind: 'coldKeys' })
+  })
+
+  it('still shows the comments when only the reactions cannot be opened', async () => {
+    const deps = depsFor({
+      comments: [wireComment(ME, me, '0001')],
+      reactions: [wireReaction('0001', ALICE)],
+    })
+    deps.openReactions.mockRejectedValue(new Error('boom'))
+    const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
+    expect(res.ok && res.comments.map((c) => c.path)).toEqual(['0001'])
+    expect(res.ok && res.reactions).toEqual([{ target: '0001', reactorUserId: ALICE, index: null }])
   })
 })

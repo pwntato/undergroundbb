@@ -41,6 +41,12 @@ import type {
   SealCommentRequest,
   SealCommentResponse,
   SealedComment,
+  SealReactionRequest,
+  SealReactionResponse,
+  SealedReaction,
+  OpenReactionsRequest,
+  OpenReactionsResponse,
+  OpenedReaction,
   SealPostRequest,
   SealPostResponse,
   OpenCommentsRequest,
@@ -1041,6 +1047,68 @@ export function openComments(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for openComments`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Seals a reaction -- #46. See credential-material.ts's sealReaction. */
+export function sealReaction(
+  req: Omit<SealReactionRequest, 'kind' | 'id'>,
+): Promise<SealedReaction> {
+  const id = nextRequestID()
+  const fullReq: SealReactionRequest = { kind: 'sealReaction', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'sealReactionDone') {
+        resolve((msg as SealReactionResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for sealReaction`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Opens a page's reactions -- #46. Rejects if liveKeys is cold; a reaction that does not open is `unreadable` in the result, in request order. */
+export function openReactions(
+  req: Omit<OpenReactionsRequest, 'kind' | 'id'>,
+): Promise<readonly OpenedReaction[]> {
+  const id = nextRequestID()
+  const fullReq: OpenReactionsRequest = { kind: 'openReactions', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'openReactionsDone') {
+        resolve((msg as OpenReactionsResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for openReactions`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

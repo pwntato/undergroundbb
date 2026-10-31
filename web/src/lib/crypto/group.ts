@@ -361,6 +361,26 @@ export function commentAAD(postId: string, path: string, generation: number): Ui
   return new TextEncoder().encode(`POST#${postId}:CMT#${path}:GEN#${gen}`)
 }
 
+/**
+ * AAD for a reaction's ciphertext -- #46. `target` is the comment path, or
+ * `0000` for the post itself, and `reactorId` the reactor's user id, so a
+ * reaction moved to another post, target, reactor or generation fails to open.
+ * `POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>`, matching
+ * internal/crypto/group.go's ReactionAAD byte-for-byte; it must never change
+ * once a real reaction exists under it. The AAD is public and every member
+ * holds the group key, so it does not prove who sealed a reaction; reactions
+ * are unsigned (docs/DESIGN.md, "Reactions are not signed").
+ */
+export function reactionAAD(
+  postId: string,
+  target: string,
+  reactorId: string,
+  generation: number,
+): Uint8Array {
+  const gen = generation.toString().padStart(6, '0')
+  return new TextEncoder().encode(`POST#${postId}:RXN#${target}#${reactorId}:GEN#${gen}`)
+}
+
 /** Which of a group's two encrypted text fields groupNameAAD is being built for. */
 export type GroupTextField = 'NAME' | 'DESC'
 

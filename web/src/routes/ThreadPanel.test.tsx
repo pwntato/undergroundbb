@@ -2,8 +2,10 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import { ThreadPanel, type ThreadReply } from './ThreadPanel'
-import type { CommentView } from './runLoadThread'
+import { ReactionBar } from './ReactionBar'
+import { elementsOf } from './elementTree.testkit'
+import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
+import type { CommentView, ReactionView } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
 
 function comment(over: Partial<CommentView> = {}): CommentView {
@@ -34,6 +36,7 @@ function render(
     retry?: boolean
     title?: string
     reply?: Partial<ThreadReply>
+    reactions?: Partial<ThreadReactions>
   } = {},
 ) {
   return renderToStaticMarkup(
@@ -49,6 +52,18 @@ function render(
         hasMore: over.more ?? false,
         onLoadMore: () => {},
         ...(over.retry === true && { onRetry: () => {} }),
+        ...(over.reactions !== undefined && {
+          reactions: {
+            reactions: [],
+            selfUserId: 'me',
+            reacting: [],
+            error: null,
+            notice: null,
+            ready: true,
+            onPress: () => {},
+            ...over.reactions,
+          },
+        }),
         ...(over.reply !== undefined && {
           reply: {
             replyTo: null,
@@ -241,5 +256,119 @@ describe('ThreadPanel reply box', () => {
   it('offers no Reply on a comment whose path is malformed', () => {
     const html = render([comment({ path: 'junk', depth: 0 })], { reply: {} })
     expect(html).not.toContain('>Reply<')
+  })
+})
+
+describe('ThreadPanel reactions (#46)', () => {
+  const rx = (target: string, reactorUserId: string, index: number | null): ReactionView => ({
+    target,
+    reactorUserId,
+    index,
+  })
+  const groups = (html: string) => html.match(/aria-label="Reactions to [^"]*"/g) ?? []
+
+  it('shows no reaction buttons where the screen gives none', () => {
+    expect(groups(render([comment()]))).toEqual([])
+  })
+
+  it('shows a row for the post and one under each comment', () => {
+    const html = render(
+      [comment(), comment({ path: '0001.0001', depth: 2 }), comment({ path: '0002' })],
+      { reactions: {} },
+    )
+    expect(groups(html)).toEqual([
+      'aria-label="Reactions to the post"',
+      'aria-label="Reactions to this comment"',
+      'aria-label="Reactions to this comment"',
+      'aria-label="Reactions to this comment"',
+    ])
+  })
+
+  it("keeps the post's row out until the first page is in", () => {
+    const html = render([], { reactions: { ready: false } })
+    expect(groups(html)).toEqual([])
+  })
+
+  it('gives a comment with a malformed path no row, since it cannot be reacted to', () => {
+    const html = render([comment({ path: 'x', depth: 0 })], { reactions: { ready: false } })
+    expect(groups(html)).toEqual([])
+  })
+
+  it('counts each row from its own target only', () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reactions: {
+        reactions: [rx('0000', 'a', 1), rx('0001', 'a', 2), rx('0001', 'b', 2), rx('0002', 'a', 3)],
+      },
+    })
+    const rows = html.split('role="group"').slice(1)
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toContain('Thumbs up, 1 reaction')
+    expect(rows[0]).toContain('Heart, 0 reactions')
+    expect(rows[1]).toContain('Heart, 2 reactions')
+    expect(rows[1]).not.toContain('Thumbs up, 1 reaction')
+    expect(rows[2]).toContain('Laughing, 1 reaction')
+  })
+
+  it("presses the reader's own and disables only the target being saved", () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reactions: { reactions: [rx('0002', 'me', 6)], reacting: ['0002'] },
+    })
+    const rows = html.split('role="group"').slice(1)
+    expect(rows[2]).toContain('Celebrate, 1 reaction, yours')
+    expect(rows[2]).toContain(' disabled=""')
+    expect(rows[0]).not.toContain(' disabled=""')
+    expect(rows[1]).not.toContain(' disabled=""')
+  })
+
+  it('says a page-wide notice once, above the rows, and says nothing without one', () => {
+    const html = render([comment()], {
+      reactions: { notice: 'The comment you reacted to is gone.' },
+    })
+    expect(html.match(/The comment you reacted to is gone\./g)).toHaveLength(1)
+    expect(html.indexOf('The comment you reacted to is gone.')).toBeLessThan(
+      html.indexOf('role="group"'),
+    )
+    expect(render([comment()], { reactions: {} })).not.toContain('is gone')
+  })
+
+  it('shows a failure under the target it happened on, and nowhere else', () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reactions: { error: { target: '0002', message: 'Could not save your reaction.' } },
+    })
+    const rows = html.split('role="group"').slice(1)
+    expect(rows[2]).toContain('Could not save your reaction.')
+    expect(rows[0]).not.toContain('Could not save')
+    expect(rows[1]).not.toContain('Could not save')
+  })
+})
+
+describe('ThreadPanel reports reaction presses', () => {
+  it('names the target and the button pressed, for the post and for each comment', () => {
+    const calls: [string, number][] = []
+    const tree = ThreadPanel({
+      groupId: 'g1',
+      comments: [comment(), comment({ path: '0001.0001', depth: 2 })],
+      loading: false,
+      error: null,
+      hasMore: false,
+      onLoadMore: () => {},
+      reactions: {
+        reactions: [],
+        selfUserId: 'me',
+        reacting: [],
+        error: null,
+        notice: null,
+        ready: true,
+        onPress: (target, index) => calls.push([target, index]),
+      },
+    })
+    const bars = elementsOf(tree).filter((e) => e.type === ReactionBar)
+    expect(bars).toHaveLength(3)
+    bars.forEach((bar, i) => (bar.props['onPress'] as (n: number) => void)(i + 3))
+    expect(calls).toEqual([
+      ['0000', 3],
+      ['0001', 4],
+      ['0001.0001', 5],
+    ])
   })
 })

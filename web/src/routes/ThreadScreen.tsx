@@ -11,10 +11,23 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useLocation, useParams } from 'react-router'
 import { getPublicConfig } from '@/lib/api/config'
-import { createComment, getGroup, getKeychain, getThread } from '@/lib/api/groups'
+import {
+  createComment,
+  deleteReaction,
+  getGroup,
+  getKeychain,
+  getThread,
+  putReaction,
+} from '@/lib/api/groups'
 import { listAllPins } from '@/lib/api/pins'
 import { getUserDetail } from '@/lib/api/users'
-import { getOwnSigningKey, openComments, sealComment } from '@/lib/crypto/worker-client'
+import {
+  getOwnSigningKey,
+  openComments,
+  openReactions,
+  sealComment,
+  sealReaction,
+} from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
@@ -27,11 +40,12 @@ import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
 import { makeAuthorResolver } from './runListPosts'
 import { loadThreadPage, type LoadThreadDeps, type ThreadPageResult } from './runLoadThread'
-import { ThreadPanel, type ThreadReply } from './ThreadPanel'
+import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
 import { canRetryFailure, INITIAL_THREAD_STATE, nextThreadState } from './threadState'
 import {
   loadPageInto,
   sendReply,
+  toggleReaction,
   type PendingReply,
   type SavedReply,
   type ThreadIO,
@@ -134,6 +148,7 @@ function Thread({
       getChain: (gid, from, to) => fetchNameChain(getKeychain, gid, from, to),
       getThread,
       openComments,
+      openReactions,
       getUserDetail,
       selfUserId: userId,
       ownSigningKey: () => ownSigningKeyWithFallback(userId, getOwnSigningKey),
@@ -219,6 +234,30 @@ function Thread({
     )
   }
 
+  const handleReact = (target: string, index: number) => {
+    void toggleReaction(
+      { ...io, reload },
+      {
+        userId,
+        context: reader.deps,
+        sealReaction,
+        putReaction,
+        deleteReaction,
+      },
+      { groupId, postId, target, index, reactions: state.reactions },
+    )
+  }
+
+  const reactions: ThreadReactions = {
+    reactions: state.reactions,
+    selfUserId: userId,
+    reacting: state.reacting,
+    error: state.reactionError,
+    notice: state.notice,
+    ready: state.loaded,
+    onPress: handleReact,
+  }
+
   const reply: ThreadReply = {
     replyTo: replyState.replyTo,
     draft: replyState.draft,
@@ -251,6 +290,7 @@ function Thread({
       loading={state.loading}
       error={state.failure === null ? null : PAGE_ERRORS[state.failure]}
       reply={state.failure === 'notFound' ? undefined : reply}
+      reactions={state.failure === 'notFound' ? undefined : reactions}
       hasMore={state.cursor !== undefined}
       onRetry={
         canRetryFailure(state.failure)
