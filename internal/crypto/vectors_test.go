@@ -43,6 +43,7 @@ type vectorFile struct {
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	PostAAD              []postAADVector              `json:"post_aad"`
 	CommentAAD           []commentAADVector           `json:"comment_aad"`
+	ReactionAAD          []reactionAADVector          `json:"reaction_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
@@ -347,6 +348,19 @@ type postAADVector struct {
 	Name          string `json:"name"`
 	GroupID       string `json:"group_id"`
 	SortKey       string `json:"sort_key"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+type reactionAADVector struct {
+	Name          string `json:"name"`
+	PostID        string `json:"post_id"`
+	Target        string `json:"target"`
+	ReactorID     string `json:"reactor_id"`
 	Generation    uint64 `json:"generation"`
 	AADHex        string `json:"aad_hex"`
 	KeyHex        string `json:"key_hex"`
@@ -1194,6 +1208,51 @@ func TestVectorCommentAAD(t *testing.T) {
 				"another path":       CommentAAD(tc.PostID, "0009", tc.Generation),
 				"another post":       CommentAAD("group-uuid-2#2026-10-29#00112233445566ff", tc.Path, tc.Generation),
 				"as a post":          PostAAD("group-uuid-2", "POST#2026-10-28#00112233445566ff", tc.Generation),
+			} {
+				if _, err := Decrypt(key, nonce, got, other); err == nil {
+					t.Fatalf("opened under %s", name)
+				}
+			}
+		})
+	}
+}
+
+// TestVectorReactionAAD pins ReactionAAD's exact encoding (#46), that a sealed
+// reaction is always ReactionCiphertextSize bytes, and that it does not open when
+// moved to another generation, target, reactor or post, or read as a comment.
+func TestVectorReactionAAD(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.ReactionAAD) < 2 {
+		t.Fatalf("expected at least 2 reaction_aad vectors, got %d", len(v.ReactionAAD))
+	}
+	for _, tc := range v.ReactionAAD {
+		t.Run(tc.Name, func(t *testing.T) {
+			wantAAD := mustHex(t, tc.AADHex)
+			gotAAD := ReactionAAD(tc.PostID, tc.Target, tc.ReactorID, tc.Generation)
+			if !bytes.Equal(gotAAD, wantAAD) {
+				t.Fatalf("ReactionAAD = %x, want %x", gotAAD, wantAAD)
+			}
+			key, nonce := mustHex(t, tc.KeyHex), mustHex(t, tc.NonceHex)
+			plaintext := mustHex(t, tc.PlaintextHex)
+			if len(plaintext) != ReactionPlaintextSize {
+				t.Fatalf("plaintext is %d bytes, want %d", len(plaintext), ReactionPlaintextSize)
+			}
+			got, err := EncryptWithNonce(key, nonce, plaintext, gotAAD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, mustHex(t, tc.CiphertextHex)) {
+				t.Fatalf("EncryptWithNonce = %x, want %s", got, tc.CiphertextHex)
+			}
+			if len(got) != ReactionCiphertextSize {
+				t.Fatalf("ciphertext is %d bytes, want %d", len(got), ReactionCiphertextSize)
+			}
+			for name, other := range map[string][]byte{
+				"another generation": ReactionAAD(tc.PostID, tc.Target, tc.ReactorID, tc.Generation+1),
+				"another target":     ReactionAAD(tc.PostID, "0009", tc.ReactorID, tc.Generation),
+				"another reactor":    ReactionAAD(tc.PostID, tc.Target, tc.ReactorID+"x", tc.Generation),
+				"another post":       ReactionAAD("group-uuid-2#2026-10-29#00112233445566ff", tc.Target, tc.ReactorID, tc.Generation),
+				"as a comment":       CommentAAD(tc.PostID, tc.Target, tc.Generation),
 			} {
 				if _, err := Decrypt(key, nonce, got, other); err == nil {
 					t.Fatalf("opened under %s", name)

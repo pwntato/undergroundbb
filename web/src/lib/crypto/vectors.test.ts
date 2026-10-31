@@ -16,12 +16,14 @@ import { deriveKey } from './argon2.js'
 import { credentialWrapAAD, type CredentialCopy } from './credential.js'
 import * as ed25519 from './ed25519.js'
 import { fingerprint } from './fingerprint.js'
+import { REACTION_CIPHERTEXT_BYTES } from './reaction.js'
 import {
   admissionPayload,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
   commentAAD,
+  reactionAAD,
   postAAD,
   roleGrantPayload,
   successorClaimPayload,
@@ -333,6 +335,18 @@ interface VectorFile {
     name: string
     post_id: string
     path: string
+    generation: number
+    aad_hex: string
+    key_hex: string
+    plaintext_hex: string
+    nonce_hex: string
+    ciphertext_hex: string
+  }[]
+  reaction_aad: {
+    name: string
+    post_id: string
+    target: string
+    reactor_id: string
     generation: number
     aad_hex: string
     key_hex: string
@@ -1055,6 +1069,40 @@ describe('post AAD vectors', () => {
           postAAD(tc.group_id, 'POST#2026-10-29#00112233445566ff', tc.generation),
         ),
       ).rejects.toThrow(DecryptionFailedError)
+    })
+  }
+})
+
+// Pins reactionAAD's exact encoding (#46), that a sealed reaction is always the
+// fixed 17 bytes, and that it does not open under another post's, target's,
+// reactor's or generation's AAD, or as a comment.
+describe('reaction AAD vectors', () => {
+  for (const tc of vectors.reaction_aad) {
+    it(tc.name, async () => {
+      const gotAad = reactionAAD(tc.post_id, tc.target, tc.reactor_id, tc.generation)
+      expect(bytesToHex(gotAad)).toBe(tc.aad_hex)
+
+      const key = hexToBytes(tc.key_hex)
+      const nonce = hexToBytes(tc.nonce_hex)
+      const ciphertext = await encryptWithNonce(key, nonce, hexToBytes(tc.plaintext_hex), gotAad)
+      expect(bytesToHex(ciphertext)).toBe(tc.ciphertext_hex)
+      expect(ciphertext.length).toBe(REACTION_CIPHERTEXT_BYTES)
+      expect(bytesToHex(await decrypt(key, nonce, ciphertext, gotAad))).toBe(tc.plaintext_hex)
+
+      for (const wrong of [
+        reactionAAD(tc.post_id, tc.target, tc.reactor_id, tc.generation + 1),
+        reactionAAD(tc.post_id, '0009', tc.reactor_id, tc.generation),
+        reactionAAD(tc.post_id, tc.target, `${tc.reactor_id}x`, tc.generation),
+        reactionAAD(
+          tc.post_id.replace('2026-10-28', '2026-10-29'),
+          tc.target,
+          tc.reactor_id,
+          tc.generation,
+        ),
+        commentAAD(tc.post_id, tc.target, tc.generation),
+      ]) {
+        await expect(decrypt(key, nonce, ciphertext, wrong)).rejects.toThrow(DecryptionFailedError)
+      }
     })
   }
 })

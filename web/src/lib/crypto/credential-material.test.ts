@@ -41,15 +41,19 @@ import {
   sealPost,
   sealComment,
   openComments,
+  sealReaction,
+  openReactions,
   openPosts,
   startSelfRekey,
 } from './credential-material.js'
 import { encodeComment } from './comment.js'
+import { REACTIONS } from './reaction.js'
 import { checkCommentSignature } from './comment-check.js'
 import * as ed25519 from './ed25519.js'
 import {
   admissionPayload,
   commentAAD,
+  reactionAAD,
   genKeyAAD,
   groupNameAAD,
   memberWrapAAD,
@@ -1161,6 +1165,176 @@ describe('decryptGroupNames', () => {
       ).toEqual([{ kind: 'opened', text: 't', at: now.toISOString() }])
       // Without the link the walk cannot reach generation 0.
       await expect(sealComment(keys, { ...req, chain: [] }, now)).rejects.toThrow()
+    })
+  })
+
+  describe('sealReaction and openReactions (#46)', () => {
+    const groupId = 'group-uuid-test-reactions'
+    const postId = `${groupId}#2026-10-28#00112233445566ff`
+
+    async function sealed(
+      keys: Awaited<ReturnType<typeof setUpMemberWithGroup>>['keys'],
+      wrappedGroupKey: Awaited<ReturnType<typeof setUpMemberWithGroup>>['wrappedGroupKey'],
+      target: string,
+      index: number,
+    ) {
+      const s = await sealReaction(keys, {
+        groupId,
+        postId,
+        target,
+        generation: 0,
+        reactionGeneration: 0,
+        wrappedGroupKey,
+        index,
+      })
+      return { target, reactorUserId: keys.userId, ...s }
+    }
+
+    it('round trips every reaction in the table as a fixed 17-byte ciphertext', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(71),
+      )
+      for (const r of REACTIONS) {
+        const x = await sealed(keys, wrappedGroupKey, '0001', r.index)
+        expect(base64ToBytes(x.ciphertext).length).toBe(17)
+        expect(
+          await openReactions(keys, {
+            groupId,
+            postId,
+            generation: 0,
+            wrappedGroupKey,
+            reactions: [x],
+          }),
+        ).toEqual([{ kind: 'opened', index: r.index }])
+      }
+    })
+
+    it('refuses to seal 0 or an index the table does not have', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(72),
+      )
+      for (const index of [0, REACTIONS.length + 1, 255]) {
+        await expect(sealed(keys, wrappedGroupKey, '0000', index)).rejects.toThrow()
+      }
+    })
+
+    it('binds the post, the target, the reactor and the generation', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(73),
+      )
+      const x = await sealed(keys, wrappedGroupKey, '0001', 1)
+      const open = (over: Partial<typeof x>, post = postId) =>
+        openReactions(keys, {
+          groupId,
+          postId: post,
+          generation: 0,
+          wrappedGroupKey,
+          reactions: [{ ...x, ...over }],
+        })
+      expect(await open({})).toEqual([{ kind: 'opened', index: 1 }])
+      expect(await open({ target: '0002' })).toEqual([{ kind: 'unreadable' }])
+      expect(await open({ target: '0000' })).toEqual([{ kind: 'unreadable' }])
+      expect(await open({ reactorUserId: 'someone-else' })).toEqual([{ kind: 'unreadable' }])
+      expect(await open({ generation: 1 })).toEqual([{ kind: 'unreadable' }])
+      expect(await open({}, `${groupId}#2026-10-29#00112233445566ff`)).toEqual([
+        { kind: 'unreadable' },
+      ])
+    })
+
+    it('shows a byte it has no reaction for as unreadable and still opens the rest, in order', async () => {
+      const groupKey = new Uint8Array(32).fill(74)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const raw = async (bytes: number[]) => {
+        const e = await encrypt(
+          groupKey,
+          new Uint8Array(bytes),
+          reactionAAD(postId, '0001', keys.userId, 0),
+        )
+        return {
+          target: '0001',
+          reactorUserId: keys.userId,
+          generation: 0,
+          nonce: bytesToBase64(e.nonce),
+          ciphertext: bytesToBase64(e.ciphertext),
+        }
+      }
+      const good = await sealed(keys, wrappedGroupKey, '0001', 3)
+      const out = await openReactions(keys, {
+        groupId,
+        postId,
+        generation: 0,
+        wrappedGroupKey,
+        reactions: [
+          await raw([0]),
+          await raw([REACTIONS.length + 1]),
+          await raw([1, 1]),
+          await raw([]),
+          { ...good, nonce: '***' },
+          good,
+        ],
+      })
+      expect(out.map((o) => o.kind)).toEqual([
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'unreadable',
+        'opened',
+      ])
+    })
+
+    it('takes a fresh IV every time and walks the chain down mid-rotation', async () => {
+      const key0 = new Uint8Array(32).fill(75)
+      const key1 = new Uint8Array(32).fill(76)
+      const { keys } = await setUpMemberWithGroup(groupId, key0)
+      const wrapped1 = await wrap(
+        keys.wrappingKey.publicKey,
+        key1,
+        memberWrapAAD(groupId, keys.userId, 1),
+      )
+      const link0 = await encrypt(key1, key0, genKeyAAD(groupId, 0))
+      const wrappedGroupKey = {
+        ephemeralPub: bytesToBase64(wrapped1.ephemeralPub),
+        nonce: bytesToBase64(wrapped1.nonce),
+        ciphertext: bytesToBase64(wrapped1.ciphertext),
+      }
+      const chain = [
+        {
+          generation: 0,
+          wrapped: {
+            nonce: bytesToBase64(link0.nonce),
+            ciphertext: bytesToBase64(link0.ciphertext),
+          },
+        },
+      ]
+      const req = {
+        groupId,
+        postId,
+        target: '0000',
+        generation: 1,
+        reactionGeneration: 0,
+        wrappedGroupKey,
+        chain,
+        index: 2,
+      }
+      const [x, y] = [await sealReaction(keys, req), await sealReaction(keys, req)]
+      expect(x.generation).toBe(0)
+      expect(x.nonce).not.toEqual(y.nonce)
+      const open = (c?: typeof chain) =>
+        openReactions(keys, {
+          groupId,
+          postId,
+          generation: 1,
+          wrappedGroupKey,
+          ...(c !== undefined && { chain: c }),
+          reactions: [{ target: '0000', reactorUserId: keys.userId, ...x }],
+        })
+      expect(await open(chain)).toEqual([{ kind: 'opened', index: 2 }])
+      expect(await open()).toEqual([{ kind: 'unreadable' }])
+      await expect(sealReaction(keys, { ...req, chain: [] })).rejects.toThrow()
     })
   })
 
