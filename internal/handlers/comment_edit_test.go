@@ -55,18 +55,27 @@ func rowHas(row map[string]types.AttributeValue, attr string) bool {
 
 func countReactionRows(t *testing.T, pid, prefix string) int {
 	t.Helper()
-	out, err := rawDDB(t).Query(context.Background(), &dynamodb.QueryInput{
-		TableName:              aws.String(testTableName()),
-		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pk": s("POST#" + pid), ":sk": s("RXN#" + prefix),
-		},
-		ConsistentRead: aws.Bool(true),
-	})
-	if err != nil {
-		t.Fatal(err)
+	n := 0
+	var start map[string]types.AttributeValue
+	for {
+		out, err := rawDDB(t).Query(context.Background(), &dynamodb.QueryInput{
+			TableName:              aws.String(testTableName()),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :sk)"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": s("POST#" + pid), ":sk": s("RXN#" + prefix),
+			},
+			ConsistentRead:    aws.Bool(true),
+			ExclusiveStartKey: start,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += len(out.Items)
+		if len(out.LastEvaluatedKey) == 0 {
+			return n
+		}
+		start = out.LastEvaluatedKey
 	}
-	return len(out.Items)
 }
 
 func TestEditCommentReplacesTheSealedTextAndNothingElse(t *testing.T) {
@@ -260,6 +269,28 @@ func TestDeleteCommentSweepsItsReactionsOnlyAcrossPages(t *testing.T) {
 		if n := countReactionRows(t, pid, p); n != 1 {
 			t.Errorf("reactions under %s = %d, want 1", p, n)
 		}
+	}
+}
+
+// A comment whose reactions span several DynamoDB query pages (a query returns
+// at most 1 MB) is swept completely.
+func TestDeleteCommentSweepsReactionsThatSpanQueryPages(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	writeComment(t, h, gid, pid, owner, cookie, "0001")
+	for i := 0; i < 30; i++ {
+		putCommentRow(t, map[string]types.AttributeValue{
+			"PK": s("POST#" + pid), "SK": s(fmt.Sprintf("RXN#0001#reactor-%03d", i)), "Type": s("REACTION"),
+			"Ciphertext": &types.AttributeValueMemberB{Value: make([]byte, 50_000)},
+		})
+	}
+	if n := countReactionRows(t, pid, "0001#"); n != 30 {
+		t.Fatalf("seeded %d rows", n)
+	}
+	if rec := doCommentAt(t, h, http.MethodDelete, cookie, pid, "0001", nil); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body.String())
+	}
+	if n := countReactionRows(t, pid, "0001#"); n != 0 {
+		t.Errorf("%d reactions left after the sweep", n)
 	}
 }
 
