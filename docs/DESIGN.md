@@ -266,7 +266,9 @@ append-only, never reordered or reused, and `reaction.test.ts` pins every index 
 and a byte this build has no reaction for (a newer client added one) is counted as "could not be read", never guessed.
 Pressing your own reaction takes it back (`DELETE`), pressing another changes it (`PUT`, which replaces); which of the
 two it is comes from what is on screen, not from the button. A reaction is shown as yours only after the server
-accepted it, never ahead of it, and the buttons of a target being saved are disabled. A page's reactions are opened
+accepted it, never ahead of it, and the buttons of a target being saved are disabled (also across a reload, so a
+second press cannot race the first). A take-back is remembered until the thread starts over, so a page read before the
+DELETE committed cannot put the reaction back on screen. A page's reactions are opened
 with `openReactions` under the key of each reaction's own generation, as comments are. A write collision (409
 `conflict_retry`) sends the same sealed bytes again, up to three times; a moved group key (`generation_stale`,
 `membership_changed`, `key_epoch_stale`) loads the group and seals again, up to twice. A comment deleted while it was on
