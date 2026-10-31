@@ -265,3 +265,39 @@ func TestSuccessorClaimPayloadDistinguishesEveryField(t *testing.T) {
 		}
 	}
 }
+
+func TestReactionAADIsPinnedAndBindsEveryField(t *testing.T) {
+	const pid = "11111111-1111-4111-8111-111111111111#2026-10-28#00112233445566ff"
+	const user = "22222222-2222-4222-8222-222222222222"
+	got := string(ReactionAAD(pid, "0001.0002", user, 3))
+	want := "POST#" + pid + ":RXN#0001.0002#" + user + ":GEN#000003"
+	if got != want {
+		t.Fatalf("ReactionAAD = %q, want %q", got, want)
+	}
+	base := ReactionAAD(pid, "0001.0002", user, 3)
+	for name, other := range map[string][]byte{
+		"post":       ReactionAAD(pid+"x", "0001.0002", user, 3),
+		"target":     ReactionAAD(pid, "0001.0003", user, 3),
+		"post level": ReactionAAD(pid, "0000", user, 3),
+		"reactor":    ReactionAAD(pid, "0001.0002", user+"x", 3),
+		"generation": ReactionAAD(pid, "0001.0002", user, 4),
+		"a comment":  CommentAAD(pid, "0001.0002", 3),
+	} {
+		if bytes.Equal(base, other) {
+			t.Errorf("changing the %s did not change the AAD", name)
+		}
+	}
+}
+
+func TestReactionCiphertextSizeIsOneByteAndATag(t *testing.T) {
+	key := make([]byte, 32)
+	for _, plain := range [][]byte{{1}, {7}} {
+		_, ct, err := Encrypt(key, plain, ReactionAAD("p", "0000", "u", 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ct) != ReactionCiphertextSize {
+			t.Errorf("a sealed %d-byte reaction is %d bytes, want %d", len(plain), len(ct), ReactionCiphertextSize)
+		}
+	}
+}

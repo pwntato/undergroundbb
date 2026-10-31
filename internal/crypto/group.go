@@ -316,6 +316,31 @@ func CommentAAD(postID, path string, generation uint64) []byte {
 	return fmt.Appendf(nil, "POST#%s:CMT#%s:GEN#%06d", postID, path, generation)
 }
 
+// ReactionPlaintextSize and ReactionCiphertextSize pin a sealed reaction's
+// length. The plaintext is one byte, an index into the client's fixed emoji
+// table (docs/DESIGN.md "Reactions"), so every reaction seals to the same
+// length and the ciphertext's size says nothing about which one it is. The
+// server refuses any other length.
+const (
+	ReactionPlaintextSize  = 1
+	ReactionCiphertextSize = ReactionPlaintextSize + 16
+)
+
+// ReactionAAD builds the AAD for a reaction's ciphertext -- see docs/DESIGN.md's
+// AAD table, "Reaction | POST#<pid> + RXN#<cmtpath>#<reactor> + generation."
+// target is the comment path, or "0000" for the post itself, and reactorID the
+// reactor's user id, so a reaction moved to another post, target, reactor or
+// generation fails to open.
+//
+// The encoding is "POST#<pid>:RXN#<target>#<reactor>:GEN#<nnnnnn>", the
+// convention of CommentAAD. Neither a post id, a path nor a user id contains
+// ':', so the fields cannot run together.
+//
+// This must never change once a real reaction exists under it.
+func ReactionAAD(postID, target, reactorID string, generation uint64) []byte {
+	return fmt.Appendf(nil, "POST#%s:RXN#%s#%s:GEN#%06d", postID, target, reactorID, generation)
+}
+
 // GroupNameAAD builds the AAD for encrypting or decrypting a private
 // group's name or description -- see docs/DESIGN.md's AAD table, "Group
 // name/description | group id + generation number." field distinguishes
