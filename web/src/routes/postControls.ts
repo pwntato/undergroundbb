@@ -49,6 +49,8 @@ export type PostControlsEvent =
   | { readonly type: 'finished' }
   /** The first page of the list was loaded; `liveKeys` are its posts that are not deleted. */
   | { readonly type: 'firstPageLoaded'; readonly liveKeys: readonly string[] }
+  /** The first page could not be loaded: the posts the form hangs on are gone from the screen. */
+  | { readonly type: 'firstPageFailed' }
 
 export function nextPostControlsState(
   state: PostControlsState,
@@ -78,6 +80,11 @@ export function nextPostControlsState(
       if (state.busy || state.mode.kind === 'idle' || event.liveKeys.includes(state.mode.sortKey)) {
         return state
       }
+      return { ...state, mode: { kind: 'idle' } }
+    case 'firstPageFailed':
+      // The form is drawn inside the post it is about, and a reload empties the list
+      // first, so a form left open would be invisible and stuck. Close it, keep the error.
+      if (state.busy || state.mode.kind === 'idle') return state
       return { ...state, mode: { kind: 'idle' } }
   }
 }

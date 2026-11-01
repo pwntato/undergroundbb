@@ -48,6 +48,8 @@ export type ControlsEvent =
   | { readonly type: 'madeReadOnly'; readonly message: string | null }
   /** The first page of the thread was loaded; `livePaths` are its comments that are not deleted. */
   | { readonly type: 'firstPageLoaded'; readonly livePaths: readonly string[] }
+  /** The first page could not be loaded: the comments the form hangs on are gone from the screen. */
+  | { readonly type: 'firstPageFailed' }
 
 export function nextControlsState(state: ControlsState, event: ControlsEvent): ControlsState {
   switch (event.type) {
@@ -80,6 +82,11 @@ export function nextControlsState(state: ControlsState, event: ControlsEvent): C
         return state
       }
       // The error stays: it may be the very reason the comment is gone.
+      return { ...state, mode: { kind: 'idle' } }
+    case 'firstPageFailed':
+      // The form is drawn inside the comment it is about, and a reload empties the thread
+      // first, so a form left open would be invisible and stuck. Close it, keep the error.
+      if (state.busy || state.mode.kind === 'idle') return state
       return { ...state, mode: { kind: 'idle' } }
   }
 }

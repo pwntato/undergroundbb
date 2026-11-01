@@ -75,6 +75,7 @@ export async function loadPageInto(
       livePaths: result.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
     })
   }
+  if (cursor === undefined && !result.ok) io.dispatchControls({ type: 'firstPageFailed' })
   if (!result.ok && result.kind === 'coldKeys') io.onColdKeys(io.liveReply())
 }
 

@@ -105,6 +105,23 @@ describe('nextControlsState', () => {
     })
   })
 
+  it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
+    const gone = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted' },
+    ])
+    expect(nextControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const asking = run([{ type: 'deleteAsked', path: '0001' }])
+    expect(nextControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({ kind: 'idle' })
+    const idle = run([])
+    expect(nextControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
+    const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
+    expect(nextControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+  })
+
   it('does not close a form during a send, since the answer is still coming', () => {
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
     expect(nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [] })).toBe(busy)

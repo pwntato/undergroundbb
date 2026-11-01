@@ -78,4 +78,20 @@ describe('nextPostControlsState', () => {
     const busy = run([open('P1'), { type: 'started' }])
     expect(nextPostControlsState(busy, { type: 'firstPageLoaded', liveKeys: [] })).toBe(busy)
   })
+
+  it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
+    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted' }])
+    expect(nextPostControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const asking = run([{ type: 'deleteAsked', sortKey: 'P1' }])
+    expect(nextPostControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({
+      kind: 'idle',
+    })
+    const idle = run([])
+    expect(nextPostControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
+    const busy = run([open('P1'), { type: 'started' }])
+    expect(nextPostControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+  })
 })
