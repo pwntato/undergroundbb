@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { bytesToBase64 } from './base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from './ed25519'
 import { makeKeyChange } from './own-history.testkit'
-import { atOnSignedDay, checkCommentSignature } from './comment-check'
+import { atOnSignedDay, checkCommentSignature, commentTimeSuspect } from './comment-check'
 import { signedPayload } from './payload'
 
 const GROUP = 'a0000000-0000-4000-8000-000000000001'
@@ -98,5 +98,23 @@ describe('atOnSignedDay', () => {
     expect(atOnSignedDay(DAY, '2026-10-20T23:59:59.999Z')).toBe(true)
     expect(atOnSignedDay(DAY, '2026-10-21T00:00:00.000Z')).toBe(false)
     expect(atOnSignedDay('garbage', 'garbage-time')).toBe(false)
+  })
+})
+
+describe('commentTimeSuspect', () => {
+  const at = `${DAY}T10:00:00.000Z`
+
+  it('a never-edited comment is suspect only when at is off the signed day', () => {
+    expect(commentTimeSuspect({ signedDay: DAY, at, editedAt: undefined })).toBe(false)
+    expect(commentTimeSuspect({ signedDay: '2026-10-21', at, editedAt: undefined })).toBe(true)
+  })
+
+  it('an edited comment is signed on the edit day, so editedAt must be on it and at no later', () => {
+    const edit = { signedDay: '2026-10-25', at, editedAt: '2026-10-25T01:00:00.000Z' }
+    // at is on an earlier day than the signed one, and that is fine once edited.
+    expect(commentTimeSuspect(edit)).toBe(false)
+    expect(commentTimeSuspect({ ...edit, editedAt: '2026-10-26T01:00:00.000Z' })).toBe(true)
+    expect(commentTimeSuspect({ ...edit, at: '2026-10-25T01:00:00.001Z' })).toBe(true)
+    expect(commentTimeSuspect({ ...edit, at: '2026-10-25T01:00:00.000Z' })).toBe(false)
   })
 })

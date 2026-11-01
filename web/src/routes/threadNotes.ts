@@ -4,6 +4,9 @@
 
 import type { CommentView } from './runLoadThread'
 
+/** What a deleted comment shows in place of its author, time and text. */
+export const DELETED_COMMENT_TEXT = 'This comment was deleted.'
+
 export function commentAuthorLabel(comment: CommentView): string {
   return comment.authorName ?? 'an unknown member'
 }
@@ -42,7 +45,10 @@ export function commentNotes(
   if (comment.content.timeSuspect) {
     notes.push({
       tone: 'warn',
-      text: `Suspect: the time inside this comment does not match the day it was signed (${comment.signedDay}), so its time is not shown.`,
+      text:
+        comment.content.editedAt === undefined
+          ? `Suspect: the time inside this comment does not match the day it was signed (${comment.signedDay}), so its time is not shown.`
+          : `Suspect: the edit time inside this comment is not on the day the edit was signed (${comment.signedDay}), or is earlier than the comment's own time, so its times are not shown.`,
     })
   }
   return notes

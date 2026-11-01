@@ -12,8 +12,8 @@ import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { postIdOf } from '@/lib/crypto/post-check'
-import { authorLabel, postNotes, postTimeLabel } from './postNotes'
-import type { PostView } from './runListPosts'
+import { authorLabel, DELETED_POST_TEXT, editedMark, postNotes, postTimeLabel } from './postNotes'
+import { isDeletedPost, type PostEntry, type PostView } from './runListPosts'
 
 export function GroupPostsPanel({
   groupId,
@@ -25,7 +25,7 @@ export function GroupPostsPanel({
   onRetry,
 }: {
   readonly groupId: string
-  readonly posts: readonly PostView[]
+  readonly posts: readonly PostEntry[]
   readonly loading: boolean
   readonly error: string | null
   readonly hasMore: boolean
@@ -48,28 +48,17 @@ export function GroupPostsPanel({
           No posts to show here yet. Older posts may follow.
         </p>
       )}
-      {posts.map((post) => (
-        <article key={post.sortKey} className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
-          {post.content.kind === 'opened' && (
-            <h2 className="break-words text-base font-semibold">{post.content.title}</h2>
-          )}
-          <p className="text-xs text-muted-foreground">
-            {authorLabel(post)} · {postTimeLabel(post)}
-          </p>
-          {post.content.kind === 'opened' && post.content.body !== '' && (
-            <p className="whitespace-pre-wrap break-words text-sm">{post.content.body}</p>
-          )}
-          {postNotes(post).map((note) => (
-            <p
-              key={note.text}
-              className={`text-xs ${note.tone === 'warn' ? 'text-destructive' : 'text-muted-foreground'}`}
-            >
-              {note.text}
-            </p>
-          ))}
-          <PostCommentsLink groupId={groupId} post={post} />
-        </article>
-      ))}
+      {posts.map((post) =>
+        isDeletedPost(post) ? (
+          // Its comments stay readable, so the link stays; who wrote it is not served.
+          <article key={post.sortKey} className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
+            <p className="text-sm italic text-muted-foreground">{DELETED_POST_TEXT}</p>
+            <PostCommentsLink groupId={groupId} sortKey={post.sortKey} title={undefined} />
+          </article>
+        ) : (
+          <PostCard key={post.sortKey} groupId={groupId} post={post} />
+        ),
+      )}
       {onRetry !== undefined && !loading && (
         <Button type="button" variant="outline" onClick={onRetry}>
           Try again
@@ -94,20 +83,58 @@ export function GroupPostsPanel({
   )
 }
 
+function PostCard({ groupId, post }: { readonly groupId: string; readonly post: PostView }) {
+  const edited = post.content.kind === 'opened' ? editedMark(post.content) : null
+  return (
+    <article className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
+      {post.content.kind === 'opened' && (
+        <h2 className="break-words text-base font-semibold">{post.content.title}</h2>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {authorLabel(post)} · {postTimeLabel(post)}
+        {edited !== null && (
+          <>
+            {' · '}
+            <span title={edited.title}>{edited.text}</span>
+          </>
+        )}
+      </p>
+      {post.content.kind === 'opened' && post.content.body !== '' && (
+        <p className="whitespace-pre-wrap break-words text-sm">{post.content.body}</p>
+      )}
+      {postNotes(post).map((note) => (
+        <p
+          key={note.text}
+          className={`text-xs ${note.tone === 'warn' ? 'text-destructive' : 'text-muted-foreground'}`}
+        >
+          {note.text}
+        </p>
+      ))}
+      <PostCommentsLink
+        groupId={groupId}
+        sortKey={post.sortKey}
+        title={post.content.kind === 'opened' ? post.content.title : undefined}
+      />
+    </article>
+  )
+}
+
 /** Opens the post's thread. The `#`s in the post id travel as %23; the title rides along for display only. */
 function PostCommentsLink({
   groupId,
-  post,
+  sortKey,
+  title,
 }: {
   readonly groupId: string
-  readonly post: PostView
+  readonly sortKey: string
+  readonly title: string | undefined
 }) {
-  const postId = postIdOf(groupId, post.sortKey)
+  const postId = postIdOf(groupId, sortKey)
   if (postId === undefined) return null
   return (
     <Link
       to={`/groups/${groupId}/posts/${encodeURIComponent(postId)}`}
-      state={post.content.kind === 'opened' ? { postTitle: post.content.title } : undefined}
+      state={title !== undefined ? { postTitle: title } : undefined}
       className="text-sm text-primary underline-offset-4 hover:underline"
     >
       Comments

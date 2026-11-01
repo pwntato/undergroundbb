@@ -12,7 +12,12 @@
 //     day and ciphertext, NOT the post: the post is bound by the AAD alone. A
 //     failed read of the author's keys is 'unchecked', never 'invalid'.
 //   - The decrypted `at` is whatever the author signed: a comment whose time is
-//     not on its signed day is flagged `timeSuspect`.
+//     not on its signed day is flagged `timeSuspect`. An edited comment (#45)
+//     is signed on the edit's day, so its `editedAt` is checked against the
+//     signed day instead (comment-check's commentTimeSuspect); whether it was
+//     edited comes only from that decrypted field.
+//   - A deleted comment is served as its path alone and shown as a placeholder
+//     with no author and no reactions; its replies keep their place.
 //   - A path that is not a well-formed path cannot be placed in the thread, so
 //     it is shown as unreadable with a failed signature check and is never
 //     indented.
@@ -22,8 +27,8 @@
 // carry a cursor; both mean "keep going", never "the end".
 
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, ThreadResponse, WireComment, WireReaction } from '@/lib/api/groups'
-import { checkCommentSignature, atOnSignedDay } from '@/lib/crypto/comment-check'
+import type { GroupDetail, ThreadResponse, WireLiveComment, WireReaction } from '@/lib/api/groups'
+import { checkCommentSignature, commentTimeSuspect } from '@/lib/crypto/comment-check'
 import { groupOfPostId } from '@/lib/crypto/post-check'
 import type { OpenedComment, OpenedReaction } from '@/lib/crypto/worker-protocol'
 import { isLiveKeysError } from './runListGroups'
@@ -101,7 +106,9 @@ export interface CommentView {
         readonly kind: 'opened'
         readonly text: string
         readonly at: string
-        /** The decrypted time is not on the signed day. */
+        /** When it was last edited (#45), from the decrypted comment alone; absent if never edited. */
+        readonly editedAt?: string
+        /** A decrypted time is off the signed day (commentTimeSuspect), so neither is shown. */
         readonly timeSuspect: boolean
       }
     | { readonly kind: 'unreadable' }
@@ -110,10 +117,24 @@ export interface CommentView {
   readonly keyAnchor?: 'own' | 'pinned' | 'first-seen'
 }
 
+/** A deleted comment (#45): its place in the thread and nothing about who wrote or deleted it. */
+export interface DeletedCommentView {
+  readonly deleted: true
+  readonly path: string
+  /** As for a comment; 0 if the path is malformed. */
+  readonly depth: number
+}
+
+export type ThreadEntry = CommentView | DeletedCommentView
+
+export function isDeletedComment(entry: ThreadEntry): entry is DeletedCommentView {
+  return 'deleted' in entry
+}
+
 export type ThreadPageResult =
   | {
       readonly ok: true
-      readonly comments: readonly CommentView[]
+      readonly comments: readonly ThreadEntry[]
       /** The page's reactions: the post's own on the first page, then those on this page's comments. */
       readonly reactions: readonly ReactionView[]
       readonly nextCursor?: string
@@ -160,16 +181,26 @@ export async function loadThreadPage(
     page.nextCursor !== undefined && page.nextCursor !== ''
       ? { nextCursor: page.nextCursor }
       : undefined
-  const wire = page.comments
+  // A tombstone has no ciphertext or author, and its generation is served as 0,
+  // which must not pull the key chain back to the group's first generation.
+  const wire = page.comments.filter((c): c is WireLiveComment => c.deleted !== true)
+  const deletedPaths = new Set(page.comments.filter((c) => c.deleted === true).map((c) => c.path))
   // A reaction on a target that is neither the post nor a well-formed comment path
-  // cannot be placed anywhere, so it is not opened or shown.
+  // cannot be placed anywhere, so it is not opened or shown. Nor is one on a
+  // deleted comment: the server sweeps those, and drops any it missed, but a
+  // reader does not take that on trust.
   const wireReactions = page.reactions.filter(
-    (x) => x.target === POST_TARGET || commentDepth(x.target) > 0,
+    (x) => (x.target === POST_TARGET || commentDepth(x.target) > 0) && !deletedPaths.has(x.target),
   )
   // The first page can hold only the post's own reactions, so an empty page of
-  // comments is not an empty page.
+  // comments is not an empty page. A page of nothing but tombstones needs no keys.
   if (wire.length === 0 && wireReactions.length === 0) {
-    return { ok: true, comments: [], reactions: [], ...nextCursor }
+    return {
+      ok: true,
+      comments: page.comments.map((c) => tombstone(c.path)),
+      reactions: [],
+      ...nextCursor,
+    }
   }
 
   const oldest = Math.min(
@@ -225,6 +256,7 @@ export async function loadThreadPage(
       if (isLiveKeysError(err)) return { ok: false, kind: 'coldKeys' }
     }
   }
+  const openedOf = new Map(wire.map((c, i) => [c, opened[i]] as const))
   const authors = new Map(
     await Promise.all(
       [...new Set(wire.map((c) => c.authorUserId))].map(
@@ -234,12 +266,18 @@ export async function loadThreadPage(
   )
   return {
     ok: true,
-    comments: wire.map((c, i) =>
-      viewOf(c, opened[i] ?? { kind: 'unreadable' }, authors.get(c.authorUserId)!, groupId),
-    ),
+    comments: page.comments.map((c) => {
+      if (c.deleted === true) return tombstone(c.path)
+      const o = openedOf.get(c) ?? { kind: 'unreadable' }
+      return viewOf(c, o, authors.get(c.authorUserId)!, groupId)
+    }),
     reactions: wireReactions.map((x, i) => reactionViewOf(x, openedReactions[i])),
     ...nextCursor,
   }
+}
+
+function tombstone(path: string): DeletedCommentView {
+  return { deleted: true, path, depth: commentDepth(path) }
 }
 
 function reactionViewOf(x: WireReaction, o: OpenedReaction | undefined): ReactionView {
@@ -251,7 +289,7 @@ function reactionViewOf(x: WireReaction, o: OpenedReaction | undefined): Reactio
 }
 
 function viewOf(
-  c: WireComment,
+  c: WireLiveComment,
   o: OpenedComment,
   author: AuthorCheck,
   groupId: string,
@@ -284,7 +322,12 @@ function viewOf(
             kind: 'opened',
             text: o.text,
             at: o.at,
-            timeSuspect: !atOnSignedDay(c.signedDay, o.at),
+            ...(o.editedAt !== undefined && { editedAt: o.editedAt }),
+            timeSuspect: commentTimeSuspect({
+              signedDay: c.signedDay,
+              at: o.at,
+              editedAt: o.editedAt,
+            }),
           }
         : { kind: 'unreadable' },
     signature,

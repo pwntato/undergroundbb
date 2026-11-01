@@ -16,6 +16,12 @@
 //     reason. A failed read is 'unchecked', never 'invalid'.
 //   - The decrypted `at` is whatever the author signed: a post whose time is not
 //     on the sort key's day is flagged `timeSuspect`.
+//   - An edited post (#45) is signed on the day of the edit, which the row serves
+//     as `signedDay`; the signature is checked over that day. Whether it was
+//     edited, and when, comes only from the decrypted `editedAt`, which must be
+//     on that day and not before `at` (post-check's postTimeSuspect).
+//   - A deleted post is served as its sort key alone, and shown as a placeholder
+//     with no author: nothing is opened or checked for it.
 //
 // Order: the server pages newest sort key first, which is newest day first and
 // random within a day, so each page is re-sorted within each day by the decrypted
@@ -23,14 +29,14 @@
 // is ordered within each page only.
 
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, ListPostsResponse, WirePost } from '@/lib/api/groups'
+import type { GroupDetail, ListPostsResponse, WireLivePost } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import type { OwnKeyHistory } from '@/lib/crypto/own-history'
 import { evaluatePin, servedSigningKeySet, type PinRecord } from '@/lib/crypto/pin'
 import {
-  atOnSortKeyDay,
   checkPostSignature,
+  postTimeSuspect,
   sortKeyDay,
   type AuthorKeys,
 } from '@/lib/crypto/post-check'
@@ -115,17 +121,35 @@ export interface PostView {
         readonly title: string
         readonly body: string
         readonly at: string
-        /** The decrypted time is not on the sort key's day. */
+        /** When it was last edited (#45), from the decrypted post alone; absent if never edited. */
+        readonly editedAt?: string
+        /** A decrypted time is off its day (postTimeSuspect), so neither is shown. */
         readonly timeSuspect: boolean
       }
     | { readonly kind: 'unreadable' }
+  /** The day an edit was signed on, as served; absent for a post never edited. */
+  readonly signedDay?: string
   readonly signature: PostSignature
   /** How the author's keys were anchored; absent when they were not (see signature). */
   readonly keyAnchor?: KeyAnchor
 }
 
+/** A deleted post (#45): its place in the list, and nothing about who wrote or deleted it. */
+export interface DeletedPostView {
+  readonly deleted: true
+  readonly sortKey: string
+  /** The UTC day in the sort key, or '' for a malformed one. */
+  readonly day: string
+}
+
+export type PostEntry = PostView | DeletedPostView
+
+export function isDeletedPost(entry: PostEntry): entry is DeletedPostView {
+  return 'deleted' in entry
+}
+
 export type PageResult =
-  | { readonly ok: true; readonly posts: readonly PostView[]; readonly nextCursor?: string }
+  | { readonly ok: true; readonly posts: readonly PostEntry[]; readonly nextCursor?: string }
   | {
       readonly ok: false
       readonly kind: 'notFound' | 'authRequired' | 'coldKeys' | 'chain' | 'failed'
@@ -284,17 +308,23 @@ export async function loadPostsPage(
   if (detail.role === '' || detail.wrappedGroupKey === undefined) {
     return { ok: false, kind: 'notFound' }
   }
-  const posts = page.posts
-  const attempt = await openAll(deps, detail, groupId, posts)
+  // A tombstone has no ciphertext or author, and its generation is served as 0,
+  // which must not pull the key chain back to the group's first generation.
+  const live = page.posts.filter((p): p is WireLivePost => p.deleted !== true)
+  const attempt = await openAll(deps, detail, groupId, live)
   if (!attempt.ok) return attempt
-  const opened = attempt.opened
+  const opened = new Map(live.map((p, i) => [p, attempt.opened[i]!] as const))
   const authors = await Promise.all(
-    [...new Set(posts.map((p) => p.authorUserId))].map(
+    [...new Set(live.map((p) => p.authorUserId))].map(
       async (id) => [id, await resolveAuthor(id)] as const,
     ),
   )
   const byAuthor = new Map(authors)
-  const views = posts.map((p, i) => viewOf(p, opened[i]!, byAuthor.get(p.authorUserId)!, groupId))
+  const views = page.posts.map((p): PostEntry =>
+    p.deleted === true
+      ? { deleted: true, sortKey: p.sortKey, day: sortKeyDay(p.sortKey) ?? '' }
+      : viewOf(p, opened.get(p)!, byAuthor.get(p.authorUserId)!, groupId),
+  )
   return {
     ok: true,
     posts: orderWithinDays(views),
@@ -306,7 +336,7 @@ async function openAll(
   deps: ListPostsDeps,
   detail: GroupDetail,
   groupId: string,
-  posts: readonly WirePost[],
+  posts: readonly WireLivePost[],
 ): Promise<
   { readonly ok: true; readonly opened: readonly OpenedPost[] } | Extract<PageResult, { ok: false }>
 > {
@@ -338,7 +368,7 @@ async function openAll(
   }
 }
 
-function viewOf(p: WirePost, o: OpenedPost, author: AuthorCheck, groupId: string): PostView {
+function viewOf(p: WireLivePost, o: OpenedPost, author: AuthorCheck, groupId: string): PostView {
   const day = sortKeyDay(p.sortKey) ?? ''
   const signature: PostSignature =
     author.kind === 'unchecked'
@@ -350,6 +380,7 @@ function viewOf(p: WirePost, o: OpenedPost, author: AuthorCheck, groupId: string
           generation: p.generation,
           ciphertext: p.ciphertext,
           signature: p.signature,
+          signedDay: p.signedDay,
           author: author.keys,
         })
   return {
@@ -364,25 +395,34 @@ function viewOf(p: WirePost, o: OpenedPost, author: AuthorCheck, groupId: string
             title: o.title,
             body: o.body,
             at: o.at,
-            timeSuspect: !atOnSortKeyDay(p.sortKey, o.at),
+            ...(o.editedAt !== undefined && { editedAt: o.editedAt }),
+            timeSuspect: postTimeSuspect({
+              sortKey: p.sortKey,
+              signedDay: p.signedDay,
+              at: o.at,
+              editedAt: o.editedAt,
+            }),
           }
         : { kind: 'unreadable' },
+    ...(p.signedDay !== undefined && { signedDay: p.signedDay }),
     signature,
     ...(author.kind === 'keys' && { keyAnchor: author.anchor }),
   }
 }
 
-function trustRank(c: PostView['content']): number {
-  if (c.kind === 'unreadable') return 2
-  return c.timeSuspect ? 1 : 0
+function trustRank(v: PostEntry): number {
+  if (isDeletedPost(v)) return 3
+  if (v.content.kind === 'unreadable') return 2
+  return v.content.timeSuspect ? 1 : 0
 }
 
 /**
  * Keeps the server's day order; inside a day, posts with a trusted time newest
- * first, then posts whose time is suspect, then unreadable ones.
+ * first, then posts whose time is suspect, then unreadable ones, then deleted
+ * ones (they have no time to place them by).
  */
-function orderWithinDays(views: readonly PostView[]): PostView[] {
-  const days: PostView[][] = []
+function orderWithinDays(views: readonly PostEntry[]): PostEntry[] {
+  const days: PostEntry[][] = []
   for (const v of views) {
     const last = days[days.length - 1]
     if (last !== undefined && last[0]!.day === v.day) last.push(v)
@@ -392,13 +432,14 @@ function orderWithinDays(views: readonly PostView[]): PostView[] {
     group
       .map((v, i) => ({ v, i }))
       .sort((a, b) => {
-        const ca = a.v.content
-        const cb = b.v.content
-        const ra = trustRank(ca)
-        const rb = trustRank(cb)
+        const ra = trustRank(a.v)
+        const rb = trustRank(b.v)
         if (ra !== rb) return ra - rb
         // Only a trusted time orders posts; a suspect one keeps the served order.
-        if (ca.kind === 'opened' && cb.kind === 'opened' && ra === 0 && ca.at !== cb.at) {
+        // A post is placed by when it was written, never by when it was edited.
+        const ca = isDeletedPost(a.v) ? undefined : a.v.content
+        const cb = isDeletedPost(b.v) ? undefined : b.v.content
+        if (ca?.kind === 'opened' && cb?.kind === 'opened' && ra === 0 && ca.at !== cb.at) {
           return ca.at < cb.at ? 1 : -1
         }
         return a.i - b.i

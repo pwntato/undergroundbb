@@ -27,7 +27,7 @@ import {
   makeAuthorResolver,
   type ListPostsDeps,
   type PageResult,
-  type PostView,
+  type PostEntry,
 } from './runListPosts'
 
 const PAGE_ERRORS: Record<Exclude<PageResult, { ok: true }>['kind'], string> = {
@@ -115,7 +115,7 @@ function PostsList({
     }
     return { deps, resolveAuthor: makeAuthorResolver(deps) }
   }, [userId])
-  const [posts, setPosts] = useState<readonly PostView[]>([])
+  const [posts, setPosts] = useState<readonly PostEntry[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

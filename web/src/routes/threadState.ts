@@ -21,10 +21,10 @@
 //     reaction still being saved survives that restart too, so its buttons stay
 //     disabled until the server has answered.
 
-import type { CommentView, ReactionView, ThreadPageResult } from './runLoadThread'
+import type { ReactionView, ThreadEntry, ThreadPageResult } from './runLoadThread'
 
 export interface ThreadState {
-  readonly comments: readonly CommentView[]
+  readonly comments: readonly ThreadEntry[]
   /** Where the next page starts; undefined once the last page has been read. */
   readonly cursor: string | undefined
   readonly loading: boolean

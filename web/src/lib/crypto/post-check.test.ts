@@ -8,6 +8,7 @@ import {
   checkPostSignature,
   groupOfPostId,
   postIdOf,
+  postTimeSuspect,
   sortKeyDay,
 } from './post-check'
 
@@ -183,5 +184,168 @@ describe('groupOfPostId', () => {
     ]) {
       expect(groupOfPostId(bad), bad).toBeUndefined()
     }
+  })
+})
+
+/** A post signed over `day` rather than the sort key's day, as an edit is (#45). */
+function editedBy(key: SigningKey, day: string) {
+  const signed = signedPayload(AUTHOR, GROUP, SORT_KEY, 0, day, CIPHERTEXT)
+  return {
+    sortKey: SORT_KEY,
+    generation: 0,
+    ciphertext: b64(CIPHERTEXT),
+    signature: b64(sign(key, SigningContext.Post, signed)),
+  }
+}
+
+describe('checkPostSignature on an edited post (signedDay, #45)', () => {
+  const EDIT_DAY = '2026-10-25'
+
+  it('checks the signature over the served signedDay in place of the sort key day', () => {
+    const post = editedBy(k0, EDIT_DAY)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        ...post,
+        signedDay: EDIT_DAY,
+        author: unrotated,
+      }),
+    ).toEqual({ kind: 'valid' })
+    // Without it the reader would check the sort key's day, which the edit did not sign.
+    expect(check(post)).toEqual({ kind: 'invalid' })
+  })
+
+  it('is invalid when the served signedDay is not the day that was signed', () => {
+    const post = postBy(k0)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        ...post,
+        signedDay: EDIT_DAY,
+        author: unrotated,
+      }),
+    ).toEqual({ kind: 'invalid' })
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        ...post,
+        signedDay: DAY,
+        author: unrotated,
+      }),
+    ).toEqual({ kind: 'valid' })
+  })
+
+  it('picks the key interval from the edit day: an edit after a rotation is under the new key', () => {
+    const author = rotatedOn('2026-10-22')
+    const post = editedBy(k1, EDIT_DAY)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        ...post,
+        signedDay: EDIT_DAY,
+        author,
+      }),
+    ).toEqual({ kind: 'valid' })
+    // The old key signing on the edit day is refused: it was retired before then.
+    const stale = editedBy(k0, EDIT_DAY)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        ...stale,
+        signedDay: EDIT_DAY,
+        author,
+      }),
+    ).toEqual({ kind: 'invalid' })
+  })
+
+  it('is invalid when signedDay is earlier than the day the post was filed, even from the key of that day', () => {
+    // k0 was retired on 10-22; the post is filed on 10-30 but "signed" on 10-20 by k0.
+    const author = rotatedOn('2026-10-22')
+    const sortKey = 'POST#2026-10-30#00112233445566ff'
+    const signedDay = '2026-10-20'
+    const signed = signedPayload(AUTHOR, GROUP, sortKey, 0, signedDay, CIPHERTEXT)
+    const post = {
+      sortKey,
+      generation: 0,
+      ciphertext: b64(CIPHERTEXT),
+      signature: b64(sign(k0, SigningContext.Post, signed)),
+    }
+    expect(
+      checkPostSignature({ groupId: GROUP, authorUserId: AUTHOR, ...post, signedDay, author }),
+    ).toEqual({ kind: 'invalid' })
+    // An edit on the filing day itself is still fine.
+    const same = signedPayload(AUTHOR, GROUP, sortKey, 0, '2026-10-30', CIPHERTEXT)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        sortKey,
+        generation: 0,
+        ciphertext: b64(CIPHERTEXT),
+        signature: b64(sign(k1, SigningContext.Post, same)),
+        signedDay: '2026-10-30',
+        author,
+      }),
+    ).toEqual({ kind: 'valid' })
+  })
+
+  it('is invalid for a malformed signedDay, even one the author signed over', () => {
+    for (const signedDay of ['', 'yesterday', '2026-10-25T00:00:00Z']) {
+      const post = editedBy(k0, signedDay)
+      expect(
+        checkPostSignature({
+          groupId: GROUP,
+          authorUserId: AUTHOR,
+          ...post,
+          signedDay,
+          author: unrotated,
+        }),
+        signedDay,
+      ).toEqual({ kind: 'invalid' })
+    }
+  })
+
+  it('is invalid for a malformed signedDay', () => {
+    const post = editedBy(k0, EDIT_DAY)
+    for (const signedDay of ['', '2026-10-25T00:00:00Z', 'yesterday']) {
+      expect(
+        checkPostSignature({
+          groupId: GROUP,
+          authorUserId: AUTHOR,
+          ...post,
+          signedDay,
+          author: unrotated,
+        }),
+        signedDay,
+      ).toEqual({ kind: 'invalid' })
+    }
+  })
+})
+
+describe('postTimeSuspect', () => {
+  const AT = `${DAY}T10:00:00.000Z`
+  const base = { sortKey: SORT_KEY, signedDay: undefined, at: AT, editedAt: undefined }
+
+  it('a never-edited post is suspect only when at is off the sort key day', () => {
+    expect(postTimeSuspect(base)).toBe(false)
+    expect(postTimeSuspect({ ...base, at: '2026-10-21T10:00:00.000Z' })).toBe(true)
+    // A re-signed version 1 post carries a signedDay too; its at is still the sort key's day.
+    expect(postTimeSuspect({ ...base, signedDay: '2026-10-21' })).toBe(false)
+  })
+
+  it('an edited post needs editedAt on the signed day and not before at', () => {
+    const edited = { ...base, signedDay: '2026-10-25', editedAt: '2026-10-25T08:00:00.000Z' }
+    expect(postTimeSuspect(edited)).toBe(false)
+    expect(postTimeSuspect({ ...edited, editedAt: '2026-10-24T23:59:59.999Z' })).toBe(true)
+    expect(postTimeSuspect({ ...edited, at: '2026-10-21T10:00:00.000Z' })).toBe(true)
+    // Edited the same day: no signedDay needed, editedAt must not precede at.
+    expect(postTimeSuspect({ ...base, editedAt: `${DAY}T10:00:00.000Z` })).toBe(false)
+    expect(postTimeSuspect({ ...base, editedAt: `${DAY}T09:59:59.999Z` })).toBe(true)
+    expect(postTimeSuspect({ ...base, editedAt: '2026-10-25T08:00:00.000Z' })).toBe(true)
   })
 })
