@@ -116,6 +116,15 @@ describe('submitCommentEdit', () => {
     expect(s.sealCommentEdit).toHaveBeenCalledTimes(MAX_EDIT_RESEALS + 1)
   })
 
+  it('reports a refused signing day (clock_skew) as clockSkew, without retrying or resealing', async () => {
+    const s = setup(
+      vi.fn().mockRejectedValue(new ApiError(400, 'signedDay: not within tolerance', 'clock_skew')),
+    )
+    expect(await s.run()).toEqual({ ok: false, kind: 'clockSkew' })
+    expect(s.edit).toHaveBeenCalledTimes(1)
+    expect(s.sealCommentEdit).toHaveBeenCalledTimes(1)
+  })
+
   it('reports a comment that was deleted meanwhile, without retrying', async () => {
     const s = setup(vi.fn().mockRejectedValue(conflict('comment_gone')))
     expect(await s.run()).toEqual({ ok: false, kind: 'gone' })

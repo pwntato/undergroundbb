@@ -202,6 +202,15 @@ describe('submitComment', () => {
     expect((d.sealComment.mock.calls[0]![0] as { path: string }).path).toBe('0005')
   })
 
+  it('names a refused signing day (clock_skew) as its own failure, not a generic rejection', async () => {
+    const d = deps()
+    d.createComment.mockRejectedValue(
+      new ApiError(400, 'signedDay: not within tolerance', 'clock_skew'),
+    )
+    expect(await submitComment(d, input('0001'))).toEqual({ ok: false, kind: 'clockSkew' })
+    expect(d.createComment).toHaveBeenCalledTimes(1)
+  })
+
   it('names replies_full and parent_gone separately', async () => {
     const full = deps()
     full.createComment.mockRejectedValue(new ApiError(409, 'full', 'replies_full'))

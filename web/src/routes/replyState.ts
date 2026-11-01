@@ -41,6 +41,10 @@ export type ReplyEvent =
   /** The first page of the thread was loaded; `paths` are all the comments on screen. */
   | { readonly type: 'firstPageLoaded'; readonly paths: readonly string[] }
 
+/** The server refused the signing day: this device's clock is off, or the write was sealed too long ago. */
+export const CLOCK_SKEW_MESSAGE =
+  "This device's date or time looks wrong, or this was prepared too long ago. Check the date and time on this device, then try again."
+
 export const TARGET_GONE_MESSAGE =
   'The comment you were replying to is no longer here, so your reply will go in as a new comment at the bottom.'
 

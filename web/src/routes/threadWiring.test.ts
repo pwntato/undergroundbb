@@ -9,6 +9,7 @@ import {
   type ControlsState,
 } from './commentControls'
 import {
+  CLOCK_SKEW_MESSAGE,
   INITIAL_REPLY_STATE,
   nextReplyState,
   TARGET_GONE_MESSAGE,
@@ -327,6 +328,18 @@ describe('sendReply', () => {
     expect(s.sealComment).not.toHaveBeenCalled()
     expect(s.createComment).not.toHaveBeenCalled()
     expect(h.reply().error).toBe(SEND_ERRORS.notFound)
+  })
+
+  it('tells the reader their device clock looks wrong when the signing day is refused', async () => {
+    const h = harness({ draft: 'x' })
+    const s = sendHarness(
+      h,
+      vi.fn().mockRejectedValue(new ApiError(400, 'signedDay: no', 'clock_skew')),
+    )
+    await s.send()
+    expect(h.reply().error).toBe(SEND_ERRORS.clockSkew)
+    expect(h.reply().error).toBe(CLOCK_SKEW_MESSAGE)
+    expect(h.reply().draft).toBe('x')
   })
 
   it('does not reload for a failure other than a gone parent', async () => {
@@ -875,6 +888,20 @@ describe('saveEdit', () => {
     await e2.save()
     await e2.save('different words')
     expect(e2.sealCommentEdit).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the edit form and says the device clock looks wrong when the signing day is refused', async () => {
+    const h = harness()
+    const e = editHarness(
+      h,
+      vi.fn().mockRejectedValue(new ApiError(400, 'signedDay: no', 'clock_skew')),
+    )
+    e.open()
+    await e.save()
+    expect(h.controls().error).toBe(EDIT_ERRORS.clockSkew)
+    expect(h.controls().error).toBe(CLOCK_SKEW_MESSAGE)
+    expect(h.controls().mode.kind).toBe('editing')
+    expect(e.reload).not.toHaveBeenCalled()
   })
 
   it('reloads when the comment was deleted meanwhile, and the form closes with the reason kept', async () => {

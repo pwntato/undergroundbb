@@ -139,7 +139,7 @@ func TestEditPostRefusesWhatItShould(t *testing.T) {
 		{"signed for another post", cookie, pid, postEdit(t, otherPid, owner, today(), nonceOf(1), ctOf(1)), 400, `"bad_signature"`},
 		{"signed for another generation", cookie, pid, postEditAtGeneration(t, pid, owner, 1, today(), nonceOf(1), ctOf(1)), 409, `"generation_stale"`},
 		{"signed before the day the post was filed", cookie, pid, postEdit(t, pid, owner, dayBeforeFiled, nonceOf(1), ctOf(1)), 400, "signedDay: before the day the post was filed"},
-		{"signed on a far day", cookie, pid, postEdit(t, pid, owner, "2099-01-01", nonceOf(1), ctOf(1)), 400, "signedDay: not within tolerance"},
+		{"signed on a far day", cookie, pid, postEdit(t, pid, owner, "2099-01-01", nonceOf(1), ctOf(1)), 400, `"clock_skew"`},
 		{"signed on a malformed day", cookie, pid, postEdit(t, pid, owner, "yesterday", nonceOf(1), ctOf(1)), 400, "signedDay: must be a UTC date"},
 		{"the stored nonce over other text", cookie, pid, reused, 400, `"nonce_reused"`},
 		{"not a member", outsiderCookie, pid, postEdit(t, pid, owner, today(), nonceOf(1), ctOf(1)), 404, ""},

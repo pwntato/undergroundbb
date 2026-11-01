@@ -12,6 +12,7 @@
 import { ApiError } from '@/lib/api/auth'
 import type { SealedPostEdit } from '@/lib/crypto/worker-protocol'
 import type { PostControlsEvent } from './postControls'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { EditFailure } from './runEdit'
 import { submitPostEdit, type EditPostDeps } from './runEditPost'
 
@@ -36,6 +37,7 @@ export const POST_EDIT_ERRORS: Record<EditFailure, string> = {
   failed: "Couldn't load this group. Try again.",
   gone: 'This post was deleted, so it can no longer be edited.',
   busy: 'Others are changing this post at the same moment. Press Save again.',
+  clockSkew: CLOCK_SKEW_MESSAGE,
   rejected: 'The server rejected the edit.',
   ambiguous:
     "We couldn't confirm whether the edit was saved. Press Save again to send the same edit; it will not be applied twice.",

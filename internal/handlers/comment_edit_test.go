@@ -146,7 +146,7 @@ func TestEditCommentRefusesWhatItShould(t *testing.T) {
 		{"a comment that is not there", cookie, "0009", edited(signedComment(t, gid, owner, copts{path: "0009"})), 409, `"comment_gone"`},
 		{"signed for another path", cookie, "0001", edited(signedComment(t, gid, owner, copts{path: "0001", signedPath: "0002"})), 400, `"bad_signature"`},
 		{"signed for another generation", cookie, "0001", edited(signedComment(t, gid, owner, copts{path: "0001", generation: 1, signedPath: "0001"})), 409, `"generation_stale"`},
-		{"signed on a far day", cookie, "0001", edited(signedComment(t, gid, owner, copts{path: "0001", signedDay: "2020-01-01"})), 400, "signedDay: not within tolerance"},
+		{"signed on a far day", cookie, "0001", edited(signedComment(t, gid, owner, copts{path: "0001", signedDay: "2020-01-01"})), 400, `"clock_skew"`},
 		{"a nonce already used", cookie, "0001", reusedNonce, 400, `"nonce_reused"`},
 		{"not a member", outsiderCookie, "0001", edited(signedComment(t, gid, owner, copts{path: "0001"})), 404, ""},
 		{"no session", nil, "0001", edited(signedComment(t, gid, owner, copts{path: "0001"})), 401, ""},
