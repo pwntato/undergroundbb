@@ -89,6 +89,7 @@ function render(
             error: null,
             notice: null,
             ready: true,
+            readOnly: false,
             onPress: () => {},
             ...over.reactions,
           },
@@ -339,6 +340,17 @@ describe('ThreadPanel reactions (#46)', () => {
     expect(rows[2]).toContain('Laughing, 1 reaction')
   })
 
+  it('disables every reaction button, and keeps the counts, when the thread is read-only', () => {
+    const html = render([comment(), comment({ path: '0002' })], {
+      reactions: { reactions: [rx('0002', 'me', 6)], readOnly: true },
+    })
+    const rows = html.split('role="group"').slice(1)
+    expect(rows).toHaveLength(3)
+    for (const row of rows) expect(row).toContain(' disabled=""')
+    expect(rows[2]).toContain('Celebrate, 1 reaction, yours')
+    expect(render([comment()], { reactions: {} })).not.toContain(' disabled=""')
+  })
+
   it("presses the reader's own and disables only the target being saved", () => {
     const html = render([comment(), comment({ path: '0002' })], {
       reactions: { reactions: [rx('0002', 'me', 6)], reacting: ['0002'] },
@@ -389,6 +401,7 @@ describe('ThreadPanel reports reaction presses', () => {
         error: null,
         notice: null,
         ready: true,
+        readOnly: false,
         onPress: (target, index) => calls.push([target, index]),
       },
     })

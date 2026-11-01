@@ -256,7 +256,9 @@ export interface ReactDeps {
  * none) or takes it back (it is the same one). Never throws.
  */
 export async function toggleReaction(
-  io: Pick<ThreadIO, 'dispatch' | 'onColdKeys' | 'liveReply'> & { readonly reload: () => void },
+  io: Pick<ThreadIO, 'dispatch' | 'dispatchControls' | 'onColdKeys' | 'liveReply'> & {
+    readonly reload: () => void
+  },
   deps: ReactDeps,
   input: {
     readonly groupId: string
@@ -297,6 +299,11 @@ export async function toggleReaction(
       // to disappear), then show the thread as it is now.
       io.dispatch({ type: 'reactionTargetGone', target, message: REACTION_ERRORS.parentGone })
       io.reload()
+    } else if (kind === 'notFound') {
+      // The post is gone (the server answers 404 on its reactions): say so under the
+      // button, and stop offering to write, as a refused reply or edit does.
+      fail(REACTION_ERRORS.notFound)
+      io.dispatchControls({ type: 'madeReadOnly', message: null })
     } else {
       fail(REACTION_ERRORS[kind])
     }

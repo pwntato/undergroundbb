@@ -293,6 +293,7 @@ function Thread({
     error: state.reactionError,
     notice: state.notice,
     ready: state.loaded,
+    readOnly: controlsState.readOnly,
     onPress: handleReact,
   }
 

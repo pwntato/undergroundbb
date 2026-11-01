@@ -45,7 +45,7 @@ export type ControlsEvent =
   | { readonly type: 'started' }
   | { readonly type: 'failed'; readonly message: string }
   | { readonly type: 'finished' }
-  | { readonly type: 'madeReadOnly'; readonly message: string }
+  | { readonly type: 'madeReadOnly'; readonly message: string | null }
   /** The first page of the thread was loaded; `livePaths` are its comments that are not deleted. */
   | { readonly type: 'firstPageLoaded'; readonly livePaths: readonly string[] }
 
