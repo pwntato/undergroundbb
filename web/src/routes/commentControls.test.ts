@@ -171,6 +171,23 @@ describe('nextControlsState', () => {
     expect(nextControlsState(typedAfterError, { type: 'firstPageFailed' })).toBe(typedAfterError)
   })
 
+  it.each<[string, ControlsEvent]>([
+    ['editOpened', { type: 'editOpened', path: '0002', text: 'b' }],
+    ['draftEdited', { type: 'draftEdited', draft: 'more' }],
+    ['deleteAsked', { type: 'deleteAsked', path: '0002' }],
+    ['closed', { type: 'closed' }],
+    ['started', { type: 'started' }],
+    ['finished', { type: 'finished' }],
+    ['madeReadOnly', { type: 'madeReadOnly', message: null }],
+  ])('%s clears the gone mark together with the error', (_name, event) => {
+    const gone = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+    ])
+    expect(gone).toMatchObject({ gone: true, error: 'it was deleted' })
+    expect(nextControlsState(gone, event)).toMatchObject({ gone: false, error: null })
+  })
+
   it('does not close a form during a send, since the answer is still coming', () => {
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
     expect(nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [] })).toBe(busy)

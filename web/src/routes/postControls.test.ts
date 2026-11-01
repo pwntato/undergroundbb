@@ -79,6 +79,18 @@ describe('nextPostControlsState', () => {
     expect(nextPostControlsState(busy, { type: 'firstPageLoaded', liveKeys: [] })).toBe(busy)
   })
 
+  it.each<[string, PostControlsEvent]>([
+    ['editOpened', open('P2')],
+    ['deleteAsked', { type: 'deleteAsked', sortKey: 'P2' }],
+    ['closed', { type: 'closed' }],
+    ['started', { type: 'started' }],
+    ['finished', { type: 'finished' }],
+  ])('%s clears the gone mark together with the error', (_name, event) => {
+    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted', gone: true }])
+    expect(gone).toMatchObject({ gone: true, error: 'it was deleted' })
+    expect(nextPostControlsState(gone, event)).toMatchObject({ gone: false, error: null })
+  })
+
   it('keeps a form that holds no error when the first page fails: the reload had another cause', () => {
     const editing = run([open('P1')])
     expect(nextPostControlsState(editing, { type: 'firstPageFailed' })).toBe(editing)
