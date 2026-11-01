@@ -62,6 +62,7 @@ export function nextControlsState(state: ControlsState, event: ControlsEvent): C
         ...state,
         mode: { kind: 'editing', path: event.path, draft: event.text, original: event.text },
         error: null,
+        gone: false,
       }
     case 'draftEdited':
       if (state.busy || state.mode.kind !== 'editing') return state

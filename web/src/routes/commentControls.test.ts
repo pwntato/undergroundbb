@@ -152,6 +152,16 @@ describe('nextControlsState', () => {
       { type: 'draftEdited', draft: 'more' },
     ])
     expect(nextControlsState(goneThenTyped, { type: 'firstPageFailed' })).toBe(goneThenTyped)
+    // Opening another edit clears the mark: after a gone failure whose reload worked and
+    // closed the form, a new form must not be closed by a reload it had nothing to do with.
+    const reopened = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'firstPageLoaded', livePaths: ['0002'] },
+      { type: 'editOpened', path: '0002', text: 'b' },
+    ])
+    expect(reopened).toMatchObject({ mode: { kind: 'editing', path: '0002' }, error: null })
+    expect(nextControlsState(reopened, { type: 'firstPageFailed' })).toBe(reopened)
     // Typing clears an older error, so a draft is never closed because of a stale one.
     const typedAfterError = run([
       { type: 'editOpened', path: '0001', text: 'a' },

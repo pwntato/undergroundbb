@@ -66,6 +66,7 @@ export function nextPostControlsState(
         ...state,
         mode: { kind: 'editing', sortKey: event.sortKey, title: event.title, body: event.body },
         error: null,
+        gone: false,
       }
     case 'deleteAsked':
       if (state.busy) return state

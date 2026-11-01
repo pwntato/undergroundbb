@@ -84,6 +84,16 @@ describe('nextPostControlsState', () => {
     expect(nextPostControlsState(editing, { type: 'firstPageFailed' })).toBe(editing)
     const asking = run([{ type: 'deleteAsked', sortKey: 'P1' }])
     expect(nextPostControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // Opening another edit clears the mark: after a gone failure whose reload worked and
+    // closed the form, a new form must not be closed by a reload it had nothing to do with.
+    const reopened = run([
+      open('P1'),
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'firstPageLoaded', liveKeys: [] },
+      open('P2'),
+    ])
+    expect(reopened).toMatchObject({ mode: { kind: 'editing', sortKey: 'P2' }, error: null })
+    expect(nextPostControlsState(reopened, { type: 'firstPageFailed' })).toBe(reopened)
     // A later failure that is not "gone" replaces the mark.
     const goneThenOther = run([
       open('P1'),
