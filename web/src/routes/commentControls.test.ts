@@ -108,7 +108,7 @@ describe('nextControlsState', () => {
   it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
     const gone = run([
       { type: 'editOpened', path: '0001', text: 'a' },
-      { type: 'failed', message: 'it was deleted' },
+      { type: 'failed', message: 'it was deleted', gone: true },
     ])
     expect(nextControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
       mode: { kind: 'idle' },
@@ -116,7 +116,7 @@ describe('nextControlsState', () => {
     })
     const asking = run([
       { type: 'deleteAsked', path: '0001' },
-      { type: 'failed', message: 'it was deleted' },
+      { type: 'failed', message: 'it was deleted', gone: true },
     ])
     expect(nextControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({ kind: 'idle' })
     const idle = run([])
@@ -133,6 +133,12 @@ describe('nextControlsState', () => {
     expect(nextControlsState(typing, { type: 'firstPageFailed' })).toBe(typing)
     const asking = run([{ type: 'deleteAsked', path: '0001' }])
     expect(nextControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // An error that does not say "gone" (a failed save, say) does not close a form either.
+    const failedSave = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: "Couldn't save the comment. Try again." },
+    ])
+    expect(nextControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
     // Typing clears an older error, so a draft is never closed because of a stale one.
     const typedAfterError = run([
       { type: 'editOpened', path: '0001', text: 'a' },

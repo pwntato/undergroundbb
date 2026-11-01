@@ -84,17 +84,20 @@ describe('nextPostControlsState', () => {
     expect(nextPostControlsState(editing, { type: 'firstPageFailed' })).toBe(editing)
     const asking = run([{ type: 'deleteAsked', sortKey: 'P1' }])
     expect(nextPostControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // An error that does not say "gone" (a failed save, say) does not close a form either.
+    const failedSave = run([open('P1'), { type: 'failed', message: "Couldn't save. Try again." }])
+    expect(nextPostControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
   })
 
   it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
-    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted' }])
+    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted', gone: true }])
     expect(nextPostControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
       mode: { kind: 'idle' },
       error: 'it was deleted',
     })
     const asking = run([
       { type: 'deleteAsked', sortKey: 'P1' },
-      { type: 'failed', message: 'it was deleted' },
+      { type: 'failed', message: 'it was deleted', gone: true },
     ])
     expect(nextPostControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({
       kind: 'idle',
