@@ -263,6 +263,22 @@ describe('checkPostSignature on an edited post (signedDay, #45)', () => {
     ).toEqual({ kind: 'invalid' })
   })
 
+  it('is invalid for a malformed signedDay, even one the author signed over', () => {
+    for (const signedDay of ['', 'yesterday', '2026-10-25T00:00:00Z']) {
+      const post = editedBy(k0, signedDay)
+      expect(
+        checkPostSignature({
+          groupId: GROUP,
+          authorUserId: AUTHOR,
+          ...post,
+          signedDay,
+          author: unrotated,
+        }),
+        signedDay,
+      ).toEqual({ kind: 'invalid' })
+    }
+  })
+
   it('is invalid for a malformed signedDay', () => {
     const post = editedBy(k0, EDIT_DAY)
     for (const signedDay of ['', '2026-10-25T00:00:00Z', 'yesterday']) {
