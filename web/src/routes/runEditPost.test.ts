@@ -115,6 +115,14 @@ describe('submitPostEdit', () => {
     expect(s.getGroup).toHaveBeenCalledTimes(2)
   })
 
+  it('reports a refused signing day (clock_skew) as clockSkew, without retrying or resealing', async () => {
+    const s = setup(
+      vi.fn().mockRejectedValue(new ApiError(400, 'signedDay: not within tolerance', 'clock_skew')),
+    )
+    expect(await s.run()).toEqual({ ok: false, kind: 'clockSkew' })
+    expect(s.edit).toHaveBeenCalledTimes(1)
+  })
+
   it('reports post_gone as gone, without retrying', async () => {
     const s = setup(vi.fn().mockRejectedValue(conflict('post_gone')))
     expect(await s.run()).toEqual({ ok: false, kind: 'gone' })

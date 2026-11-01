@@ -15,6 +15,7 @@ import {
   saveEditPost,
   type PendingPostEdit,
 } from './postWiring'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { EditPostDeps } from './runEditPost'
 
 const SORT_KEY = 'POST#2026-10-29#00112233445566ff'
@@ -153,6 +154,36 @@ describe('saveEditPost', () => {
     expect(h.controls().error).toBe(POST_EDIT_ERRORS.gone)
     h.io.dispatchControls({ type: 'firstPageLoaded', liveKeys: [] })
     expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, error: POST_EDIT_ERRORS.gone })
+  })
+
+  it('keeps the form and says the device clock looks wrong when the signing day is refused', async () => {
+    const h = harness()
+    const e = editHarness(
+      h,
+      vi.fn().mockRejectedValue(new ApiError(400, 'signedDay: no', 'clock_skew')),
+    )
+    e.open()
+    await e.save()
+    expect(h.controls().error).toBe(POST_EDIT_ERRORS.clockSkew)
+    expect(h.controls().error).toBe(CLOCK_SKEW_MESSAGE)
+    expect(h.controls().mode.kind).toBe('editing')
+    expect(h.reload).not.toHaveBeenCalled()
+  })
+
+  it('forgets an edit resend refused as clock_skew, so the next Save seals fresh', async () => {
+    const h = harness()
+    const edit = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    edit.mockRejectedValueOnce(new ApiError(400, 'signedDay: no', 'clock_skew'))
+    edit.mockResolvedValue({ sortKey: SORT_KEY })
+    const e = editHarness(h, edit)
+    e.open()
+    await e.save()
+    expect(e.pending.current).not.toBeNull()
+    await e.save()
+    expect(h.controls().error).toBe(CLOCK_SKEW_MESSAGE)
+    expect(e.pending.current).toBeNull()
+    await e.save()
+    expect(e.sealPostEdit).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the form and the draft on a rejection, with the server message', async () => {

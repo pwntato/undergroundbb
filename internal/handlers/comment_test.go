@@ -263,7 +263,7 @@ func TestCreateCommentRefusesWhatItShould(t *testing.T) {
 		}(), http.StatusBadRequest, "bad_signature"},
 		{"signed by someone else", cookie, pid, signedComment(t, gid, owner, copts{signer: other}), http.StatusBadRequest, "bad_signature"},
 		{"wrong generation", cookie, pid, signedComment(t, gid, owner, copts{generation: 1}), http.StatusConflict, "generation_stale"},
-		{"signing day too old", cookie, pid, signedComment(t, gid, owner, copts{signedDay: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}), http.StatusBadRequest, ""},
+		{"signing day too old", cookie, pid, signedComment(t, gid, owner, copts{signedDay: time.Now().UTC().AddDate(0, 0, -3).Format("2006-01-02")}), http.StatusBadRequest, "clock_skew"},
 		{"signing day not a date", cookie, pid, signedComment(t, gid, owner, copts{signedDay: "yesterday"}), http.StatusBadRequest, ""},
 		{"ciphertext too short", cookie, pid, short, http.StatusBadRequest, ""},
 		{"ciphertext too long", cookie, pid, signedComment(t, gid, owner, copts{ctLen: h.commentCiphertextLimit() + 1}), http.StatusBadRequest, ""},

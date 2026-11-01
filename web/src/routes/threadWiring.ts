@@ -19,7 +19,7 @@ import { ApiError } from '@/lib/api/auth'
 import type { PutReactionRequest } from '@/lib/api/groups'
 import type { ControlsEvent } from './commentControls'
 import type { SealedComment, SealedReaction } from '@/lib/crypto/worker-protocol'
-import { TARGET_GONE_MESSAGE, type ReplyEvent } from './replyState'
+import { CLOCK_SKEW_MESSAGE, TARGET_GONE_MESSAGE, type ReplyEvent } from './replyState'
 import {
   attachParent,
   guessPath,
@@ -91,6 +91,7 @@ export const SEND_ERRORS: Record<Exclude<SubmitResult, { ok: true }>['kind'], st
   unreadable:
     "Couldn't open this group's key, so the comment was not sent. Reload the page and try again.",
   repliesFull: "This comment can't take any more replies.",
+  clockSkew: CLOCK_SKEW_MESSAGE,
   parentGone: TARGET_GONE_MESSAGE,
   busy: 'Others are replying at the same moment. Press Send again.',
   rejected: 'The server rejected the comment.',
@@ -381,6 +382,7 @@ export const EDIT_ERRORS: Record<EditFailure, string> = {
   failed: CONTEXT_ERRORS.failed,
   gone: 'This comment was deleted, so it can no longer be edited.',
   busy: 'Others are changing this comment at the same moment. Press Save again.',
+  clockSkew: CLOCK_SKEW_MESSAGE,
   rejected: 'The server rejected the edit.',
   ambiguous:
     "We couldn't confirm whether the edit was saved. Press Save again to send the same edit; it will not be applied twice.",

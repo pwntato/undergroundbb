@@ -169,7 +169,7 @@ func (h *Handler) editComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(signedDay); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "signedDay: not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "signedDay: not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	commentGeneration := current

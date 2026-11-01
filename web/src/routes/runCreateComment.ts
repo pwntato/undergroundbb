@@ -147,6 +147,8 @@ export type SubmitResult =
         | 'unreadable'
         // This comment has as many replies as can be numbered.
         | 'repliesFull'
+        // The server refused the signing day: this device's clock is off.
+        | 'clockSkew'
         // The comment being replied to was deleted.
         | 'parentGone'
         // Other writers kept taking the number; the retries ran out.
@@ -253,6 +255,8 @@ function failure(err: unknown): Extract<SubmitResult, { ok: false }> {
       return { ok: false, kind: 'dormant' }
     case 'replies_full':
       return { ok: false, kind: 'repliesFull' }
+    case 'clock_skew':
+      return { ok: false, kind: 'clockSkew' }
     case 'parent_gone':
       return { ok: false, kind: 'parentGone' }
   }

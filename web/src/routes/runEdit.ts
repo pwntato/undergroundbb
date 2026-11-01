@@ -34,6 +34,8 @@ export type EditFailure =
   | 'gone'
   /** Other writers kept colliding with this one, or the key kept moving. */
   | 'busy'
+  /** The server refused the signing day: this device's clock is off. */
+  | 'clockSkew'
   | 'rejected'
   /** No answer: the edit may have landed. Send `sealed` again unchanged. */
   | 'ambiguous'
@@ -72,6 +74,7 @@ export function classifyEditError(err: unknown, goneCode: string): Step | 'ambig
     }
   }
   if (err.status === 400 && err.code === 'nonce_reused') return 'reseal'
+  if (err.status === 400 && err.code === 'clock_skew') return { fail: 'clockSkew' }
   return { fail: 'rejected', message: err.message }
 }
 
