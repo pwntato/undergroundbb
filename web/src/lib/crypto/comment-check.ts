@@ -9,7 +9,11 @@
 //     comment moved under another post fails to OPEN, which says nothing about
 //     its author (the nonce is not signed).
 //   - The time: the decrypted `at` is whatever the author signed, so a comment is
-//     suspect when it does not fall on the signed day.
+//     suspect when it does not fall on the signed day. An edit (#45) is signed
+//     on its own day, so the row's signed day is the EDIT's and the original
+//     day is not kept anywhere: an edited comment (version 2, comment.ts) is
+//     suspect when its `editedAt` is off the signed day or earlier than `at`
+//     (commentTimeSuspect).
 //
 // Pure and never throws.
 
@@ -21,6 +25,16 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/
 /** Whether a decrypted RFC 3339 `at` falls on the comment's signed UTC day. */
 export function atOnSignedDay(signedDay: string, at: string): boolean {
   return DAY.test(signedDay) && at.slice(0, 10) === signedDay
+}
+
+/** Whether a comment's decrypted times are suspect against the day it was signed. */
+export function commentTimeSuspect(input: {
+  readonly signedDay: string
+  readonly at: string
+  readonly editedAt: string | undefined
+}): boolean {
+  if (input.editedAt === undefined) return !atOnSignedDay(input.signedDay, input.at)
+  return !atOnSignedDay(input.signedDay, input.editedAt) || input.editedAt < input.at
 }
 
 export function checkCommentSignature(input: {

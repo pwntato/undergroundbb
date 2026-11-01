@@ -3,13 +3,17 @@
 //
 //   - The signature: it covers the author, group, sort key, generation, day and
 //     ciphertext (crypto.SignedPayload), and is checked under the author's
-//     signing keys for the sort key's day: their current key from the day it
+//     signing keys for the day it was signed: the sort key's day, or for an
+//     edited post (#45) the `signedDay` the row carries: their current key from the day it
 //     was introduced, and each superseded key up to the rotation that ended it
 //     (both on a rotation day). It does not cover the nonce, so a post that
 //     fails to OPEN says nothing about its author (see openPosts), but one
 //     whose signature fails is not by the key set it claims.
 //   - The time: the decrypted `at` is whatever the author signed, so a post is
-//     suspect when it does not fall on the sort key's UTC day.
+//     suspect when it does not fall on the sort key's UTC day. An edited post
+//     (version 2, post.ts) keeps its original `at` and adds `editedAt`, which
+//     must fall on the day the edit was signed and not before `at`
+//     (postTimeSuspect).
 //   - The author's keys are what the server serves, so the caller anchors them
 //     to a key it already trusts before calling this (routes/runListPosts);
 //     a leaked superseded key can sign a post dated anywhere in that key's
@@ -60,6 +64,26 @@ export function groupOfPostId(postId: string): string | undefined {
   return POST_ID.exec(postId)?.[1]
 }
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Whether a post's decrypted times are suspect: `at` off the sort key's day, or
+ * an `editedAt` off the day the edition was signed (`signedDay`, else the sort
+ * key's) or earlier than `at`. Both times have one fixed format (post.ts), so
+ * they compare as strings.
+ */
+export function postTimeSuspect(input: {
+  readonly sortKey: string
+  readonly signedDay: string | undefined
+  readonly at: string
+  readonly editedAt: string | undefined
+}): boolean {
+  if (!atOnSortKeyDay(input.sortKey, input.at)) return true
+  if (input.editedAt === undefined) return false
+  const day = input.signedDay ?? sortKeyDay(input.sortKey)
+  return input.editedAt.slice(0, 10) !== day || input.editedAt < input.at
+}
+
 /** Whether a decrypted RFC 3339 `at` falls on the sort key's UTC day. */
 export function atOnSortKeyDay(sortKey: string, at: string): boolean {
   const day = sortKeyDay(sortKey)
@@ -73,12 +97,16 @@ export function checkPostSignature(input: {
   readonly generation: number
   readonly ciphertext: string
   readonly signature: string
+  /** The day an edited post was signed on, as the row serves it; absent for one never edited. */
+  readonly signedDay?: string | undefined
   /** Absent until the author's keys have been read and anchored. */
   readonly author: AuthorKeys | undefined
 }): SignatureVerdict {
-  const day = sortKeyDay(input.sortKey)
-  if (day === undefined) return { kind: 'invalid' }
-  return checkSignedItem({ ...input, day, context: SigningContext.Post })
+  const { signedDay, ...rest } = input
+  if (sortKeyDay(input.sortKey) === undefined) return { kind: 'invalid' }
+  if (signedDay !== undefined && !DAY.test(signedDay)) return { kind: 'invalid' }
+  const day = signedDay ?? sortKeyDay(input.sortKey)!
+  return checkSignedItem({ ...rest, day, context: SigningContext.Post })
 }
 
 /**
