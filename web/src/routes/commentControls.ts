@@ -83,3 +83,11 @@ export function nextControlsState(state: ControlsState, event: ControlsEvent): C
       return { ...state, mode: { kind: 'idle' } }
   }
 }
+
+/**
+ * Whether the reply box is offered: not when the thread itself failed as "not
+ * found", and not once a write showed the post is gone for writing.
+ */
+export function replyOffered(failure: string | null, readOnly: boolean): boolean {
+  return failure !== 'notFound' && !readOnly
+}

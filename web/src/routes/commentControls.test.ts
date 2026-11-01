@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   INITIAL_CONTROLS_STATE,
   nextControlsState,
+  replyOffered,
   type ControlsEvent,
   type ControlsState,
 } from './commentControls'
@@ -107,5 +108,14 @@ describe('nextControlsState', () => {
   it('does not close a form during a send, since the answer is still coming', () => {
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
     expect(nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [] })).toBe(busy)
+  })
+})
+
+describe('replyOffered', () => {
+  it('offers the reply box unless the thread was not found or turned read-only', () => {
+    expect(replyOffered(null, false)).toBe(true)
+    expect(replyOffered('failed', false)).toBe(true)
+    expect(replyOffered('notFound', false)).toBe(false)
+    expect(replyOffered(null, true)).toBe(false)
   })
 })

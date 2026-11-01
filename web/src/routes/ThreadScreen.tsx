@@ -35,7 +35,7 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
-import { INITIAL_CONTROLS_STATE, nextControlsState } from './commentControls'
+import { INITIAL_CONTROLS_STATE, nextControlsState, replyOffered } from './commentControls'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
@@ -372,7 +372,7 @@ function Thread({
       comments={state.comments}
       loading={state.loading}
       error={state.failure === null ? null : PAGE_ERRORS[state.failure]}
-      reply={state.failure === 'notFound' || controlsState.readOnly ? undefined : reply}
+      reply={replyOffered(state.failure, controlsState.readOnly) ? reply : undefined}
       controls={state.failure === 'notFound' ? undefined : controls}
       reactions={state.failure === 'notFound' ? undefined : reactions}
       hasMore={state.cursor !== undefined}

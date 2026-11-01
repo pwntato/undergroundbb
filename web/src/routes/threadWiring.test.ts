@@ -958,3 +958,39 @@ describe('confirmDelete', () => {
     expect(h2.controls().error).toBe(DELETE_ERRORS.authRequired)
   })
 })
+
+describe('saveEdit resend is per comment', () => {
+  it('does not reuse a kept seal for the same text on another comment', async () => {
+    const h = harness()
+    const put = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    put.mockResolvedValue({ path: 'ok' })
+    const e = editHarness(h, put)
+    e.open()
+    await e.save()
+    expect(e.pending.current).not.toBeNull()
+    await saveEdit(
+      { ...h.io, reload: e.reload },
+      {
+        edit: {
+          userId: 'u1',
+          context: {
+            getGroup: vi
+              .fn()
+              .mockResolvedValue({
+                groupId: 'g',
+                role: 'member',
+                generation: 0,
+                wrappedGroupKey: WRAPPED,
+              }),
+            getChain: vi.fn(),
+          },
+          sealCommentEdit: e.sealCommentEdit,
+          editComment: put,
+        } as unknown as EditDeps,
+        pending: e.pending,
+      },
+      { groupId: 'g', postId: POST, path: '0002', text: 'new', at: '2026-10-29T00:00:00.000Z' },
+    )
+    expect(e.sealCommentEdit).toHaveBeenCalledTimes(2)
+  })
+})
