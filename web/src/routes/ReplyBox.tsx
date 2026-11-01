@@ -20,6 +20,8 @@ export function ReplyBox({
   sending,
   error,
   autoFocus,
+  submitLabel,
+  unchanged,
   onChange,
   onSubmit,
   onCancel,
@@ -34,6 +36,10 @@ export function ReplyBox({
   readonly sending: boolean
   readonly error: string | null
   readonly autoFocus?: boolean
+  /** The send button's label; "Send" when absent. */
+  readonly submitLabel?: string | undefined
+  /** True when the text is what it already was, e.g. an edit nobody has changed: nothing to send. */
+  readonly unchanged?: boolean | undefined
   readonly onChange: (value: string) => void
   readonly onSubmit: () => void
   /** Shown for an inline box; the bottom box has nothing to close. */
@@ -46,7 +52,7 @@ export function ReplyBox({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (problem === null && !sending) onSubmit()
+    if (problem === null && !sending && unchanged !== true) onSubmit()
   }
 
   return (
@@ -77,8 +83,8 @@ export function ReplyBox({
       </p>
       {shown !== null && <p className="text-sm text-destructive">{COMMENT_PROBLEMS[shown]}</p>}
       <div className="flex gap-2">
-        <Button type="submit" disabled={sending || problem !== null}>
-          {sending ? 'Sending…' : 'Send'}
+        <Button type="submit" disabled={sending || problem !== null || unchanged === true}>
+          {sending ? 'Sending…' : (submitLabel ?? 'Send')}
         </Button>
         {onCancel !== undefined && (
           <Button type="button" variant="outline" disabled={sending} onClick={onCancel}>

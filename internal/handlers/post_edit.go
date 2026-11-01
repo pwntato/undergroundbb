@@ -147,6 +147,15 @@ func (h *Handler) editPost(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "nonce: an edit must be sealed under a new nonce", "nonce_reused")
 		return
 	}
+	// Readers refuse an edit signed before the day the post was filed (a retired
+	// key could otherwise sign an earlier day for a later post), so refuse it
+	// here: an honest client on a slow clock gets a clear answer instead of a
+	// stored edit every reader shows as an invalid signature. The client signs
+	// over the later of today and the filing day.
+	if req.SignedDay < postSortKey[len("POST#"):len("POST#")+len("2006-01-02")] {
+		WriteError(w, http.StatusBadRequest, "signedDay: before the day the post was filed")
+		return
+	}
 	if skew := time.Since(signedDay); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
 		WriteError(w, http.StatusBadRequest, "signedDay: not within tolerance of the current UTC day")
 		return

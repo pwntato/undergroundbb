@@ -13,7 +13,9 @@ import { useLocation, useParams } from 'react-router'
 import { getPublicConfig } from '@/lib/api/config'
 import {
   createComment,
+  deleteComment,
   deleteReaction,
+  editComment,
   getGroup,
   getKeychain,
   getThread,
@@ -26,12 +28,14 @@ import {
   openComments,
   openReactions,
   sealComment,
+  sealCommentEdit,
   sealReaction,
 } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
+import { INITIAL_CONTROLS_STATE, nextControlsState, replyOffered } from './commentControls'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
@@ -39,13 +43,26 @@ import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
 import { makeAuthorResolver } from './runListPosts'
-import { loadThreadPage, type LoadThreadDeps, type ThreadPageResult } from './runLoadThread'
-import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
+import {
+  isDeletedComment,
+  loadThreadPage,
+  type LoadThreadDeps,
+  type ThreadPageResult,
+} from './runLoadThread'
+import {
+  ThreadPanel,
+  type ThreadControls,
+  type ThreadReactions,
+  type ThreadReply,
+} from './ThreadPanel'
 import { canRetryFailure, INITIAL_THREAD_STATE, nextThreadState } from './threadState'
 import {
+  confirmDelete,
   loadPageInto,
+  saveEdit,
   sendReply,
   toggleReaction,
+  type PendingEdit,
   type PendingReply,
   type SavedReply,
   type ThreadIO,
@@ -165,11 +182,17 @@ function Thread({
       ? INITIAL_REPLY_STATE
       : { ...INITIAL_REPLY_STATE, replyTo: initialReply.replyTo, draft: initialReply.draft },
   )
+  const [controlsState, dispatchControls] = useReducer(nextControlsState, INITIAL_CONTROLS_STATE)
+  // Whether the reader is an admin of the group, who may delete anyone's comment. The
+  // server decides; this only decides whether to offer the button.
+  const [isAdmin, setIsAdmin] = useState(false)
   const [maxBytes, setMaxBytes] = useState(DEFAULT_MAX_COMMENT_BYTES)
   // Bumped when the thread starts over, so a page still in flight is dropped.
   const epoch = useRef(0)
   // The comment a send left unanswered; sent again unchanged while the box still matches.
   const pending = useRef<PendingReply | null>(null)
+  // Likewise an edit a send left unanswered.
+  const pendingEdit = useRef<PendingEdit | null>(null)
   // What the reply box holds right now, for a password step asked for by a page load.
   const replyNow = useRef(replyState)
   useEffect(() => {
@@ -179,6 +202,7 @@ function Thread({
     () => ({
       dispatch,
       dispatchReply,
+      dispatchControls,
       onColdKeys,
       liveReply: () =>
         replyNow.current.draft === ''
@@ -220,6 +244,20 @@ function Thread({
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    void getGroup(groupId)
+      .then((g) => {
+        if (!cancelled) setIsAdmin(g.role === 'admin')
+      })
+      .catch(() => {
+        // No Delete for others' comments; the server enforces who may delete regardless.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [groupId])
+
   const handleSend = () => {
     void sendReply(
       { ...io, reload },
@@ -258,6 +296,51 @@ function Thread({
     onPress: handleReact,
   }
 
+  const handleSave = () => {
+    const mode = controlsState.mode
+    if (mode.kind !== 'editing') return
+    const target = state.comments.find((c) => c.path === mode.path)
+    if (target === undefined || isDeletedComment(target) || target.content.kind !== 'opened') return
+    void saveEdit(
+      { ...io, reload },
+      {
+        edit: { userId, context: reader.deps, sealCommentEdit, editComment },
+        pending: pendingEdit,
+      },
+      { groupId, postId, path: mode.path, text: mode.draft, at: target.content.at },
+    )
+  }
+
+  const handleDeleteConfirm = () => {
+    const mode = controlsState.mode
+    if (mode.kind !== 'confirmDelete') return
+    void confirmDelete({ ...io, reload }, { deleteComment }, { postId, path: mode.path })
+  }
+
+  const controls: ThreadControls = {
+    selfUserId: userId,
+    isAdmin,
+    readOnly: controlsState.readOnly,
+    mode: controlsState.mode,
+    busy: controlsState.busy,
+    error: controlsState.error,
+    maxBytes,
+    onEditOpen: (path, text) => {
+      dispatchControls({ type: 'editOpened', path, text })
+    },
+    onDraft: (draft) => {
+      dispatchControls({ type: 'draftEdited', draft })
+    },
+    onSave: handleSave,
+    onDeleteAsk: (path) => {
+      dispatchControls({ type: 'deleteAsked', path })
+    },
+    onDeleteConfirm: handleDeleteConfirm,
+    onClose: () => {
+      dispatchControls({ type: 'closed' })
+    },
+  }
+
   const reply: ThreadReply = {
     replyTo: replyState.replyTo,
     draft: replyState.draft,
@@ -289,7 +372,8 @@ function Thread({
       comments={state.comments}
       loading={state.loading}
       error={state.failure === null ? null : PAGE_ERRORS[state.failure]}
-      reply={state.failure === 'notFound' ? undefined : reply}
+      reply={replyOffered(state.failure, controlsState.readOnly) ? reply : undefined}
+      controls={state.failure === 'notFound' ? undefined : controls}
       reactions={state.failure === 'notFound' ? undefined : reactions}
       hasMore={state.cursor !== undefined}
       onRetry={

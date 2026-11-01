@@ -13,6 +13,7 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import type { ControlMode } from './commentControls'
 import { ReactionBar } from './ReactionBar'
 import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
@@ -24,7 +25,13 @@ import {
   commentTimeLabel,
   DELETED_COMMENT_TEXT,
 } from './threadNotes'
-import { isDeletedComment, POST_TARGET, type ReactionView, type ThreadEntry } from './runLoadThread'
+import {
+  isDeletedComment,
+  POST_TARGET,
+  type CommentView,
+  type ReactionView,
+  type ThreadEntry,
+} from './runLoadThread'
 
 /** Indent steps drawn; deeper replies share the last one. */
 const MAX_INDENT = 4
@@ -63,6 +70,32 @@ export interface ThreadReply {
   readonly onSend: () => void
 }
 
+/** The advisory under an edit or a delete: deletion and editing cannot recall what was read. */
+export const COPY_ADVISORY = 'Any member may have kept a copy of the original.'
+
+/** The question asked before a delete. */
+export const DELETE_QUESTION = 'Delete this comment? Replies stay.'
+
+/** What Edit and Delete on a comment need from the screen. */
+export interface ThreadControls {
+  /** The reader, whose own comments get Edit and Delete. */
+  readonly selfUserId: string
+  /** An admin may delete anyone's comment. */
+  readonly isAdmin: boolean
+  /** The post is gone for writing: Edit is hidden, Delete stays. */
+  readonly readOnly: boolean
+  readonly mode: ControlMode
+  readonly busy: boolean
+  readonly error: string | null
+  readonly maxBytes: number
+  readonly onEditOpen: (path: string, text: string) => void
+  readonly onDraft: (draft: string) => void
+  readonly onSave: () => void
+  readonly onDeleteAsk: (path: string) => void
+  readonly onDeleteConfirm: () => void
+  readonly onClose: () => void
+}
+
 /** What the reaction buttons need from the screen; absent where reacting makes no sense. */
 export interface ThreadReactions {
   readonly reactions: readonly ReactionView[]
@@ -79,6 +112,101 @@ export interface ThreadReactions {
   readonly onPress: (target: string, index: number) => void
 }
 
+/** Edit and Delete for one comment, or the form either of them opened (#45). */
+export function CommentControls({
+  comment,
+  controls,
+}: {
+  readonly comment: CommentView
+  readonly controls: ThreadControls
+}) {
+  const mine = comment.authorUserId === controls.selfUserId
+  // An unreadable comment has no text to start from and no original time to keep.
+  const opened = comment.content.kind === 'opened' ? comment.content : null
+  const canEdit = mine && !controls.readOnly && opened !== null
+  const canDelete = mine || controls.isAdmin
+  if (!canEdit && !canDelete) return null
+  const { mode, busy, error } = controls
+  const style = { marginLeft: indent(comment.depth) }
+  if (mode.kind === 'editing' && mode.path === comment.path) {
+    return (
+      <div style={style}>
+        <ReplyBox
+          id={`edit-${comment.path}`}
+          label="Edit your comment"
+          hint={COPY_ADVISORY}
+          value={mode.draft}
+          maxBytes={controls.maxBytes}
+          sending={busy}
+          error={error}
+          autoFocus
+          submitLabel="Save"
+          unchanged={mode.draft === mode.original}
+          onChange={controls.onDraft}
+          onSubmit={controls.onSave}
+          onCancel={controls.onClose}
+        />
+      </div>
+    )
+  }
+  if (mode.kind === 'confirmDelete' && mode.path === comment.path) {
+    return (
+      <div style={style} className="flex flex-col gap-1.5">
+        {error !== null && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <p className="text-sm font-medium">{DELETE_QUESTION}</p>
+        <p className="text-xs text-muted-foreground">{COPY_ADVISORY}</p>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={controls.onDeleteConfirm}
+          >
+            {busy ? 'Deleting…' : 'Delete'}
+          </Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={controls.onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={style} className="flex gap-1">
+      {canEdit && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            controls.onEditOpen(comment.path, opened.text)
+          }}
+        >
+          Edit
+        </Button>
+      )}
+      {canDelete && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            controls.onDeleteAsk(comment.path)
+          }}
+        >
+          Delete
+        </Button>
+      )}
+    </div>
+  )
+}
+
 export function ThreadPanel({
   groupId,
   postTitle,
@@ -90,6 +218,7 @@ export function ThreadPanel({
   onRetry,
   reply,
   reactions,
+  controls,
 }: {
   readonly groupId: string
   /** The post's title when the list passed it along; a thread opened cold has none. */
@@ -103,6 +232,7 @@ export function ThreadPanel({
   readonly onRetry?: (() => void) | undefined
   readonly reply?: ThreadReply | undefined
   readonly reactions?: ThreadReactions | undefined
+  readonly controls?: ThreadControls | undefined
 }) {
   const barFor = (target: string, label: string) => {
     if (reactions === undefined) return null
@@ -133,6 +263,11 @@ export function ThreadPanel({
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {controls !== undefined && controls.mode.kind === 'idle' && controls.error !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{controls.error}</AlertDescription>
         </Alert>
       )}
       {reactions?.notice != null && (
@@ -182,6 +317,7 @@ export function ThreadPanel({
               ))}
               {comment.depth > 0 && barFor(comment.path, 'Reactions to this comment')}
             </article>
+            {controls !== undefined && <CommentControls comment={comment} controls={controls} />}
             {reply !== undefined && comment.depth > 0 && (
               <div style={{ marginLeft: indent(comment.depth) }}>
                 {inlineAt === comment.path ? (

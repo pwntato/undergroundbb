@@ -4,7 +4,16 @@ import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { ReactionBar } from './ReactionBar'
 import { elementsOf } from './elementTree.testkit'
-import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
+import {
+  COPY_ADVISORY,
+  CommentControls,
+  DELETE_QUESTION,
+  ThreadPanel,
+  type ThreadControls,
+  type ThreadReactions,
+  type ThreadReply,
+} from './ThreadPanel'
+import { ReplyBox } from './ReplyBox'
 import type { CommentView, ReactionView, ThreadEntry } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
 
@@ -27,6 +36,25 @@ function comment(over: Partial<CommentView> = {}): CommentView {
   }
 }
 
+function controlsOf(over: Partial<ThreadControls> = {}): ThreadControls {
+  return {
+    selfUserId: 'u1',
+    isAdmin: false,
+    readOnly: false,
+    mode: { kind: 'idle' },
+    busy: false,
+    error: null,
+    maxBytes: 100,
+    onEditOpen: () => {},
+    onDraft: () => {},
+    onSave: () => {},
+    onDeleteAsk: () => {},
+    onDeleteConfirm: () => {},
+    onClose: () => {},
+    ...over,
+  }
+}
+
 function render(
   comments: readonly ThreadEntry[],
   over: {
@@ -37,6 +65,7 @@ function render(
     title?: string
     reply?: Partial<ThreadReply>
     reactions?: Partial<ThreadReactions>
+    controls?: Partial<ThreadControls>
   } = {},
 ) {
   return renderToStaticMarkup(
@@ -64,6 +93,7 @@ function render(
             ...over.reactions,
           },
         }),
+        ...(over.controls !== undefined && { controls: controlsOf(over.controls) }),
         ...(over.reply !== undefined && {
           reply: {
             replyTo: null,
@@ -424,5 +454,136 @@ describe('ThreadPanel edited and deleted comments (#45)', () => {
     // A row for the post and one per live comment; Reply on the live ones only.
     expect(html.match(/aria-label="Reactions to [^"]*"/g)).toHaveLength(3)
     expect(html.match(/>Reply</g)).toHaveLength(2)
+  })
+})
+
+describe('Edit and Delete on a comment (#45)', () => {
+  const mine = comment({ authorUserId: 'u1' })
+  const theirs = comment({ path: '0002', authorUserId: 'u2' })
+  const labels = (node: unknown) =>
+    elementsOf(node as never)
+      .filter((e) => e.type === 'button' || typeof e.type === 'function')
+      .map((e) => e.props['children'])
+      .filter((c) => typeof c === 'string')
+  const buttons = (c: ReturnType<typeof comment>, over: Partial<ThreadControls> = {}) =>
+    labels(CommentControls({ comment: c, controls: controlsOf(over) }))
+
+  it("offers Edit and Delete on the reader's own comment, and nothing on another member's", () => {
+    expect(buttons(mine)).toEqual(['Edit', 'Delete'])
+    expect(buttons(theirs)).toEqual([])
+    expect(CommentControls({ comment: theirs, controls: controlsOf() })).toBeNull()
+  })
+
+  it("gives an admin Delete, but not Edit, on another member's comment", () => {
+    expect(buttons(theirs, { isAdmin: true })).toEqual(['Delete'])
+  })
+
+  it('hides Edit on a read-only thread but keeps Delete', () => {
+    expect(buttons(mine, { readOnly: true })).toEqual(['Delete'])
+  })
+
+  it('offers no Edit on an unreadable comment (no text to start from), only Delete', () => {
+    const unreadable = comment({ content: { kind: 'unreadable' } })
+    expect(buttons(unreadable)).toEqual(['Delete'])
+  })
+
+  it('shows no buttons where the screen passes no controls', () => {
+    const html = render([mine])
+    expect(html).not.toContain('>Edit<')
+    expect(html).not.toContain('>Delete<')
+  })
+
+  it('renders the controls under the comment in the whole panel', () => {
+    const html = render([mine, theirs], { controls: {} })
+    expect(html.match(/>Edit</g)).toHaveLength(1)
+    expect(html.match(/>Delete</g)).toHaveLength(1)
+  })
+
+  it("calls the handlers with the comment's path and current text", () => {
+    const calls: string[] = []
+    const tree = CommentControls({
+      comment: mine,
+      controls: controlsOf({
+        onEditOpen: (p, t) => calls.push(`edit ${p} ${JSON.stringify(t)}`),
+        onDeleteAsk: (p) => calls.push(`delete ${p}`),
+      }),
+    })
+    const click = (label: string) =>
+      (
+        elementsOf(tree).find((e) => e.props['children'] === label)!.props['onClick'] as () => void
+      )()
+    click('Edit')
+    click('Delete')
+    expect(calls).toEqual([`edit 0001 ${JSON.stringify('First line\nSecond line')}`, 'delete 0001'])
+  })
+
+  it('disables both buttons while a send is in flight', () => {
+    const tree = CommentControls({ comment: mine, controls: controlsOf({ busy: true }) })
+    const bs = elementsOf(tree).filter((e) => typeof e.props['children'] === 'string')
+    expect(bs).toHaveLength(2)
+    for (const b of bs) expect(b.props['disabled']).toBe(true)
+  })
+
+  it('shows the edit form with the advisory, a Save button, and Save waiting until the text changes', () => {
+    const open = (draft: string) =>
+      elementsOf(
+        CommentControls({
+          comment: mine,
+          controls: controlsOf({ mode: { kind: 'editing', path: '0001', draft, original: 'old' } }),
+        }),
+      ).find((e) => e.type === ReplyBox)!.props
+    const same = open('old')
+    expect(same['label']).toBe('Edit your comment')
+    expect(same['hint']).toBe(COPY_ADVISORY)
+    expect(same['hint']).toBe('Any member may have kept a copy of the original.')
+    expect(same['submitLabel']).toBe('Save')
+    expect(same['unchanged']).toBe(true)
+    expect(open('new')['unchanged']).toBe(false)
+  })
+
+  it('shows the confirmation with the question, the advisory, and Delete and Cancel', () => {
+    const calls: string[] = []
+    const tree = CommentControls({
+      comment: mine,
+      controls: controlsOf({
+        mode: { kind: 'confirmDelete', path: '0001' },
+        onDeleteConfirm: () => calls.push('confirm'),
+        onClose: () => calls.push('close'),
+      }),
+    })
+    const html = renderToStaticMarkup(tree)
+    expect(html).toContain('Delete this comment? Replies stay.')
+    expect(DELETE_QUESTION).toBe('Delete this comment? Replies stay.')
+    expect(html).toContain('Any member may have kept a copy of the original.')
+    const click = (label: string) =>
+      (
+        elementsOf(tree).find((e) => e.props['children'] === label)!.props['onClick'] as () => void
+      )()
+    click('Delete')
+    click('Cancel')
+    expect(calls).toEqual(['confirm', 'close'])
+  })
+
+  it('shows a failure inside the form it belongs to, and an idle one at the top of the page', () => {
+    const inForm = render([mine], {
+      controls: { mode: { kind: 'confirmDelete', path: '0001' }, error: 'Could not delete' },
+    })
+    expect(inForm.match(/Could not delete/g)).toHaveLength(1)
+    const idle = render([mine], { controls: { error: 'This post was deleted' } })
+    expect(idle.match(/This post was deleted/g)).toHaveLength(1)
+  })
+
+  it('only opens the form on the comment it is for', () => {
+    const html = render([mine, comment({ path: '0003', authorUserId: 'u1' })], {
+      controls: { mode: { kind: 'editing', path: '0003', draft: 'x', original: 'y' } },
+    })
+    expect(html.match(/Edit your comment/g)).toHaveLength(1)
+    expect(html.match(/>Edit</g)).toHaveLength(1)
+  })
+
+  it('shows no controls on a deleted comment', () => {
+    const html = render([{ deleted: true, path: '0001', depth: 1 }], { controls: {} })
+    expect(html).not.toContain('>Edit<')
+    expect(html).not.toContain('>Delete<')
   })
 })

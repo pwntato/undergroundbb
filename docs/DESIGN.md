@@ -277,7 +277,9 @@ THREAT_MODEL).
 above, with these differences. A post's sort key carries the day it was created, which an edit cannot change, so an edit
 signs over the same sort key and **the day it signs today** and stores that day on the row as `SignedDay`; the list serves
 it as `signedDay`, and a reader picks the key interval from it when present and from the sort key's day when absent (a
-post never edited has none). The `at` inside the ciphertext stays the original time. Deleting leaves a tombstone served by
+post never edited has none). An edit's `signedDay` may not be **earlier than the sort key's day** (400 `signedDay: before
+the day the post was filed`): readers refuse such an edit as an invalid signature, so the server refuses it first, and a
+client signs over the later of today and the filing day. The `at` inside the ciphertext stays the original time. Deleting leaves a tombstone served by
 the list as its sort key and `deleted: true` and nothing else; the post's own reactions (target `0000`) are swept the way
 a comment's are, and the thread drops strays. **A deleted post takes nothing new**: its comments stay readable, but a new
 comment, a reaction on the post or on any of its comments, and an edit of one of its comments are all refused (404), by
@@ -297,6 +299,19 @@ edited, so its `edited_at` must be on it and `at` no later (the original day is 
 times and says so. Tombstones are shown as "This post was deleted." / "This comment was deleted." with no author;
 nothing is opened for them, their served generation (0) does not pull the key chain back, and the reader drops any
 reaction on a deleted comment itself. Reactions stay on an edited item; the marker tells readers they may predate it.
+
+**For Edit and Delete on a comment (#45, web).** `web/src/routes/runEditComment.ts`, `commentControls.ts`, `threadWiring.ts`.
+Edit is offered to the comment's author and Delete to the author and to an admin; the server decides, the screen only
+decides what to offer. An edit is sealed by the worker op `sealCommentEdit` at the same path, under the generation new
+comments use, with a fresh nonce, the comment's original `at` and `edited_at` set to now (version 2), signed over today.
+What an answer means: `conflict_retry` sends the **same bytes** again (up to 3 times); `nonce_reused`, `generation_stale`,
+`membership_changed` and `key_epoch_stale` load the context and **seal again** (up to 2 times); `comment_gone` stops and
+reloads; no answer or a 5xx keeps the sealed bytes, and the next Save with the same text resends exactly those (the server
+answers 200 for stored bytes even after the signing day has passed). Save waits until the text differs from the original.
+Delete asks "Delete this comment? Replies stay." and, like the edit form, says "Any member may have kept a copy of the
+original." A repeated delete is safe (a tombstone answers the same 204), so a failure with no clear answer is just tried
+again. A 404 on a new comment or an edit means the post was deleted (or the reader left): the thread turns **read-only**
+(no reply box, no Edit; Delete stays). The edit form is lost across the password step (the reply draft is kept).
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.

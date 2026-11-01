@@ -42,7 +42,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
-import { decodeComment, encodeComment } from './comment.js'
+import { decodeComment, encodeComment, type CommentContent } from './comment.js'
 import { decodeReaction, encodeReaction } from './reaction.js'
 import { decodePost, encodePost } from './post.js'
 import { signedPayload } from './payload.js'
@@ -1361,28 +1361,61 @@ export async function openPosts(
  */
 export async function sealComment(
   keys: LiveKeys,
-  req: {
-    readonly groupId: string
-    readonly postId: string
-    readonly path: string
-    readonly generation: number
-    readonly commentGeneration: number
-    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
-    readonly chain?: readonly {
-      generation: number
-      wrapped: { nonce: string; ciphertext: string }
-    }[]
-    readonly text: string
-  },
+  req: SealCommentMaterial & { readonly text: string },
   now: Date = new Date(),
-): Promise<{
+): Promise<SealedCommentMaterial> {
+  return sealCommentContent(keys, req, { text: req.text, at: now.toISOString() }, now)
+}
+
+/**
+ * #45: seals an EDIT of one's own comment. Same path, the generation new
+ * comments use now, a fresh nonce (encrypt draws one, and the server refuses a
+ * nonce this comment has already been sealed under), the ORIGINAL `at` kept and
+ * `editedAt` set to now, which makes it a version 2 layout (comment.ts). The
+ * signature covers the same `CMT#<path>` and TODAY's UTC day, so a reader picks
+ * the signing key for the edit and not for the original.
+ */
+export async function sealCommentEdit(
+  keys: LiveKeys,
+  req: SealCommentMaterial & { readonly text: string; readonly at: string },
+  now: Date = new Date(),
+): Promise<SealedCommentMaterial> {
+  return sealCommentContent(
+    keys,
+    req,
+    { text: req.text, at: req.at, editedAt: now.toISOString() },
+    now,
+  )
+}
+
+interface SealCommentMaterial {
+  readonly groupId: string
+  readonly postId: string
+  readonly path: string
+  readonly generation: number
+  readonly commentGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly {
+    generation: number
+    wrapped: { nonce: string; ciphertext: string }
+  }[]
+}
+
+interface SealedCommentMaterial {
   path: string
   generation: number
   signedDay: string
   nonce: string
   ciphertext: string
   signature: string
-}> {
+}
+
+async function sealCommentContent(
+  keys: LiveKeys,
+  req: SealCommentMaterial,
+  content: CommentContent,
+  now: Date,
+): Promise<SealedCommentMaterial> {
   const ownKey = await unwrap(
     keys.wrappingKey.privateKey,
     {
@@ -1402,7 +1435,7 @@ export async function sealComment(
   const day = now.toISOString().slice(0, 10)
   const sealed = await encrypt(
     groupKey,
-    encodeComment({ text: req.text, at: now.toISOString() }),
+    encodeComment(content),
     commentAAD(req.postId, req.path, req.commentGeneration),
   )
   const signature = ed25519.sign(

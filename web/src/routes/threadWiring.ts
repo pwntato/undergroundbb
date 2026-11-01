@@ -9,12 +9,15 @@
 //   - sendReply: one press of Send. The send target comes from the reply state,
 //     the path guess from the comments on screen, and a gone parent reloads the
 //     thread.
+//   - saveEdit / confirmDelete: one press of Save on an edited comment, or of
+//     Delete on the confirmation (#45).
 //   - toggleReaction: one press of a reaction button (#46). Pressing your own
 //     reaction takes it back; pressing another sets it, replacing the one you
 //     had. What is shown changes only after the server said yes.
 
 import { ApiError } from '@/lib/api/auth'
 import type { PutReactionRequest } from '@/lib/api/groups'
+import type { ControlsEvent } from './commentControls'
 import type { SealedComment, SealedReaction } from '@/lib/crypto/worker-protocol'
 import { TARGET_GONE_MESSAGE, type ReplyEvent } from './replyState'
 import {
@@ -27,9 +30,10 @@ import {
   type SubmitDeps,
   type SubmitResult,
 } from './runCreateComment'
+import { submitCommentEdit, type EditDeps, type EditFailure } from './runEditComment'
 import { isLiveKeysError } from './runListGroups'
 import { summarizeReactions } from './reactionSummary'
-import type { ReactionView, ThreadPageResult } from './runLoadThread'
+import { isDeletedComment, type ReactionView, type ThreadPageResult } from './runLoadThread'
 import type { ThreadEvent } from './threadState'
 
 /** A reply in progress, kept across the password step. */
@@ -41,6 +45,7 @@ export interface SavedReply {
 export interface ThreadIO {
   readonly dispatch: (event: ThreadEvent) => void
   readonly dispatchReply: (event: ReplyEvent) => void
+  readonly dispatchControls: (event: ControlsEvent) => void
   /**
    * The password step is needed. `reply` is what is in the box right now (absent
    * when it is empty), so the screen always holds the live draft and never an old one.
@@ -65,6 +70,10 @@ export async function loadPageInto(
   // The first page is everything on screen, so a reply target missing from it is gone from view.
   if (cursor === undefined && result.ok) {
     io.dispatchReply({ type: 'firstPageLoaded', paths: result.comments.map((c) => c.path) })
+    io.dispatchControls({
+      type: 'firstPageLoaded',
+      livePaths: result.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
+    })
   }
   if (!result.ok && result.kind === 'coldKeys') io.onColdKeys(io.liveReply())
 }
@@ -76,7 +85,8 @@ export const SEND_ERRORS: Record<Exclude<SubmitResult, { ok: true }>['kind'], st
   dormant:
     'You rotated your keys and an admin has not approved them for this group yet. Ask an admin to approve you from Members.',
   authRequired: 'Your session has expired. Log in again and retry.',
-  notFound: 'This post no longer exists, or you are no longer a member of its group.',
+  notFound:
+    'This post was deleted, or you are no longer a member of its group, so it takes no new comments.',
   coldKeys: 'This tab needs your password again to write a comment.',
   unreadable:
     "Couldn't open this group's key, so the comment was not sent. Reload the page and try again.",
@@ -104,7 +114,9 @@ export interface PendingReply {
 }
 
 export async function sendReply(
-  io: Pick<ThreadIO, 'dispatchReply' | 'onColdKeys'> & { readonly reload: () => void },
+  io: Pick<ThreadIO, 'dispatchReply' | 'onColdKeys' | 'dispatchControls'> & {
+    readonly reload: () => void
+  },
   deps: {
     readonly context: ContextDeps
     readonly submit: SubmitDeps
@@ -157,6 +169,10 @@ export async function sendReply(
       : SEND_ERRORS[result.kind],
   )
   if (result.kind === 'coldKeys') io.onColdKeys({ replyTo, draft: text })
+  // A deleted post takes no new comments (the server answers 404): stop offering to write.
+  if (result.kind === 'notFound') {
+    io.dispatchControls({ type: 'madeReadOnly', message: SEND_ERRORS.notFound })
+  }
   // The comment replied to is gone: show the thread as it is now.
   if (result.kind === 'parentGone') io.reload()
 }
@@ -344,4 +360,110 @@ export async function toggleReaction(
       }
     }
   }
+}
+
+export const EDIT_ERRORS: Record<EditFailure, string> = {
+  authRequired: SEND_ERRORS.authRequired,
+  notFound:
+    'This post was deleted, or you are no longer a member of its group, so its comments can no longer be changed.',
+  behind: SEND_ERRORS.behind,
+  dormant: SEND_ERRORS.dormant,
+  coldKeys: 'This tab needs your password again to edit a comment.',
+  unreadable:
+    "Couldn't open this group's key, so the edit was not sent. Reload the page and try again.",
+  failed: CONTEXT_ERRORS.failed,
+  gone: 'This comment was deleted, so it can no longer be edited.',
+  busy: 'Others are changing this comment at the same moment. Press Save again.',
+  rejected: 'The server rejected the edit.',
+  ambiguous:
+    "We couldn't confirm whether the edit was saved. Press Save again to send the same edit; it will not be applied twice.",
+}
+
+/** An edit a send left unanswered, with what it came from. */
+export interface PendingEdit {
+  readonly sealed: SealedComment
+  readonly path: string
+  readonly text: string
+}
+
+type ControlsIO = Pick<ThreadIO, 'dispatchControls'> & { readonly reload: () => void }
+
+/**
+ * One press of Save on the edit form for `path`. An edit a send left unanswered
+ * goes again as the exact same bytes while the form still holds the same text.
+ */
+export async function saveEdit(
+  io: ControlsIO & Pick<ThreadIO, 'onColdKeys' | 'liveReply'>,
+  deps: { readonly edit: EditDeps; readonly pending: { current: PendingEdit | null } },
+  input: {
+    readonly groupId: string
+    readonly postId: string
+    readonly path: string
+    readonly text: string
+    /** The comment's original write time, kept by the edit. */
+    readonly at: string
+  },
+): Promise<void> {
+  io.dispatchControls({ type: 'started' })
+  const again = deps.pending.current
+  const resend = again?.path === input.path && again.text === input.text ? again.sealed : undefined
+  if (resend === undefined) deps.pending.current = null
+  const result = await submitCommentEdit(deps.edit, {
+    ...input,
+    ...(resend !== undefined && { resend }),
+  })
+  if (result.ok) {
+    deps.pending.current = null
+    io.dispatchControls({ type: 'finished' })
+    io.reload()
+    return
+  }
+  deps.pending.current =
+    result.kind === 'ambiguous' && result.sealed !== undefined
+      ? { sealed: result.sealed, path: input.path, text: input.text }
+      : null
+  const message =
+    result.kind === 'rejected' ? (result.message ?? EDIT_ERRORS.rejected) : EDIT_ERRORS[result.kind]
+  // The post is gone for writing: stop offering Edit.
+  io.dispatchControls(
+    result.kind === 'notFound' ? { type: 'madeReadOnly', message } : { type: 'failed', message },
+  )
+  if (result.kind === 'coldKeys') io.onColdKeys(io.liveReply())
+  // The comment was deleted meanwhile: show the thread as it is now.
+  if (result.kind === 'gone') io.reload()
+}
+
+export const DELETE_ERRORS = {
+  authRequired: SEND_ERRORS.authRequired,
+  gone: 'This comment or its post is gone. The thread was reloaded.',
+  failed: "Couldn't delete the comment. Try again.",
+} as const
+
+/**
+ * One press of Delete on the confirmation. Deleting is safe to repeat (a tombstone
+ * answers the same 204), so a failure with no clear answer is simply tried again.
+ */
+export async function confirmDelete(
+  io: ControlsIO,
+  deps: { readonly deleteComment: (postId: string, path: string) => Promise<void> },
+  input: { readonly postId: string; readonly path: string },
+): Promise<void> {
+  io.dispatchControls({ type: 'started' })
+  try {
+    await deps.deleteComment(input.postId, input.path)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.authRequired })
+    } else if (err instanceof ApiError && err.status === 404) {
+      io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.gone })
+      io.reload()
+    } else if (err instanceof ApiError && err.status === 403) {
+      io.dispatchControls({ type: 'failed', message: err.message })
+    } else {
+      io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.failed })
+    }
+    return
+  }
+  io.dispatchControls({ type: 'finished' })
+  io.reload()
 }
