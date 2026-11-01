@@ -159,7 +159,7 @@ following for every post:
   about its author, because the nonce is not signed. A chain that could not be read is a page error, not a row of
   unreadable posts.
 - **Verifies the signature** under the author's signing keys for the sort key's day, or for the row's `signedDay` when
-  the post was edited (#45: the server stores and serves it; the reader uses it from the web slice on) (`lib/crypto/post-check.ts`:
+  the post was edited (#45) (`lib/crypto/post-check.ts`:
   the current key from the day it was introduced, each superseded key up to the rotation that ended it, both on a
   rotation day). The author's served keys are anchored first, by the same trust-on-first-use rule as the roster's
   grant check: your own key from the worker; anyone else's against your signed pin. A match is `pinned`; no pin yet is
@@ -285,6 +285,18 @@ the same transactions that refuse a tombstoned comment; an author can still dele
 has room for the time it was made.** The edited item carries `edited_at` inside the ciphertext (a 4-byte length prefix
 and a 24-byte timestamp, 28 bytes), so an edit's ciphertext may be 28 bytes longer than a new item's limit allows;
 without that, an item written at its size cap could not be edited. New items get no such room.
+
+**How an edit is laid out and read (#45, web).** An edited post or comment is plaintext **version 2**
+(`web/src/lib/crypto/post.ts`, `comment.ts`): version 1's fields, then `u32 length, edited_at` in the same RFC 3339
+format as `at`, which keeps the original time. Only an edit writes version 2, the decoder refuses a version 1 body
+labelled 2 and the reverse, and both layouts are pinned byte for byte by tests. The reader's "edited" marker comes from
+the decrypted `edited_at` alone, never from the row, so a version 1 post whose row carries a `signedDay` (a re-sign of
+the same bytes) shows no edit. Time checks: a post's `at` must be on its sort key's day and an `edited_at` on the day
+the edit was signed (`signedDay`, else the sort key's) and not before `at`; a comment's signed day is the edit's once
+edited, so its `edited_at` must be on it and `at` no later (the original day is not kept). A failed check hides the
+times and says so. Tombstones are shown as "This post was deleted." / "This comment was deleted." with no author;
+nothing is opened for them, their served generation (0) does not pull the key chain back, and the reader drops any
+reaction on a deleted comment itself. Reactions stay on an edited item; the marker tells readers they may predate it.
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
