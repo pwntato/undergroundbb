@@ -76,7 +76,20 @@ function editHarness(
         at: '2026-10-29T00:00:00.000Z',
       },
     )
-  return { open, save, sealPostEdit, editPost, pending }
+  const saveAt = (sortKey: string) =>
+    saveEditPost(
+      h.io,
+      { edit, pending },
+      {
+        groupId: 'g',
+        postId: `g#${sortKey.slice(5)}`,
+        sortKey,
+        title: 'new',
+        body: 'new body',
+        at: '2026-10-29T00:00:00.000Z',
+      },
+    )
+  return { open, save, saveAt, sealPostEdit, editPost, pending }
 }
 
 describe('saveEditPost', () => {
@@ -117,6 +130,18 @@ describe('saveEditPost', () => {
       await e2.save(title, body)
       expect(e2.sealPostEdit, `${title}/${body}`).toHaveBeenCalledTimes(2)
     }
+  })
+
+  it('does not reuse a kept seal for the same text on another post', async () => {
+    const h = harness()
+    const put = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    put.mockResolvedValue({ sortKey: SORT_KEY })
+    const e = editHarness(h, put)
+    e.open()
+    await e.save()
+    expect(e.pending.current).not.toBeNull()
+    await e.saveAt('POST#2026-10-29#aaaaaaaaaaaaaaaa')
+    expect(e.sealPostEdit).toHaveBeenCalledTimes(2)
   })
 
   it('reloads when the post was deleted meanwhile, and the form closes with the reason kept', async () => {

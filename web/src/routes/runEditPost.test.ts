@@ -28,10 +28,11 @@ function setup(edit: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ sort
     generation: 3,
     wrappedGroupKey: WRAPPED,
   } as unknown as GroupDetail)
+  const getChain = vi.fn()
   const deps = {
     userId: 'u1',
     getGroup,
-    getChain: vi.fn(),
+    getChain,
     sealPostEdit,
     editPost: edit,
   } as unknown as EditPostDeps
@@ -45,7 +46,7 @@ function setup(edit: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ sort
       at: AT,
       ...over,
     })
-  return { run, sealPostEdit, edit, getGroup }
+  return { run, sealPostEdit, edit, getGroup, getChain }
 }
 
 const conflict = (code: string) => new ApiError(409, code, code)
@@ -72,6 +73,27 @@ describe('submitPostEdit', () => {
       nonce: 'n1',
       ciphertext: 'ct',
       signature: 'sig',
+    })
+  })
+
+  it('seals under the generation new posts use, with the chain down to it, while a rotation runs', async () => {
+    const s = setup()
+    // The caller's own wrap is at generation 3; a rotation to 3 is running, so posts still use 2.
+    s.getGroup.mockResolvedValue({
+      groupId: 'g',
+      role: 'member',
+      generation: 3,
+      rotation: { generation: 3 },
+      wrappedGroupKey: WRAPPED,
+    } as unknown as GroupDetail)
+    const chain = [{ generation: 2, wrapped: { nonce: 'n', ciphertext: 'c' } }]
+    s.getChain.mockResolvedValue(chain)
+    expect(await s.run()).toEqual({ ok: true })
+    expect(s.getChain).toHaveBeenCalledWith('g', 2, 3)
+    expect(s.sealPostEdit.mock.calls[0]![0]).toMatchObject({
+      generation: 3,
+      postGeneration: 2,
+      chain,
     })
   })
 
