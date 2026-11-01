@@ -116,6 +116,13 @@ func TestEditPostRefusesWhatItShould(t *testing.T) {
 	}
 	stored := postRow(t, pid)["Nonce"].(*types.AttributeValueMemberB).Value
 	reused := postEdit(t, pid, owner, today(), stored, ctOf(9))
+	// The day before the day this post was FILED (its sort key), not before the wall clock now.
+	_, filedKey, _ := idgen.ParsePostID(pid)
+	filed, err := time.Parse("2006-01-02", filedKey[len("POST#"):len("POST#")+len("2006-01-02")])
+	if err != nil {
+		t.Fatal(err)
+	}
+	dayBeforeFiled := filed.AddDate(0, 0, -1).Format("2006-01-02")
 
 	cases := []struct {
 		name   string
@@ -131,7 +138,7 @@ func TestEditPostRefusesWhatItShould(t *testing.T) {
 		{"signed by someone else", cookie, pid, postEdit(t, pid, other, today(), nonceOf(1), ctOf(1)), 400, `"bad_signature"`},
 		{"signed for another post", cookie, pid, postEdit(t, otherPid, owner, today(), nonceOf(1), ctOf(1)), 400, `"bad_signature"`},
 		{"signed for another generation", cookie, pid, postEditAtGeneration(t, pid, owner, 1, today(), nonceOf(1), ctOf(1)), 409, `"generation_stale"`},
-		{"signed before the day the post was filed", cookie, pid, postEdit(t, pid, owner, time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"), nonceOf(1), ctOf(1)), 400, "signedDay: before the day the post was filed"},
+		{"signed before the day the post was filed", cookie, pid, postEdit(t, pid, owner, dayBeforeFiled, nonceOf(1), ctOf(1)), 400, "signedDay: before the day the post was filed"},
 		{"signed on a far day", cookie, pid, postEdit(t, pid, owner, "2099-01-01", nonceOf(1), ctOf(1)), 400, "signedDay: not within tolerance"},
 		{"signed on a malformed day", cookie, pid, postEdit(t, pid, owner, "yesterday", nonceOf(1), ctOf(1)), 400, "signedDay: must be a UTC date"},
 		{"the stored nonce over other text", cookie, pid, reused, 400, `"nonce_reused"`},

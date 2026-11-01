@@ -974,14 +974,12 @@ describe('saveEdit resend is per comment', () => {
         edit: {
           userId: 'u1',
           context: {
-            getGroup: vi
-              .fn()
-              .mockResolvedValue({
-                groupId: 'g',
-                role: 'member',
-                generation: 0,
-                wrappedGroupKey: WRAPPED,
-              }),
+            getGroup: vi.fn().mockResolvedValue({
+              groupId: 'g',
+              role: 'member',
+              generation: 0,
+              wrappedGroupKey: WRAPPED,
+            }),
             getChain: vi.fn(),
           },
           sealCommentEdit: e.sealCommentEdit,
