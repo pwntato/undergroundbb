@@ -206,7 +206,7 @@ describe('GroupPostsPanel edited and deleted posts (#45)', () => {
     expect(postNotes(p)).toEqual([
       {
         tone: 'warn',
-        text: 'Suspect: the times inside this post do not match the day it is filed under (2026-10-28) and the day its edit was signed (2026-10-30), so its times are not shown.',
+        text: "Suspect: the times inside this post do not match the day it is filed under (2026-10-28) and the day its edit was signed (2026-10-30), or the edit time is earlier than the post's own time, so its times are not shown.",
       },
     ])
   })

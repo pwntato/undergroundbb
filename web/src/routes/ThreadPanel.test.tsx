@@ -401,7 +401,7 @@ describe('ThreadPanel edited and deleted comments (#45)', () => {
     expect(commentNotes(c)).toEqual([
       {
         tone: 'warn',
-        text: 'Suspect: the edit time inside this comment does not match the day the edit was signed (2026-10-31), so its times are not shown.',
+        text: "Suspect: the edit time inside this comment is not on the day the edit was signed (2026-10-31), or is earlier than the comment's own time, so its times are not shown.",
       },
     ])
   })

@@ -48,7 +48,7 @@ export function commentNotes(
       text:
         comment.content.editedAt === undefined
           ? `Suspect: the time inside this comment does not match the day it was signed (${comment.signedDay}), so its time is not shown.`
-          : `Suspect: the edit time inside this comment does not match the day the edit was signed (${comment.signedDay}), so its times are not shown.`,
+          : `Suspect: the edit time inside this comment is not on the day the edit was signed (${comment.signedDay}), or is earlier than the comment's own time, so its times are not shown.`,
     })
   }
   return notes

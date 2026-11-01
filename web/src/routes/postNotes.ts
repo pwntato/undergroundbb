@@ -40,7 +40,7 @@ export function postNotes(
       text:
         post.content.editedAt === undefined
           ? `Suspect: the time inside this post does not match the day it is filed under (${post.day}), so its time is not shown.`
-          : `Suspect: the times inside this post do not match the day it is filed under (${post.day}) and the day its edit was signed (${post.signedDay ?? post.day}), so its times are not shown.`,
+          : `Suspect: the times inside this post do not match the day it is filed under (${post.day}) and the day its edit was signed (${post.signedDay ?? post.day}), or the edit time is earlier than the post's own time, so its times are not shown.`,
     })
   }
   return notes

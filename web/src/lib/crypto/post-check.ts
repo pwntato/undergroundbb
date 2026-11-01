@@ -105,6 +105,9 @@ export function checkPostSignature(input: {
   const { signedDay, ...rest } = input
   if (sortKeyDay(input.sortKey) === undefined) return { kind: 'invalid' }
   if (signedDay !== undefined && !DAY.test(signedDay)) return { kind: 'invalid' }
+  // A real edit is never signed before the day the post was filed. Without this a retired
+  // key could sign over an earlier day, inside its own interval, for a post filed later.
+  if (signedDay !== undefined && signedDay < sortKeyDay(input.sortKey)!) return { kind: 'invalid' }
   const day = signedDay ?? sortKeyDay(input.sortKey)!
   return checkSignedItem({ ...rest, day, context: SigningContext.Post })
 }

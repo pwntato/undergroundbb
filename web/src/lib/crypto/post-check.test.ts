@@ -263,6 +263,37 @@ describe('checkPostSignature on an edited post (signedDay, #45)', () => {
     ).toEqual({ kind: 'invalid' })
   })
 
+  it('is invalid when signedDay is earlier than the day the post was filed, even from the key of that day', () => {
+    // k0 was retired on 10-22; the post is filed on 10-30 but "signed" on 10-20 by k0.
+    const author = rotatedOn('2026-10-22')
+    const sortKey = 'POST#2026-10-30#00112233445566ff'
+    const signedDay = '2026-10-20'
+    const signed = signedPayload(AUTHOR, GROUP, sortKey, 0, signedDay, CIPHERTEXT)
+    const post = {
+      sortKey,
+      generation: 0,
+      ciphertext: b64(CIPHERTEXT),
+      signature: b64(sign(k0, SigningContext.Post, signed)),
+    }
+    expect(
+      checkPostSignature({ groupId: GROUP, authorUserId: AUTHOR, ...post, signedDay, author }),
+    ).toEqual({ kind: 'invalid' })
+    // An edit on the filing day itself is still fine.
+    const same = signedPayload(AUTHOR, GROUP, sortKey, 0, '2026-10-30', CIPHERTEXT)
+    expect(
+      checkPostSignature({
+        groupId: GROUP,
+        authorUserId: AUTHOR,
+        sortKey,
+        generation: 0,
+        ciphertext: b64(CIPHERTEXT),
+        signature: b64(sign(k1, SigningContext.Post, same)),
+        signedDay: '2026-10-30',
+        author,
+      }),
+    ).toEqual({ kind: 'valid' })
+  })
+
   it('is invalid for a malformed signedDay, even one the author signed over', () => {
     for (const signedDay of ['', 'yesterday', '2026-10-25T00:00:00Z']) {
       const post = editedBy(k0, signedDay)
