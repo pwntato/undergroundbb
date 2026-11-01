@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, WireComment, WireReaction } from '@/lib/api/groups'
+import type { GroupDetail, WireComment, WireLiveComment, WireReaction } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from '@/lib/crypto/ed25519'
 import { signedPayload } from '@/lib/crypto/payload'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import type { OpenedComment, OpenedReaction } from '@/lib/crypto/worker-protocol'
-import { commentDepth, loadThreadPage, type LoadThreadDeps } from './runLoadThread'
+import {
+  commentDepth,
+  isDeletedComment,
+  loadThreadPage,
+  type CommentView,
+  type LoadThreadDeps,
+} from './runLoadThread'
 import { makeAuthorResolver } from './runListPosts'
 
 const GROUP = 'a0000000-0000-4000-8000-000000000001'
@@ -52,13 +58,27 @@ function pinOf(id: string, key: SigningKey): PinRecord {
   }
 }
 
+/** A deleted comment exactly as the server serves one: every field but the path empty. */
+function tombstone(path: string): WireComment {
+  return {
+    path,
+    authorUserId: '',
+    generation: 0,
+    signedDay: '',
+    nonce: '',
+    ciphertext: '',
+    signature: '',
+    deleted: true,
+  } as unknown as WireComment
+}
+
 let counter = 0
 function wireComment(
   author: string,
   key: SigningKey,
   path: string,
   over: { generation?: number; signedDay?: string; context?: SigningContext } = {},
-): WireComment {
+): WireLiveComment {
   counter += 1
   const ciphertext = new Uint8Array(60).fill(counter)
   const generation = over.generation ?? 0
@@ -86,7 +106,7 @@ interface World {
   reactions?: WireReaction[]
   openReaction?: (x: WireReaction) => OpenedReaction
   nextCursor?: string
-  open?: (c: WireComment) => OpenedComment
+  open?: (c: WireLiveComment) => OpenedComment
   pins?: PinRecord[]
 }
 
@@ -118,6 +138,7 @@ function depsFor(w: World): LoadThreadDeps & Parameters<typeof makeAuthorResolve
     openComments: vi.fn().mockImplementation(async (req: { comments: { path: string }[] }) =>
       req.comments.map((rc) => {
         const c = w.comments.find((x) => x.path === rc.path)!
+        if (c.deleted === true) throw new Error(`opened a tombstone ${c.path}`)
         return w.open ? w.open(c) : opened(`text of ${c.path}`)
       }),
     ),
@@ -151,9 +172,17 @@ async function load(w: World, cursor?: string) {
   return { res, deps }
 }
 
-function views(res: Awaited<ReturnType<typeof load>>['res']) {
+function entries(res: Awaited<ReturnType<typeof load>>['res']) {
   if (!res.ok) throw new Error(`expected a page, got ${res.kind}`)
   return res.comments
+}
+
+/** The page's comments, none of them deleted. */
+function views(res: Awaited<ReturnType<typeof load>>['res']): CommentView[] {
+  return entries(res).map((c) => {
+    if (isDeletedComment(c)) throw new Error(`unexpected tombstone ${c.path}`)
+    return c
+  })
 }
 
 describe('commentDepth', () => {
@@ -489,5 +518,99 @@ describe('loadThreadPage reactions (#46)', () => {
     const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
     expect(res.ok && res.comments.map((c) => c.path)).toEqual(['0001'])
     expect(res.ok && res.reactions).toEqual([{ target: '0001', reactorUserId: ALICE, index: null }])
+  })
+
+  describe('deleted comments (#45)', () => {
+    it('keeps a tombstone in its place, with its replies, and opens and checks nothing for it', async () => {
+      const first = wireComment(ALICE, aliceKey, '0001')
+      const reply = wireComment(ALICE, aliceKey, '0002.0001')
+      const { res, deps } = await load({ comments: [first, tombstone('0002'), reply] })
+      const page = entries(res)
+      expect(page.map((c) => c.path)).toEqual(['0001', '0002', '0002.0001'])
+      expect(page[1]).toEqual({ deleted: true, path: '0002', depth: 1 })
+      expect(page[2]).toMatchObject({ depth: 2, authorName: 'alice', signature: { kind: 'valid' } })
+      expect(
+        deps.openComments.mock.calls[0]![0].comments.map((c: { path: string }) => c.path),
+      ).toEqual(['0001', '0002.0001'])
+      expect(deps.getUserDetail).not.toHaveBeenCalledWith('')
+    })
+
+    it('drops reactions on a tombstone without opening them, and keeps the rest', async () => {
+      const kept = wireComment(ALICE, aliceKey, '0001')
+      const rx = (target: string): WireReaction => ({
+        target,
+        reactorUserId: ALICE,
+        generation: 0,
+        nonce: b64(new Uint8Array(12)),
+        ciphertext: b64(new Uint8Array(17)),
+      })
+      const { res, deps } = await load({
+        comments: [kept, tombstone('0002')],
+        reactions: [rx('0000'), rx('0001'), rx('0002')],
+      })
+      expect(res.ok && res.reactions.map((x) => x.target)).toEqual(['0000', '0001'])
+      expect(
+        deps.openReactions.mock.calls[0]![0].reactions.map((x: { target: string }) => x.target),
+      ).toEqual(['0000', '0001'])
+    })
+
+    it("does not let a tombstone's served generation 0 pull the key chain back", async () => {
+      const deps = depsFor({
+        comments: [tombstone('0001'), wireComment(ALICE, aliceKey, '0002', { generation: 3 })],
+      })
+      deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 3 })
+      const res = await loadThreadPage(deps, makeAuthorResolver(deps), GROUP, POST_ID)
+      expect(res.ok).toBe(true)
+      expect(deps.getChain).not.toHaveBeenCalled()
+    })
+
+    it('opens nothing for a page of nothing but tombstones', async () => {
+      const { res, deps } = await load({ comments: [tombstone('0001'), tombstone('0002')] })
+      expect(entries(res)).toEqual([
+        { deleted: true, path: '0001', depth: 1 },
+        { deleted: true, path: '0002', depth: 1 },
+      ])
+      expect(deps.openComments).not.toHaveBeenCalled()
+      expect(deps.getUserDetail).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('edited comments (#45)', () => {
+    const EDIT_DAY = '2026-10-31'
+    const edited = (editedAt: string) => (): OpenedComment => ({
+      kind: 'opened',
+      text: 'changed',
+      at: `${DAY}T12:00:00.000Z`,
+      editedAt,
+    })
+
+    it('takes editedAt from the decrypted comment and checks it against the signed day', async () => {
+      const c = wireComment(ALICE, aliceKey, '0001', { signedDay: EDIT_DAY })
+      const { res } = await load({ comments: [c], open: edited(`${EDIT_DAY}T08:00:00.000Z`) })
+      const [v] = views(res)
+      expect(v!.signature).toEqual({ kind: 'valid' })
+      // at is on an earlier day than the edit signed, which is right once edited.
+      expect(v!.content).toEqual({
+        kind: 'opened',
+        text: 'changed',
+        at: `${DAY}T12:00:00.000Z`,
+        editedAt: `${EDIT_DAY}T08:00:00.000Z`,
+        timeSuspect: false,
+      })
+    })
+
+    it('flags an editedAt off the signed day as suspect', async () => {
+      const c = wireComment(ALICE, aliceKey, '0001', { signedDay: EDIT_DAY })
+      const { res } = await load({ comments: [c], open: edited(`${DAY}T13:00:00.000Z`) })
+      expect(views(res)[0]!.content).toMatchObject({ timeSuspect: true })
+    })
+
+    it('flags a version 1 comment whose at is off the signed day, as before', async () => {
+      const c = wireComment(ALICE, aliceKey, '0001', { signedDay: EDIT_DAY })
+      const { res } = await load({ comments: [c] })
+      const [v] = views(res)
+      expect(v!.content).toMatchObject({ timeSuspect: true })
+      expect(v!.content.kind === 'opened' && 'editedAt' in v!.content).toBe(false)
+    })
   })
 })

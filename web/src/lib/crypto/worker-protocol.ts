@@ -933,7 +933,14 @@ export interface OpenPostsRequest {
 }
 
 export type OpenedPost =
-  | { readonly kind: 'opened'; readonly title: string; readonly body: string; readonly at: string }
+  | {
+      readonly kind: 'opened'
+      readonly title: string
+      readonly body: string
+      readonly at: string
+      /** Only on an edited post (#45, layout version 2). */
+      readonly editedAt?: string
+    }
   | { readonly kind: 'unreadable' }
 
 /**
@@ -959,7 +966,13 @@ export interface OpenCommentsRequest {
 }
 
 export type OpenedComment =
-  | { readonly kind: 'opened'; readonly text: string; readonly at: string }
+  | {
+      readonly kind: 'opened'
+      readonly text: string
+      readonly at: string
+      /** Only on an edited comment (#45, layout version 2). */
+      readonly editedAt?: string
+    }
   | { readonly kind: 'unreadable' }
 
 export interface OpenCommentsResponse {

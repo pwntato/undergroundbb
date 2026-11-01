@@ -77,7 +77,7 @@ import { handoffWrapAAD } from './key-rotation.js'
 import { normalizeRecoveryCode } from './recovery-code.js'
 import { evaluatePin } from './pin.js'
 import { signedPayload } from './payload.js'
-import { decodePost } from './post.js'
+import { decodePost, encodePost } from './post.js'
 import { unwrap, wrap } from './x25519.js'
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
@@ -663,6 +663,38 @@ describe('decryptGroupNames', () => {
       ])
     })
 
+    it("passes an edited comment's editedAt through, and none for an unedited one (#45)", async () => {
+      const groupKey = new Uint8Array(32).fill(56)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const editedAt = '2026-10-30T08:00:00.000Z'
+      const sealed = await encrypt(
+        groupKey,
+        encodeComment({ text: 'changed', at, editedAt }),
+        commentAAD(postId, '0001', 0),
+      )
+      const plain = await sealRawComment(groupKey, '0002', 0, 'as written')
+      const out = await openComments(keys, {
+        groupId,
+        postId,
+        generation: 0,
+        wrappedGroupKey,
+        comments: [
+          {
+            path: '0001',
+            generation: 0,
+            nonce: bytesToBase64(sealed.nonce),
+            ciphertext: bytesToBase64(sealed.ciphertext),
+          },
+          plain,
+        ],
+      })
+      expect(out).toEqual([
+        { kind: 'opened', text: 'changed', at, editedAt },
+        { kind: 'opened', text: 'as written', at },
+      ])
+      expect('editedAt' in out[1]!).toBe(false)
+    })
+
     it('shows a comment that does not open as unreadable and still opens the rest', async () => {
       const groupKey = new Uint8Array(32).fill(52)
       const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
@@ -772,6 +804,33 @@ describe('decryptGroupNames', () => {
         { kind: 'opened', title: 'second', body: 'two', at: '2026-10-28T12:34:56.789Z' },
         { kind: 'opened', title: 'first', body: 'one', at: '2026-10-28T12:34:56.789Z' },
       ])
+    })
+
+    it("passes an edited post's editedAt through (#45)", async () => {
+      const groupKey = new Uint8Array(32).fill(43)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const sortKey = 'POST#2026-10-28#00112233445566ff'
+      const content = {
+        title: 't',
+        body: 'b',
+        at: '2026-10-28T12:34:56.789Z',
+        editedAt: '2026-10-30T08:00:00.000Z',
+      }
+      const sealed = await encrypt(groupKey, encodePost(content), postAAD(groupId, sortKey, 0))
+      const out = await openPosts(keys, {
+        groupId,
+        generation: 0,
+        wrappedGroupKey,
+        posts: [
+          {
+            sortKey,
+            generation: 0,
+            nonce: bytesToBase64(sealed.nonce),
+            ciphertext: bytesToBase64(sealed.ciphertext),
+          },
+        ],
+      })
+      expect(out).toEqual([{ kind: 'opened', ...content }])
     })
 
     it('shows a post that does not open as unreadable and still opens the rest', async () => {

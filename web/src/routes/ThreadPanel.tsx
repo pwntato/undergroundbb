@@ -17,11 +17,37 @@ import { ReactionBar } from './ReactionBar'
 import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
 import { attachesBeside } from './runCreateComment'
-import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
-import { POST_TARGET, type CommentView, type ReactionView } from './runLoadThread'
+import { editedMark } from './postNotes'
+import {
+  commentAuthorLabel,
+  commentNotes,
+  commentTimeLabel,
+  DELETED_COMMENT_TEXT,
+} from './threadNotes'
+import { isDeletedComment, POST_TARGET, type ReactionView, type ThreadEntry } from './runLoadThread'
 
 /** Indent steps drawn; deeper replies share the last one. */
 const MAX_INDENT = 4
+
+function indent(depth: number): string {
+  return `${String(Math.min(Math.max(depth - 1, 0), MAX_INDENT))}rem`
+}
+
+/** The "edited" marker after a byline (#45); the exact time is in the tooltip. */
+function EditedMark({
+  content,
+}: {
+  readonly content: { readonly editedAt?: string; readonly timeSuspect: boolean }
+}) {
+  const mark = editedMark(content)
+  if (mark === null) return null
+  return (
+    <>
+      {' · '}
+      <span title={mark.title}>{mark.text}</span>
+    </>
+  )
+}
 
 /** Everything the reply box needs from the screen; absent where replying makes no sense. */
 export interface ThreadReply {
@@ -68,7 +94,7 @@ export function ThreadPanel({
   readonly groupId: string
   /** The post's title when the list passed it along; a thread opened cold has none. */
   readonly postTitle?: string | undefined
-  readonly comments: readonly CommentView[]
+  readonly comments: readonly ThreadEntry[]
   readonly loading: boolean
   readonly error: string | null
   readonly hasMore: boolean
@@ -121,74 +147,81 @@ export function ThreadPanel({
           No comments to show here yet. More may follow.
         </p>
       )}
-      {comments.map((comment) => (
-        <div key={comment.path} className="flex flex-col gap-2">
+      {comments.map((comment) =>
+        isDeletedComment(comment) ? (
+          // No author, time, reactions or reply: nothing of it is served but its place.
           <article
+            key={comment.path}
             data-depth={comment.depth}
-            style={{
-              marginLeft: `${String(Math.min(Math.max(comment.depth - 1, 0), MAX_INDENT))}rem`,
-            }}
-            className="flex flex-col gap-1.5 rounded-md border px-3 py-2"
+            style={{ marginLeft: indent(comment.depth) }}
+            className="rounded-md border px-3 py-2"
           >
-            <p className="text-xs text-muted-foreground">
-              {commentAuthorLabel(comment)} · {commentTimeLabel(comment)}
-            </p>
-            {comment.content.kind === 'opened' && (
-              <p className="whitespace-pre-wrap break-words text-sm">{comment.content.text}</p>
-            )}
-            {commentNotes(comment).map((note) => (
-              <p
-                key={note.text}
-                className={`text-xs ${note.tone === 'warn' ? 'text-destructive' : 'text-muted-foreground'}`}
-              >
-                {note.text}
-              </p>
-            ))}
-            {comment.depth > 0 && barFor(comment.path, 'Reactions to this comment')}
+            <p className="text-sm italic text-muted-foreground">{DELETED_COMMENT_TEXT}</p>
           </article>
-          {reply !== undefined && comment.depth > 0 && (
-            <div
-              style={{
-                marginLeft: `${String(Math.min(Math.max(comment.depth - 1, 0), MAX_INDENT))}rem`,
-              }}
+        ) : (
+          <div key={comment.path} className="flex flex-col gap-2">
+            <article
+              data-depth={comment.depth}
+              style={{ marginLeft: indent(comment.depth) }}
+              className="flex flex-col gap-1.5 rounded-md border px-3 py-2"
             >
-              {inlineAt === comment.path ? (
-                <ReplyBox
-                  id={`reply-${comment.path}`}
-                  label="Your reply"
-                  hint={
-                    attachesBeside(comment.path)
-                      ? 'Replies stop at this depth, so yours will appear beside this comment.'
-                      : undefined
-                  }
-                  value={reply.draft}
-                  maxBytes={reply.maxBytes}
-                  sending={reply.sending}
-                  error={reply.error}
-                  autoFocus
-                  onChange={reply.onEdit}
-                  onSubmit={reply.onSend}
-                  onCancel={() => {
-                    reply.onOpen(null)
-                  }}
-                />
-              ) : (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={reply.sending}
-                  onClick={() => {
-                    reply.onOpen(comment.path)
-                  }}
-                >
-                  Reply
-                </Button>
+              <p className="text-xs text-muted-foreground">
+                {commentAuthorLabel(comment)} · {commentTimeLabel(comment)}
+                {comment.content.kind === 'opened' && <EditedMark content={comment.content} />}
+              </p>
+              {comment.content.kind === 'opened' && (
+                <p className="whitespace-pre-wrap break-words text-sm">{comment.content.text}</p>
               )}
-            </div>
-          )}
-        </div>
-      ))}
+              {commentNotes(comment).map((note) => (
+                <p
+                  key={note.text}
+                  className={`text-xs ${note.tone === 'warn' ? 'text-destructive' : 'text-muted-foreground'}`}
+                >
+                  {note.text}
+                </p>
+              ))}
+              {comment.depth > 0 && barFor(comment.path, 'Reactions to this comment')}
+            </article>
+            {reply !== undefined && comment.depth > 0 && (
+              <div style={{ marginLeft: indent(comment.depth) }}>
+                {inlineAt === comment.path ? (
+                  <ReplyBox
+                    id={`reply-${comment.path}`}
+                    label="Your reply"
+                    hint={
+                      attachesBeside(comment.path)
+                        ? 'Replies stop at this depth, so yours will appear beside this comment.'
+                        : undefined
+                    }
+                    value={reply.draft}
+                    maxBytes={reply.maxBytes}
+                    sending={reply.sending}
+                    error={reply.error}
+                    autoFocus
+                    onChange={reply.onEdit}
+                    onSubmit={reply.onSend}
+                    onCancel={() => {
+                      reply.onOpen(null)
+                    }}
+                  />
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={reply.sending}
+                    onClick={() => {
+                      reply.onOpen(comment.path)
+                    }}
+                  >
+                    Reply
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        ),
+      )}
       {onRetry !== undefined && !loading && (
         <Button type="button" variant="outline" onClick={onRetry}>
           Try again

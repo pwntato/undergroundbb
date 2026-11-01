@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { GroupPostsPanel } from './GroupPostsPanel'
 import { authorLabel, postNotes, postTimeLabel } from './postNotes'
-import type { PostView } from './runListPosts'
+import type { PostEntry, PostView } from './runListPosts'
 
 function post(over: Partial<PostView> = {}): PostView {
   return {
@@ -26,7 +26,7 @@ function post(over: Partial<PostView> = {}): PostView {
 }
 
 function render(
-  posts: readonly PostView[],
+  posts: readonly PostEntry[],
   over: { loading?: boolean; error?: string; more?: boolean; retry?: boolean } = {},
 ) {
   return renderToStaticMarkup(
@@ -174,5 +174,50 @@ describe('GroupPostsPanel', () => {
     expect(html).toContain('href="/groups/g1/posts/g1%232026-10-28%2300112233445566ff"')
     expect(html).toContain('>Comments</a>')
     expect(render([post({ sortKey: 'garbage' })])).not.toContain('>Comments</a>')
+  })
+})
+
+describe('GroupPostsPanel edited and deleted posts (#45)', () => {
+  const editedContent = (timeSuspect: boolean) => ({
+    kind: 'opened' as const,
+    title: 'Hello',
+    body: 'b',
+    at: '2026-10-28T14:03:09.000Z',
+    editedAt: '2026-10-30T09:12:00.000Z',
+    timeSuspect,
+  })
+
+  it('marks an edited post, with the exact edit time in the tooltip', () => {
+    const html = render([post({ signedDay: '2026-10-30', content: editedContent(false) })])
+    expect(html).toContain(
+      'alice · 2026-10-28 14:03 UTC · <span title="Edited 2026-10-30 09:12 UTC">edited</span>',
+    )
+  })
+
+  it('shows no marker on a post never edited, even one whose row carries a signedDay', () => {
+    expect(render([post({ signedDay: '2026-10-30' })])).not.toContain('edited')
+  })
+
+  it('names both days when an edited post has suspect times, and drops the edit time', () => {
+    const p = post({ signedDay: '2026-10-30', content: editedContent(true) })
+    const html = render([p])
+    expect(html).toContain('· <span>edited</span>')
+    expect(html).not.toContain('09:12')
+    expect(postNotes(p)).toEqual([
+      {
+        tone: 'warn',
+        text: 'Suspect: the times inside this post do not match the day it is filed under (2026-10-28) and the day its edit was signed (2026-10-30), so its times are not shown.',
+      },
+    ])
+  })
+
+  it('shows a deleted post as a placeholder with no author, keeping the link to its comments', () => {
+    const html = render([
+      { deleted: true, sortKey: 'POST#2026-10-28#00112233445566aa', day: '2026-10-28' },
+    ])
+    expect(html).toContain('This post was deleted.')
+    expect(html).not.toContain('alice')
+    expect(html).not.toContain('an unknown member')
+    expect(html).toContain('href="/groups/g1/posts/g1%232026-10-28%2300112233445566aa"')
   })
 })

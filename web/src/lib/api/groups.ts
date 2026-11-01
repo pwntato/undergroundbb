@@ -824,14 +824,25 @@ export interface CreatePostRequest {
 }
 
 /** One stored post as GET /api/groups/{id}/posts serves it; nothing in it is checked server-side. */
-export interface WirePost {
+export interface WireLivePost {
   readonly sortKey: string
   readonly authorUserId: string
   readonly generation: number
   readonly nonce: string
   readonly ciphertext: string
   readonly signature: string
+  /** The UTC day an EDITED post was signed on (#45); absent for a post never edited. */
+  readonly signedDay?: string
+  readonly deleted?: false
 }
+
+/** A deleted post (#45): only its place is served, never who wrote or deleted it. */
+export interface WireDeletedPost {
+  readonly sortKey: string
+  readonly deleted: true
+}
+
+export type WirePost = WireLivePost | WireDeletedPost
 
 export interface ListPostsResponse {
   /** Newest sort key first. */
@@ -850,16 +861,28 @@ export async function listPosts(groupId: string, cursor?: string): Promise<ListP
 }
 
 /** One stored comment as GET /api/posts/{pid}/thread serves it; nothing in it is checked server-side. */
-export interface WireComment {
+export interface WireLiveComment {
   readonly path: string
   readonly authorUserId: string
   readonly generation: number
-  /** The UTC day the author signed, `YYYY-MM-DD`; a comment's sort key has no day. */
+  /** The UTC day the author signed, `YYYY-MM-DD` (an edit's day once edited); a comment's sort key has no day. */
   readonly signedDay: string
   readonly nonce: string
   readonly ciphertext: string
   readonly signature: string
+  readonly deleted?: false
 }
+
+/**
+ * A deleted comment (#45). The server sends the other fields empty; only the
+ * path counts, which keeps its replies in place.
+ */
+export interface WireDeletedComment {
+  readonly path: string
+  readonly deleted: true
+}
+
+export type WireComment = WireLiveComment | WireDeletedComment
 
 /** One stored reaction; read by #46, typed here so the response is whole. */
 export interface WireReaction {

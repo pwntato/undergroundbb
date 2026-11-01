@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, WirePost } from '@/lib/api/groups'
+import type { GroupDetail, WireLivePost, WirePost } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { SigningContext, generateSigningKey, sign, type SigningKey } from '@/lib/crypto/ed25519'
 import { signedPayload } from '@/lib/crypto/payload'
 import { pinPayload, type PinRecord } from '@/lib/crypto/pin'
 import type { OpenedPost } from '@/lib/crypto/worker-protocol'
-import { loadPostsPage, makeAuthorResolver, type ListPostsDeps } from './runListPosts'
+import {
+  isDeletedPost,
+  loadPostsPage,
+  makeAuthorResolver,
+  type ListPostsDeps,
+  type PostView,
+} from './runListPosts'
 
 const GROUP = 'a0000000-0000-4000-8000-000000000001'
 const ME = 'b0000000-0000-4000-8000-000000000002'
@@ -55,8 +61,8 @@ function wirePost(
   author: string,
   key: SigningKey,
   day: string,
-  over: { generation?: number; signedGeneration?: number } = {},
-): WirePost {
+  over: { generation?: number; signedGeneration?: number; signedDay?: string } = {},
+): WireLivePost {
   counter += 1
   const sortKey = `POST#${day}#${counter.toString(16).padStart(16, '0')}`
   const ciphertext = new Uint8Array(60).fill(counter)
@@ -66,7 +72,7 @@ function wirePost(
     GROUP,
     sortKey,
     over.signedGeneration ?? generation,
-    day,
+    over.signedDay ?? day,
     ciphertext,
   )
   return {
@@ -76,7 +82,22 @@ function wirePost(
     nonce: b64(new Uint8Array(12)),
     ciphertext: b64(ciphertext),
     signature: b64(sign(key, SigningContext.Post, payload)),
+    ...(over.signedDay !== undefined && { signedDay: over.signedDay }),
   }
+}
+
+/** A deleted post exactly as the server serves one: every field but the sort key empty. */
+function tombstone(day: string): WirePost {
+  counter += 1
+  return {
+    sortKey: `POST#${day}#${counter.toString(16).padStart(16, '0')}`,
+    authorUserId: '',
+    generation: 0,
+    nonce: '',
+    ciphertext: '',
+    signature: '',
+    deleted: true,
+  } as unknown as WirePost
 }
 
 const opened = (at: string, title = 't'): OpenedPost => ({ kind: 'opened', title, body: 'b', at })
@@ -84,7 +105,7 @@ const opened = (at: string, title = 't'): OpenedPost => ({ kind: 'opened', title
 interface World {
   posts: WirePost[]
   nextCursor?: string
-  open?: (p: WirePost) => OpenedPost
+  open?: (p: WireLivePost) => OpenedPost
   users?: Record<string, UserDetail>
   pins?: PinRecord[]
 }
@@ -109,6 +130,7 @@ function depsFor(w: World): ListPostsDeps & Mocked {
     openPosts: vi.fn().mockImplementation(async (req: { posts: { sortKey: string }[] }) =>
       req.posts.map((rp) => {
         const p = w.posts.find((x) => x.sortKey === rp.sortKey)!
+        if (p.deleted === true) throw new Error(`opened a tombstone ${p.sortKey}`)
         return w.open ? w.open(p) : opened(`${p.sortKey.slice(5, 15)}T12:00:00.000Z`)
       }),
     ),
@@ -130,9 +152,17 @@ async function load(w: World, cursor?: string) {
   return { res, deps }
 }
 
-function views(res: Awaited<ReturnType<typeof load>>['res']) {
+function entries(res: Awaited<ReturnType<typeof load>>['res']) {
   if (!res.ok) throw new Error(`expected a page, got ${res.kind}`)
   return res.posts
+}
+
+/** The page's posts, none of them deleted. */
+function views(res: Awaited<ReturnType<typeof load>>['res']): PostView[] {
+  return entries(res).map((p) => {
+    if (isDeletedPost(p)) throw new Error(`unexpected tombstone ${p.sortKey}`)
+    return p
+  })
 }
 
 describe('loadPostsPage', () => {
@@ -403,5 +433,117 @@ describe('loadPostsPage', () => {
     await loadPostsPage(deps, resolve, GROUP)
     expect(deps.getUserDetail).toHaveBeenCalledTimes(1)
     expect(deps.pinKeys).toHaveBeenCalledTimes(1)
+  })
+
+  describe('deleted posts (#45)', () => {
+    it('shows a tombstone as its place alone, opening and checking nothing for it', async () => {
+      const gone = tombstone('2026-10-28')
+      const kept = wirePost(ALICE, aliceKey, '2026-10-28')
+      const { res, deps } = await load({ posts: [gone, kept] })
+      const page = entries(res)
+      expect(page).toEqual([
+        expect.objectContaining({ sortKey: kept.sortKey, authorName: 'alice' }),
+        { deleted: true, sortKey: gone.sortKey, day: '2026-10-28' },
+      ])
+      expect(
+        deps.openPosts.mock.calls[0]![0].posts.map((p: { sortKey: string }) => p.sortKey),
+      ).toEqual([kept.sortKey])
+      // The tombstone's empty author is never looked up.
+      expect(deps.getUserDetail).not.toHaveBeenCalledWith('')
+    })
+
+    it('orders a tombstone after the readable, suspect and unreadable posts of its day', async () => {
+      const gone = tombstone('2026-10-28')
+      const good = wirePost(ALICE, aliceKey, '2026-10-28')
+      const bad = wirePost(ALICE, aliceKey, '2026-10-28')
+      const older = wirePost(ALICE, aliceKey, '2026-10-27')
+      const { res } = await load({
+        posts: [gone, bad, good, older],
+        open: (p) =>
+          p === bad ? { kind: 'unreadable' } : opened(`${p.sortKey.slice(5, 15)}T12:00:00.000Z`),
+      })
+      expect(entries(res).map((p) => p.sortKey)).toEqual([
+        good.sortKey,
+        bad.sortKey,
+        gone.sortKey,
+        older.sortKey,
+      ])
+    })
+
+    it("does not let a tombstone's served generation 0 pull the key chain back", async () => {
+      const deps = depsFor({
+        posts: [
+          tombstone('2026-10-28'),
+          wirePost(ALICE, aliceKey, '2026-10-28', { generation: 3 }),
+        ],
+      })
+      deps.getGroup.mockResolvedValue({ ...DETAIL, generation: 3 })
+      const res = await loadPostsPage(deps, makeAuthorResolver(deps), GROUP)
+      expect(res.ok).toBe(true)
+      expect(deps.getChain).not.toHaveBeenCalled()
+    })
+
+    it('opens nothing for a page of nothing but tombstones', async () => {
+      const gone = tombstone('2026-10-28')
+      const { res, deps } = await load({ posts: [gone] })
+      expect(entries(res)).toEqual([{ deleted: true, sortKey: gone.sortKey, day: '2026-10-28' }])
+      expect(deps.openPosts).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('edited posts (#45)', () => {
+    const EDIT_DAY = '2026-10-30'
+    const editedOpen =
+      (editedAt: string) =>
+      (p: WireLivePost): OpenedPost => ({
+        kind: 'opened',
+        title: 't',
+        body: 'b',
+        at: `${p.sortKey.slice(5, 15)}T12:00:00.000Z`,
+        editedAt,
+      })
+
+    it('checks the signature over the served signedDay and passes editedAt through', async () => {
+      const post = wirePost(ALICE, aliceKey, '2026-10-28', { signedDay: EDIT_DAY })
+      const { res } = await load({ posts: [post], open: editedOpen(`${EDIT_DAY}T08:00:00.000Z`) })
+      const [v] = views(res)
+      expect(v!.signature).toEqual({ kind: 'valid' })
+      expect(v!.signedDay).toBe(EDIT_DAY)
+      expect(v!.content).toEqual({
+        kind: 'opened',
+        title: 't',
+        body: 'b',
+        at: '2026-10-28T12:00:00.000Z',
+        editedAt: `${EDIT_DAY}T08:00:00.000Z`,
+        timeSuspect: false,
+      })
+    })
+
+    it('is invalid when the row does not serve the day the edit signed', async () => {
+      const post = wirePost(ALICE, aliceKey, '2026-10-28', { signedDay: EDIT_DAY })
+      const { signedDay: _dropped, ...withoutDay } = post
+      const { res } = await load({
+        posts: [withoutDay],
+        open: editedOpen(`${EDIT_DAY}T08:00:00.000Z`),
+      })
+      expect(views(res)[0]!.signature).toEqual({ kind: 'invalid' })
+    })
+
+    it('flags an editedAt off the signed day as suspect', async () => {
+      const post = wirePost(ALICE, aliceKey, '2026-10-28', { signedDay: EDIT_DAY })
+      const { res } = await load({ posts: [post], open: editedOpen('2026-10-29T08:00:00.000Z') })
+      const [v] = views(res)
+      expect(v!.signature).toEqual({ kind: 'valid' })
+      expect(v!.content).toMatchObject({ timeSuspect: true })
+    })
+
+    it('shows no edit for a version 1 post, even with a signedDay on the row', async () => {
+      const post = wirePost(ALICE, aliceKey, '2026-10-28', { signedDay: EDIT_DAY })
+      const { res } = await load({ posts: [post] })
+      const [v] = views(res)
+      expect(v!.signature).toEqual({ kind: 'valid' })
+      expect(v!.content.kind === 'opened' && 'editedAt' in v!.content).toBe(false)
+      expect(v!.content).toMatchObject({ timeSuspect: false })
+    })
   })
 })

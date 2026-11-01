@@ -66,6 +66,8 @@ import { decrypt, encrypt, encryptWithNonce, NONCE_SIZE, KEY_SIZE } from './aesg
 import type {
   DecryptedGroupName,
   DecryptGroupNamesRequest,
+  OpenedComment,
+  OpenedPost,
   RecoveryMaterial,
   SignupMaterial,
 } from './worker-protocol.js'
@@ -1317,13 +1319,9 @@ export async function openPosts(
       readonly ciphertext: string
     }[]
   },
-): Promise<
-  ({ kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' })[]
-> {
+): Promise<OpenedPost[]> {
   const keyFor = await generationKeys(keys, req)
-  const out: (
-    { kind: 'opened'; title: string; body: string; at: string } | { kind: 'unreadable' }
-  )[] = []
+  const out: OpenedPost[] = []
   for (const p of req.posts) {
     try {
       const groupKey = await keyFor(p.generation)
@@ -1338,7 +1336,13 @@ export async function openPosts(
         postAAD(req.groupId, p.sortKey, p.generation),
       )
       const content = decodePost(plain)
-      out.push({ kind: 'opened', title: content.title, body: content.body, at: content.at })
+      out.push({
+        kind: 'opened',
+        title: content.title,
+        body: content.body,
+        at: content.at,
+        ...(content.editedAt !== undefined && { editedAt: content.editedAt }),
+      })
     } catch {
       out.push({ kind: 'unreadable' })
     }
@@ -1449,9 +1453,9 @@ export async function openComments(
       readonly ciphertext: string
     }[]
   },
-): Promise<({ kind: 'opened'; text: string; at: string } | { kind: 'unreadable' })[]> {
+): Promise<OpenedComment[]> {
   const keyFor = await generationKeys(keys, req)
-  const out: ({ kind: 'opened'; text: string; at: string } | { kind: 'unreadable' })[] = []
+  const out: OpenedComment[] = []
   for (const c of req.comments) {
     try {
       const groupKey = await keyFor(c.generation)
@@ -1466,7 +1470,12 @@ export async function openComments(
         commentAAD(req.postId, c.path, c.generation),
       )
       const content = decodeComment(plain)
-      out.push({ kind: 'opened', text: content.text, at: content.at })
+      out.push({
+        kind: 'opened',
+        text: content.text,
+        at: content.at,
+        ...(content.editedAt !== undefined && { editedAt: content.editedAt }),
+      })
     } catch {
       out.push({ kind: 'unreadable' })
     }

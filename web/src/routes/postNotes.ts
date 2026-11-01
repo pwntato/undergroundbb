@@ -37,10 +37,34 @@ export function postNotes(
   if (post.content.timeSuspect) {
     notes.push({
       tone: 'warn',
-      text: `Suspect: the time inside this post does not match the day it is filed under (${post.day}), so its time is not shown.`,
+      text:
+        post.content.editedAt === undefined
+          ? `Suspect: the time inside this post does not match the day it is filed under (${post.day}), so its time is not shown.`
+          : `Suspect: the times inside this post do not match the day it is filed under (${post.day}) and the day its edit was signed (${post.signedDay ?? post.day}), so its times are not shown.`,
     })
   }
   return notes
+}
+
+/** The placeholder a deleted post or comment shows in place of its text. */
+export const DELETED_POST_TEXT = 'This post was deleted.'
+
+/**
+ * The "edited" marker (#45), taken only from the decrypted editedAt, never from
+ * the row. The exact time goes in the tooltip, and is left out when the item's
+ * times are suspect, like the byline's own time.
+ */
+export function editedMark(content: {
+  readonly editedAt?: string
+  readonly timeSuspect: boolean
+}): { readonly text: string; readonly title: string | undefined } | null {
+  if (content.editedAt === undefined) return null
+  return {
+    text: 'edited',
+    title: content.timeSuspect
+      ? undefined
+      : `Edited ${content.editedAt.slice(0, 10)} ${content.editedAt.slice(11, 16)} UTC`,
+  }
 }
 
 export function authorLabel(post: PostView): string {

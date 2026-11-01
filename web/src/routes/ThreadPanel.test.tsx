@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { ReactionBar } from './ReactionBar'
 import { elementsOf } from './elementTree.testkit'
 import { ThreadPanel, type ThreadReactions, type ThreadReply } from './ThreadPanel'
-import type { CommentView, ReactionView } from './runLoadThread'
+import type { CommentView, ReactionView, ThreadEntry } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
 
 function comment(over: Partial<CommentView> = {}): CommentView {
@@ -28,7 +28,7 @@ function comment(over: Partial<CommentView> = {}): CommentView {
 }
 
 function render(
-  comments: readonly CommentView[],
+  comments: readonly ThreadEntry[],
   over: {
     loading?: boolean
     error?: string
@@ -370,5 +370,59 @@ describe('ThreadPanel reports reaction presses', () => {
       ['0001', 4],
       ['0001.0001', 5],
     ])
+  })
+})
+
+describe('ThreadPanel edited and deleted comments (#45)', () => {
+  const editedContent = (timeSuspect: boolean) => ({
+    kind: 'opened' as const,
+    text: 'changed',
+    at: '2026-10-29T14:03:09.000Z',
+    editedAt: '2026-10-31T08:15:00.000Z',
+    timeSuspect,
+  })
+
+  it('marks an edited comment, with the exact edit time in the tooltip', () => {
+    const html = render([comment({ signedDay: '2026-10-31', content: editedContent(false) })])
+    expect(html).toContain(
+      'alice · 2026-10-29 14:03 UTC · <span title="Edited 2026-10-31 08:15 UTC">edited</span>',
+    )
+  })
+
+  it('shows no marker on a comment never edited', () => {
+    expect(render([comment()])).not.toContain('edited')
+  })
+
+  it('keeps the marker but drops the edit time when the times are suspect', () => {
+    const c = comment({ signedDay: '2026-10-31', content: editedContent(true) })
+    const html = render([c])
+    expect(html).toContain('· <span>edited</span>')
+    expect(html).not.toContain('08:15')
+    expect(commentNotes(c)).toEqual([
+      {
+        tone: 'warn',
+        text: 'Suspect: the edit time inside this comment does not match the day the edit was signed (2026-10-31), so its times are not shown.',
+      },
+    ])
+  })
+
+  it('shows a deleted comment as a placeholder with no author, time, reactions or Reply, indented in place', () => {
+    const html = render(
+      [
+        comment(),
+        { deleted: true, path: '0001.0001', depth: 2 },
+        comment({ path: '0001.0001.0001', depth: 3 }),
+      ],
+      { reactions: {}, reply: {} },
+    )
+    expect(html).toContain('This comment was deleted.')
+    const placeholder = /<article data-depth="2"[^>]*>(.*?)<\/article>/.exec(html)
+    expect(placeholder?.[0]).toContain('margin-left:1rem')
+    expect(placeholder?.[1]).toBe(
+      '<p class="text-sm italic text-muted-foreground">This comment was deleted.</p>',
+    )
+    // A row for the post and one per live comment; Reply on the live ones only.
+    expect(html.match(/aria-label="Reactions to [^"]*"/g)).toHaveLength(3)
+    expect(html.match(/>Reply</g)).toHaveLength(2)
   })
 })
