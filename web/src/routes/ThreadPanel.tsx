@@ -107,6 +107,8 @@ export interface ThreadReactions {
   readonly error: { readonly target: string; readonly message: string } | null
   /** Said once for the whole page, e.g. the comment reacted to is gone. */
   readonly notice: string | null
+  /** The post is gone for writing: the buttons stay, with their counts, but cannot be pressed. */
+  readonly readOnly: boolean
   /** False until the first page is in: the post's own reactions come with it. */
   readonly ready: boolean
   /** A press of reaction button `index` on `target`; whether it sets or takes back is decided from what is shown. */
@@ -242,7 +244,7 @@ export function ThreadPanel({
       <ReactionBar
         label={label}
         summary={summary}
-        busy={reactions.reacting.includes(target)}
+        busy={reactions.readOnly || reactions.reacting.includes(target)}
         error={reactions.error?.target === target ? reactions.error.message : null}
         onPress={(index) => {
           reactions.onPress(target, index)

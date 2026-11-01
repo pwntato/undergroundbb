@@ -492,6 +492,41 @@ describe('toggleReaction', () => {
     },
   )
 
+  it('turns the thread read-only when a reaction gets a 404, on a save and on a take-back', async () => {
+    for (const taking of [false, true]) {
+      const h = harness()
+      const failing = vi.fn().mockRejectedValue(new ApiError(404, 'gone'))
+      if (taking) withReaction(h, '0001', 2)
+      const r = reactHarness(h, taking ? { del: failing } : { put: failing })
+      await r.press('0001', taking ? 2 : 3)
+      expect(h.controls()).toMatchObject({ readOnly: true, error: REACTION_ERRORS.notFound })
+      expect(h.thread().reactionError).toEqual({
+        target: '0001',
+        message: REACTION_ERRORS.notFound,
+      })
+    }
+  })
+
+  it.each([
+    [401, undefined],
+    [409, 'member_behind'],
+    [409, 'member_dormant'],
+    [500, undefined],
+  ])('leaves the thread writable on a %i %s', async (status, code) => {
+    const h = harness()
+    const r = reactHarness(h, { put: vi.fn().mockRejectedValue(new ApiError(status, 'x', code)) })
+    await r.press('0001', 1)
+    expect(h.controls().readOnly).toBe(false)
+  })
+
+  it('leaves the thread writable when only the group cannot be loaded', async () => {
+    const h = harness()
+    const r = reactHarness(h)
+    r.context.getGroup.mockRejectedValue(new ApiError(404, 'no'))
+    await r.press('0001', 1)
+    expect(h.controls().readOnly).toBe(false)
+  })
+
   it('treats a network failure as a failed save, not an exception', async () => {
     const h = harness()
     const r = reactHarness(h, { put: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) })
