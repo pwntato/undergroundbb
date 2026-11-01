@@ -170,6 +170,22 @@ describe('saveEditPost', () => {
     expect(h.reload).not.toHaveBeenCalled()
   })
 
+  it('forgets an edit resend refused as clock_skew, so the next Save seals fresh', async () => {
+    const h = harness()
+    const edit = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    edit.mockRejectedValueOnce(new ApiError(400, 'signedDay: no', 'clock_skew'))
+    edit.mockResolvedValue({ sortKey: SORT_KEY })
+    const e = editHarness(h, edit)
+    e.open()
+    await e.save()
+    expect(e.pending.current).not.toBeNull()
+    await e.save()
+    expect(h.controls().error).toBe(CLOCK_SKEW_MESSAGE)
+    expect(e.pending.current).toBeNull()
+    await e.save()
+    expect(e.sealPostEdit).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the form and the draft on a rejection, with the server message', async () => {
     const h = harness()
     const e = editHarness(
