@@ -864,6 +864,32 @@ export interface SealedComment {
   readonly signature: string
 }
 
+/**
+ * #45: seals and signs an EDIT of the caller's own comment. `at` is the
+ * comment's original write time, kept; the edit time is the worker's clock. See
+ * credential-material.ts's sealCommentEdit.
+ */
+export interface SealCommentEditRequest {
+  readonly kind: 'sealCommentEdit'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly postId: string
+  readonly path: string
+  readonly generation: number
+  readonly commentGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly text: string
+  readonly at: string
+}
+
+export interface SealCommentEditResponse {
+  readonly kind: 'sealCommentEditDone'
+  readonly id: string
+  readonly result: SealedComment
+}
+
 export interface SealCommentResponse {
   readonly kind: 'sealCommentDone'
   readonly id: string
@@ -1155,6 +1181,7 @@ export type WorkerRequest =
   | EncryptGroupTextRequest
   | SealPostRequest
   | SealCommentRequest
+  | SealCommentEditRequest
   | SealReactionRequest
   | OpenPostsRequest
   | OpenCommentsRequest
@@ -1196,6 +1223,7 @@ export type WorkerResponse =
   | EncryptGroupTextResponse
   | SealPostResponse
   | SealCommentResponse
+  | SealCommentEditResponse
   | SealReactionResponse
   | OpenPostsResponse
   | OpenCommentsResponse

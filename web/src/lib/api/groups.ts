@@ -972,6 +972,52 @@ export async function createComment(
   return handleJSON<{ path: string }>(res)
 }
 
+/** The body of PUT /api/posts/{pid}/comments/{path}; the path is the URL's, never the body's. */
+export interface EditCommentRequest {
+  readonly generation: number
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+function commentUrl(postId: string, path: string): string {
+  return `/api/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(path)}`
+}
+
+/**
+ * Replaces the caller's own comment with a newly sealed edition (#45). The same
+ * bytes sent twice are one edit. 409 codes: `conflict_retry` (another write got
+ * there first; send again), `comment_gone` (it was deleted),
+ * `generation_stale` / `membership_changed` / `key_epoch_stale` (seal again),
+ * `member_behind`, `member_dormant`; 400 `nonce_reused` (seal again).
+ */
+export async function editComment(
+  postId: string,
+  path: string,
+  req: EditCommentRequest,
+): Promise<{ path: string }> {
+  const res = await fetch(commentUrl(postId, path), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(req),
+  })
+  return handleJSON<{ path: string }>(res)
+}
+
+/**
+ * Turns a comment into a tombstone (#45): its author or a group admin. Replies
+ * keep their place. Deleting a tombstone again is the same 204, so a repeat is safe.
+ */
+export async function deleteComment(postId: string, path: string): Promise<void> {
+  const res = await fetch(commentUrl(postId, path), {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  })
+  await handleNoContent(res)
+}
+
 /** The body of PUT /api/posts/{pid}/reactions/{target}; the reactor is the session's user. */
 export interface PutReactionRequest {
   readonly generation: number

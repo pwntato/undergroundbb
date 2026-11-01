@@ -38,6 +38,7 @@ import {
   signInviteCreation as signInviteCreationPure,
   signPin as signPinPure,
   sealComment as sealCommentPure,
+  sealCommentEdit as sealCommentEditPure,
   sealReaction as sealReactionPure,
   openReactions as openReactionsPure,
   sealPost as sealPostPure,
@@ -73,6 +74,7 @@ import type {
   DecryptGroupNamesRequest,
   EncryptGroupTextRequest,
   SealCommentRequest,
+  SealCommentEditRequest,
   SealReactionRequest,
   SealPostRequest,
   OpenCommentsRequest,
@@ -198,6 +200,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'sealComment':
       await sealComment(req)
+      return
+    case 'sealCommentEdit':
+      await sealCommentEdit(req)
       return
     case 'openPosts':
       await openPosts(req)
@@ -353,6 +358,14 @@ async function sealComment(req: SealCommentRequest): Promise<void> {
   const keys = requireLiveKeys(req.userId, 'write a comment')
   const result = await sealCommentPure(keys, req)
   post({ kind: 'sealCommentDone', id: req.id, result })
+}
+
+/** Seals and signs an edit of the caller's own comment -- #45. Same guards as sealComment. */
+async function sealCommentEdit(req: SealCommentEditRequest): Promise<void> {
+  rotation.assertIdle('edit a comment')
+  const keys = requireLiveKeys(req.userId, 'edit a comment')
+  const result = await sealCommentEditPure(keys, req)
+  post({ kind: 'sealCommentEditDone', id: req.id, result })
 }
 
 async function sealPost(req: SealPostRequest): Promise<void> {

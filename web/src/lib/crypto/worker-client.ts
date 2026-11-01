@@ -38,6 +38,8 @@ import type {
   DecryptGroupNamesResponse,
   EncryptGroupTextRequest,
   EncryptGroupTextResponse,
+  SealCommentEditRequest,
+  SealCommentEditResponse,
   SealCommentRequest,
   SealCommentResponse,
   SealedComment,
@@ -948,6 +950,37 @@ export function sealPost(req: Omit<SealPostRequest, 'kind' | 'id'>): Promise<Sea
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPost`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Seals and signs an edit of one's own comment -- #45. See credential-material.ts's sealCommentEdit. */
+export function sealCommentEdit(
+  req: Omit<SealCommentEditRequest, 'kind' | 'id'>,
+): Promise<SealedComment> {
+  const id = nextRequestID()
+  const fullReq: SealCommentEditRequest = { kind: 'sealCommentEdit', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'sealCommentEditDone') {
+        resolve((msg as SealCommentEditResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for sealCommentEdit`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

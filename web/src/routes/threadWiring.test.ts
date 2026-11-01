@@ -3,6 +3,12 @@ import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail } from '@/lib/api/groups'
 import type { SealedComment, SealedReaction } from '@/lib/crypto/worker-protocol'
 import {
+  INITIAL_CONTROLS_STATE,
+  nextControlsState,
+  type ControlsEvent,
+  type ControlsState,
+} from './commentControls'
+import {
   INITIAL_REPLY_STATE,
   nextReplyState,
   TARGET_GONE_MESSAGE,
@@ -10,17 +16,23 @@ import {
   type ReplyState,
 } from './replyState'
 import type { SubmitDeps } from './runCreateComment'
+import type { EditDeps } from './runEditComment'
 import type { CommentView, ThreadPageResult } from './runLoadThread'
 import { INITIAL_THREAD_STATE, nextThreadState, type ThreadEvent } from './threadState'
 import {
   classifyReactionError,
+  confirmDelete,
+  DELETE_ERRORS,
+  EDIT_ERRORS,
   loadPageInto,
   MAX_REACTION_RESEALS,
   MAX_REACTION_RETRIES,
   REACTION_ERRORS,
+  saveEdit,
   sendReply,
   SEND_ERRORS,
   toggleReaction,
+  type PendingEdit,
   type PendingReply,
   type ReactDeps,
   type SavedReply,
@@ -50,6 +62,7 @@ const page = (paths: string[], nextCursor?: string): ThreadPageResult => ({
 function harness(reply: Partial<ReplyState> = {}) {
   let thread = INITIAL_THREAD_STATE
   let replyState: ReplyState = { ...INITIAL_REPLY_STATE, ...reply }
+  let controls: ControlsState = INITIAL_CONTROLS_STATE
   const coldKeys = vi.fn()
   const io: ThreadIO = {
     dispatch: (e: ThreadEvent) => {
@@ -57,6 +70,9 @@ function harness(reply: Partial<ReplyState> = {}) {
     },
     dispatchReply: (e: ReplyEvent) => {
       replyState = nextReplyState(replyState, e)
+    },
+    dispatchControls: (e: ControlsEvent) => {
+      controls = nextControlsState(controls, e)
     },
     onColdKeys: coldKeys,
     liveReply: () =>
@@ -69,6 +85,10 @@ function harness(reply: Partial<ReplyState> = {}) {
     coldKeys,
     thread: () => thread,
     reply: () => replyState,
+    controls: () => controls,
+    setControls: (c: ControlsState) => {
+      controls = c
+    },
   }
 }
 
@@ -681,5 +701,260 @@ describe('classifyReactionError', () => {
     ['text', 'failed'],
   ])('%s -> %s', (err, kind) => {
     expect(classifyReactionError(err)).toBe(kind)
+  })
+})
+
+describe('sendReply on a deleted post', () => {
+  it('turns the thread read-only when the server answers 404 on create', async () => {
+    const h = harness({ draft: 'x' })
+    const s = sendHarness(h, vi.fn().mockRejectedValue(new ApiError(404, 'post not found')))
+    await s.send()
+    expect(h.reply().error).toBe(SEND_ERRORS.notFound)
+    expect(h.controls()).toMatchObject({ readOnly: true, error: SEND_ERRORS.notFound })
+  })
+
+  it('does not turn it read-only for other failures', async () => {
+    const h = harness({ draft: 'x' })
+    const s = sendHarness(h, vi.fn().mockRejectedValue(new ApiError(409, 'full', 'replies_full')))
+    await s.send()
+    expect(h.controls().readOnly).toBe(false)
+  })
+})
+
+describe('loadPageInto and the edit form', () => {
+  it('closes the form on a comment that is no longer a live one on the first page', async () => {
+    const h = harness()
+    h.setControls({
+      ...INITIAL_CONTROLS_STATE,
+      mode: { kind: 'editing', path: '0001', draft: 'd', original: 'o' },
+    })
+    const gone: ThreadPageResult = {
+      ok: true,
+      comments: [{ deleted: true, path: '0001', depth: 1 }, view('0002')],
+      reactions: [],
+    }
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(gone),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toEqual({ kind: 'idle' })
+  })
+
+  it('keeps the form on a comment that is still there', async () => {
+    const h = harness()
+    h.setControls({
+      ...INITIAL_CONTROLS_STATE,
+      mode: { kind: 'editing', path: '0001', draft: 'd', original: 'o' },
+    })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode.kind).toBe('editing')
+  })
+})
+
+function editHarness(
+  h: ReturnType<typeof harness>,
+  editComment: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({ path: '0001' }),
+) {
+  const sealCommentEdit = vi.fn().mockResolvedValue({
+    path: '0001',
+    generation: 0,
+    signedDay: '2026-10-31',
+    nonce: 'n',
+    ciphertext: 'c',
+    signature: 's',
+  } satisfies SealedComment)
+  const pending: { current: PendingEdit | null } = { current: null }
+  const reload = vi.fn()
+  const edit = {
+    userId: 'u1',
+    context: {
+      getGroup: vi.fn().mockResolvedValue({
+        groupId: 'g',
+        role: 'member',
+        generation: 0,
+        wrappedGroupKey: WRAPPED,
+      } as unknown as GroupDetail),
+      getChain: vi.fn(),
+    },
+    sealCommentEdit,
+    editComment,
+  } as unknown as EditDeps
+  const open = () => {
+    h.io.dispatchControls({ type: 'editOpened', path: '0001', text: 'old' })
+    h.io.dispatchControls({ type: 'draftEdited', draft: 'new' })
+  }
+  const save = (text = 'new') =>
+    saveEdit(
+      { ...h.io, reload },
+      { edit, pending },
+      {
+        groupId: 'g',
+        postId: POST,
+        path: '0001',
+        text,
+        at: '2026-10-29T00:00:00.000Z',
+      },
+    )
+  return { open, save, sealCommentEdit, editComment, pending, reload }
+}
+
+describe('saveEdit', () => {
+  it('closes the form and reloads the thread when the edit lands', async () => {
+    const h = harness()
+    const e = editHarness(h)
+    e.open()
+    await e.save()
+    expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, busy: false, error: null })
+    expect(e.reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the same bytes again after a lost answer while the text is unchanged, and seals fresh once it changes', async () => {
+    const h = harness()
+    const put = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    put.mockResolvedValue({ path: 'ok' })
+    const e = editHarness(h, put)
+    e.open()
+    await e.save()
+    expect(h.controls()).toMatchObject({ busy: false, error: EDIT_ERRORS.ambiguous })
+    expect(h.controls().mode.kind).toBe('editing')
+    expect(e.pending.current).not.toBeNull()
+    await e.save()
+    expect(e.sealCommentEdit).toHaveBeenCalledTimes(1)
+    expect(put.mock.calls[1]![2]).toEqual(put.mock.calls[0]![2])
+    expect(e.pending.current).toBeNull()
+
+    const h2 = harness()
+    const put2 = vi.fn().mockRejectedValueOnce(new TypeError('lost'))
+    put2.mockResolvedValue({ path: 'ok' })
+    const e2 = editHarness(h2, put2)
+    e2.open()
+    await e2.save()
+    await e2.save('different words')
+    expect(e2.sealCommentEdit).toHaveBeenCalledTimes(2)
+  })
+
+  it('reloads when the comment was deleted meanwhile, and the form closes with the reason kept', async () => {
+    const h = harness()
+    const e = editHarness(h, vi.fn().mockRejectedValue(new ApiError(409, 'gone', 'comment_gone')))
+    e.open()
+    await e.save()
+    expect(e.reload).toHaveBeenCalledTimes(1)
+    expect(h.controls().error).toBe(EDIT_ERRORS.gone)
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0002'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, error: EDIT_ERRORS.gone })
+  })
+
+  it('turns the thread read-only when the post is gone (404)', async () => {
+    const h = harness()
+    const e = editHarness(h, vi.fn().mockRejectedValue(new ApiError(404, 'post not found')))
+    e.open()
+    await e.save()
+    expect(h.controls()).toMatchObject({
+      readOnly: true,
+      mode: { kind: 'idle' },
+      error: EDIT_ERRORS.notFound,
+    })
+    expect(e.reload).not.toHaveBeenCalled()
+  })
+
+  it('keeps the form and the draft on a rejection, with the server message', async () => {
+    const h = harness()
+    const e = editHarness(
+      h,
+      vi.fn().mockRejectedValue(new ApiError(403, 'only the author can edit a comment')),
+    )
+    e.open()
+    await e.save()
+    expect(h.controls()).toMatchObject({
+      error: 'only the author can edit a comment',
+      mode: { kind: 'editing', draft: 'new' },
+    })
+  })
+
+  it('hands the password step the reply that is in the box', async () => {
+    const h = harness({ replyTo: '0004', draft: 'half written' })
+    const e = editHarness(h)
+    e.sealCommentEdit.mockRejectedValue(new Error('no live keys cached'))
+    e.open()
+    await e.save()
+    expect(h.coldKeys).toHaveBeenCalledWith({ replyTo: '0004', draft: 'half written' })
+    expect(h.controls().error).toBe(EDIT_ERRORS.coldKeys)
+  })
+})
+
+describe('confirmDelete', () => {
+  const run = (h: ReturnType<typeof harness>, del: ReturnType<typeof vi.fn>) => {
+    const reload = vi.fn()
+    h.io.dispatchControls({ type: 'deleteAsked', path: '0001' })
+    return {
+      reload,
+      go: () =>
+        confirmDelete(
+          { ...h.io, reload },
+          { deleteComment: del as unknown as (postId: string, path: string) => Promise<void> },
+          { postId: POST, path: '0001' },
+        ),
+    }
+  }
+
+  it('closes the confirmation and reloads when the delete lands', async () => {
+    const h = harness()
+    const del = vi.fn().mockResolvedValue(undefined)
+    const r = run(h, del)
+    await r.go()
+    expect(del).toHaveBeenCalledWith(POST, '0001')
+    expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, busy: false, error: null })
+    expect(r.reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the confirmation open with a message on a failure with no clear answer, so Delete can be pressed again', async () => {
+    const h = harness()
+    const r = run(h, vi.fn().mockRejectedValue(new TypeError('lost')))
+    await r.go()
+    expect(h.controls()).toMatchObject({
+      mode: { kind: 'confirmDelete', path: '0001' },
+      busy: false,
+      error: DELETE_ERRORS.failed,
+    })
+    expect(r.reload).not.toHaveBeenCalled()
+  })
+
+  it('reloads when the comment or post is gone (404)', async () => {
+    const h = harness()
+    const r = run(h, vi.fn().mockRejectedValue(new ApiError(404, 'comment not found')))
+    await r.go()
+    expect(h.controls().error).toBe(DELETE_ERRORS.gone)
+    expect(r.reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the server message when it is not the author or an admin (403), and asks to log in on 401', async () => {
+    const h = harness()
+    const r = run(
+      h,
+      vi
+        .fn()
+        .mockRejectedValue(new ApiError(403, 'only the author or an admin can delete a comment')),
+    )
+    await r.go()
+    expect(h.controls().error).toBe('only the author or an admin can delete a comment')
+    const h2 = harness()
+    const r2 = run(h2, vi.fn().mockRejectedValue(new ApiError(401, 'nope')))
+    await r2.go()
+    expect(h2.controls().error).toBe(DELETE_ERRORS.authRequired)
   })
 })

@@ -40,6 +40,7 @@ import {
   selfWrapFromHandoff,
   sealPost,
   sealComment,
+  sealCommentEdit,
   openComments,
   sealReaction,
   openReactions,
@@ -1224,6 +1225,141 @@ describe('decryptGroupNames', () => {
       ).toEqual([{ kind: 'opened', text: 't', at: now.toISOString() }])
       // Without the link the walk cannot reach generation 0.
       await expect(sealComment(keys, { ...req, chain: [] }, now)).rejects.toThrow()
+    })
+  })
+
+  describe('sealCommentEdit (#45)', () => {
+    const groupId = 'group-uuid-test-seal-comment-edit'
+    const postId = `${groupId}#2026-10-28#00112233445566ff`
+    const wrote = new Date('2026-10-28T12:34:56.789Z')
+    const edited = new Date('2026-10-30T08:00:01.002Z')
+
+    it('keeps the original time, adds the edit time and signs the edit day over the same address', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(71),
+      )
+      const base = {
+        groupId,
+        postId,
+        path: '0001.0002',
+        generation: 0,
+        commentGeneration: 0,
+        wrappedGroupKey,
+      }
+      const first = await sealComment(keys, { ...base, text: 'before' }, wrote)
+      const second = await sealCommentEdit(
+        keys,
+        { ...base, text: 'after', at: wrote.toISOString() },
+        edited,
+      )
+      expect(second.path).toBe('0001.0002')
+      expect(second.signedDay).toBe('2026-10-30')
+      // A fresh nonce: the same key, address and generation sealed two plaintexts.
+      expect(second.nonce).not.toBe(first.nonce)
+      expect(
+        await openComments(keys, {
+          groupId,
+          postId,
+          generation: 0,
+          wrappedGroupKey,
+          comments: [second],
+        }),
+      ).toEqual([
+        { kind: 'opened', text: 'after', at: wrote.toISOString(), editedAt: edited.toISOString() },
+      ])
+      const author = { signingPublicKey: bytesToBase64(keys.signingKey.publicKey), keyChanges: [] }
+      const check = (over: Partial<Parameters<typeof checkCommentSignature>[0]> = {}) =>
+        checkCommentSignature({
+          groupId,
+          authorUserId: keys.userId,
+          path: second.path,
+          generation: second.generation,
+          signedDay: second.signedDay,
+          ciphertext: second.ciphertext,
+          signature: second.signature,
+          author,
+          ...over,
+        }).kind
+      expect(check()).toBe('valid')
+      // Signed over the edit's day, not the original's.
+      expect(check({ signedDay: '2026-10-28' })).toBe('invalid')
+      expect(check({ path: '0001.0003' })).toBe('invalid')
+    })
+
+    it('is sealed under the generation new comments use, walking the chain down', async () => {
+      const key0 = new Uint8Array(32).fill(72)
+      const key1 = new Uint8Array(32).fill(73)
+      const { keys } = await setUpMemberWithGroup(groupId, key0)
+      const wrapped1 = await wrap(
+        keys.wrappingKey.publicKey,
+        key1,
+        memberWrapAAD(groupId, keys.userId, 1),
+      )
+      const link0 = await encrypt(key1, key0, genKeyAAD(groupId, 0))
+      const wrappedGroupKey = {
+        ephemeralPub: bytesToBase64(wrapped1.ephemeralPub),
+        nonce: bytesToBase64(wrapped1.nonce),
+        ciphertext: bytesToBase64(wrapped1.ciphertext),
+      }
+      const chain = [
+        {
+          generation: 0,
+          wrapped: {
+            nonce: bytesToBase64(link0.nonce),
+            ciphertext: bytesToBase64(link0.ciphertext),
+          },
+        },
+      ]
+      const req = {
+        groupId,
+        postId,
+        path: '0001',
+        generation: 1,
+        commentGeneration: 0,
+        wrappedGroupKey,
+        chain,
+        text: 't',
+        at: wrote.toISOString(),
+      }
+      const sealed = await sealCommentEdit(keys, req, edited)
+      expect(sealed.generation).toBe(0)
+      expect(
+        await openComments(keys, {
+          groupId,
+          postId,
+          generation: 1,
+          wrappedGroupKey,
+          chain,
+          comments: [sealed],
+        }),
+      ).toEqual([
+        { kind: 'opened', text: 't', at: wrote.toISOString(), editedAt: edited.toISOString() },
+      ])
+      await expect(sealCommentEdit(keys, { ...req, chain: [] }, edited)).rejects.toThrow()
+    })
+
+    it('refuses an original time that is not a time rather than sealing something unreadable', async () => {
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(
+        groupId,
+        new Uint8Array(32).fill(74),
+      )
+      await expect(
+        sealCommentEdit(
+          keys,
+          {
+            groupId,
+            postId,
+            path: '0001',
+            generation: 0,
+            commentGeneration: 0,
+            wrappedGroupKey,
+            text: 'x',
+            at: 'yesterday',
+          },
+          edited,
+        ),
+      ).rejects.toThrow()
     })
   })
 
