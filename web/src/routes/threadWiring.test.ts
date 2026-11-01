@@ -499,7 +499,7 @@ describe('toggleReaction', () => {
       if (taking) withReaction(h, '0001', 2)
       const r = reactHarness(h, taking ? { del: failing } : { put: failing })
       await r.press('0001', taking ? 2 : 3)
-      expect(h.controls()).toMatchObject({ readOnly: true, error: REACTION_ERRORS.notFound })
+      expect(h.controls()).toMatchObject({ readOnly: true, error: null })
       expect(h.thread().reactionError).toEqual({
         target: '0001',
         message: REACTION_ERRORS.notFound,

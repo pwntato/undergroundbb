@@ -303,7 +303,7 @@ export async function toggleReaction(
       // The post is gone (the server answers 404 on its reactions): say so under the
       // button, and stop offering to write, as a refused reply or edit does.
       fail(REACTION_ERRORS.notFound)
-      io.dispatchControls({ type: 'madeReadOnly', message: REACTION_ERRORS.notFound })
+      io.dispatchControls({ type: 'madeReadOnly', message: null })
     } else {
       fail(REACTION_ERRORS[kind])
     }
