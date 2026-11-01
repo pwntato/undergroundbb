@@ -133,7 +133,12 @@ describe('nextPostControlsState', () => {
     })
     const idle = run([])
     expect(nextPostControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
-    const busy = run([open('P1'), { type: 'started' }])
+    // Through events a request in flight has no gone mark (`started` clears it), so build the
+    // state by hand to check the busy guard itself.
+    const busy: PostControlsState = { ...gone, busy: true }
+    expect(busy).toMatchObject({ busy: true, gone: true })
     expect(nextPostControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+    const started = run([open('P1'), { type: 'started' }])
+    expect(nextPostControlsState(started, { type: 'firstPageFailed' })).toBe(started)
   })
 })

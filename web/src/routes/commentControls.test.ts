@@ -121,8 +121,13 @@ describe('nextControlsState', () => {
     expect(nextControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({ kind: 'idle' })
     const idle = run([])
     expect(nextControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
-    const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
+    // Through events a request in flight has no gone mark (`started` clears it), so build the
+    // state by hand to check the busy guard itself.
+    const busy: ControlsState = { ...gone, busy: true }
+    expect(busy).toMatchObject({ busy: true, gone: true })
     expect(nextControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+    const started = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
+    expect(nextControlsState(started, { type: 'firstPageFailed' })).toBe(started)
   })
 
   it('keeps a form that holds no error when the first page fails: the reload had another cause', () => {
