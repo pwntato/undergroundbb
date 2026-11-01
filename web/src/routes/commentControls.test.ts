@@ -114,12 +114,32 @@ describe('nextControlsState', () => {
       mode: { kind: 'idle' },
       error: 'it was deleted',
     })
-    const asking = run([{ type: 'deleteAsked', path: '0001' }])
+    const asking = run([
+      { type: 'deleteAsked', path: '0001' },
+      { type: 'failed', message: 'it was deleted' },
+    ])
     expect(nextControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({ kind: 'idle' })
     const idle = run([])
     expect(nextControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
     expect(nextControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+  })
+
+  it('keeps a form that holds no error when the first page fails: the reload had another cause', () => {
+    const typing = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'draftEdited', draft: 'half-typed edit' },
+    ])
+    expect(nextControlsState(typing, { type: 'firstPageFailed' })).toBe(typing)
+    const asking = run([{ type: 'deleteAsked', path: '0001' }])
+    expect(nextControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // Typing clears an older error, so a draft is never closed because of a stale one.
+    const typedAfterError = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'busy' },
+      { type: 'draftEdited', draft: 'more' },
+    ])
+    expect(nextControlsState(typedAfterError, { type: 'firstPageFailed' })).toBe(typedAfterError)
   })
 
   it('does not close a form during a send, since the answer is still coming', () => {

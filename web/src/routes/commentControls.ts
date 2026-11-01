@@ -86,7 +86,10 @@ export function nextControlsState(state: ControlsState, event: ControlsEvent): C
     case 'firstPageFailed':
       // The form is drawn inside the comment it is about, and a reload empties the thread
       // first, so a form left open would be invisible and stuck. Close it, keep the error.
-      if (state.busy || state.mode.kind === 'idle') return state
+      // Only a form holding an error is closed: that is the "it is gone" case. A reload that
+      // something else caused (a sent reply, say) must not throw away a draft being typed;
+      // when the retry works, `firstPageLoaded` puts a form whose item is still live back.
+      if (state.busy || state.mode.kind === 'idle' || state.error === null) return state
       return { ...state, mode: { kind: 'idle' } }
   }
 }

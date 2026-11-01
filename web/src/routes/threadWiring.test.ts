@@ -128,6 +128,31 @@ describe('loadPageInto', () => {
     })
   })
 
+  it('keeps an edit draft through a failed first-page reload that something else caused, and restores the form on a working retry', async () => {
+    const h = harness()
+    h.io.dispatchControls({ type: 'editOpened', path: '0001', text: 'original' })
+    h.io.dispatchControls({ type: 'draftEdited', draft: 'half-typed edit' })
+    // A reload from a sent reply: the thread starts over, then the first page fails.
+    h.io.dispatch({ type: 'reset' })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve({ ok: false, kind: 'failed' }),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', draft: 'half-typed edit' })
+    // Retry works and the comment is still live: the form is still there with its draft.
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', draft: 'half-typed edit' })
+  })
+
   it('leaves an open form alone when a later page fails, since the first page is still on screen', async () => {
     const h = harness()
     const open: ControlsState = {
