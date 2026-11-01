@@ -972,6 +972,45 @@ export async function createComment(
   return handleJSON<{ path: string }>(res)
 }
 
+/** The body of PUT /api/posts/{pid}; the sort key is the post id's, never the body's. */
+export interface EditPostRequest {
+  readonly generation: number
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+/**
+ * Replaces the caller's own post with a newly sealed edition (#45). The same
+ * bytes sent twice are one edit. 409 codes: `conflict_retry` (send again),
+ * `post_gone` (it was deleted), `generation_stale` / `membership_changed` /
+ * `key_epoch_stale` (seal again), `member_behind`, `member_dormant`; 400
+ * `nonce_reused` (seal again). A 400 for a `signedDay` before the post's filing
+ * day cannot come from a client that signs the later of today and that day.
+ */
+export async function editPost(postId: string, req: EditPostRequest): Promise<{ sortKey: string }> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(postId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(req),
+  })
+  return handleJSON<{ sortKey: string }>(res)
+}
+
+/**
+ * Turns a post into a tombstone (#45): its author or a group admin. Its comments
+ * stay readable but it takes nothing new. Repeating it is the same 204.
+ */
+export async function deletePost(postId: string): Promise<void> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(postId)}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  })
+  await handleNoContent(res)
+}
+
 /** The body of PUT /api/posts/{pid}/comments/{path}; the path is the URL's, never the body's. */
 export interface EditCommentRequest {
   readonly generation: number

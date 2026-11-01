@@ -252,3 +252,20 @@ export async function sendPost(
     return { ok: false, kind: 'rejected', message: err.message }
   }
 }
+
+/**
+ * Whether the post form may be sent: the text is valid, nothing is in flight, and,
+ * for an edit (`unchangedFrom` is what it was opened with), something actually
+ * differs. The button and the Enter key both ask this, so they cannot disagree.
+ */
+export function canSubmitPostForm(input: {
+  readonly title: string
+  readonly body: string
+  readonly limits: PostLimits
+  readonly busy: boolean
+  readonly unchangedFrom?: { readonly title: string; readonly body: string } | undefined
+}): boolean {
+  if (input.busy || validatePostForm(input.title, input.body, input.limits) !== null) return false
+  const from = input.unchangedFrom
+  return from === undefined || input.title !== from.title || input.body !== from.body
+}

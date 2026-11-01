@@ -12,7 +12,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { utf8Length } from '@/lib/crypto/post'
-import { FORM_PROBLEMS, validatePostForm, type PostLimits } from './runCreatePost'
+import {
+  canSubmitPostForm,
+  FORM_PROBLEMS,
+  validatePostForm,
+  type PostLimits,
+} from './runCreatePost'
 
 export function CreatePostPanel({
   limits,
@@ -21,6 +26,12 @@ export function CreatePostPanel({
   error,
   onSubmit,
   initial,
+  idPrefix = 'post',
+  submitLabel = 'Post',
+  busyLabel = 'Posting…',
+  hint,
+  unchangedFrom,
+  onCancel,
 }: {
   readonly limits: PostLimits
   readonly posting: boolean
@@ -30,6 +41,18 @@ export function CreatePostPanel({
   readonly onSubmit: (title: string, body: string) => void
   /** Seeds the fields, so a form that was unmounted for a re-login comes back filled. */
   readonly initial?: { readonly title: string; readonly body: string }
+  /** Prefix of the field ids, unique on the page; "post" when absent. */
+  readonly idPrefix?: string
+  /** The send button's label; "Post" when absent. */
+  readonly submitLabel?: string
+  /** The send button's label while sending; "Posting…" when absent. */
+  readonly busyLabel?: string
+  /** A line above the fields, e.g. an advisory. */
+  readonly hint?: string | undefined
+  /** For an edit: what the form was opened with. Nothing can be sent until the text differs. */
+  readonly unchangedFrom?: { readonly title: string; readonly body: string } | undefined
+  /** Shown as a Cancel button next to the send button, e.g. for an inline edit. */
+  readonly onCancel?: (() => void) | undefined
 }) {
   const [title, setTitle] = useState(initial?.title ?? '')
   const [body, setBody] = useState(initial?.body ?? '')
@@ -41,7 +64,7 @@ export function CreatePostPanel({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (problem === null && !posting) {
+    if (canSubmitPostForm({ title, body, limits, busy: posting, unchangedFrom })) {
       onSubmit(title, body)
     }
   }
@@ -58,10 +81,11 @@ export function CreatePostPanel({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {hint !== undefined && <p className="text-xs text-muted-foreground">{hint}</p>}
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="post-title">Title</Label>
+        <Label htmlFor={`${idPrefix}-title`}>Title</Label>
         <Input
-          id="post-title"
+          id={`${idPrefix}-title`}
           value={title}
           onChange={(e) => {
             setTitle(e.target.value)
@@ -77,9 +101,9 @@ export function CreatePostPanel({
         </p>
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="post-body">Post</Label>
+        <Label htmlFor={`${idPrefix}-body`}>Post</Label>
         <textarea
-          id="post-body"
+          id={`${idPrefix}-body`}
           value={body}
           onChange={(e) => {
             setBody(e.target.value)
@@ -96,9 +120,19 @@ export function CreatePostPanel({
         </p>
       </div>
       {shown !== null && <p className="text-sm text-destructive">{FORM_PROBLEMS[shown]}</p>}
-      <Button type="submit" disabled={posting || problem !== null}>
-        {posting ? 'Posting…' : 'Post'}
-      </Button>
+      <div className="flex gap-2">
+        <Button
+          type="submit"
+          disabled={!canSubmitPostForm({ title, body, limits, busy: posting, unchangedFrom })}
+        >
+          {posting ? busyLabel : submitLabel}
+        </Button>
+        {onCancel !== undefined && (
+          <Button type="button" variant="outline" disabled={posting} onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
     </form>
   )
 }

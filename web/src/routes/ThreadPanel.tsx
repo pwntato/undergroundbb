@@ -14,6 +14,7 @@ import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { ControlMode } from './commentControls'
+import { COPY_ADVISORY } from './editCopy'
 import { ReactionBar } from './ReactionBar'
 import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
@@ -71,7 +72,7 @@ export interface ThreadReply {
 }
 
 /** The advisory under an edit or a delete: deletion and editing cannot recall what was read. */
-export const COPY_ADVISORY = 'Any member may have kept a copy of the original.'
+export { COPY_ADVISORY }
 
 /** The question asked before a delete. */
 export const DELETE_QUESTION = 'Delete this comment? Replies stay.'

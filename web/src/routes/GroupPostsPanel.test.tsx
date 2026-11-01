@@ -2,7 +2,15 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
-import { GroupPostsPanel } from './GroupPostsPanel'
+import { CreatePostPanel } from './CreatePostPanel'
+import { elementsOf } from './elementTree.testkit'
+import {
+  DELETE_POST_QUESTION,
+  GroupPostsPanel,
+  PostControls,
+  type PostListControls,
+} from './GroupPostsPanel'
+import { COPY_ADVISORY } from './editCopy'
 import { authorLabel, postNotes, postTimeLabel } from './postNotes'
 import type { PostEntry, PostView } from './runListPosts'
 
@@ -25,9 +33,32 @@ function post(over: Partial<PostView> = {}): PostView {
   }
 }
 
+function controlsOf(over: Partial<PostListControls> = {}): PostListControls {
+  return {
+    selfUserId: 'u1',
+    isAdmin: false,
+    mode: { kind: 'idle' },
+    busy: false,
+    error: null,
+    limits: { maxTitleBytes: 200, maxBodyBytes: 10000 },
+    onEditOpen: () => {},
+    onSave: () => {},
+    onDeleteAsk: () => {},
+    onDeleteConfirm: () => {},
+    onClose: () => {},
+    ...over,
+  }
+}
+
 function render(
   posts: readonly PostEntry[],
-  over: { loading?: boolean; error?: string; more?: boolean; retry?: boolean } = {},
+  over: {
+    loading?: boolean
+    error?: string
+    more?: boolean
+    retry?: boolean
+    controls?: Partial<PostListControls>
+  } = {},
 ) {
   return renderToStaticMarkup(
     createElement(
@@ -41,6 +72,7 @@ function render(
         hasMore: over.more ?? false,
         onLoadMore: () => {},
         ...(over.retry === true && { onRetry: () => {} }),
+        ...(over.controls !== undefined && { controls: controlsOf(over.controls) }),
       }),
     ),
   )
@@ -219,5 +251,140 @@ describe('GroupPostsPanel edited and deleted posts (#45)', () => {
     expect(html).not.toContain('alice')
     expect(html).not.toContain('an unknown member')
     expect(html).toContain('href="/groups/g1/posts/g1%232026-10-28%2300112233445566aa"')
+  })
+})
+
+describe('Edit and Delete on a post (#45)', () => {
+  const mine = post({ authorUserId: 'u1' })
+  const theirs = post({ sortKey: 'POST#2026-10-28#00112233445566aa', authorUserId: 'u2' })
+  const labels = (node: unknown) =>
+    elementsOf(node as never)
+      .map((e) => e.props['children'])
+      .filter((c) => typeof c === 'string')
+  const buttons = (p: PostView, over: Partial<PostListControls> = {}) =>
+    labels(PostControls({ post: p, controls: controlsOf(over) }))
+  const click = (tree: unknown, label: string) =>
+    (
+      elementsOf(tree as never).find((e) => e.props['children'] === label)!.props[
+        'onClick'
+      ] as () => void
+    )()
+
+  it("offers Edit and Delete on the reader's own post, and nothing on another member's", () => {
+    expect(buttons(mine)).toEqual(['Edit', 'Delete'])
+    expect(buttons(theirs)).toEqual([])
+    expect(PostControls({ post: theirs, controls: controlsOf() })).toBeNull()
+  })
+
+  it("gives an admin Delete, but not Edit, on another member's post", () => {
+    expect(buttons(theirs, { isAdmin: true })).toEqual(['Delete'])
+  })
+
+  it('offers no Edit on an unreadable post (no text to start from), only Delete', () => {
+    expect(buttons(post({ content: { kind: 'unreadable' } }))).toEqual(['Delete'])
+  })
+
+  it('shows no buttons where the screen passes no controls, and renders them under each post in the whole panel', () => {
+    expect(render([mine])).not.toContain('>Edit<')
+    const html = render([mine, theirs], { controls: {} })
+    expect(html.match(/>Edit</g)).toHaveLength(1)
+    expect(html.match(/>Delete</g)).toHaveLength(1)
+  })
+
+  it("calls the handlers with the post's sort key and current title and body", () => {
+    const calls: string[] = []
+    const tree = PostControls({
+      post: mine,
+      controls: controlsOf({
+        onEditOpen: (k, t, b) => calls.push(`edit ${k} ${JSON.stringify([t, b])}`),
+        onDeleteAsk: (k) => calls.push(`delete ${k}`),
+      }),
+    })
+    click(tree, 'Edit')
+    click(tree, 'Delete')
+    expect(calls).toEqual([
+      `edit ${mine.sortKey} ${JSON.stringify(['Hello', 'First line\nSecond line'])}`,
+      `delete ${mine.sortKey}`,
+    ])
+  })
+
+  it('disables both buttons while a send is in flight', () => {
+    const tree = PostControls({ post: mine, controls: controlsOf({ busy: true }) })
+    const bs = elementsOf(tree).filter((e) => typeof e.props['children'] === 'string')
+    expect(bs).toHaveLength(2)
+    for (const b of bs) expect(b.props['disabled']).toBe(true)
+  })
+
+  it('shows the edit form seeded with the post, with the advisory, Save, and Save waiting until something differs', () => {
+    const calls: [string, string][] = []
+    const tree = PostControls({
+      post: mine,
+      controls: controlsOf({
+        mode: { kind: 'editing', sortKey: mine.sortKey, title: 'Hello', body: 'old' },
+        onSave: (t, b) => calls.push([t, b]),
+      }),
+    })
+    const form = elementsOf(tree).find((e) => e.type === CreatePostPanel)!.props
+    expect(form['initial']).toEqual({ title: 'Hello', body: 'old' })
+    expect(form['unchangedFrom']).toEqual({ title: 'Hello', body: 'old' })
+    expect(form['hint']).toBe(COPY_ADVISORY)
+    expect(COPY_ADVISORY).toBe('Any member may have kept a copy of the original.')
+    expect(form['submitLabel']).toBe('Save')
+    expect(form['idPrefix']).toBe(`edit-${mine.sortKey}`)
+    ;(form['onSubmit'] as (t: string, b: string) => void)('t2', 'b2')
+    expect(calls).toEqual([['t2', 'b2']])
+  })
+
+  it('shows the confirmation with the question, the advisory, and Delete and Cancel', () => {
+    const calls: string[] = []
+    const tree = PostControls({
+      post: mine,
+      controls: controlsOf({
+        mode: { kind: 'confirmDelete', sortKey: mine.sortKey },
+        onDeleteConfirm: () => calls.push('confirm'),
+        onClose: () => calls.push('close'),
+      }),
+    })
+    const html = renderToStaticMarkup(tree)
+    expect(html).toContain(DELETE_POST_QUESTION)
+    expect(DELETE_POST_QUESTION).toBe(
+      'Delete this post? Its comments stay, but nothing new can be added.',
+    )
+    expect(html).toContain('Any member may have kept a copy of the original.')
+    click(tree, 'Delete')
+    click(tree, 'Cancel')
+    expect(calls).toEqual(['confirm', 'close'])
+  })
+
+  it('shows a failure inside the form it belongs to, and an idle one at the top of the page', () => {
+    const inConfirm = render([mine], {
+      controls: {
+        mode: { kind: 'confirmDelete', sortKey: mine.sortKey },
+        error: 'Could not delete',
+      },
+    })
+    expect(inConfirm.match(/Could not delete/g)).toHaveLength(1)
+    const idle = render([mine], { controls: { error: 'This post is gone' } })
+    expect(idle.match(/This post is gone/g)).toHaveLength(1)
+  })
+
+  it('only opens the form on the post it is for', () => {
+    const other = post({ sortKey: 'POST#2026-10-28#00112233445566bb', authorUserId: 'u1' })
+    const html = render([mine, other], {
+      controls: { mode: { kind: 'editing', sortKey: other.sortKey, title: 'x', body: 'y' } },
+    })
+    expect(html.match(/>Save</g)).toHaveLength(1)
+    expect(html.match(/>Edit</g)).toHaveLength(1)
+  })
+
+  it('shows no controls on a deleted post', () => {
+    const html = render(
+      [{ deleted: true, sortKey: 'POST#2026-10-28#00112233445566cc', day: '2026-10-28' }],
+      {
+        controls: {},
+      },
+    )
+    expect(html).not.toContain('>Edit<')
+    expect(html).not.toContain('>Delete<')
   })
 })

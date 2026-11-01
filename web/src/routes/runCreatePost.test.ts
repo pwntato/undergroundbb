@@ -3,6 +3,7 @@ import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail } from '@/lib/api/groups'
 import type { SealedPost } from '@/lib/crypto/worker-protocol'
 import {
+  canSubmitPostForm,
   DEFAULT_POST_LIMITS,
   preparePost,
   sendPost,
@@ -226,5 +227,28 @@ describe('sendPost', () => {
     expect(await send(new TypeError('offline'))).toEqual({ ok: false, kind: 'ambiguous' })
     expect(await send(new ApiError(502, 'bad gateway'))).toEqual({ ok: false, kind: 'ambiguous' })
     expect(await send(new ApiError(500, 'oops'))).toEqual({ ok: false, kind: 'ambiguous' })
+  })
+})
+
+describe('canSubmitPostForm', () => {
+  const ok = { title: 'T', body: 'b', limits: LIMITS, busy: false }
+  it('allows valid text', () => {
+    expect(canSubmitPostForm(ok)).toBe(true)
+  })
+  it('refuses invalid text, and anything while a send is in flight', () => {
+    expect(canSubmitPostForm({ ...ok, title: ' ' })).toBe(false)
+    expect(canSubmitPostForm({ ...ok, body: 'x'.repeat(21) })).toBe(false)
+    expect(canSubmitPostForm({ ...ok, busy: true })).toBe(false)
+  })
+  it('refuses an edit nobody has changed, and allows one that differs in the title or in the body', () => {
+    const from = { title: 'T', body: 'b' }
+    expect(canSubmitPostForm({ ...ok, unchangedFrom: from })).toBe(false)
+    expect(canSubmitPostForm({ ...ok, title: 'T2', unchangedFrom: from })).toBe(true)
+    expect(canSubmitPostForm({ ...ok, body: 'b2', unchangedFrom: from })).toBe(true)
+  })
+  it('still refuses an invalid edit that differs', () => {
+    expect(canSubmitPostForm({ ...ok, title: '', unchangedFrom: { title: 'T', body: 'b' } })).toBe(
+      false,
+    )
   })
 })

@@ -49,8 +49,11 @@ import type {
   OpenReactionsRequest,
   OpenReactionsResponse,
   OpenedReaction,
+  SealPostEditRequest,
+  SealPostEditResponse,
   SealPostRequest,
   SealPostResponse,
+  SealedPostEdit,
   OpenCommentsRequest,
   OpenCommentsResponse,
   OpenedComment,
@@ -950,6 +953,37 @@ export function sealPost(req: Omit<SealPostRequest, 'kind' | 'id'>): Promise<Sea
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPost`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Seals and signs an edit of one's own post -- #45. See credential-material.ts's sealPostEdit. */
+export function sealPostEdit(
+  req: Omit<SealPostEditRequest, 'kind' | 'id'>,
+): Promise<SealedPostEdit> {
+  const id = nextRequestID()
+  const fullReq: SealPostEditRequest = { kind: 'sealPostEdit', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'sealPostEditDone') {
+        resolve((msg as SealPostEditResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for sealPostEdit`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)
