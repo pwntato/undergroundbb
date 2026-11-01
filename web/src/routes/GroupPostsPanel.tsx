@@ -11,9 +11,126 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { CreatePostPanel } from './CreatePostPanel'
+import { COPY_ADVISORY } from './editCopy'
+import type { PostControlMode } from './postControls'
+import type { PostLimits } from './runCreatePost'
 import { postIdOf } from '@/lib/crypto/post-check'
 import { authorLabel, DELETED_POST_TEXT, editedMark, postNotes, postTimeLabel } from './postNotes'
 import { isDeletedPost, type PostEntry, type PostView } from './runListPosts'
+
+/** The question asked before a post is deleted. */
+export const DELETE_POST_QUESTION =
+  'Delete this post? Its comments stay, but nothing new can be added.'
+
+/** What Edit and Delete on a post need from the screen; absent where they make no sense. */
+export interface PostListControls {
+  /** The reader, whose own posts get Edit and Delete. */
+  readonly selfUserId: string
+  /** An admin may delete anyone's post. */
+  readonly isAdmin: boolean
+  readonly mode: PostControlMode
+  readonly busy: boolean
+  readonly error: string | null
+  readonly limits: PostLimits
+  readonly onEditOpen: (sortKey: string, title: string, body: string) => void
+  /** Save pressed on the edit form, with what is in it. */
+  readonly onSave: (title: string, body: string) => void
+  readonly onDeleteAsk: (sortKey: string) => void
+  readonly onDeleteConfirm: () => void
+  readonly onClose: () => void
+}
+
+/** Edit and Delete for one post, or the form either of them opened (#45). */
+export function PostControls({
+  post,
+  controls,
+}: {
+  readonly post: PostView
+  readonly controls: PostListControls
+}) {
+  const mine = post.authorUserId === controls.selfUserId
+  // An unreadable post has no text to start from and no original time to keep.
+  const opened = post.content.kind === 'opened' ? post.content : null
+  const canEdit = mine && opened !== null
+  const canDelete = mine || controls.isAdmin
+  if (!canEdit && !canDelete) return null
+  const { mode, busy, error } = controls
+  if (mode.kind === 'editing' && mode.sortKey === post.sortKey) {
+    return (
+      <CreatePostPanel
+        limits={controls.limits}
+        posting={busy}
+        message={null}
+        error={error}
+        onSubmit={controls.onSave}
+        initial={{ title: mode.title, body: mode.body }}
+        unchangedFrom={{ title: mode.title, body: mode.body }}
+        idPrefix={`edit-${post.sortKey}`}
+        submitLabel="Save"
+        busyLabel="Saving…"
+        hint={COPY_ADVISORY}
+        onCancel={controls.onClose}
+      />
+    )
+  }
+  if (mode.kind === 'confirmDelete' && mode.sortKey === post.sortKey) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {error !== null && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <p className="text-sm font-medium">{DELETE_POST_QUESTION}</p>
+        <p className="text-xs text-muted-foreground">{COPY_ADVISORY}</p>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={controls.onDeleteConfirm}
+          >
+            {busy ? 'Deleting…' : 'Delete'}
+          </Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={controls.onClose}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex gap-1">
+      {canEdit && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            controls.onEditOpen(post.sortKey, opened.title, opened.body)
+          }}
+        >
+          Edit
+        </Button>
+      )}
+      {canDelete && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => {
+            controls.onDeleteAsk(post.sortKey)
+          }}
+        >
+          Delete
+        </Button>
+      )}
+    </div>
+  )
+}
 
 export function GroupPostsPanel({
   groupId,
@@ -23,6 +140,7 @@ export function GroupPostsPanel({
   hasMore,
   onLoadMore,
   onRetry,
+  controls,
 }: {
   readonly groupId: string
   readonly posts: readonly PostEntry[]
@@ -32,12 +150,18 @@ export function GroupPostsPanel({
   readonly onLoadMore: () => void
   /** Set when the first page failed and there is nothing yet to load more from. */
   readonly onRetry?: (() => void) | undefined
+  readonly controls?: PostListControls | undefined
 }) {
   return (
     <div className="flex w-full max-w-xl flex-col gap-4 text-left">
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {controls !== undefined && controls.mode.kind === 'idle' && controls.error !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{controls.error}</AlertDescription>
         </Alert>
       )}
       {posts.length === 0 && !loading && error === null && !hasMore && (
@@ -56,7 +180,7 @@ export function GroupPostsPanel({
             <PostCommentsLink groupId={groupId} sortKey={post.sortKey} title={undefined} />
           </article>
         ) : (
-          <PostCard key={post.sortKey} groupId={groupId} post={post} />
+          <PostCard key={post.sortKey} groupId={groupId} post={post} controls={controls} />
         ),
       )}
       {onRetry !== undefined && !loading && (
@@ -83,7 +207,15 @@ export function GroupPostsPanel({
   )
 }
 
-function PostCard({ groupId, post }: { readonly groupId: string; readonly post: PostView }) {
+function PostCard({
+  groupId,
+  post,
+  controls,
+}: {
+  readonly groupId: string
+  readonly post: PostView
+  readonly controls: PostListControls | undefined
+}) {
   const edited = post.content.kind === 'opened' ? editedMark(post.content) : null
   return (
     <article className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
@@ -115,6 +247,7 @@ function PostCard({ groupId, post }: { readonly groupId: string; readonly post: 
         sortKey={post.sortKey}
         title={post.content.kind === 'opened' ? post.content.title : undefined}
       />
+      {controls !== undefined && <PostControls post={post} controls={controls} />}
     </article>
   )
 }

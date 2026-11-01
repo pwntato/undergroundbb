@@ -42,6 +42,7 @@ import {
   sealReaction as sealReactionPure,
   openReactions as openReactionsPure,
   sealPost as sealPostPure,
+  sealPostEdit as sealPostEditPure,
   openComments as openCommentsPure,
   openPosts as openPostsPure,
   signWrapRecord as signWrapRecordPure,
@@ -77,6 +78,7 @@ import type {
   SealCommentEditRequest,
   SealReactionRequest,
   SealPostRequest,
+  SealPostEditRequest,
   OpenCommentsRequest,
   OpenReactionsRequest,
   OpenPostsRequest,
@@ -197,6 +199,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'sealPost':
       await sealPost(req)
+      return
+    case 'sealPostEdit':
+      await sealPostEdit(req)
       return
     case 'sealComment':
       await sealComment(req)
@@ -366,6 +371,14 @@ async function sealCommentEdit(req: SealCommentEditRequest): Promise<void> {
   const keys = requireLiveKeys(req.userId, 'edit a comment')
   const result = await sealCommentEditPure(keys, req)
   post({ kind: 'sealCommentEditDone', id: req.id, result })
+}
+
+/** Seals and signs an edit of the caller's own post -- #45. Same guards as sealPost. */
+async function sealPostEdit(req: SealPostEditRequest): Promise<void> {
+  rotation.assertIdle('edit a post')
+  const keys = requireLiveKeys(req.userId, 'edit a post')
+  const result = await sealPostEditPure(keys, req)
+  post({ kind: 'sealPostEditDone', id: req.id, result })
 }
 
 async function sealPost(req: SealPostRequest): Promise<void> {

@@ -840,6 +840,42 @@ export interface SealPostRequest {
   readonly body: string
 }
 
+/**
+ * #45: seals and signs an EDIT of the caller's own post. `at` is the post's
+ * original write time, kept; the edit time is the worker's clock, and the signed
+ * day is the later of today and the post's filing day. See credential-material.ts's
+ * sealPostEdit.
+ */
+export interface SealPostEditRequest {
+  readonly kind: 'sealPostEdit'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  readonly sortKey: string
+  readonly generation: number
+  readonly postGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly { generation: number; wrapped: { nonce: string; ciphertext: string } }[]
+  readonly title: string
+  readonly body: string
+  readonly at: string
+}
+
+export interface SealedPostEdit {
+  readonly sortKey: string
+  readonly generation: number
+  readonly signedDay: string
+  readonly nonce: string
+  readonly ciphertext: string
+  readonly signature: string
+}
+
+export interface SealPostEditResponse {
+  readonly kind: 'sealPostEditDone'
+  readonly id: string
+  readonly result: SealedPostEdit
+}
+
 /** #44: seals and signs a comment. See credential-material.ts's sealComment. */
 export interface SealCommentRequest {
   readonly kind: 'sealComment'
@@ -1180,6 +1216,7 @@ export type WorkerRequest =
   | DecryptGroupNamesRequest
   | EncryptGroupTextRequest
   | SealPostRequest
+  | SealPostEditRequest
   | SealCommentRequest
   | SealCommentEditRequest
   | SealReactionRequest
@@ -1222,6 +1259,7 @@ export type WorkerResponse =
   | DecryptGroupNamesResponse
   | EncryptGroupTextResponse
   | SealPostResponse
+  | SealPostEditResponse
   | SealCommentResponse
   | SealCommentEditResponse
   | SealReactionResponse

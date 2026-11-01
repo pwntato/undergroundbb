@@ -41,6 +41,7 @@ import {
   sealPost,
   sealComment,
   sealCommentEdit,
+  sealPostEdit,
   openComments,
   sealReaction,
   openReactions,
@@ -50,6 +51,7 @@ import {
 import { encodeComment } from './comment.js'
 import { REACTIONS } from './reaction.js'
 import { checkCommentSignature } from './comment-check.js'
+import { checkPostSignature, postTimeSuspect } from './post-check.js'
 import * as ed25519 from './ed25519.js'
 import {
   admissionPayload,
@@ -1088,6 +1090,103 @@ describe('decryptGroupNames', () => {
           now,
         ),
       ).rejects.toThrow()
+    })
+  })
+
+  describe('sealPostEdit (#45)', () => {
+    const groupId = 'group-uuid-test-post-edit'
+    const sortKey = 'POST#2026-10-28#00112233445566ff'
+    const at = '2026-10-28T12:34:56.789Z'
+
+    async function setup(fill: number) {
+      const groupKey = new Uint8Array(32).fill(fill)
+      const { keys, wrappedGroupKey } = await setUpMemberWithGroup(groupId, groupKey)
+      const base = { groupId, generation: 0, postGeneration: 0, wrappedGroupKey, sortKey, at }
+      const author = { signingPublicKey: bytesToBase64(keys.signingKey.publicKey), keyChanges: [] }
+      const open = async (sealed: { nonce: string; ciphertext: string }) =>
+        decodePost(
+          await decrypt(
+            groupKey,
+            base64ToBytes(sealed.nonce),
+            base64ToBytes(sealed.ciphertext),
+            postAAD(groupId, sortKey, 0),
+          ),
+        )
+      const verdict = (sealed: Awaited<ReturnType<typeof sealPostEdit>>) =>
+        checkPostSignature({
+          groupId,
+          authorUserId: keys.userId,
+          sortKey,
+          generation: 0,
+          ciphertext: sealed.ciphertext,
+          signature: sealed.signature,
+          signedDay: sealed.signedDay,
+          author,
+        }).kind
+      return { keys, base, open, verdict }
+    }
+
+    it('keeps the sort key and original time, adds the edit time and signs the edit day', async () => {
+      const { keys, base, open, verdict } = await setup(81)
+      const now = new Date('2026-10-30T08:00:01.002Z')
+      const first = await sealPost(keys, { ...base, title: 'a', body: 'b' }, new Date(at))
+      const edited = await sealPostEdit(keys, { ...base, title: 'new', body: 'text' }, now)
+      expect(edited.sortKey).toBe(sortKey)
+      expect(edited.signedDay).toBe('2026-10-30')
+      expect(edited.nonce).not.toBe(first.nonce)
+      const content = await open(edited)
+      expect(content).toEqual({ title: 'new', body: 'text', at, editedAt: now.toISOString() })
+      expect(
+        postTimeSuspect({ sortKey, signedDay: edited.signedDay, at, editedAt: content.editedAt }),
+      ).toBe(false)
+      expect(verdict(edited)).toBe('valid')
+    })
+
+    it('signs the filing day when the clock runs behind it, so the server and readers accept the edit', async () => {
+      const { keys, base, open, verdict } = await setup(82)
+      // Today is the day BEFORE the post was filed (a slow clock).
+      const edited = await sealPostEdit(
+        keys,
+        { ...base, title: 't', body: 'b' },
+        new Date('2026-10-27T23:00:00.000Z'),
+      )
+      expect(edited.signedDay).toBe('2026-10-28')
+      const content = await open(edited)
+      // Never before the original time, and on the signed day.
+      expect(content.editedAt).toBe(at)
+      expect(
+        postTimeSuspect({ sortKey, signedDay: edited.signedDay, at, editedAt: content.editedAt }),
+      ).toBe(false)
+      expect(verdict(edited)).toBe('valid')
+    })
+
+    it('edits on the filing day itself: signed that day, edit time is now', async () => {
+      const { keys, base, open, verdict } = await setup(83)
+      const now = new Date('2026-10-28T20:00:00.000Z')
+      const edited = await sealPostEdit(keys, { ...base, title: 't', body: 'b' }, now)
+      expect(edited.signedDay).toBe('2026-10-28')
+      expect((await open(edited)).editedAt).toBe(now.toISOString())
+      expect(verdict(edited)).toBe('valid')
+    })
+
+    it('keeps the edit time from going before the original time on the same day', async () => {
+      const { keys, base, open } = await setup(84)
+      // The clock reads earlier in the filing day than the post was written.
+      const edited = await sealPostEdit(
+        keys,
+        { ...base, title: 't', body: 'b' },
+        new Date('2026-10-28T01:00:00.000Z'),
+      )
+      expect((await open(edited)).editedAt).toBe(at)
+    })
+
+    it('refuses something that is not a post sort key', async () => {
+      const { keys, base } = await setup(85)
+      for (const bad of ['', 'CMT#0001', 'POST#2026-10-28#xyz', 'POST#today#00112233445566ff']) {
+        await expect(
+          sealPostEdit(keys, { ...base, sortKey: bad, title: 't', body: 'b' }, new Date(at)),
+        ).rejects.toThrow()
+      }
     })
   })
 

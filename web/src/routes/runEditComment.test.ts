@@ -192,12 +192,16 @@ describe('submitCommentEdit', () => {
 
 describe('classifyEditError', () => {
   it('treats anything that is not an API answer as no answer', () => {
-    expect(classifyEditError(new TypeError('x'))).toBe('ambiguous')
+    expect(classifyEditError(new TypeError('x'), 'comment_gone')).toBe('ambiguous')
   })
   it('does not retry a bare 400 or an unknown 409', () => {
-    expect(classifyEditError(new ApiError(400, 'bad_signature', 'bad_signature'))).toMatchObject({
+    expect(
+      classifyEditError(new ApiError(400, 'bad_signature', 'bad_signature'), 'comment_gone'),
+    ).toMatchObject({
       fail: 'rejected',
     })
-    expect(classifyEditError(conflict('something_new'))).toMatchObject({ fail: 'rejected' })
+    expect(classifyEditError(conflict('something_new'), 'comment_gone')).toMatchObject({
+      fail: 'rejected',
+    })
   })
 })

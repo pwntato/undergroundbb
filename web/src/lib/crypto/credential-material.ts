@@ -44,7 +44,7 @@ import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
 import { decodeComment, encodeComment, type CommentContent } from './comment.js'
 import { decodeReaction, encodeReaction } from './reaction.js'
-import { decodePost, encodePost } from './post.js'
+import { decodePost, encodePost, type PostContent } from './post.js'
 import { signedPayload } from './payload.js'
 import { verificationPayload } from './verification.js'
 import {
@@ -1190,18 +1190,7 @@ async function decryptOneGroupName(
  */
 export async function sealPost(
   keys: LiveKeys,
-  req: {
-    readonly groupId: string
-    readonly generation: number
-    readonly postGeneration: number
-    readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
-    readonly chain?: readonly {
-      generation: number
-      wrapped: { nonce: string; ciphertext: string }
-    }[]
-    readonly title: string
-    readonly body: string
-  },
+  req: SealPostMaterial & { readonly title: string; readonly body: string },
   now: Date = new Date(),
 ): Promise<{
   sortKey: string
@@ -1210,6 +1199,87 @@ export async function sealPost(
   ciphertext: string
   signature: string
 }> {
+  const day = now.toISOString().slice(0, 10)
+  const sortKey = `POST#${day}#${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`
+  const sealed = await sealPostContent(
+    keys,
+    req,
+    sortKey,
+    { title: req.title, body: req.body, at: now.toISOString() },
+    day,
+  )
+  return {
+    sortKey,
+    generation: req.postGeneration,
+    nonce: sealed.nonce,
+    ciphertext: sealed.ciphertext,
+    signature: sealed.signature,
+  }
+}
+
+const POST_SORT_KEY = /^POST#(\d{4}-\d{2}-\d{2})#[0-9a-f]{16}$/
+
+/**
+ * #45: seals an EDIT of one's own post. The sort key is the post's own and does
+ * not change; `at` stays the original write time and `editedAt` is set (version
+ * 2, post.ts). The signature covers the sort key and the edit's day, which is the
+ * LATER of today and the day the post was filed: the server refuses an edit
+ * signed before the filing day (readers would show it as an invalid signature),
+ * so a device whose clock runs behind still gets a valid edit. `editedAt` follows
+ * the same rule, so it stays on the signed day and never before `at`.
+ */
+export async function sealPostEdit(
+  keys: LiveKeys,
+  req: SealPostMaterial & {
+    readonly sortKey: string
+    readonly title: string
+    readonly body: string
+    /** The post's original write time, kept by the edit. */
+    readonly at: string
+  },
+  now: Date = new Date(),
+): Promise<{
+  sortKey: string
+  generation: number
+  signedDay: string
+  nonce: string
+  ciphertext: string
+  signature: string
+}> {
+  const filed = POST_SORT_KEY.exec(req.sortKey)?.[1]
+  if (filed === undefined) throw new Error('post: not a post sort key')
+  const today = now.toISOString().slice(0, 10)
+  const day = today > filed ? today : filed
+  const nowIso = now.toISOString()
+  const editedAt = nowIso > req.at ? nowIso : req.at
+  const sealed = await sealPostContent(
+    keys,
+    req,
+    req.sortKey,
+    { title: req.title, body: req.body, at: req.at, editedAt },
+    day,
+  )
+  return { sortKey: req.sortKey, generation: req.postGeneration, signedDay: day, ...sealed }
+}
+
+interface SealPostMaterial {
+  readonly groupId: string
+  readonly generation: number
+  readonly postGeneration: number
+  readonly wrappedGroupKey: { ephemeralPub: string; nonce: string; ciphertext: string }
+  readonly chain?: readonly {
+    generation: number
+    wrapped: { nonce: string; ciphertext: string }
+  }[]
+}
+
+async function sealPostContent(
+  keys: LiveKeys,
+  req: SealPostMaterial,
+  sortKey: string,
+  content: PostContent,
+  day: string,
+): Promise<{ nonce: string; ciphertext: string; signature: string }> {
   const ownKey = await unwrap(
     keys.wrappingKey.privateKey,
     {
@@ -1226,11 +1296,9 @@ export async function sealPost(
     req.postGeneration,
     req.chain ?? [],
   )
-  const day = now.toISOString().slice(0, 10)
-  const sortKey = `POST#${day}#${bytesToHex(crypto.getRandomValues(new Uint8Array(8)))}`
   const sealed = await encrypt(
     groupKey,
-    encodePost({ title: req.title, body: req.body, at: now.toISOString() }),
+    encodePost(content),
     postAAD(req.groupId, sortKey, req.postGeneration),
   )
   const signature = ed25519.sign(
@@ -1239,8 +1307,6 @@ export async function sealPost(
     signedPayload(keys.userId, req.groupId, sortKey, req.postGeneration, day, sealed.ciphertext),
   )
   return {
-    sortKey,
-    generation: req.postGeneration,
     nonce: bytesToBase64(sealed.nonce),
     ciphertext: bytesToBase64(sealed.ciphertext),
     signature: bytesToBase64(signature),
