@@ -139,6 +139,19 @@ describe('nextControlsState', () => {
       { type: 'failed', message: "Couldn't save the comment. Try again." },
     ])
     expect(nextControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
+    // A later failure that is not "gone" replaces the mark; typing clears it with the error.
+    const goneThenOther = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'failed', message: "Couldn't save the comment. Try again." },
+    ])
+    expect(nextControlsState(goneThenOther, { type: 'firstPageFailed' })).toBe(goneThenOther)
+    const goneThenTyped = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'draftEdited', draft: 'more' },
+    ])
+    expect(nextControlsState(goneThenTyped, { type: 'firstPageFailed' })).toBe(goneThenTyped)
     // Typing clears an older error, so a draft is never closed because of a stale one.
     const typedAfterError = run([
       { type: 'editOpened', path: '0001', text: 'a' },

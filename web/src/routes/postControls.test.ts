@@ -84,6 +84,13 @@ describe('nextPostControlsState', () => {
     expect(nextPostControlsState(editing, { type: 'firstPageFailed' })).toBe(editing)
     const asking = run([{ type: 'deleteAsked', sortKey: 'P1' }])
     expect(nextPostControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // A later failure that is not "gone" replaces the mark.
+    const goneThenOther = run([
+      open('P1'),
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'failed', message: "Couldn't save. Try again." },
+    ])
+    expect(nextPostControlsState(goneThenOther, { type: 'firstPageFailed' })).toBe(goneThenOther)
     // An error that does not say "gone" (a failed save, say) does not close a form either.
     const failedSave = run([open('P1'), { type: 'failed', message: "Couldn't save. Try again." }])
     expect(nextPostControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
