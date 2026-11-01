@@ -151,7 +151,7 @@ describe('saveEditPost', () => {
     e.open()
     await e.save()
     expect(h.reload).toHaveBeenCalledTimes(1)
-    expect(h.controls().error).toBe(POST_EDIT_ERRORS.gone)
+    expect(h.controls()).toMatchObject({ error: POST_EDIT_ERRORS.gone, gone: true })
     h.io.dispatchControls({ type: 'firstPageLoaded', liveKeys: [] })
     expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, error: POST_EDIT_ERRORS.gone })
   })
@@ -246,7 +246,7 @@ describe('confirmDeletePost', () => {
   it('reloads when the post is gone (404)', async () => {
     const h = harness()
     await run(h, vi.fn().mockRejectedValue(new ApiError(404, 'post not found')))()
-    expect(h.controls().error).toBe(POST_DELETE_ERRORS.gone)
+    expect(h.controls()).toMatchObject({ error: POST_DELETE_ERRORS.gone, gone: true })
     expect(h.reload).toHaveBeenCalledTimes(1)
   })
 

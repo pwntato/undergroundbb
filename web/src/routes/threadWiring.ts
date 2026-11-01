@@ -75,6 +75,7 @@ export async function loadPageInto(
       livePaths: result.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
     })
   }
+  if (cursor === undefined && !result.ok) io.dispatchControls({ type: 'firstPageFailed' })
   if (!result.ok && result.kind === 'coldKeys') io.onColdKeys(io.liveReply())
 }
 
@@ -435,7 +436,9 @@ export async function saveEdit(
     result.kind === 'rejected' ? (result.message ?? EDIT_ERRORS.rejected) : EDIT_ERRORS[result.kind]
   // The post is gone for writing: stop offering Edit.
   io.dispatchControls(
-    result.kind === 'notFound' ? { type: 'madeReadOnly', message } : { type: 'failed', message },
+    result.kind === 'notFound'
+      ? { type: 'madeReadOnly', message }
+      : { type: 'failed', message, gone: result.kind === 'gone' },
   )
   if (result.kind === 'coldKeys') io.onColdKeys(io.liveReply())
   // The comment was deleted meanwhile: show the thread as it is now.
@@ -464,7 +467,7 @@ export async function confirmDelete(
     if (err instanceof ApiError && err.status === 401) {
       io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.authRequired })
     } else if (err instanceof ApiError && err.status === 404) {
-      io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.gone })
+      io.dispatchControls({ type: 'failed', message: DELETE_ERRORS.gone, gone: true })
       io.reload()
     } else if (err instanceof ApiError && err.status === 403) {
       io.dispatchControls({ type: 'failed', message: err.message })

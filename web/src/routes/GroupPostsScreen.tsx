@@ -149,6 +149,7 @@ function PostsList({
         setError(PAGE_ERRORS[result.kind])
         setCanRetry(result.kind === 'failed' || result.kind === 'chain')
         if (result.kind === 'coldKeys') onColdKeys()
+        if (first) dispatchControls({ type: 'firstPageFailed' })
         return
       }
       // A post already shown (a cursor served twice) is dropped, not duplicated.

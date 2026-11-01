@@ -78,4 +78,67 @@ describe('nextPostControlsState', () => {
     const busy = run([open('P1'), { type: 'started' }])
     expect(nextPostControlsState(busy, { type: 'firstPageLoaded', liveKeys: [] })).toBe(busy)
   })
+
+  it.each<[string, PostControlsEvent]>([
+    ['editOpened', open('P2')],
+    ['deleteAsked', { type: 'deleteAsked', sortKey: 'P2' }],
+    ['closed', { type: 'closed' }],
+    ['started', { type: 'started' }],
+    ['finished', { type: 'finished' }],
+  ])('%s clears the gone mark together with the error', (_name, event) => {
+    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted', gone: true }])
+    expect(gone).toMatchObject({ gone: true, error: 'it was deleted' })
+    expect(nextPostControlsState(gone, event)).toMatchObject({ gone: false, error: null })
+  })
+
+  it('keeps a form that holds no error when the first page fails: the reload had another cause', () => {
+    const editing = run([open('P1')])
+    expect(nextPostControlsState(editing, { type: 'firstPageFailed' })).toBe(editing)
+    const asking = run([{ type: 'deleteAsked', sortKey: 'P1' }])
+    expect(nextPostControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // Opening another edit clears the mark: after a gone failure whose reload worked and
+    // closed the form, a new form must not be closed by a reload it had nothing to do with.
+    const reopened = run([
+      open('P1'),
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'firstPageLoaded', liveKeys: [] },
+      open('P2'),
+    ])
+    expect(reopened).toMatchObject({ mode: { kind: 'editing', sortKey: 'P2' }, error: null })
+    expect(nextPostControlsState(reopened, { type: 'firstPageFailed' })).toBe(reopened)
+    // A later failure that is not "gone" replaces the mark.
+    const goneThenOther = run([
+      open('P1'),
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'failed', message: "Couldn't save. Try again." },
+    ])
+    expect(nextPostControlsState(goneThenOther, { type: 'firstPageFailed' })).toBe(goneThenOther)
+    // An error that does not say "gone" (a failed save, say) does not close a form either.
+    const failedSave = run([open('P1'), { type: 'failed', message: "Couldn't save. Try again." }])
+    expect(nextPostControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
+  })
+
+  it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
+    const gone = run([open('P1'), { type: 'failed', message: 'it was deleted', gone: true }])
+    expect(nextPostControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const asking = run([
+      { type: 'deleteAsked', sortKey: 'P1' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+    ])
+    expect(nextPostControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({
+      kind: 'idle',
+    })
+    const idle = run([])
+    expect(nextPostControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
+    // Through events a request in flight has no gone mark (`started` clears it), so build the
+    // state by hand to check the busy guard itself.
+    const busy: PostControlsState = { ...gone, busy: true }
+    expect(busy).toMatchObject({ busy: true, gone: true })
+    expect(nextPostControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+    const started = run([open('P1'), { type: 'started' }])
+    expect(nextPostControlsState(started, { type: 'firstPageFailed' })).toBe(started)
+  })
 })

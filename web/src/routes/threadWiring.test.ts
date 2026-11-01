@@ -107,6 +107,100 @@ describe('loadPageInto', () => {
     expect(h.reply()).toMatchObject({ replyTo: null, draft: 'typed', error: TARGET_GONE_MESSAGE })
   })
 
+  it('closes an open form, keeping its error, when the first page cannot be loaded', async () => {
+    const h = harness()
+    h.setControls({
+      mode: { kind: 'editing', path: '0001', draft: 'x', original: 'y' },
+      busy: false,
+      error: 'This comment was deleted, so it can no longer be edited.',
+      gone: true,
+      readOnly: false,
+    })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve({ ok: false, kind: 'failed' }),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls()).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'This comment was deleted, so it can no longer be edited.',
+    })
+  })
+
+  it('keeps an edit draft through a failed first-page reload that something else caused, and restores the form on a working retry', async () => {
+    const h = harness()
+    h.io.dispatchControls({ type: 'editOpened', path: '0001', text: 'original' })
+    h.io.dispatchControls({ type: 'draftEdited', draft: 'half-typed edit' })
+    // A reload from a sent reply: the thread starts over, then the first page fails.
+    h.io.dispatch({ type: 'reset' })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve({ ok: false, kind: 'failed' }),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', draft: 'half-typed edit' })
+    // Retry works and the comment is still live: the form is still there with its draft.
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', draft: 'half-typed edit' })
+  })
+
+  it('keeps an edit draft through a failed first-page reload when an unrelated error is still showing', async () => {
+    const h = harness()
+    h.io.dispatchControls({ type: 'editOpened', path: '0001', text: 'original' })
+    h.io.dispatchControls({ type: 'draftEdited', draft: 'half-typed edit' })
+    h.io.dispatchControls({ type: 'started' })
+    h.io.dispatchControls({ type: 'failed', message: "Couldn't save the comment. Try again." })
+    // A reply sent from the reply box reloads the thread; its first page fails.
+    h.io.dispatch({ type: 'reset' })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve({ ok: false, kind: 'failed' }),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', original: 'original' })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', original: 'original' })
+  })
+
+  it('leaves an open form alone when a later page fails, since the first page is still on screen', async () => {
+    const h = harness()
+    const open: ControlsState = {
+      mode: { kind: 'editing', path: '0001', draft: 'x', original: 'y' },
+      busy: false,
+      // An error that would close the form if the event were sent: only the page number saves it.
+      error: 'This comment was deleted, so it can no longer be edited.',
+      gone: true,
+      readOnly: false,
+    }
+    h.setControls(open)
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve({ ok: false, kind: 'failed' }),
+      () => true,
+      '0050',
+      false,
+    )
+    expect(h.controls()).toBe(open)
+  })
+
   it('keeps a target that is on the first page', async () => {
     const h = harness({ replyTo: '0001', draft: 'typed' })
     await loadPageInto(
@@ -941,7 +1035,7 @@ describe('saveEdit', () => {
     e.open()
     await e.save()
     expect(e.reload).toHaveBeenCalledTimes(1)
-    expect(h.controls().error).toBe(EDIT_ERRORS.gone)
+    expect(h.controls()).toMatchObject({ error: EDIT_ERRORS.gone, gone: true })
     await loadPageInto(
       h.io,
       () => Promise.resolve(page(['0002'])),
@@ -1031,7 +1125,7 @@ describe('confirmDelete', () => {
     const h = harness()
     const r = run(h, vi.fn().mockRejectedValue(new ApiError(404, 'comment not found')))
     await r.go()
-    expect(h.controls().error).toBe(DELETE_ERRORS.gone)
+    expect(h.controls()).toMatchObject({ error: DELETE_ERRORS.gone, gone: true })
     expect(r.reload).toHaveBeenCalledTimes(1)
   })
 

@@ -91,6 +91,7 @@ export async function saveEditPost(
       result.kind === 'rejected'
         ? (result.message ?? POST_EDIT_ERRORS.rejected)
         : POST_EDIT_ERRORS[result.kind],
+    gone: result.kind === 'gone',
   })
   if (result.kind === 'coldKeys') io.onColdKeys()
   // The post was deleted meanwhile: show the list as it is now.
@@ -115,7 +116,7 @@ export async function confirmDeletePost(
     if (err instanceof ApiError && err.status === 401) {
       io.dispatchControls({ type: 'failed', message: POST_DELETE_ERRORS.authRequired })
     } else if (err instanceof ApiError && err.status === 404) {
-      io.dispatchControls({ type: 'failed', message: POST_DELETE_ERRORS.gone })
+      io.dispatchControls({ type: 'failed', message: POST_DELETE_ERRORS.gone, gone: true })
       io.reload()
     } else if (err instanceof ApiError && err.status === 403) {
       io.dispatchControls({ type: 'failed', message: err.message })

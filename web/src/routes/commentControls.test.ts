@@ -105,6 +105,94 @@ describe('nextControlsState', () => {
     })
   })
 
+  it('closes a form when the first page fails to load, keeping the reason, and not during a send', () => {
+    const gone = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+    ])
+    expect(nextControlsState(gone, { type: 'firstPageFailed' })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const asking = run([
+      { type: 'deleteAsked', path: '0001' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+    ])
+    expect(nextControlsState(asking, { type: 'firstPageFailed' }).mode).toEqual({ kind: 'idle' })
+    const idle = run([])
+    expect(nextControlsState(idle, { type: 'firstPageFailed' })).toBe(idle)
+    // Through events a request in flight has no gone mark (`started` clears it), so build the
+    // state by hand to check the busy guard itself.
+    const busy: ControlsState = { ...gone, busy: true }
+    expect(busy).toMatchObject({ busy: true, gone: true })
+    expect(nextControlsState(busy, { type: 'firstPageFailed' })).toBe(busy)
+    const started = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
+    expect(nextControlsState(started, { type: 'firstPageFailed' })).toBe(started)
+  })
+
+  it('keeps a form that holds no error when the first page fails: the reload had another cause', () => {
+    const typing = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'draftEdited', draft: 'half-typed edit' },
+    ])
+    expect(nextControlsState(typing, { type: 'firstPageFailed' })).toBe(typing)
+    const asking = run([{ type: 'deleteAsked', path: '0001' }])
+    expect(nextControlsState(asking, { type: 'firstPageFailed' })).toBe(asking)
+    // An error that does not say "gone" (a failed save, say) does not close a form either.
+    const failedSave = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: "Couldn't save the comment. Try again." },
+    ])
+    expect(nextControlsState(failedSave, { type: 'firstPageFailed' })).toBe(failedSave)
+    // A later failure that is not "gone" replaces the mark; typing clears it with the error.
+    const goneThenOther = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'failed', message: "Couldn't save the comment. Try again." },
+    ])
+    expect(nextControlsState(goneThenOther, { type: 'firstPageFailed' })).toBe(goneThenOther)
+    const goneThenTyped = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'draftEdited', draft: 'more' },
+    ])
+    expect(nextControlsState(goneThenTyped, { type: 'firstPageFailed' })).toBe(goneThenTyped)
+    // Opening another edit clears the mark: after a gone failure whose reload worked and
+    // closed the form, a new form must not be closed by a reload it had nothing to do with.
+    const reopened = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+      { type: 'firstPageLoaded', livePaths: ['0002'] },
+      { type: 'editOpened', path: '0002', text: 'b' },
+    ])
+    expect(reopened).toMatchObject({ mode: { kind: 'editing', path: '0002' }, error: null })
+    expect(nextControlsState(reopened, { type: 'firstPageFailed' })).toBe(reopened)
+    // Typing clears an older error, so a draft is never closed because of a stale one.
+    const typedAfterError = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'busy' },
+      { type: 'draftEdited', draft: 'more' },
+    ])
+    expect(nextControlsState(typedAfterError, { type: 'firstPageFailed' })).toBe(typedAfterError)
+  })
+
+  it.each<[string, ControlsEvent]>([
+    ['editOpened', { type: 'editOpened', path: '0002', text: 'b' }],
+    ['draftEdited', { type: 'draftEdited', draft: 'more' }],
+    ['deleteAsked', { type: 'deleteAsked', path: '0002' }],
+    ['closed', { type: 'closed' }],
+    ['started', { type: 'started' }],
+    ['finished', { type: 'finished' }],
+    ['madeReadOnly', { type: 'madeReadOnly', message: null }],
+  ])('%s clears the gone mark together with the error', (_name, event) => {
+    const gone = run([
+      { type: 'editOpened', path: '0001', text: 'a' },
+      { type: 'failed', message: 'it was deleted', gone: true },
+    ])
+    expect(gone).toMatchObject({ gone: true, error: 'it was deleted' })
+    expect(nextControlsState(gone, event)).toMatchObject({ gone: false, error: null })
+  })
+
   it('does not close a form during a send, since the answer is still coming', () => {
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
     expect(nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [] })).toBe(busy)
