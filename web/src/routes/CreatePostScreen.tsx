@@ -16,16 +16,15 @@ import type { SealedPost } from '@/lib/crypto/worker-protocol'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { CreatePostPanel } from './CreatePostPanel'
-import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import {
   DEFAULT_POST_LIMITS,
   FORM_PROBLEMS,
   preparePost,
+  SEND_ERRORS,
   sendPost,
   type PostLimits,
   type PrepareResult,
-  type SendResult,
 } from './runCreatePost'
 
 const PREPARE_ERRORS: Record<Exclude<PrepareResult, { ok: true }>['kind'], string> = {
@@ -38,20 +37,6 @@ const PREPARE_ERRORS: Record<Exclude<PrepareResult, { ok: true }>['kind'], strin
   unreadable:
     "Couldn't open this group's key, so the post was not written. Reload the page and try again.",
   failed: "Couldn't load this group. Try again.",
-}
-
-const SEND_ERRORS: Record<Exclude<SendResult, { ok: true }>['kind'], string> = {
-  reseal: 'The group changed while you were writing. Press Post again to send it with the new key.',
-  behind:
-    'Your key for this group is behind. Wait for the key rotation to reach you, then try again.',
-  dormant:
-    'You rotated your keys and an admin has not approved them for this group yet. Ask an admin to approve you from Members.',
-  authRequired: 'Your session has expired. Log in again and retry.',
-  notFound: 'This group no longer exists, or you are no longer a member.',
-  clockSkew: CLOCK_SKEW_MESSAGE,
-  rejected: 'The server rejected the post.',
-  ambiguous:
-    "We couldn't confirm whether the post was saved. Press Post again to send the same post; it will not be posted twice.",
 }
 
 export function CreatePostScreen() {
