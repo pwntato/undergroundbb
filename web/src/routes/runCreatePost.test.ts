@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { GroupDetail } from '@/lib/api/groups'
 import type { SealedPost } from '@/lib/crypto/worker-protocol'
 import {
   canSubmitPostForm,
   DEFAULT_POST_LIMITS,
   preparePost,
+  sendErrorText,
   sendPost,
   validatePostForm,
   type PrepareDeps,
@@ -212,6 +214,12 @@ describe('sendPost', () => {
     expect(await send(new ApiError(404, 'x'))).toEqual({ ok: false, kind: 'notFound' })
   })
 
+  it('names a refused post day (clock_skew) as its own failure, not a generic rejection', async () => {
+    expect(
+      await send(new ApiError(400, 'sortKey: day is not within tolerance', 'clock_skew')),
+    ).toEqual({ ok: false, kind: 'clockSkew' })
+  })
+
   it('shows the server message for any other refusal', async () => {
     expect(await send(new ApiError(400, 'ciphertext: too long', 'x'))).toEqual({
       ok: false,
@@ -250,5 +258,20 @@ describe('canSubmitPostForm', () => {
     expect(canSubmitPostForm({ ...ok, title: '', unchangedFrom: { title: 'T', body: 'b' } })).toBe(
       false,
     )
+  })
+})
+
+describe('sendErrorText', () => {
+  it('shows the shared clock message for a refused post day, not the server text', () => {
+    expect(sendErrorText({ ok: false, kind: 'clockSkew', message: 'raw server text' })).toBe(
+      CLOCK_SKEW_MESSAGE,
+    )
+  })
+
+  it('shows the server text for a plain rejection, and the table text when it has none', () => {
+    expect(sendErrorText({ ok: false, kind: 'rejected', message: 'ciphertext: too long' })).toBe(
+      'ciphertext: too long',
+    )
+    expect(sendErrorText({ ok: false, kind: 'rejected' })).toBe('The server rejected the post.')
   })
 })

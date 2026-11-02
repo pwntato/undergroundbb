@@ -11,6 +11,7 @@ import { ApiError } from '@/lib/api/auth'
 import type { CreatePostRequest, GroupDetail } from '@/lib/api/groups'
 import { utf8Length } from '@/lib/crypto/post'
 import type { SealedPost } from '@/lib/crypto/worker-protocol'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 
 export interface PostLimits {
@@ -202,11 +203,32 @@ export type SendResult =
         | 'authRequired'
         | 'notFound'
         | 'rejected'
+        // The server refused the post's day: this device's clock is off. Nothing to resend.
+        | 'clockSkew'
         // No answer, or a conflict with a send still in flight: the post may or
         // may not have landed. Send the same bytes again.
         | 'ambiguous'
       readonly message?: string
     }
+
+const SEND_ERRORS: Record<Exclude<SendResult, { ok: true }>['kind'], string> = {
+  reseal: 'The group changed while you were writing. Press Post again to send it with the new key.',
+  behind:
+    'Your key for this group is behind. Wait for the key rotation to reach you, then try again.',
+  dormant:
+    'You rotated your keys and an admin has not approved them for this group yet. Ask an admin to approve you from Members.',
+  authRequired: 'Your session has expired. Log in again and retry.',
+  notFound: 'This group no longer exists, or you are no longer a member.',
+  clockSkew: CLOCK_SKEW_MESSAGE,
+  rejected: 'The server rejected the post.',
+  ambiguous:
+    "We couldn't confirm whether the post was saved. Press Post again to send the same post; it will not be posted twice.",
+}
+
+/** The line the form shows for a failed send: the server's own text for a plain rejection, else the table's. */
+export function sendErrorText(sent: Exclude<SendResult, { ok: true }>): string {
+  return sent.kind === 'rejected' ? (sent.message ?? SEND_ERRORS.rejected) : SEND_ERRORS[sent.kind]
+}
 
 /** Posts a sealed post. Never throws. */
 export async function sendPost(
@@ -248,6 +270,8 @@ export async function sendPost(
         return { ok: false, kind: 'behind' }
       case 'member_dormant':
         return { ok: false, kind: 'dormant' }
+      case 'clock_skew':
+        return { ok: false, kind: 'clockSkew' }
     }
     return { ok: false, kind: 'rejected', message: err.message }
   }
