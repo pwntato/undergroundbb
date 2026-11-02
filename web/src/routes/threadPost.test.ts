@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ControlsEvent } from './commentControls'
 import type { PostControlsEvent } from './postControls'
-import type { DeletedPostView, PostView } from './runListPosts'
+import type { DeletedPostView, PostEntry, PostView } from './runListPosts'
 import { applyPostResult, POST_PROBLEMS, type ThreadPostIO } from './threadPost'
 
 const LIVE = { sortKey: 'POST#2026-10-28#0000000000000001' } as unknown as PostView
@@ -10,13 +10,17 @@ const GONE: DeletedPostView = { deleted: true, sortKey: LIVE.sortKey, day: '2026
 function io(hadPost = false) {
   const postEvents: PostControlsEvent[] = []
   const threadEvents: ControlsEvent[] = []
+  // Like the screen's: what is shown follows what setPost was last given.
+  let shown = hadPost
   const fake = {
-    setPost: vi.fn(),
+    setPost: vi.fn((post: PostEntry | null) => {
+      shown = post !== null
+    }),
     setProblem: vi.fn(),
     dispatchPostControls: (e: PostControlsEvent) => postEvents.push(e),
     dispatchControls: (e: ControlsEvent) => threadEvents.push(e),
     onColdKeys: vi.fn(),
-    hadPost: () => hadPost,
+    hadPost: () => shown,
   } satisfies ThreadPostIO
   return { fake, postEvents, threadEvents }
 }
