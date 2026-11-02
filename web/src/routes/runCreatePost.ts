@@ -211,7 +211,7 @@ export type SendResult =
       readonly message?: string
     }
 
-export const SEND_ERRORS: Record<Exclude<SendResult, { ok: true }>['kind'], string> = {
+const SEND_ERRORS: Record<Exclude<SendResult, { ok: true }>['kind'], string> = {
   reseal: 'The group changed while you were writing. Press Post again to send it with the new key.',
   behind:
     'Your key for this group is behind. Wait for the key rotation to reach you, then try again.',
@@ -223,6 +223,11 @@ export const SEND_ERRORS: Record<Exclude<SendResult, { ok: true }>['kind'], stri
   rejected: 'The server rejected the post.',
   ambiguous:
     "We couldn't confirm whether the post was saved. Press Post again to send the same post; it will not be posted twice.",
+}
+
+/** The line the form shows for a failed send: the server's own text for a plain rejection, else the table's. */
+export function sendErrorText(sent: Exclude<SendResult, { ok: true }>): string {
+  return sent.kind === 'rejected' ? (sent.message ?? SEND_ERRORS.rejected) : SEND_ERRORS[sent.kind]
 }
 
 /** Posts a sealed post. Never throws. */

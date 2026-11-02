@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { GroupDetail } from '@/lib/api/groups'
 import type { SealedPost } from '@/lib/crypto/worker-protocol'
 import {
   canSubmitPostForm,
   DEFAULT_POST_LIMITS,
   preparePost,
+  sendErrorText,
   sendPost,
   validatePostForm,
   type PrepareDeps,
@@ -256,5 +258,20 @@ describe('canSubmitPostForm', () => {
     expect(canSubmitPostForm({ ...ok, title: '', unchangedFrom: { title: 'T', body: 'b' } })).toBe(
       false,
     )
+  })
+})
+
+describe('sendErrorText', () => {
+  it('shows the shared clock message for a refused post day, not the server text', () => {
+    expect(sendErrorText({ ok: false, kind: 'clockSkew', message: 'raw server text' })).toBe(
+      CLOCK_SKEW_MESSAGE,
+    )
+  })
+
+  it('shows the server text for a plain rejection, and the table text when it has none', () => {
+    expect(sendErrorText({ ok: false, kind: 'rejected', message: 'ciphertext: too long' })).toBe(
+      'ciphertext: too long',
+    )
+    expect(sendErrorText({ ok: false, kind: 'rejected' })).toBe('The server rejected the post.')
   })
 })

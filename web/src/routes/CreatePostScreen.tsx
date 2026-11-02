@@ -21,7 +21,7 @@ import {
   DEFAULT_POST_LIMITS,
   FORM_PROBLEMS,
   preparePost,
-  SEND_ERRORS,
+  sendErrorText,
   sendPost,
   type PostLimits,
   type PrepareResult,
@@ -132,9 +132,7 @@ export function CreatePostScreen() {
         return
       }
       pending.current = sent.kind === 'ambiguous' ? { sealed, title, body } : null
-      setError(
-        sent.kind === 'rejected' ? (sent.message ?? SEND_ERRORS.rejected) : SEND_ERRORS[sent.kind],
-      )
+      setError(sendErrorText(sent))
     })()
   }
 
