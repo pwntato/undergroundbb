@@ -252,7 +252,7 @@ function PostsList({
   useEffect(() => {
     const seek = seekForm({
       formKey,
-      settled: !loading && error === null && posts.length > 0,
+      settled: !loading && error === null,
       shown: posts.map((p) => p.sortKey),
       live: posts.filter((p) => !isDeletedPost(p)).map((p) => p.sortKey),
       cursor,
