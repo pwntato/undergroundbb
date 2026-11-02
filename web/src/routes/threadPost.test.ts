@@ -31,7 +31,9 @@ describe('applyPostResult', () => {
     applyPostResult(fake, { ok: true, post: LIVE })
     expect(fake.setPost).toHaveBeenCalledWith(LIVE)
     expect(fake.setProblem).toHaveBeenCalledWith(null)
-    expect(postEvents).toEqual([{ type: 'firstPageLoaded', liveKeys: [LIVE.sortKey] }])
+    expect(postEvents).toEqual([
+      { type: 'firstPageLoaded', liveKeys: [LIVE.sortKey], hasMore: false },
+    ])
     expect(threadEvents).toEqual([])
   })
 
@@ -39,7 +41,7 @@ describe('applyPostResult', () => {
     const { fake, postEvents, threadEvents } = io()
     applyPostResult(fake, { ok: true, post: GONE })
     expect(fake.setPost).toHaveBeenCalledWith(GONE)
-    expect(postEvents).toEqual([{ type: 'firstPageLoaded', liveKeys: [] }])
+    expect(postEvents).toEqual([{ type: 'firstPageLoaded', liveKeys: [], hasMore: false }])
     expect(threadEvents).toEqual([{ type: 'madeReadOnly', message: null }])
   })
 

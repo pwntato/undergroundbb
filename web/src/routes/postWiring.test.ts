@@ -152,7 +152,7 @@ describe('saveEditPost', () => {
     await e.save()
     expect(h.reload).toHaveBeenCalledTimes(1)
     expect(h.controls()).toMatchObject({ error: POST_EDIT_ERRORS.gone, gone: true })
-    h.io.dispatchControls({ type: 'firstPageLoaded', liveKeys: [] })
+    h.io.dispatchControls({ type: 'firstPageLoaded', liveKeys: [], hasMore: false })
     expect(h.controls()).toMatchObject({ mode: { kind: 'idle' }, error: POST_EDIT_ERRORS.gone })
   })
 

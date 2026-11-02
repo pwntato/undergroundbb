@@ -321,7 +321,10 @@ or time looks wrong. Save waits until the text differs from the original.
 Delete asks "Delete this comment? Replies stay." and, like the edit form, says "Any member may have kept a copy of the
 original." A repeated delete is safe (a tombstone answers the same 204), so a failure with no clear answer is just tried
 again. A 404 on a new comment or an edit means the post was deleted (or the reader left): the thread turns **read-only**
-(no reply box, no Edit; Delete stays). The edit form is lost across the password step (the reply draft is kept).
+(no reply box, no Edit; Delete stays). An open edit form and the reply draft are kept across the password step
+(`savedEdits.ts`, #319). A restored form can hang on a comment that is not on the first page: the thread then loads
+later pages, one at a time, until the comment shows (`formSeek.ts`, #328), and closes the form only if the thread ends
+without it (the comment was deleted meanwhile).
 
 **For Edit and Delete on a post (#45, web).** `web/src/routes/runEditPost.ts`, `postControls.ts`, `postWiring.ts`, and the
 loop shared with comments in `runEdit.ts`. The same rules as for a comment (author edits, author or admin deletes, the
@@ -331,8 +334,9 @@ edit signed before the filing day, and a reader would show one as an invalid sig
 behind still gets a valid edit. `edited_at` follows the same rule (the later of now and `at`), so it stays on the signed
 day and never before `at`. The gone answer is `post_gone`. The edit form is the post form with a Save button, the
 advisory and Cancel; Save waits until the title or the body differs. Delete asks "Delete this post? Its comments stay,
-but nothing new can be added." and shows the same advisory. After either, the list starts over from its first page. The
-edit form is lost across the password step.
+but nothing new can be added." and shows the same advisory. After either, the list starts over from its first page. An
+open edit form is kept across the password step and, if its post is on an older page, the list loads older pages until it
+shows (#328); it closes only if the list ends without the post.
 
 **For the reply box (#44).** `web/src/routes/runCreateComment.ts`. The client picks the path: one past the highest
 direct child it has loaded under the parent, which can be wrong when the thread is paged or someone replied meanwhile.
