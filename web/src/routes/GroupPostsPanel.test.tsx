@@ -43,6 +43,7 @@ function controlsOf(over: Partial<PostListControls> = {}): PostListControls {
     limits: { maxTitleBytes: 200, maxBodyBytes: 10000 },
     onEditOpen: () => {},
     onSave: () => {},
+    onDraft: () => {},
     onDeleteAsk: () => {},
     onDeleteConfirm: () => {},
     onClose: () => {},
@@ -333,6 +334,28 @@ describe('Edit and Delete on a post (#45)', () => {
     expect(form['idPrefix']).toBe(`edit-${mine.sortKey}`)
     ;(form['onSubmit'] as (t: string, b: string) => void)('t2', 'b2')
     expect(calls).toEqual([['t2', 'b2']])
+  })
+
+  it('opens the form on what was typed, compares Save against what it was opened with, and reports typing (#319)', () => {
+    const typed: [string, string][] = []
+    const tree = PostControls({
+      post: mine,
+      controls: controlsOf({
+        mode: {
+          kind: 'editing',
+          sortKey: mine.sortKey,
+          title: 'Hello',
+          body: 'old',
+          draft: { title: 'Hello!', body: 'new' },
+        },
+        onDraft: (t, b) => typed.push([t, b]),
+      }),
+    })
+    const form = elementsOf(tree).find((e) => e.type === CreatePostPanel)!.props
+    expect(form['initial']).toEqual({ title: 'Hello!', body: 'new' })
+    expect(form['unchangedFrom']).toEqual({ title: 'Hello', body: 'old' })
+    ;(form['onDraft'] as (t: string, b: string) => void)('Hello!!', 'newer')
+    expect(typed).toEqual([['Hello!!', 'newer']])
   })
 
   it('shows the confirmation with the question, the advisory, and Delete and Cancel', () => {
