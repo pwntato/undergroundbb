@@ -29,7 +29,7 @@
 // is ordered within each page only.
 
 import { ApiError } from '@/lib/api/auth'
-import type { GroupDetail, ListPostsResponse, WireLivePost } from '@/lib/api/groups'
+import type { GroupDetail, ListPostsResponse, WireLivePost, WirePost } from '@/lib/api/groups'
 import type { UserDetail } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import type { OwnKeyHistory } from '@/lib/crypto/own-history'
@@ -84,6 +84,9 @@ export interface ListPostsDeps {
     keyEpoch: number,
   ) => Promise<void>
 }
+
+/** What opening a set of served posts needs. */
+type OpenPostsDeps = Pick<ListPostsDeps, 'getChain' | 'openPosts' | 'selfUserId'>
 
 /** What anchoring an author's keys needs; the thread reader (runLoadThread) shares it. */
 export type AuthorResolverDeps = Pick<
@@ -308,9 +311,30 @@ export async function loadPostsPage(
   if (detail.role === '' || detail.wrappedGroupKey === undefined) {
     return { ok: false, kind: 'notFound' }
   }
-  // A tombstone has no ciphertext or author, and its generation is served as 0,
-  // which must not pull the key chain back to the group's first generation.
-  const live = page.posts.filter((p): p is WireLivePost => p.deleted !== true)
+  const views = await viewsOf(deps, resolveAuthor, groupId, detail, page.posts)
+  if (!views.ok) return views
+  return {
+    ok: true,
+    posts: orderWithinDays(views.views),
+    ...(page.nextCursor !== undefined && page.nextCursor !== '' && { nextCursor: page.nextCursor }),
+  }
+}
+
+/**
+ * Opens and checks posts as served, in the order given. A tombstone has no ciphertext
+ * or author, and its generation is served as 0, which must not pull the key chain back
+ * to the group's first generation.
+ */
+async function viewsOf(
+  deps: OpenPostsDeps,
+  resolveAuthor: (userId: string) => Promise<AuthorCheck>,
+  groupId: string,
+  detail: GroupDetail,
+  posts: readonly WirePost[],
+): Promise<
+  { readonly ok: true; readonly views: readonly PostEntry[] } | Extract<PageResult, { ok: false }>
+> {
+  const live = posts.filter((p): p is WireLivePost => p.deleted !== true)
   const attempt = await openAll(deps, detail, groupId, live)
   if (!attempt.ok) return attempt
   const opened = new Map(live.map((p, i) => [p, attempt.opened[i]!] as const))
@@ -320,20 +344,53 @@ export async function loadPostsPage(
     ),
   )
   const byAuthor = new Map(authors)
-  const views = page.posts.map((p): PostEntry =>
-    p.deleted === true
-      ? { deleted: true, sortKey: p.sortKey, day: sortKeyDay(p.sortKey) ?? '' }
-      : viewOf(p, opened.get(p)!, byAuthor.get(p.authorUserId)!, groupId),
-  )
   return {
     ok: true,
-    posts: orderWithinDays(views),
-    ...(page.nextCursor !== undefined && page.nextCursor !== '' && { nextCursor: page.nextCursor }),
+    views: posts.map((p): PostEntry =>
+      p.deleted === true
+        ? { deleted: true, sortKey: p.sortKey, day: sortKeyDay(p.sortKey) ?? '' }
+        : viewOf(p, opened.get(p)!, byAuthor.get(p.authorUserId)!, groupId),
+    ),
   }
 }
 
+/** What loadPost needs: the list's deps, with a single read in place of the list. */
+export type LoadPostDeps = Omit<ListPostsDeps, 'listPosts'> & {
+  readonly getPost: (postId: string) => Promise<WirePost>
+}
+
+export type PostResult =
+  { readonly ok: true; readonly post: PostEntry } | Extract<PageResult, { ok: false }>
+
+/**
+ * Loads, opens and checks one post by its id (#318), the way a page of the list
+ * does, for the thread page. Never throws.
+ */
+export async function loadPost(
+  deps: LoadPostDeps,
+  resolveAuthor: (userId: string) => Promise<AuthorCheck>,
+  groupId: string,
+  postId: string,
+): Promise<PostResult> {
+  let detail: GroupDetail
+  let wire: WirePost
+  try {
+    ;[detail, wire] = await Promise.all([deps.getGroup(groupId), deps.getPost(postId)])
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return { ok: false, kind: 'notFound' }
+    if (err instanceof ApiError && err.status === 401) return { ok: false, kind: 'authRequired' }
+    return { ok: false, kind: 'failed' }
+  }
+  if (detail.role === '' || detail.wrappedGroupKey === undefined) {
+    return { ok: false, kind: 'notFound' }
+  }
+  const views = await viewsOf(deps, resolveAuthor, groupId, detail, [wire])
+  if (!views.ok) return views
+  return { ok: true, post: views.views[0]! }
+}
+
 async function openAll(
-  deps: ListPostsDeps,
+  deps: OpenPostsDeps,
   detail: GroupDetail,
   groupId: string,
   posts: readonly WireLivePost[],

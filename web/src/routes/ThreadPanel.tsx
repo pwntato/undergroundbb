@@ -19,13 +19,15 @@ import { ReactionBar } from './ReactionBar'
 import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
 import { attachesBeside } from './runCreateComment'
-import { editedMark } from './postNotes'
+import { DELETED_POST_TEXT, editedMark } from './postNotes'
+import { PostContent, PostControls, type PostListControls } from './GroupPostsPanel'
 import {
   commentAuthorLabel,
   commentNotes,
   commentTimeLabel,
   DELETED_COMMENT_TEXT,
 } from './threadNotes'
+import { isDeletedPost, type PostEntry } from './runListPosts'
 import {
   isDeletedComment,
   POST_TARGET,
@@ -33,6 +35,35 @@ import {
   type ReactionView,
   type ThreadEntry,
 } from './runLoadThread'
+
+/** The post the thread hangs on, with its Edit and Delete (#318). */
+export interface ThreadPost {
+  readonly entry: PostEntry
+  readonly controls: PostListControls
+}
+
+/** The post as the top of the thread: its text and who wrote it, or that it was deleted. */
+export function ThreadPostSection({ post }: { readonly post: ThreadPost }) {
+  const { entry, controls } = post
+  if (isDeletedPost(entry)) {
+    return (
+      <article className="rounded-md border px-3 py-2">
+        <p className="text-sm italic text-muted-foreground">{DELETED_POST_TEXT}</p>
+      </article>
+    )
+  }
+  return (
+    <article className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
+      <PostContent post={entry} />
+      {controls.mode.kind === 'idle' && controls.error !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{controls.error}</AlertDescription>
+        </Alert>
+      )}
+      <PostControls post={entry} controls={controls} />
+    </article>
+  )
+}
 
 /** Indent steps drawn; deeper replies share the last one. */
 const MAX_INDENT = 4
@@ -222,6 +253,8 @@ export function ThreadPanel({
   reply,
   reactions,
   controls,
+  post,
+  postProblem,
 }: {
   readonly groupId: string
   /** The post's title when the list passed it along; a thread opened cold has none. */
@@ -236,6 +269,10 @@ export function ThreadPanel({
   readonly reply?: ThreadReply | undefined
   readonly reactions?: ThreadReactions | undefined
   readonly controls?: ThreadControls | undefined
+  /** The post itself once it is loaded (#318); until then the title the list passed along. */
+  readonly post?: ThreadPost | undefined
+  /** Why the post could not be shown, when it could not. */
+  readonly postProblem?: string | null | undefined
 }) {
   const barFor = (target: string, label: string) => {
     if (reactions === undefined) return null
@@ -260,8 +297,18 @@ export function ThreadPanel({
   const empty = comments.length === 0 && !loading && error === null
   return (
     <div className="flex w-full max-w-xl flex-col gap-4 text-left">
-      {postTitle !== undefined && postTitle !== '' && (
-        <p className="break-words text-sm text-muted-foreground">On: {postTitle}</p>
+      {post !== undefined ? (
+        <ThreadPostSection post={post} />
+      ) : (
+        postTitle !== undefined &&
+        postTitle !== '' && (
+          <p className="break-words text-sm text-muted-foreground">On: {postTitle}</p>
+        )
+      )}
+      {postProblem != null && (
+        <Alert variant="destructive">
+          <AlertDescription>{postProblem}</AlertDescription>
+        </Alert>
       )}
       {error !== null && (
         <Alert variant="destructive">
