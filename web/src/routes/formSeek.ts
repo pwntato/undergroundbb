@@ -10,7 +10,7 @@ export type FormSeek =
   | { readonly kind: 'none' }
   /** Load the page behind this cursor. */
   | { readonly kind: 'loadMore'; readonly cursor: string }
-  /** Every page is loaded and the item is not there. */
+  /** The item is not there (every page is loaded without it) or is only a deleted placeholder. */
   | { readonly kind: 'gone' }
 
 export function seekForm(input: {
@@ -18,15 +18,19 @@ export function seekForm(input: {
   readonly formKey: string | undefined
   /** The first page has arrived, and no page is loading or failed. */
   readonly settled: boolean
-  /** The ids on screen. */
+  /** The ids on screen, deleted placeholders included. */
   readonly shown: readonly string[]
+  /** The shown ids that are not deleted: a form on a placeholder is never drawn, so it is gone. */
+  readonly live: readonly string[]
   /** The cursor behind the last page, or undefined when it was the last. */
   readonly cursor: string | undefined
   /** The cursor this was last asked to load, so one page is never asked for twice in a row. */
   readonly lastAsked: string | undefined
 }): FormSeek {
   if (input.formKey === undefined || !input.settled) return { kind: 'none' }
-  if (input.shown.includes(input.formKey)) return { kind: 'none' }
+  if (input.shown.includes(input.formKey)) {
+    return input.live.includes(input.formKey) ? { kind: 'none' } : { kind: 'gone' }
+  }
   if (input.cursor === undefined) return { kind: 'gone' }
   if (input.cursor === input.lastAsked) return { kind: 'none' }
   return { kind: 'loadMore', cursor: input.cursor }

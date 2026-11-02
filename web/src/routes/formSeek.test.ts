@@ -5,6 +5,7 @@ const base = {
   formKey: 'P9',
   settled: true,
   shown: ['P1', 'P2'],
+  live: ['P1', 'P2'],
   cursor: 'c1',
   lastAsked: undefined,
 }
@@ -17,12 +18,21 @@ describe('seekForm', () => {
   it('does nothing without a form, while a page is loading or failed, or once the item shows', () => {
     expect(seekForm({ ...base, formKey: undefined })).toEqual({ kind: 'none' })
     expect(seekForm({ ...base, settled: false })).toEqual({ kind: 'none' })
-    expect(seekForm({ ...base, shown: ['P9'] })).toEqual({ kind: 'none' })
+    expect(seekForm({ ...base, shown: ['P9'], live: ['P9'] })).toEqual({ kind: 'none' })
   })
 
   it('says the item is gone only when the last page is loaded without it', () => {
     expect(seekForm({ ...base, cursor: undefined })).toEqual({ kind: 'gone' })
-    expect(seekForm({ ...base, cursor: undefined, shown: ['P9'] })).toEqual({ kind: 'none' })
+    expect(seekForm({ ...base, cursor: undefined, shown: ['P9'], live: ['P9'] })).toEqual({
+      kind: 'none',
+    })
+  })
+
+  it('says gone for an item that is only a deleted placeholder, even while pages remain', () => {
+    expect(seekForm({ ...base, shown: ['P1', 'P9'], live: ['P1'] })).toEqual({ kind: 'gone' })
+    expect(seekForm({ ...base, shown: ['P1', 'P9'], live: ['P1'], cursor: undefined })).toEqual({
+      kind: 'gone',
+    })
   })
 
   it('never asks for the same cursor twice in a row, so a server repeating a cursor cannot loop', () => {

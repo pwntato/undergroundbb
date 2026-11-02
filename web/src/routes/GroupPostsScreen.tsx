@@ -155,6 +155,8 @@ function PostsList({
   const [limits, setLimits] = useState<PostLimits>(DEFAULT_POST_LIMITS)
   // Bumped when the list starts over, so a page still in flight is dropped.
   const epoch = useRef(0)
+  // The cursor the form-seek last loaded, so one page is not asked for twice in a row.
+  const lastAutoCursor = useRef<string | undefined>(undefined)
   // The edit a send left unanswered; sent again unchanged while the form still matches.
   const pendingEdit = useRef<PendingPostEdit | null>(null)
 
@@ -203,6 +205,8 @@ function PostsList({
   // Starts over from the first page, e.g. after a post was edited or deleted.
   const reload = useCallback(() => {
     epoch.current += 1
+    // The list starts over, so its first page may end at a cursor already asked for.
+    lastAutoCursor.current = undefined
     setPosts([])
     setCursor(undefined)
     load(undefined)
@@ -245,12 +249,12 @@ function PostsList({
   // is on an older page: load on, one page at a time, until it shows. When the list ends
   // without it, the post is gone and the form closes (#328).
   const formKey = controlsState.mode.kind === 'idle' ? undefined : controlsState.mode.sortKey
-  const lastAutoCursor = useRef<string | undefined>(undefined)
   useEffect(() => {
     const seek = seekForm({
       formKey,
       settled: !loading && error === null && posts.length > 0,
       shown: posts.map((p) => p.sortKey),
+      live: posts.filter((p) => !isDeletedPost(p)).map((p) => p.sortKey),
       cursor,
       lastAsked: lastAutoCursor.current,
     })

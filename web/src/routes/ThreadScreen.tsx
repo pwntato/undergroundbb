@@ -236,6 +236,8 @@ function Thread({
   const pendingPostEdit = useRef<PendingPostEdit | null>(null)
   // Bumped when the thread starts over, so a page still in flight is dropped.
   const epoch = useRef(0)
+  // The cursor the form-seek last loaded, so one page is not asked for twice in a row.
+  const lastAutoCursor = useRef<string | undefined>(undefined)
   // The comment a send left unanswered; sent again unchanged while the box still matches.
   const pending = useRef<PendingReply | null>(null)
   // Likewise an edit a send left unanswered.
@@ -285,6 +287,8 @@ function Thread({
   // Starts over from the first page: a new comment may sit on any page.
   const reload = useCallback(() => {
     epoch.current += 1
+    // The thread starts over, so its first page may end at a cursor already asked for.
+    lastAutoCursor.current = undefined
     dispatch({ type: 'reset' })
     load(undefined)
   }, [load])
@@ -403,12 +407,12 @@ function Thread({
   // that is on a later page: load on, one page at a time, until it shows. When the thread
   // ends without it, the comment is gone and the form closes (#328).
   const formPath = controlsState.mode.kind === 'idle' ? undefined : controlsState.mode.path
-  const lastAutoCursor = useRef<string | undefined>(undefined)
   useEffect(() => {
     const seek = seekForm({
       formKey: formPath,
       settled: state.loaded && !state.loading && state.failure === null,
       shown: state.comments.map((c) => c.path),
+      live: state.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
       cursor: state.cursor,
       lastAsked: lastAutoCursor.current,
     })
