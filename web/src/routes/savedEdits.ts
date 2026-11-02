@@ -13,8 +13,9 @@
 //     and is not used for any other.
 //   - It is the form's mode alone, never a busy or error state: the screen that
 //     comes back is idle. Whether what it hangs on is still there is the screen's
-//     own check when its first page loads (the reducers' `firstPageLoaded`), which
-//     closes a form whose comment or post was deleted meanwhile.
+//     own check: the screen loads pages until the form's item shows (formSeek.ts,
+//     #328) and the reducers' `endReached` closes a form whose comment or post was
+//     deleted meanwhile, once the last page is loaded without it.
 
 import { INITIAL_CONTROLS_STATE, type ControlMode, type ControlsState } from './commentControls'
 import {
