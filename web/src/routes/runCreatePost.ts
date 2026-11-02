@@ -202,6 +202,8 @@ export type SendResult =
         | 'authRequired'
         | 'notFound'
         | 'rejected'
+        // The server refused the post's day: this device's clock is off. Nothing to resend.
+        | 'clockSkew'
         // No answer, or a conflict with a send still in flight: the post may or
         // may not have landed. Send the same bytes again.
         | 'ambiguous'
@@ -248,6 +250,8 @@ export async function sendPost(
         return { ok: false, kind: 'behind' }
       case 'member_dormant':
         return { ok: false, kind: 'dormant' }
+      case 'clock_skew':
+        return { ok: false, kind: 'clockSkew' }
     }
     return { ok: false, kind: 'rejected', message: err.message }
   }

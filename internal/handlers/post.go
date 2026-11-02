@@ -158,7 +158,7 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(day); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "sortKey: day is not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "sortKey: day is not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	// New posts use the settled generation; a running rotation counts in

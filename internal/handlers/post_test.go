@@ -193,7 +193,7 @@ func TestCreatePostRefusals(t *testing.T) {
 		{name: "not a member", cookie: strangerCookie, author: stranger, status: http.StatusNotFound},
 		{name: "malformed sort key", cookie: cookie, author: owner, mutate: func(r *createPostRequest) { r.SortKey = "POST#2026-10-28#xyz" }, status: http.StatusBadRequest},
 		{name: "impossible date", cookie: cookie, author: owner, mutate: func(r *createPostRequest) { r.SortKey = "POST#2026-02-31#00112233445566ff" }, status: http.StatusBadRequest},
-		{name: "backdated day", cookie: cookie, author: owner, o: postOpts{sortKey: oldKey}, status: http.StatusBadRequest},
+		{name: "backdated day", cookie: cookie, author: owner, o: postOpts{sortKey: oldKey}, status: http.StatusBadRequest, code: "clock_skew"},
 		{name: "wrong generation", cookie: cookie, author: owner, o: postOpts{generation: 1}, status: http.StatusConflict, code: "generation_stale"},
 		{name: "over the size cap", cookie: cookie, author: owner, o: postOpts{ctLen: tooLong}, status: http.StatusBadRequest},
 		{name: "too short to hold a post", cookie: cookie, author: owner, o: postOpts{ctLen: 20}, status: http.StatusBadRequest},

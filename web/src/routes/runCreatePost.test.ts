@@ -212,6 +212,12 @@ describe('sendPost', () => {
     expect(await send(new ApiError(404, 'x'))).toEqual({ ok: false, kind: 'notFound' })
   })
 
+  it('names a refused post day (clock_skew) as its own failure, not a generic rejection', async () => {
+    expect(
+      await send(new ApiError(400, 'sortKey: day is not within tolerance', 'clock_skew')),
+    ).toEqual({ ok: false, kind: 'clockSkew' })
+  })
+
   it('shows the server message for any other refusal', async () => {
     expect(await send(new ApiError(400, 'ciphertext: too long', 'x'))).toEqual({
       ok: false,
