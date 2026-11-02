@@ -36,6 +36,8 @@ export interface PostListControls {
   readonly onEditOpen: (sortKey: string, title: string, body: string) => void
   /** Save pressed on the edit form, with what is in it. */
   readonly onSave: (title: string, body: string) => void
+  /** The edit form's text changed. */
+  readonly onDraft: (title: string, body: string) => void
   readonly onDeleteAsk: (sortKey: string) => void
   readonly onDeleteConfirm: () => void
   readonly onClose: () => void
@@ -64,8 +66,9 @@ export function PostControls({
         message={null}
         error={error}
         onSubmit={controls.onSave}
-        initial={{ title: mode.title, body: mode.body }}
+        initial={mode.draft ?? { title: mode.title, body: mode.body }}
         unchangedFrom={{ title: mode.title, body: mode.body }}
+        onDraft={controls.onDraft}
         idPrefix={`edit-${post.sortKey}`}
         submitLabel="Save"
         busyLabel="Saving…"

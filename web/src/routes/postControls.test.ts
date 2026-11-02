@@ -142,3 +142,55 @@ describe('nextPostControlsState', () => {
     expect(nextPostControlsState(started, { type: 'firstPageFailed' })).toBe(started)
   })
 })
+
+describe('the text typed into an edit form (#319)', () => {
+  it('keeps what is typed in the mode and leaves what the form was opened with alone', () => {
+    const state = run([open('P1'), { type: 'draftEdited', title: 't2', body: 'b2' }])
+    expect(state.mode).toEqual({
+      kind: 'editing',
+      sortKey: 'P1',
+      title: 't',
+      body: 'b',
+      draft: { title: 't2', body: 'b2' },
+    })
+  })
+
+  it('keeps only the latest text', () => {
+    const state = run([
+      open('P1'),
+      { type: 'draftEdited', title: 'a', body: 'b' },
+      { type: 'draftEdited', title: 'ab', body: 'bc' },
+    ])
+    expect(state.mode).toMatchObject({ draft: { title: 'ab', body: 'bc' } })
+  })
+
+  it('drops the typed text when another form opens or this one closes', () => {
+    const typed = run([open('P1'), { type: 'draftEdited', title: 'x', body: 'y' }])
+    expect(nextPostControlsState(typed, open('P2')).mode).not.toHaveProperty('draft')
+    expect(nextPostControlsState(typed, { type: 'closed' }).mode).toEqual({ kind: 'idle' })
+  })
+
+  it('is ignored with no form open, while a delete is asked, and during a send', () => {
+    const draft: PostControlsEvent = { type: 'draftEdited', title: 'x', body: 'y' }
+    expect(run([draft])).toEqual(INITIAL_POST_CONTROLS_STATE)
+    const asked = run([{ type: 'deleteAsked', sortKey: 'P1' }])
+    expect(nextPostControlsState(asked, draft)).toBe(asked)
+    const busy = run([open('P1'), { type: 'started' }])
+    expect(nextPostControlsState(busy, draft)).toBe(busy)
+  })
+
+  it('drops a message that was about something else, as typing does in the comment form', () => {
+    const failed = run([
+      open('P1'),
+      { type: 'started' },
+      { type: 'failed', message: 'nope', gone: true },
+    ])
+    expect(failed).toMatchObject({ error: 'nope', gone: true })
+    expect(
+      nextPostControlsState(failed, { type: 'draftEdited', title: 'x', body: 'y' }),
+    ).toMatchObject({
+      error: null,
+      gone: false,
+    })
+  })
+})

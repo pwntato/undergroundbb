@@ -20,12 +20,13 @@ import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
 import { GroupPostsPanel, type PostListControls } from './GroupPostsPanel'
-import { INITIAL_POST_CONTROLS_STATE, nextPostControlsState } from './postControls'
+import { nextPostControlsState } from './postControls'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { confirmDeletePost, saveEditPost, type PendingPostEdit } from './postWiring'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { makePinKeys } from './rotationDeps'
+import { restoredPostControls, snapshotEdits, type SavedEdits } from './savedEdits'
 import { DEFAULT_POST_LIMITS, type PostLimits } from './runCreatePost'
 import {
   isDeletedPost,
@@ -48,8 +49,12 @@ export function GroupPostsScreen() {
   const { groupId } = useParams<{ groupId: string }>()
   const userId = useSession().userId
   const [gate, send] = useReducer(nextPostsGate, INITIAL_POSTS_GATE)
+  // The edit form open when the password was asked for (#319): what was typed into it
+  // comes back with the list. Replaced on every ask, with nothing when none was open.
+  const [savedEdits, setSavedEdits] = useState<SavedEdits | undefined>(undefined)
   // Stable, so the list's load effect does not restart when this component re-renders.
-  const handleColdKeys = useCallback(() => {
+  const handleColdKeys = useCallback((edits?: SavedEdits) => {
+    setSavedEdits(edits)
     send('coldKeys')
   }, [])
 
@@ -90,6 +95,7 @@ export function GroupPostsScreen() {
         key={`${groupId}:${String(gate.round)}`}
         groupId={groupId}
         userId={userId}
+        initialEdits={savedEdits}
         onColdKeys={handleColdKeys}
       />
     </>
@@ -99,11 +105,13 @@ export function GroupPostsScreen() {
 function PostsList({
   groupId,
   userId,
-  onColdKeys,
+  initialEdits,
+  onColdKeys: askForPassword,
 }: {
   readonly groupId: string
   readonly userId: string
-  readonly onColdKeys: () => void
+  readonly initialEdits: SavedEdits | undefined
+  readonly onColdKeys: (edits?: SavedEdits) => void
 }) {
   // One resolver per visit, so an author is read and pinned once.
   const reader = useMemo(() => {
@@ -130,8 +138,16 @@ function PostsList({
   const [canRetry, setCanRetry] = useState(false)
   const [controlsState, dispatchControls] = useReducer(
     nextPostControlsState,
-    INITIAL_POST_CONTROLS_STATE,
+    restoredPostControls(initialEdits, groupId),
   )
+  // The edit form open right now, for the password step.
+  const modeNow = useRef(controlsState.mode)
+  useEffect(() => {
+    modeNow.current = controlsState.mode
+  })
+  const onColdKeys = useCallback(() => {
+    askForPassword(snapshotEdits(groupId, undefined, modeNow.current))
+  }, [askForPassword, groupId])
   // Whether the reader is an admin of the group, who may delete anyone's post. The
   // server decides; this only decides whether to offer the button.
   const [isAdmin, setIsAdmin] = useState(false)
@@ -232,6 +248,9 @@ function PostsList({
     limits,
     onEditOpen: (sortKey, title, body) => {
       dispatchControls({ type: 'editOpened', sortKey, title, body })
+    },
+    onDraft: (title, body) => {
+      dispatchControls({ type: 'draftEdited', title, body })
     },
     onSave: (title, body) => {
       const mode = controlsState.mode

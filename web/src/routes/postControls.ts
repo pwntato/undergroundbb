@@ -7,6 +7,8 @@
 //   - Nothing opens or changes while a send is in flight.
 //   - A failure keeps the form open with its draft and says why; typing or
 //     closing drops the message, since it was about something else.
+//   - The form reports what is typed, so the screen can keep it across the password
+//     step (savedEdits.ts).
 //   - Success closes the form.
 //   - When the first page of the list (re)loads and the post being edited or
 //     deleted is no longer a live one on it (someone deleted it), the form
@@ -17,9 +19,15 @@ export type PostControlMode =
   | {
       readonly kind: 'editing'
       readonly sortKey: string
-      /** What the form was opened with; the form holds the draft itself. */
+      /** What the form was opened with: what an edit is compared against. */
       readonly title: string
       readonly body: string
+      /**
+       * What is typed in the form now, once anything was; absent until then. The form
+       * holds the text itself and reports it here, so it survives the form being
+       * unmounted for the password step (savedEdits.ts) and brought back.
+       */
+      readonly draft?: { readonly title: string; readonly body: string }
     }
   | { readonly kind: 'confirmDelete'; readonly sortKey: string }
 
@@ -45,6 +53,8 @@ export type PostControlsEvent =
       readonly title: string
       readonly body: string
     }
+  /** The text in the form changed. */
+  | { readonly type: 'draftEdited'; readonly title: string; readonly body: string }
   | { readonly type: 'closed' }
   | { readonly type: 'deleteAsked'; readonly sortKey: string }
   | { readonly type: 'started' }
@@ -65,6 +75,15 @@ export function nextPostControlsState(
       return {
         ...state,
         mode: { kind: 'editing', sortKey: event.sortKey, title: event.title, body: event.body },
+        error: null,
+        gone: false,
+      }
+    case 'draftEdited':
+      // Typing drops a message that was about something else, as in the comment reducer.
+      if (state.busy || state.mode.kind !== 'editing') return state
+      return {
+        ...state,
+        mode: { ...state.mode, draft: { title: event.title, body: event.body } },
         error: null,
         gone: false,
       }

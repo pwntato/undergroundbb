@@ -32,6 +32,7 @@ export function CreatePostPanel({
   hint,
   unchangedFrom,
   onCancel,
+  onDraft,
 }: {
   readonly limits: PostLimits
   readonly posting: boolean
@@ -53,6 +54,8 @@ export function CreatePostPanel({
   readonly unchangedFrom?: { readonly title: string; readonly body: string } | undefined
   /** Shown as a Cancel button next to the send button, e.g. for an inline edit. */
   readonly onCancel?: (() => void) | undefined
+  /** Told the text after every change, e.g. so an edit can be kept across the password step. */
+  readonly onDraft?: ((title: string, body: string) => void) | undefined
 }) {
   const [title, setTitle] = useState(initial?.title ?? '')
   const [body, setBody] = useState(initial?.body ?? '')
@@ -89,6 +92,7 @@ export function CreatePostPanel({
           value={title}
           onChange={(e) => {
             setTitle(e.target.value)
+            onDraft?.(e.target.value, body)
           }}
           aria-invalid={titleBytes > limits.maxTitleBytes}
           disabled={posting}
@@ -107,6 +111,7 @@ export function CreatePostPanel({
           value={body}
           onChange={(e) => {
             setBody(e.target.value)
+            onDraft?.(title, e.target.value)
           }}
           aria-invalid={bodyBytes > limits.maxBodyBytes}
           disabled={posting}

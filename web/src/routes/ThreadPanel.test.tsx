@@ -634,6 +634,7 @@ describe('the post at the top of the thread (#318)', () => {
     limits: { maxTitleBytes: 100, maxBodyBytes: 1000 },
     onEditOpen: () => {},
     onSave: () => {},
+    onDraft: () => {},
     onDeleteAsk: () => {},
     onDeleteConfirm: () => {},
     onClose: () => {},

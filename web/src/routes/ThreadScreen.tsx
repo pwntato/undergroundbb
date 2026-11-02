@@ -40,12 +40,18 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
-import { INITIAL_CONTROLS_STATE, nextControlsState, replyOffered } from './commentControls'
-import { INITIAL_POST_CONTROLS_STATE, nextPostControlsState } from './postControls'
+import { nextControlsState, replyOffered } from './commentControls'
+import { nextPostControlsState } from './postControls'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
 import { confirmDeletePost, saveEditPost, type PendingPostEdit } from './postWiring'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
+import {
+  restoredCommentControls,
+  restoredPostControls,
+  snapshotEdits,
+  type SavedEdits,
+} from './savedEdits'
 import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
@@ -107,9 +113,12 @@ export function ThreadScreen() {
   // after it. Replaced on every ask, with nothing when the box was empty, so an
   // old draft that was already sent is never brought back.
   const [saved, setSaved] = useState<SavedReply | undefined>(undefined)
+  // Likewise the edit forms open then (#319): what was typed into them comes back too.
+  const [savedEdits, setSavedEdits] = useState<SavedEdits | undefined>(undefined)
   // Stable, so the thread's load effect does not restart when this component re-renders.
-  const handleColdKeys = useCallback((reply?: SavedReply) => {
+  const handleColdKeys = useCallback((reply?: SavedReply, edits?: SavedEdits) => {
     setSaved(reply)
+    setSavedEdits(edits)
     send('coldKeys')
   }, [])
 
@@ -154,6 +163,7 @@ export function ThreadScreen() {
         userId={userId}
         postTitle={typeof postTitle === 'string' ? postTitle : undefined}
         initialReply={saved}
+        initialEdits={savedEdits}
         onColdKeys={handleColdKeys}
       />
     </>
@@ -166,14 +176,16 @@ function Thread({
   userId,
   postTitle,
   initialReply,
-  onColdKeys,
+  initialEdits,
+  onColdKeys: askForPassword,
 }: {
   readonly groupId: string
   readonly postId: string
   readonly userId: string
   readonly postTitle: string | undefined
   readonly initialReply: SavedReply | undefined
-  readonly onColdKeys: (reply?: SavedReply) => void
+  readonly initialEdits: SavedEdits | undefined
+  readonly onColdKeys: (reply?: SavedReply, edits?: SavedEdits) => void
 }) {
   // One resolver per visit, so an author is read and pinned once.
   const reader = useMemo(() => {
@@ -199,7 +211,10 @@ function Thread({
       ? INITIAL_REPLY_STATE
       : { ...INITIAL_REPLY_STATE, replyTo: initialReply.replyTo, draft: initialReply.draft },
   )
-  const [controlsState, dispatchControls] = useReducer(nextControlsState, INITIAL_CONTROLS_STATE)
+  const [controlsState, dispatchControls] = useReducer(
+    nextControlsState,
+    restoredCommentControls(initialEdits, postId),
+  )
   // Whether the reader is an admin of the group, who may delete anyone's comment. The
   // server decides; this only decides whether to offer the button.
   const [isAdmin, setIsAdmin] = useState(false)
@@ -211,7 +226,7 @@ function Thread({
   const [postProblem, setPostProblem] = useState<string | null>(null)
   const [postControlsState, dispatchPostControls] = useReducer(
     nextPostControlsState,
-    INITIAL_POST_CONTROLS_STATE,
+    restoredPostControls(initialEdits, postId),
   )
   const [limits, setLimits] = useState<PostLimits>(DEFAULT_POST_LIMITS)
   // Bumped when the post is read again, so a read still in flight is dropped.
@@ -229,6 +244,18 @@ function Thread({
   useEffect(() => {
     replyNow.current = replyState
   })
+  // The edit forms open right now, for the same (#319).
+  const editsNow = useRef({ comment: controlsState.mode, post: postControlsState.mode })
+  useEffect(() => {
+    editsNow.current = { comment: controlsState.mode, post: postControlsState.mode }
+  })
+  // Asks for the password, taking along the reply and the edit forms open at this moment.
+  const onColdKeys = useCallback(
+    (reply?: SavedReply) => {
+      askForPassword(reply, snapshotEdits(postId, editsNow.current.comment, editsNow.current.post))
+    },
+    [askForPassword, postId],
+  )
   const io: ThreadIO = useMemo(
     () => ({
       dispatch,
@@ -447,6 +474,9 @@ function Thread({
       dispatchPostControls({ type: 'editOpened', sortKey, title, body })
     },
     onSave: handleSavePost,
+    onDraft: (title, body) => {
+      dispatchPostControls({ type: 'draftEdited', title, body })
+    },
     onDeleteAsk: (sortKey) => {
       dispatchPostControls({ type: 'deleteAsked', sortKey })
     },
