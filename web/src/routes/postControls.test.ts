@@ -60,23 +60,50 @@ describe('nextPostControlsState', () => {
     ).toEqual(INITIAL_POST_CONTROLS_STATE)
   })
 
+  it('keeps a form whose post is not on the first page while older pages exist (#328)', () => {
+    const editing = run([open('P9')])
+    expect(
+      nextPostControlsState(editing, { type: 'firstPageLoaded', liveKeys: ['P1'], hasMore: true }),
+    ).toBe(editing)
+  })
+
+  it('closes a form at the end of the list when its post never showed, keeping the reason', () => {
+    const editing = run([open('P9')])
+    expect(nextPostControlsState(editing, { type: 'endReached', liveKeys: ['P1'] }).mode).toEqual({
+      kind: 'idle',
+    })
+    expect(nextPostControlsState(editing, { type: 'endReached', liveKeys: ['P9'] })).toBe(editing)
+    const gone = run([open('P9'), { type: 'failed', message: 'it was deleted' }])
+    expect(nextPostControlsState(gone, { type: 'endReached', liveKeys: [] })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const busy = run([open('P9'), { type: 'started' }])
+    expect(nextPostControlsState(busy, { type: 'endReached', liveKeys: [] })).toBe(busy)
+  })
+
   it('closes a form whose post is not live on the first page, keeping the reason, and not during a send', () => {
     const editing = run([open('P1')])
     expect(
-      nextPostControlsState(editing, { type: 'firstPageLoaded', liveKeys: ['P2'] }).mode,
+      nextPostControlsState(editing, { type: 'firstPageLoaded', liveKeys: ['P2'], hasMore: false })
+        .mode,
     ).toEqual({
       kind: 'idle',
     })
-    expect(nextPostControlsState(editing, { type: 'firstPageLoaded', liveKeys: ['P1'] })).toBe(
-      editing,
-    )
+    expect(
+      nextPostControlsState(editing, { type: 'firstPageLoaded', liveKeys: ['P1'], hasMore: false }),
+    ).toBe(editing)
     const gone = run([open('P1'), { type: 'failed', message: 'it was deleted' }])
-    expect(nextPostControlsState(gone, { type: 'firstPageLoaded', liveKeys: [] })).toMatchObject({
+    expect(
+      nextPostControlsState(gone, { type: 'firstPageLoaded', liveKeys: [], hasMore: false }),
+    ).toMatchObject({
       mode: { kind: 'idle' },
       error: 'it was deleted',
     })
     const busy = run([open('P1'), { type: 'started' }])
-    expect(nextPostControlsState(busy, { type: 'firstPageLoaded', liveKeys: [] })).toBe(busy)
+    expect(
+      nextPostControlsState(busy, { type: 'firstPageLoaded', liveKeys: [], hasMore: false }),
+    ).toBe(busy)
   })
 
   it.each<[string, PostControlsEvent]>([
@@ -101,7 +128,7 @@ describe('nextPostControlsState', () => {
     const reopened = run([
       open('P1'),
       { type: 'failed', message: 'it was deleted', gone: true },
-      { type: 'firstPageLoaded', liveKeys: [] },
+      { type: 'firstPageLoaded', liveKeys: [], hasMore: false },
       open('P2'),
     ])
     expect(reopened).toMatchObject({ mode: { kind: 'editing', sortKey: 'P2' }, error: null })

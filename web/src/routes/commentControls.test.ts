@@ -89,17 +89,49 @@ describe('nextControlsState', () => {
     })
   })
 
-  it('closes a form whose comment is not live on the first page, and keeps the reason it was given', () => {
-    const open = run([{ type: 'editOpened', path: '0001', text: 'a' }])
-    expect(nextControlsState(open, { type: 'firstPageLoaded', livePaths: ['0002'] }).mode).toEqual({
+  it('keeps a form whose comment is not on the first page while later pages exist (#328)', () => {
+    const open = run([{ type: 'editOpened', path: '0090', text: 'a' }])
+    expect(
+      nextControlsState(open, { type: 'firstPageLoaded', livePaths: ['0001'], hasMore: true }),
+    ).toBe(open)
+  })
+
+  it('closes a form at the end of the thread when its comment never showed, keeping the reason', () => {
+    const open = run([{ type: 'editOpened', path: '0090', text: 'a' }])
+    expect(nextControlsState(open, { type: 'endReached', livePaths: ['0001'] }).mode).toEqual({
       kind: 'idle',
     })
-    expect(nextControlsState(open, { type: 'firstPageLoaded', livePaths: ['0001'] })).toBe(open)
+    expect(nextControlsState(open, { type: 'endReached', livePaths: ['0090'] })).toBe(open)
+    const gone = run([
+      { type: 'editOpened', path: '0090', text: 'a' },
+      { type: 'failed', message: 'it was deleted' },
+    ])
+    expect(nextControlsState(gone, { type: 'endReached', livePaths: [] })).toMatchObject({
+      mode: { kind: 'idle' },
+      error: 'it was deleted',
+    })
+    const busy = run([{ type: 'editOpened', path: '0090', text: 'a' }, { type: 'started' }])
+    expect(nextControlsState(busy, { type: 'endReached', livePaths: [] })).toBe(busy)
+  })
+
+  it('closes a form whose comment is not live on the first page, and keeps the reason it was given', () => {
+    const open = run([{ type: 'editOpened', path: '0001', text: 'a' }])
+    expect(
+      nextControlsState(open, { type: 'firstPageLoaded', livePaths: ['0002'], hasMore: false })
+        .mode,
+    ).toEqual({
+      kind: 'idle',
+    })
+    expect(
+      nextControlsState(open, { type: 'firstPageLoaded', livePaths: ['0001'], hasMore: false }),
+    ).toBe(open)
     const gone = run([
       { type: 'editOpened', path: '0001', text: 'a' },
       { type: 'failed', message: 'it was deleted' },
     ])
-    expect(nextControlsState(gone, { type: 'firstPageLoaded', livePaths: [] })).toMatchObject({
+    expect(
+      nextControlsState(gone, { type: 'firstPageLoaded', livePaths: [], hasMore: false }),
+    ).toMatchObject({
       mode: { kind: 'idle' },
       error: 'it was deleted',
     })
@@ -162,7 +194,7 @@ describe('nextControlsState', () => {
     const reopened = run([
       { type: 'editOpened', path: '0001', text: 'a' },
       { type: 'failed', message: 'it was deleted', gone: true },
-      { type: 'firstPageLoaded', livePaths: ['0002'] },
+      { type: 'firstPageLoaded', livePaths: ['0002'], hasMore: false },
       { type: 'editOpened', path: '0002', text: 'b' },
     ])
     expect(reopened).toMatchObject({ mode: { kind: 'editing', path: '0002' }, error: null })
@@ -195,7 +227,9 @@ describe('nextControlsState', () => {
 
   it('does not close a form during a send, since the answer is still coming', () => {
     const busy = run([{ type: 'editOpened', path: '0001', text: 'a' }, { type: 'started' }])
-    expect(nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [] })).toBe(busy)
+    expect(
+      nextControlsState(busy, { type: 'firstPageLoaded', livePaths: [], hasMore: false }),
+    ).toBe(busy)
   })
 })
 

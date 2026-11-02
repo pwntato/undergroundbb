@@ -8,7 +8,9 @@
 //     closing drops the message, since it was about something else.
 //   - Success closes the form.
 //   - When the first page of the thread (re)loads and the comment being edited or
-//     deleted is no longer a live one on it (someone deleted it), the form closes.
+//     deleted is not a live one on it and there is no later page, or when the last page
+//     is reached without it (someone deleted it), the form closes. While later pages
+//     exist the form stays and the screen loads them to find its comment (#328).
 //   - A write the server answers 404 for means the post is gone for writing (it
 //     was deleted, or the reader left the group): the thread turns read-only,
 //     which hides Edit. Delete stays: an author may still delete their own comment.
@@ -49,8 +51,17 @@ export type ControlsEvent =
   | { readonly type: 'failed'; readonly message: string; readonly gone?: boolean }
   | { readonly type: 'finished' }
   | { readonly type: 'madeReadOnly'; readonly message: string | null }
-  /** The first page of the thread was loaded; `livePaths` are its comments that are not deleted. */
-  | { readonly type: 'firstPageLoaded'; readonly livePaths: readonly string[] }
+  /**
+   * The first page of the thread was loaded; `livePaths` are its comments that are not deleted.
+   * `hasMore`: more pages exist, so a comment not on this one may still be on a later one.
+   */
+  | {
+      readonly type: 'firstPageLoaded'
+      readonly livePaths: readonly string[]
+      readonly hasMore: boolean
+    }
+  /** The last page is loaded; `livePaths` are every comment on screen that is not deleted. */
+  | { readonly type: 'endReached'; readonly livePaths: readonly string[] }
   /** The first page could not be loaded: the comments the form hangs on are gone from the screen. */
   | { readonly type: 'firstPageFailed' }
 
@@ -94,10 +105,22 @@ export function nextControlsState(state: ControlsState, event: ControlsEvent): C
         gone: false,
       }
     case 'firstPageLoaded':
-      if (state.busy || state.mode.kind === 'idle' || event.livePaths.includes(state.mode.path)) {
+      // A comment not on this page may be on a later one (a form restored after the password
+      // step can hang on one): the screen loads on, and `endReached` closes it if it never shows.
+      if (
+        state.busy ||
+        state.mode.kind === 'idle' ||
+        event.hasMore ||
+        event.livePaths.includes(state.mode.path)
+      ) {
         return state
       }
       // The error stays: it may be the very reason the comment is gone.
+      return { ...state, mode: { kind: 'idle' } }
+    case 'endReached':
+      if (state.busy || state.mode.kind === 'idle' || event.livePaths.includes(state.mode.path)) {
+        return state
+      }
       return { ...state, mode: { kind: 'idle' } }
     case 'firstPageFailed':
       // The form is drawn inside the comment it is about, and a reload empties the thread

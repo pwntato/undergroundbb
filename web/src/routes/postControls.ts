@@ -11,8 +11,10 @@
 //     step (savedEdits.ts).
 //   - Success closes the form.
 //   - When the first page of the list (re)loads and the post being edited or
-//     deleted is no longer a live one on it (someone deleted it), the form
-//     closes; the error stays, since it may be the very reason.
+//     deleted is not a live one on it and there is no older page, or when the last
+//     page is reached without it (someone deleted it), the form closes; the error
+//     stays, since it may be the very reason. While older pages exist the form stays
+//     and the screen loads them to find its post (#328).
 
 export type PostControlMode =
   | { readonly kind: 'idle' }
@@ -60,8 +62,17 @@ export type PostControlsEvent =
   | { readonly type: 'started' }
   | { readonly type: 'failed'; readonly message: string; readonly gone?: boolean }
   | { readonly type: 'finished' }
-  /** The first page of the list was loaded; `liveKeys` are its posts that are not deleted. */
-  | { readonly type: 'firstPageLoaded'; readonly liveKeys: readonly string[] }
+  /**
+   * The first page of the list was loaded; `liveKeys` are its posts that are not deleted.
+   * `hasMore`: older pages exist, so a post not on this one may still be on a later one.
+   */
+  | {
+      readonly type: 'firstPageLoaded'
+      readonly liveKeys: readonly string[]
+      readonly hasMore: boolean
+    }
+  /** The last page is loaded; `liveKeys` are every post on screen that is not deleted. */
+  | { readonly type: 'endReached'; readonly liveKeys: readonly string[] }
   /** The first page could not be loaded: the posts the form hangs on are gone from the screen. */
   | { readonly type: 'firstPageFailed' }
 
@@ -105,6 +116,18 @@ export function nextPostControlsState(
     case 'finished':
       return { mode: { kind: 'idle' }, busy: false, error: null, gone: false }
     case 'firstPageLoaded':
+      // A post not on this page may be on an older one (a form restored after the password
+      // step can hang on one): the screen loads on, and `endReached` closes it if it never shows.
+      if (
+        state.busy ||
+        state.mode.kind === 'idle' ||
+        event.hasMore ||
+        event.liveKeys.includes(state.mode.sortKey)
+      ) {
+        return state
+      }
+      return { ...state, mode: { kind: 'idle' } }
+    case 'endReached':
       if (state.busy || state.mode.kind === 'idle' || event.liveKeys.includes(state.mode.sortKey)) {
         return state
       }

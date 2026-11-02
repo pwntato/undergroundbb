@@ -201,6 +201,28 @@ describe('loadPageInto', () => {
     expect(h.controls()).toBe(open)
   })
 
+  it('keeps a form whose comment is not on the first page while the thread has more pages (#328)', async () => {
+    const h = harness()
+    h.io.dispatchControls({ type: 'editOpened', path: '0090', text: 'a' })
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'], 'next')),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toMatchObject({ kind: 'editing', path: '0090' })
+    // The same page with no cursor is the whole thread: the comment is gone.
+    await loadPageInto(
+      h.io,
+      () => Promise.resolve(page(['0001'])),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.controls().mode).toEqual({ kind: 'idle' })
+  })
+
   it('keeps a target that is on the first page', async () => {
     const h = harness({ replyTo: '0001', draft: 'typed' })
     await loadPageInto(

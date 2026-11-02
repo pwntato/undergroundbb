@@ -26,6 +26,7 @@ import { confirmDeletePost, saveEditPost, type PendingPostEdit } from './postWir
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { makePinKeys } from './rotationDeps'
+import { seekForm } from './formSeek'
 import { restoredPostControls, snapshotEdits, type SavedEdits } from './savedEdits'
 import { DEFAULT_POST_LIMITS, type PostLimits } from './runCreatePost'
 import {
@@ -180,6 +181,7 @@ function PostsList({
         dispatchControls({
           type: 'firstPageLoaded',
           liveKeys: result.posts.filter((p) => !isDeletedPost(p)).map((p) => p.sortKey),
+          hasMore: result.nextCursor !== undefined,
         })
       }
     },
@@ -238,6 +240,30 @@ function PostsList({
       cancelled = true
     }
   }, [groupId])
+
+  // A form restored after the password step (or kept over a reload) can hang on a post that
+  // is on an older page: load on, one page at a time, until it shows. When the list ends
+  // without it, the post is gone and the form closes (#328).
+  const formKey = controlsState.mode.kind === 'idle' ? undefined : controlsState.mode.sortKey
+  const lastAutoCursor = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const seek = seekForm({
+      formKey,
+      settled: !loading && error === null && posts.length > 0,
+      shown: posts.map((p) => p.sortKey),
+      cursor,
+      lastAsked: lastAutoCursor.current,
+    })
+    if (seek.kind === 'gone') {
+      dispatchControls({
+        type: 'endReached',
+        liveKeys: posts.filter((p) => !isDeletedPost(p)).map((p) => p.sortKey),
+      })
+    } else if (seek.kind === 'loadMore') {
+      lastAutoCursor.current = seek.cursor
+      load(seek.cursor)
+    }
+  }, [formKey, loading, error, posts, cursor, load])
 
   const controls: PostListControls = {
     selfUserId: userId,

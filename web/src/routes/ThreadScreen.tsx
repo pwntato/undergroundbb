@@ -52,6 +52,7 @@ import {
   snapshotEdits,
   type SavedEdits,
 } from './savedEdits'
+import { seekForm } from './formSeek'
 import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
@@ -397,6 +398,30 @@ function Thread({
     readOnly: controlsState.readOnly,
     onPress: handleReact,
   }
+
+  // A form restored after the password step (or kept over a reload) can hang on a comment
+  // that is on a later page: load on, one page at a time, until it shows. When the thread
+  // ends without it, the comment is gone and the form closes (#328).
+  const formPath = controlsState.mode.kind === 'idle' ? undefined : controlsState.mode.path
+  const lastAutoCursor = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const seek = seekForm({
+      formKey: formPath,
+      settled: state.loaded && !state.loading && state.failure === null,
+      shown: state.comments.map((c) => c.path),
+      cursor: state.cursor,
+      lastAsked: lastAutoCursor.current,
+    })
+    if (seek.kind === 'gone') {
+      dispatchControls({
+        type: 'endReached',
+        livePaths: state.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
+      })
+    } else if (seek.kind === 'loadMore') {
+      lastAutoCursor.current = seek.cursor
+      load(seek.cursor)
+    }
+  }, [formPath, state.loaded, state.loading, state.failure, state.comments, state.cursor, load])
 
   const handleSave = () => {
     const mode = controlsState.mode

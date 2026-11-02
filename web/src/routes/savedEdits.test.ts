@@ -131,12 +131,17 @@ describe('an edit across the password step, with the real reducers', () => {
   it('closes a restored form whose comment or post was deleted while the password was asked', () => {
     const commentBack = restoredCommentControls(snapshotEdits('P', commentEditing, POST_IDLE), 'P')
     expect(
-      nextControlsState(commentBack, { type: 'firstPageLoaded', livePaths: ['0002'] }).mode,
+      nextControlsState(commentBack, {
+        type: 'firstPageLoaded',
+        livePaths: ['0002'],
+        hasMore: false,
+      }).mode,
     ).toEqual(IDLE)
     const postBack = restoredPostControls(snapshotEdits('P', undefined, postEditing), 'P')
-    expect(nextPostControlsState(postBack, { type: 'firstPageLoaded', liveKeys: [] }).mode).toEqual(
-      POST_IDLE,
-    )
+    expect(
+      nextPostControlsState(postBack, { type: 'firstPageLoaded', liveKeys: [], hasMore: false })
+        .mode,
+    ).toEqual(POST_IDLE)
   })
 
   it('does not bring back an edit that was saved: the form closed, so the next snapshot is empty', () => {

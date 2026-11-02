@@ -50,6 +50,7 @@ export function applyPostResult(io: ThreadPostIO, result: PostResult): void {
     io.dispatchPostControls({
       type: 'firstPageLoaded',
       liveKeys: isDeletedPost(result.post) ? [] : [result.post.sortKey],
+      hasMore: false,
     })
     if (isDeletedPost(result.post)) io.dispatchControls({ type: 'madeReadOnly', message: null })
     return
