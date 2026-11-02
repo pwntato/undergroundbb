@@ -17,6 +17,8 @@ import type { PostControlsEvent } from './postControls'
 import { isDeletedPost, type PostEntry, type PostResult } from './runListPosts'
 
 export const POST_PROBLEMS = {
+  /** Same words as the comments' own: said by the post only once it has been shown and then vanished. */
+  notFound: 'This post no longer exists, or you are no longer a member of its group.',
   authRequired: 'Your session has expired. Log in again and retry.',
   coldKeys: 'This tab needs your password again to read this post.',
   chain: "Couldn't read this group's older keys, so the post can't be opened. Reload to try again.",
@@ -30,10 +32,18 @@ export interface ThreadPostIO {
   readonly dispatchControls: (event: ControlsEvent) => void
   /** The password step is needed. */
   readonly onColdKeys: () => void
+  /** Whether a post is on screen right now, read before this load replaces it. */
+  readonly hadPost: () => boolean
 }
 
-/** Applies one load of the post. `notFound` is left to the comments, which say it already. */
+/**
+ * Applies one load of the post. A `notFound` on the first load is left to the comments,
+ * which 404 the same way and say so already; but a post that was on screen and is now gone
+ * (the reader was removed, or it expired, while the thread was open) has no one else to
+ * say why it vanished, and a Delete that failed for it drew its error inside the post.
+ */
 export function applyPostResult(io: ThreadPostIO, result: PostResult): void {
+  const hadPost = io.hadPost()
   if (result.ok) {
     io.setPost(result.post)
     io.setProblem(null)
@@ -47,7 +57,7 @@ export function applyPostResult(io: ThreadPostIO, result: PostResult): void {
   io.setPost(null)
   io.dispatchPostControls({ type: 'firstPageFailed' })
   if (result.kind === 'notFound') {
-    io.setProblem(null)
+    io.setProblem(hadPost ? POST_PROBLEMS.notFound : null)
     return
   }
   io.setProblem(POST_PROBLEMS[result.kind])

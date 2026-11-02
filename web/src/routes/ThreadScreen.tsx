@@ -206,6 +206,8 @@ function Thread({
   const [maxBytes, setMaxBytes] = useState(DEFAULT_MAX_COMMENT_BYTES)
   // The post the thread hangs on (#318), with the Edit and Delete controls on it.
   const [post, setPost] = useState<PostEntry | null>(null)
+  // Whether a post is on screen, for a load that finds it gone to know it vanished.
+  const postShown = useRef(false)
   const [postProblem, setPostProblem] = useState<string | null>(null)
   const [postControlsState, dispatchPostControls] = useReducer(
     nextPostControlsState,
@@ -279,7 +281,11 @@ function Thread({
   const postDeps: LoadPostDeps = useMemo(() => ({ ...reader.deps, getPost, openPosts }), [reader])
   const postIo = useMemo(
     () => ({
-      setPost,
+      setPost: (next: PostEntry | null) => {
+        postShown.current = next !== null
+        setPost(next)
+      },
+      hadPost: () => postShown.current,
       setProblem: setPostProblem,
       dispatchPostControls,
       dispatchControls,

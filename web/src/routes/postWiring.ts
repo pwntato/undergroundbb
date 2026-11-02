@@ -100,7 +100,7 @@ export async function saveEditPost(
 
 export const POST_DELETE_ERRORS = {
   authRequired: POST_EDIT_ERRORS.authRequired,
-  gone: 'This post is gone. The list was reloaded.',
+  gone: 'This post is gone.',
   failed: "Couldn't delete the post. Try again.",
 } as const
 

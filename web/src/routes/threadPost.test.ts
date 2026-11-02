@@ -7,7 +7,7 @@ import { applyPostResult, POST_PROBLEMS, type ThreadPostIO } from './threadPost'
 const LIVE = { sortKey: 'POST#2026-10-28#0000000000000001' } as unknown as PostView
 const GONE: DeletedPostView = { deleted: true, sortKey: LIVE.sortKey, day: '2026-10-28' }
 
-function io() {
+function io(hadPost = false) {
   const postEvents: PostControlsEvent[] = []
   const threadEvents: ControlsEvent[] = []
   const fake = {
@@ -16,6 +16,7 @@ function io() {
     dispatchPostControls: (e: PostControlsEvent) => postEvents.push(e),
     dispatchControls: (e: ControlsEvent) => threadEvents.push(e),
     onColdKeys: vi.fn(),
+    hadPost: () => hadPost,
   } satisfies ThreadPostIO
   return { fake, postEvents, threadEvents }
 }
@@ -57,7 +58,15 @@ describe('applyPostResult', () => {
     expect(fake.onColdKeys).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves a missing post to the comments, which already say so', () => {
+  it('says so when a post that was on screen is now gone, and closes the form that was about it', () => {
+    const { fake, postEvents } = io(true)
+    applyPostResult(fake, { ok: false, kind: 'notFound' })
+    expect(fake.setPost).toHaveBeenCalledWith(null)
+    expect(fake.setProblem).toHaveBeenCalledWith(POST_PROBLEMS.notFound)
+    expect(postEvents).toEqual([{ type: 'firstPageFailed' }])
+  })
+
+  it('leaves a missing post to the comments on the first load, which already say so', () => {
     const { fake } = io()
     applyPostResult(fake, { ok: false, kind: 'notFound' })
     expect(fake.setPost).toHaveBeenCalledWith(null)
