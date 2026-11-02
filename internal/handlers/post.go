@@ -11,6 +11,7 @@ import (
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // postEnvelopeOverhead is what a post's ciphertext adds to its title and body
@@ -228,6 +229,59 @@ type listPostsResponse struct {
 	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
+// postEntryOf is the wire form of one stored post, shared by the list and by the
+// single-post read so the two can never serve a post differently.
+func postEntryOf(p *models.Post) postEntry {
+	if p.Deleted {
+		// Nothing but the place: who wrote it, and who deleted it, is not served.
+		return postEntry{SortKey: p.SK, Deleted: true}
+	}
+	enc := base64.StdEncoding.EncodeToString
+	return postEntry{
+		SortKey:      p.SK,
+		AuthorUserID: p.AuthorUserID,
+		Generation:   p.Generation,
+		Nonce:        enc(p.Nonce),
+		Ciphertext:   enc(p.Ciphertext),
+		Signature:    enc(p.Signature),
+		SignedDay:    p.SignedDay,
+	}
+}
+
+// getPost implements GET /api/posts/{postId} (#318): the one stored post, in the
+// list's form, so the thread page can show it and offer Edit and Delete. Members
+// only, with the thread's 404 for anyone else, for a post that does not exist and
+// for one past its TTL (a dormant member included: they can read what their keys
+// open). A deleted post is served as its place alone, like the list. Verifies
+// nothing; the reader opens and checks it.
+func (h *Handler) getPost(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupID, postSortKey, ok := idgen.ParsePostID(r.PathValue("postId"))
+	if !ok {
+		postNotFound(w)
+		return
+	}
+	m, err := h.db.GetMembership(r.Context(), groupID, userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not read the post")
+		return
+	}
+	post, err := h.db.GetPost(r.Context(), groupID, postSortKey)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not read the post")
+		return
+	}
+	if m == nil || post == nil || db.PostExpired(post, time.Now()) {
+		postNotFound(w)
+		return
+	}
+	WriteJSON(w, http.StatusOK, postEntryOf(post))
+}
+
 // listPosts implements GET /api/groups/{groupId}/posts -- #43. Members only,
 // with the roster's 404 for anyone else (a dormant member included: they can
 // read what their keys open, and the client says what it cannot). Newest sort
@@ -273,23 +327,9 @@ func (h *Handler) listPosts(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not list posts")
 		return
 	}
-	enc := base64.StdEncoding.EncodeToString
 	entries := make([]postEntry, 0, len(rows))
-	for _, p := range rows {
-		if p.Deleted {
-			// Nothing but the place: who wrote it, and who deleted it, is not served.
-			entries = append(entries, postEntry{SortKey: p.SK, Deleted: true})
-			continue
-		}
-		entries = append(entries, postEntry{
-			SortKey:      p.SK,
-			AuthorUserID: p.AuthorUserID,
-			Generation:   p.Generation,
-			Nonce:        enc(p.Nonce),
-			Ciphertext:   enc(p.Ciphertext),
-			Signature:    enc(p.Signature),
-			SignedDay:    p.SignedDay,
-		})
+	for i := range rows {
+		entries = append(entries, postEntryOf(&rows[i]))
 	}
 	WriteJSON(w, http.StatusOK, listPostsResponse{Posts: entries, NextCursor: next})
 }

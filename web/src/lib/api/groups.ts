@@ -851,6 +851,18 @@ export interface ListPostsResponse {
   readonly nextCursor?: string
 }
 
+/**
+ * GET /api/posts/{pid} -- #318. The one stored post, in the list's form (a deleted
+ * post as its place alone). Members only; 404 for anyone else, and for a post that
+ * does not exist or has expired. The `#`s in a post id travel as `%23`.
+ */
+export async function getPost(postId: string): Promise<WirePost> {
+  const res = await fetch(`/api/posts/${encodeURIComponent(postId)}`, {
+    credentials: 'same-origin',
+  })
+  return handleJSON<WirePost>(res)
+}
+
 /** GET /api/groups/{id}/posts -- #43. Members only; 404 for anyone else. */
 export async function listPosts(groupId: string, cursor?: string): Promise<ListPostsResponse> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''

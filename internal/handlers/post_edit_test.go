@@ -480,3 +480,86 @@ func TestEditPostAfterARotationMovesTheRowsGenerationWithTheCiphertext(t *testin
 		t.Errorf("the list serves %+v, want generation 1", list.Posts)
 	}
 }
+
+// Reading one post (#318): the thread page shows the post and needs its sealed
+// fields to offer Edit and Delete. The server serves the stored row and verifies
+// nothing, exactly as the list does.
+
+func decodePostEntry(t *testing.T, rec *httptest.ResponseRecorder) postEntry {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out postEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestGetPostServesTheStoredFieldsAndAnEditsDayLikeTheList(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	created := decodePostEntry(t, doPostAt(t, h, http.MethodGet, cookie, pid, nil))
+	if created.AuthorUserID != owner.userID || created.Ciphertext == "" || created.Nonce == "" || created.Signature == "" || created.SignedDay != "" {
+		t.Fatalf("a post never edited came back as %+v", created)
+	}
+	req := postEdit(t, pid, owner, today(), nonceOf(7), ctOf(7))
+	if rec := doPostAt(t, h, http.MethodPut, cookie, pid, req); rec.Code != http.StatusOK {
+		t.Fatalf("edit: %d %s", rec.Code, rec.Body.String())
+	}
+	got := decodePostEntry(t, doPostAt(t, h, http.MethodGet, cookie, pid, nil))
+	list := decodeList(t, doListPosts(t, h, cookie, gid, ""))
+	if len(list.Posts) != 1 || got != list.Posts[0] {
+		t.Fatalf("single read %+v differs from the list's %+v", got, list.Posts)
+	}
+	if got.Ciphertext != req.Ciphertext || got.Nonce != req.Nonce || got.Signature != req.Signature || got.SignedDay != today() {
+		t.Errorf("the edit and its day are not served: %+v", got)
+	}
+}
+
+func TestGetPostOfADeletedPostIsItsPlaceAlone(t *testing.T) {
+	h, _, pid, _, cookie := commentFixture(t)
+	if rec := doPostAt(t, h, http.MethodDelete, cookie, pid, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	got := decodePostEntry(t, doPostAt(t, h, http.MethodGet, cookie, pid, nil))
+	if got != (postEntry{SortKey: got.SortKey, Deleted: true}) || got.SortKey == "" {
+		t.Errorf("tombstone served as %+v, want only its sort key and the flag", got)
+	}
+}
+
+func TestGetPostWhoMayReadAndWhatIsNotFound(t *testing.T) {
+	h, gid, pid, owner, cookie := commentFixture(t)
+	_, strangerCookie := loggedInUser(t, h)
+	if rec := doPostAt(t, h, http.MethodGet, strangerCookie, pid, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("non-member status = %d, want 404", rec.Code)
+	}
+	if rec := doPostAt(t, h, http.MethodGet, nil, pid, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no session status = %d, want 401", rec.Code)
+	}
+	if rec := doPostAt(t, h, http.MethodGet, cookie, "not-a-post-id", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("malformed id status = %d, want 404", rec.Code)
+	}
+	if rec := doPostAt(t, h, http.MethodGet, cookie, pidOf(gid, "POST#2026-10-28#00112233445566aa"), nil); rec.Code != http.StatusNotFound {
+		t.Errorf("missing post status = %d, want 404", rec.Code)
+	}
+	expiredKey := "POST#2026-10-28#00112233445566ab"
+	storePostAt(t, gid, expiredKey, owner.userID, time.Now().Add(-time.Hour).Unix())
+	if rec := doPostAt(t, h, http.MethodGet, cookie, pidOf(gid, expiredKey), nil); rec.Code != http.StatusNotFound {
+		t.Errorf("expired post status = %d, want 404", rec.Code)
+	}
+	// A member of one group asking for another group's post is a stranger there.
+	otherGroup := createPrivateGroup(t, h, owner, cookie)
+	otherKey := "POST#2026-10-28#00112233445566ac"
+	storePostAt(t, otherGroup, otherKey, owner.userID, 0)
+	member, memberCookie := loggedInUser(t, h)
+	addMember(t, gid, member, "member")
+	if rec := doPostAt(t, h, http.MethodGet, memberCookie, pidOf(otherGroup, otherKey), nil); rec.Code != http.StatusNotFound {
+		t.Errorf("member of another group status = %d, want 404", rec.Code)
+	}
+	// A dormant member can still read what their keys open.
+	setProfileKeyEpoch(t, owner.userID, 1)
+	if rec := doPostAt(t, h, http.MethodGet, cookie, pid, nil); rec.Code != http.StatusOK {
+		t.Errorf("dormant member status = %d, want 200", rec.Code)
+	}
+}

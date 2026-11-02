@@ -10,10 +10,13 @@ import {
   DELETE_QUESTION,
   ThreadPanel,
   type ThreadControls,
+  type ThreadPost,
   type ThreadReactions,
   type ThreadReply,
 } from './ThreadPanel'
 import { ReplyBox } from './ReplyBox'
+import type { PostListControls } from './GroupPostsPanel'
+import type { PostEntry, PostView } from './runListPosts'
 import type { CommentView, ReactionView, ThreadEntry } from './runLoadThread'
 import { commentAuthorLabel, commentNotes, commentTimeLabel } from './threadNotes'
 
@@ -66,6 +69,8 @@ function render(
     reply?: Partial<ThreadReply>
     reactions?: Partial<ThreadReactions>
     controls?: Partial<ThreadControls>
+    post?: ThreadPost
+    postProblem?: string
   } = {},
 ) {
   return renderToStaticMarkup(
@@ -75,6 +80,8 @@ function render(
       createElement(ThreadPanel, {
         groupId: 'g1',
         postTitle: over.title,
+        post: over.post,
+        postProblem: over.postProblem,
         comments,
         loading: over.loading ?? false,
         error: over.error ?? null,
@@ -598,5 +605,96 @@ describe('Edit and Delete on a comment (#45)', () => {
     const html = render([{ deleted: true, path: '0001', depth: 1 }], { controls: {} })
     expect(html).not.toContain('>Edit<')
     expect(html).not.toContain('>Delete<')
+  })
+})
+
+describe('the post at the top of the thread (#318)', () => {
+  const postView = (over: Partial<PostView> = {}): PostView => ({
+    sortKey: 'POST#2026-10-28#00112233445566ff',
+    day: '2026-10-28',
+    authorUserId: 'u1',
+    authorName: 'alice',
+    content: {
+      kind: 'opened',
+      title: 'Hello there',
+      body: 'Post line one\nline two',
+      at: '2026-10-28T14:03:09.000Z',
+      timeSuspect: false,
+    },
+    signature: { kind: 'valid' },
+    keyAnchor: 'pinned',
+    ...over,
+  })
+  const postControls = (over: Partial<PostListControls> = {}): PostListControls => ({
+    selfUserId: 'u1',
+    isAdmin: false,
+    mode: { kind: 'idle' },
+    busy: false,
+    error: null,
+    limits: { maxTitleBytes: 100, maxBodyBytes: 1000 },
+    onEditOpen: () => {},
+    onSave: () => {},
+    onDeleteAsk: () => {},
+    onDeleteConfirm: () => {},
+    onClose: () => {},
+    ...over,
+  })
+  const withPost = (entry: PostEntry, over: Partial<PostListControls> = {}): ThreadPost => ({
+    entry,
+    controls: postControls(over),
+  })
+  const buttonLabels = (html: string) =>
+    [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])
+
+  it('shows the post itself, with who wrote it, instead of the "On:" line', () => {
+    const html = render([], { title: 'From the list', post: withPost(postView()) })
+    expect(html).toContain('Hello there')
+    expect(html).toContain('Post line one\nline two')
+    expect(html).toContain('alice')
+    expect(html).not.toContain('On: ')
+  })
+
+  it('keeps the "On:" line until the post has loaded', () => {
+    expect(render([], { title: 'From the list' })).toContain('On: From the list')
+  })
+
+  it("offers Edit and Delete on the reader's own post, Delete alone to an admin, nothing to others", () => {
+    expect(buttonLabels(render([], { post: withPost(postView()) }))).toEqual(['Edit', 'Delete'])
+    const theirs = postView({ authorUserId: 'u2' })
+    expect(buttonLabels(render([], { post: withPost(theirs) }))).toEqual([])
+    expect(buttonLabels(render([], { post: withPost(theirs, { isAdmin: true }) }))).toEqual([
+      'Delete',
+    ])
+  })
+
+  it('shows a deleted post as a placeholder with no author and no buttons', () => {
+    const html = render([], {
+      post: withPost({
+        deleted: true,
+        sortKey: 'POST#2026-10-28#00112233445566ff',
+        day: '2026-10-28',
+      }),
+    })
+    expect(html).toContain('This post was deleted.')
+    expect(html).not.toContain('alice')
+    expect(buttonLabels(html)).toEqual([])
+  })
+
+  it('says why a failed action stopped, once, when no form is open', () => {
+    const html = render([], { post: withPost(postView(), { error: 'This post is gone.' }) })
+    expect(html.split('This post is gone.')).toHaveLength(2)
+  })
+
+  it('puts the delete question inside the post, not above the comments', () => {
+    const html = render([], {
+      post: withPost(postView(), { mode: { kind: 'confirmDelete', sortKey: postView().sortKey } }),
+    })
+    expect(html).toContain('Delete this post? Its comments stay, but nothing new can be added.')
+    expect(buttonLabels(html)).toEqual(['Delete', 'Cancel'])
+  })
+
+  it('says why the post is missing when it could not be loaded', () => {
+    const html = render([], { postProblem: 'Couldn’t load the post itself.' })
+    expect(html).toContain('Couldn’t load the post itself.')
   })
 })

@@ -14,10 +14,13 @@ import { getPublicConfig } from '@/lib/api/config'
 import {
   createComment,
   deleteComment,
+  deletePost,
   deleteReaction,
   editComment,
+  editPost,
   getGroup,
   getKeychain,
+  getPost,
   getThread,
   putReaction,
 } from '@/lib/api/groups'
@@ -26,9 +29,11 @@ import { getUserDetail } from '@/lib/api/users'
 import {
   getOwnSigningKey,
   openComments,
+  openPosts,
   openReactions,
   sealComment,
   sealCommentEdit,
+  sealPostEdit,
   sealReaction,
 } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
@@ -36,25 +41,37 @@ import { makeOwnKeyHistoryLoader } from '@/lib/session/ownKeyHistory'
 import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { useSession } from '@/lib/session/useSession'
 import { INITIAL_CONTROLS_STATE, nextControlsState, replyOffered } from './commentControls'
+import { INITIAL_POST_CONTROLS_STATE, nextPostControlsState } from './postControls'
 import { INITIAL_POSTS_GATE, nextPostsGate } from './postsGate'
+import { confirmDeletePost, saveEditPost, type PendingPostEdit } from './postWiring'
 import { PostsPasswordDeclined } from './PostsPasswordDeclined'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
-import { makeAuthorResolver } from './runListPosts'
+import { DEFAULT_POST_LIMITS, type PostLimits } from './runCreatePost'
+import {
+  isDeletedPost,
+  loadPost,
+  makeAuthorResolver,
+  type LoadPostDeps,
+  type PostEntry,
+} from './runListPosts'
 import {
   isDeletedComment,
   loadThreadPage,
   type LoadThreadDeps,
   type ThreadPageResult,
 } from './runLoadThread'
+import { applyPostResult } from './threadPost'
 import {
   ThreadPanel,
   type ThreadControls,
+  type ThreadPost,
   type ThreadReactions,
   type ThreadReply,
 } from './ThreadPanel'
+import type { PostListControls } from './GroupPostsPanel'
 import { canRetryFailure, INITIAL_THREAD_STATE, nextThreadState } from './threadState'
 import {
   confirmDelete,
@@ -187,6 +204,18 @@ function Thread({
   // server decides; this only decides whether to offer the button.
   const [isAdmin, setIsAdmin] = useState(false)
   const [maxBytes, setMaxBytes] = useState(DEFAULT_MAX_COMMENT_BYTES)
+  // The post the thread hangs on (#318), with the Edit and Delete controls on it.
+  const [post, setPost] = useState<PostEntry | null>(null)
+  const [postProblem, setPostProblem] = useState<string | null>(null)
+  const [postControlsState, dispatchPostControls] = useReducer(
+    nextPostControlsState,
+    INITIAL_POST_CONTROLS_STATE,
+  )
+  const [limits, setLimits] = useState<PostLimits>(DEFAULT_POST_LIMITS)
+  // Bumped when the post is read again, so a read still in flight is dropped.
+  const postEpoch = useRef(0)
+  // The edit of the post a send left unanswered; sent again unchanged while the form still matches.
+  const pendingPostEdit = useRef<PendingPostEdit | null>(null)
   // Bumped when the thread starts over, so a page still in flight is dropped.
   const epoch = useRef(0)
   // The comment a send left unanswered; sent again unchanged while the box still matches.
@@ -234,7 +263,10 @@ function Thread({
     let cancelled = false
     void getPublicConfig()
       .then((c) => {
-        if (!cancelled) setMaxBytes(c.maxCommentBytes)
+        if (!cancelled) {
+          setMaxBytes(c.maxCommentBytes)
+          setLimits({ maxTitleBytes: c.maxPostTitleBytes, maxBodyBytes: c.maxPostBodyBytes })
+        }
       })
       .catch(() => {
         // The default matches the server's; it enforces its own limit regardless.
@@ -243,6 +275,42 @@ function Thread({
       cancelled = true
     }
   }, [])
+
+  const postDeps: LoadPostDeps = useMemo(() => ({ ...reader.deps, getPost, openPosts }), [reader])
+  const postIo = useMemo(
+    () => ({
+      setPost,
+      setProblem: setPostProblem,
+      dispatchPostControls,
+      dispatchControls,
+      onColdKeys: () => {
+        onColdKeys(
+          replyNow.current.draft === ''
+            ? undefined
+            : { replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
+        )
+      },
+    }),
+    [onColdKeys],
+  )
+  // Reads the post again, e.g. after it was edited or deleted.
+  const reloadPost = useCallback(() => {
+    postEpoch.current += 1
+    const mine = postEpoch.current
+    void loadPost(postDeps, reader.resolveAuthor, groupId, postId).then((result) => {
+      if (mine === postEpoch.current) applyPostResult(postIo, result)
+    })
+  }, [postDeps, reader, groupId, postId, postIo])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadPost(postDeps, reader.resolveAuthor, groupId, postId).then((result) => {
+      if (!cancelled && postEpoch.current === 0) applyPostResult(postIo, result)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [postDeps, reader, groupId, postId, postIo])
 
   useEffect(() => {
     let cancelled = false
@@ -342,6 +410,55 @@ function Thread({
     },
   }
 
+  const handleSavePost = (title: string, body: string) => {
+    const mode = postControlsState.mode
+    if (mode.kind !== 'editing' || post === null || isDeletedPost(post)) return
+    if (post.sortKey !== mode.sortKey || post.content.kind !== 'opened') return
+    void saveEditPost(
+      { dispatchControls: dispatchPostControls, reload: reloadPost, onColdKeys: postIo.onColdKeys },
+      {
+        edit: {
+          userId,
+          getGroup,
+          getChain: reader.deps.getChain,
+          sealPostEdit,
+          editPost,
+        },
+        pending: pendingPostEdit,
+      },
+      { groupId, postId, sortKey: mode.sortKey, title, body, at: post.content.at },
+    )
+  }
+
+  const postControls: PostListControls = {
+    selfUserId: userId,
+    isAdmin,
+    mode: postControlsState.mode,
+    busy: postControlsState.busy,
+    error: postControlsState.error,
+    limits,
+    onEditOpen: (sortKey, title, body) => {
+      dispatchPostControls({ type: 'editOpened', sortKey, title, body })
+    },
+    onSave: handleSavePost,
+    onDeleteAsk: (sortKey) => {
+      dispatchPostControls({ type: 'deleteAsked', sortKey })
+    },
+    onDeleteConfirm: () => {
+      if (postControlsState.mode.kind !== 'confirmDelete') return
+      void confirmDeletePost(
+        { dispatchControls: dispatchPostControls, reload: reloadPost },
+        { deletePost },
+        { postId },
+      )
+    },
+    onClose: () => {
+      dispatchPostControls({ type: 'closed' })
+    },
+  }
+  const threadPost: ThreadPost | undefined =
+    post === null ? undefined : { entry: post, controls: postControls }
+
   const reply: ThreadReply = {
     replyTo: replyState.replyTo,
     draft: replyState.draft,
@@ -370,6 +487,8 @@ function Thread({
     <ThreadPanel
       groupId={groupId}
       postTitle={postTitle}
+      post={threadPost}
+      postProblem={postProblem}
       comments={state.comments}
       loading={state.loading}
       error={state.failure === null ? null : PAGE_ERRORS[state.failure]}

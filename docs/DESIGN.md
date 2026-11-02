@@ -273,6 +273,14 @@ the UI says so. **A rollback is possible and not detectable**: an old edition of
 one, carries a signature that still verifies at the same address, so an operator holding a copy can put it back (see
 THREAT_MODEL).
 
+**Reading one post (#318).** `GET /api/posts/{pid}` serves the one stored post in exactly the list's form (the same
+function builds both, so they cannot drift), for the thread page, which shows the post above its comments and offers Edit
+and Delete on it with the list's controls. A member reads it (a dormant one included); anyone else, a post that does not
+exist, a malformed id and a post past its TTL are the same 404 `post not found` the thread gives. A deleted post is
+served as its sort key and the `deleted` flag alone, and the thread page then turns read-only at once (no reply box,
+reaction buttons stopped), since nothing new can be added to it. Nothing is verified server-side; the client opens and
+checks the post as it does a page of the list.
+
 **Editing and deleting a post (#45).** `PUT /api/posts/{pid}` and `DELETE /api/posts/{pid}` follow the comment rules
 above, with these differences. A post's sort key carries the day it was created, which an edit cannot change, so an edit
 signs over the same sort key and **the day it signs today** and stores that day on the row as `SignedDay`; the list serves

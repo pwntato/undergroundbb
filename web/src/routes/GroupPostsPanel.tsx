@@ -207,18 +207,11 @@ export function GroupPostsPanel({
   )
 }
 
-function PostCard({
-  groupId,
-  post,
-  controls,
-}: {
-  readonly groupId: string
-  readonly post: PostView
-  readonly controls: PostListControls | undefined
-}) {
+/** A post as shown: title, who and when, body, and what to know about its trust. Shared with the thread page (#318). */
+export function PostContent({ post }: { readonly post: PostView }) {
   const edited = post.content.kind === 'opened' ? editedMark(post.content) : null
   return (
-    <article className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
+    <>
       {post.content.kind === 'opened' && (
         <h2 className="break-words text-base font-semibold">{post.content.title}</h2>
       )}
@@ -242,6 +235,22 @@ function PostCard({
           {note.text}
         </p>
       ))}
+    </>
+  )
+}
+
+function PostCard({
+  groupId,
+  post,
+  controls,
+}: {
+  readonly groupId: string
+  readonly post: PostView
+  readonly controls: PostListControls | undefined
+}) {
+  return (
+    <article className="flex flex-col gap-1.5 rounded-md border px-3 py-2">
+      <PostContent post={post} />
       <PostCommentsLink
         groupId={groupId}
         sortKey={post.sortKey}
