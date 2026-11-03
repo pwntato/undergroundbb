@@ -6,7 +6,13 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import { isDefinitelyUncommitted, runCreateGroup, type CreateGroupDeps } from './runCreateGroup'
+import {
+  createGroupErrorText,
+  isDefinitelyUncommitted,
+  runCreateGroup,
+  type CreateGroupDeps,
+} from './runCreateGroup'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 
 const SIGN_RESULT = {
   trustAnchorSignature: 'YW5jaG9yLXNpZw==',
@@ -145,6 +151,34 @@ describe('runCreateGroup', () => {
     }
   })
 
+  it('classifies a refused day (400, code clock_skew) as clockSkew, not definitelyUncommitted', async () => {
+    const deps = makeDeps({
+      createGroup: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError(400, 'rootGrantSortKey: day is not within tolerance', 'clock_skew'),
+        ),
+    })
+    const result = await runCreateGroup(deps, 'group-1', 'Z3JvdXBrZXk=', FORM)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('clockSkew')
+    }
+  })
+
+  it('classifies a 400 WITHOUT the clock_skew code as definitelyUncommitted', async () => {
+    const deps = makeDeps({
+      createGroup: vi.fn().mockRejectedValue(new ApiError(400, 'some other refusal')),
+    })
+    const result = await runCreateGroup(deps, 'group-1', 'Z3JvdXBrZXk=', FORM)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('definitelyUncommitted')
+    }
+  })
+
   it('classifies a 409 from createGroup WITHOUT the group_id_taken code as definitelyUncommitted', async () => {
     // Any other 4xx (validation, signature failures) is still a plain
     // definite-non-commit -- only the specific group_id_taken code gets the
@@ -180,5 +214,12 @@ describe('runCreateGroup', () => {
     if (!result.ok) {
       expect(result.kind).toBe('ambiguous')
     }
+  })
+})
+
+describe('createGroupErrorText', () => {
+  it('says the clock is wrong for clockSkew, not that the server was unreachable', () => {
+    expect(createGroupErrorText('clockSkew')).toBe(CLOCK_SKEW_MESSAGE)
+    expect(createGroupErrorText('definitelyUncommitted')).not.toBe(CLOCK_SKEW_MESSAGE)
   })
 })

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,6 +210,9 @@ func TestCreateGroupRejectsStaleGrantDay(t *testing.T) {
 	rec := doCreateGroup(t, h, cookie, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"clock_skew"`) {
+		t.Fatalf("body = %s, want code clock_skew", rec.Body.String())
 	}
 }
 
