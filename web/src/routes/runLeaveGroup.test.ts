@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { MemberEntry } from '@/lib/api/groups'
 import { leaveFailureMessage, leavePlan, runLeave, type LeaveDeps } from './runLeaveGroup'
 import type { MembersView } from './runGroupMembers'
@@ -429,6 +430,20 @@ describe('runLeave in a Rotating group (#178)', () => {
     expect(leaveFailureMessage('refused')).toContain('nothing was changed')
     expect(leaveFailureMessage('refused')).not.toContain("couldn't confirm")
     expect(leaveFailureMessage('refused', 'bob')).toContain("didn't go through")
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew), not a plain refusal', async () => {
+    const h = harness({
+      leave: () => Promise.reject(new ApiError(400, 'day is not within tolerance', 'clock_skew')),
+    })
+    expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'clockSkew' })
+    // Only a 400 with the code means a clock problem.
+    const other = harness({ leave: () => Promise.reject(new ApiError(422, 'x', 'clock_skew')) })
+    expect(await runLeave(other.deps, plain, 'plain')).toEqual({ ok: false, kind: 'refused' })
+    expect(leaveFailureMessage('clockSkew')).toBe(CLOCK_SKEW_MESSAGE)
+    // After a successor was promoted, the message still says what happened, and why a retry needs a fixed clock.
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain('bob is now an admin')
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain(CLOCK_SKEW_MESSAGE)
   })
 
   it('has a message for every new failure', () => {

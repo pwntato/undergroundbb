@@ -10,6 +10,7 @@ import type {
 } from '@/lib/crypto/worker-protocol'
 import type { MembersView } from './runGroupMembers'
 import { isDeletedUser } from './memberLabel'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 import type { RotationDeps } from './runRotation'
 
@@ -66,6 +67,8 @@ export type LeaveResult =
   // The server refused the request outright (a 4xx the cases above do not name,
   // e.g. a signature it could not verify). Nothing was written.
   | { readonly ok: false; readonly kind: 'refused' }
+  // The server refused the signing day: this device's clock is off. Nothing was written.
+  | { readonly ok: false; readonly kind: 'clockSkew' }
   // Network failure or 5xx: the leave may or may not have committed.
   | { readonly ok: false; readonly kind: 'ambiguous' }
 
@@ -173,6 +176,10 @@ export async function runLeave(
           // Promoted since the roster loaded; reload and sign next time.
           return { ok: false, kind: 'stale' }
         }
+        if (err.status === 400 && err.code === 'clock_skew') {
+          // The server refused the signing day: nothing was written.
+          return { ok: false, kind: 'clockSkew' }
+        }
         if (err.status === 401) {
           return { ok: false, kind: 'authRequired' }
         }
@@ -253,6 +260,7 @@ const LEAVE_ERRORS: Record<Exclude<LeaveResult, { ok: true }>['kind'], string> =
     "We couldn't read the group to prepare your leaving, so nothing was changed. Try again.",
   refused:
     'The server refused this request, so nothing was changed. Reload the page and try again.',
+  clockSkew: CLOCK_SKEW_MESSAGE,
   notFound: 'You are no longer a member of this group.',
   ambiguous: "We couldn't confirm whether you left. Check your group list before trying again.",
 }
@@ -273,6 +281,9 @@ export function leaveFailureMessage(
     }
     if (kind === 'stale' || kind === 'lastAdmin' || kind === 'refused') {
       return `${promotedName} is now an admin, but leaving didn't go through. Try Leave again.`
+    }
+    if (kind === 'clockSkew') {
+      return `${promotedName} is now an admin, but leaving didn't go through. ${CLOCK_SKEW_MESSAGE}`
     }
   }
   return LEAVE_ERRORS[kind]

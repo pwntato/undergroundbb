@@ -388,6 +388,16 @@ describe('deleteFailureMessage', () => {
       ),
     ).toContain('enter your password')
   })
+
+  it('says the device clock is wrong when a leave was refused for its signing day', () => {
+    const message = deleteFailureMessage(
+      { ok: false, kind: 'leaveFailed', groupId: 'g-x', reason: 'clockSkew', left: 1 },
+      label,
+    )
+    expect(message).toContain('date or time looks wrong')
+    expect(message).not.toContain('refused by the server')
+    expect(message).toContain('already left 1 group')
+  })
 })
 
 describe('runConfirmedDeletion (review of #183: the plan on screen can be stale)', () => {

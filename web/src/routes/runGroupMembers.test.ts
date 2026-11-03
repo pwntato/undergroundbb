@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { GroupDetail, MemberEntry } from '@/lib/api/groups'
 import {
   changeRole,
@@ -245,6 +246,25 @@ describe('changeRole', () => {
       changeMemberRole: vi.fn().mockRejectedValue(new ApiError(status, 'no')),
     })
     expect(await changeRole(deps, view(), BOB, 'admin')).toEqual({ ok: false, kind })
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew)', async () => {
+    const fail = (err: ApiError) =>
+      changeRole(
+        changeDeps({ changeMemberRole: vi.fn().mockRejectedValue(err) }),
+        view(),
+        BOB,
+        'admin',
+      )
+    expect(
+      await fail(new ApiError(400, 'grantSortKey: day is not within tolerance', 'clock_skew')),
+    ).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+    // Only a 400 with the code means a clock problem.
+    expect(await fail(new ApiError(422, 'other', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other',
+    })
   })
 
   it('surfaces the server message for a 400', async () => {

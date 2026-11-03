@@ -249,7 +249,7 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "grantSortKey: day is not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "grantSortKey: day is not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	// The grantor's own grant must be dated strictly earlier than this one
@@ -513,7 +513,7 @@ func (h *Handler) buildLeaveDemotion(
 		return nil, http.StatusBadRequest, "", "grantSortKey: must be a well-formed GRANT# sort key for your uuid"
 	}
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		return nil, http.StatusBadRequest, "", "grantSortKey: day is not within tolerance of the current UTC day"
+		return nil, http.StatusBadRequest, "clock_skew", "grantSortKey: day is not within tolerance of the current UTC day"
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
 	if err != nil {
@@ -1065,7 +1065,7 @@ func (h *Handler) buildRemoveDemotion(ctx context.Context, removerID, groupID, s
 		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: must be a well-formed GRANT# sort key for the member's uuid"
 	}
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		return nil, removeRejection{http.StatusBadRequest, "bad_grant_sort_key"}, "grantSortKey: day is not within tolerance of the current UTC day"
+		return nil, removeRejection{http.StatusBadRequest, "clock_skew"}, "grantSortKey: day is not within tolerance of the current UTC day"
 	}
 	// The remover's own grant must be dated strictly earlier than the demotion
 	// they sign (see grantorDatedTooLate). The remover's current grant is

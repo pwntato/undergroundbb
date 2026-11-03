@@ -331,6 +331,16 @@ func TestLeaveGroupElevatedRejections(t *testing.T) {
 			t.Fatalf("%d %s", rec.Code, rec.Body.String())
 		}
 	})
+	for name, days := range map[string]int{"day too old": -5, "day in the future": 5} {
+		t.Run("demotion "+name, func(t *testing.T) {
+			leave := signedLeave(t, owner, gid, ref)
+			leave.GrantSortKey = testGrantSortKey(t, owner.userID, time.Now().AddDate(0, 0, days))
+			rec := doLeaveWith(t, h, ownerCookie, gid, &leave)
+			if rec.Code != http.StatusBadRequest || errCode(t, rec) != "clock_skew" {
+				t.Fatalf("%d %q %s", rec.Code, errCode(t, rec), rec.Body.String())
+			}
+		})
+	}
 	t.Run("stale grantor ref", func(t *testing.T) {
 		leave := signedLeave(t, owner, gid, "GRANT#"+owner.userID+"#2020-01-01#x")
 		rec := doLeaveWith(t, h, ownerCookie, gid, &leave)

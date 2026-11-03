@@ -21,6 +21,7 @@ import type {
   StartGroupRotationResult,
 } from '@/lib/crypto/worker-protocol'
 import type { UserDetail } from '@/lib/api/users'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 import { ownWrapRecord, type SignWrapRecord } from './wrapRecord'
 
@@ -210,6 +211,11 @@ function failureOf(err: unknown): Extract<RemoveResult, { ok: false }> {
     }
     if (err.status === 409) {
       return { ok: false, kind: 'rejected', message: err.message }
+    }
+    if (err.status === 400 && err.code === 'clock_skew') {
+      // The server refused the signing day: nothing was saved, and trying again cannot
+      // help until the clock is right.
+      return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
     }
     if (err.status === 401) {
       return { ok: false, kind: 'authRequired' }
