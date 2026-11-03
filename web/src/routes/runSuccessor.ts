@@ -28,6 +28,7 @@ import {
   type SuccessorOffer,
   utcDayMs,
 } from '@/lib/groups/designation'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 import { listAllMembers } from './runGroupMembers'
 
@@ -145,6 +146,11 @@ function mapApiError(
       return err.code !== undefined && staleCodes.has(err.code)
         ? { ok: false, kind: 'stale' }
         : { ok: false, kind: 'rejected', message: err.message }
+    }
+    if (err.status === 400 && err.code === 'clock_skew') {
+      // The server refused the signing day: nothing was written, and a retry cannot help until
+      // the clock is right. Say so instead of showing the server's own text.
+      return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
     }
     if (err.status === 401) return { ok: false, kind: 'authRequired' }
     if (err.status === 403) return { ok: false, kind: 'forbidden' }

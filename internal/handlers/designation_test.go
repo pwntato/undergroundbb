@@ -148,7 +148,7 @@ func TestPutDesignationRejections(t *testing.T) {
 		}, http.StatusBadRequest, ""},
 		{"day far in the past", func(r *putDesignationRequest) {
 			r.DesignationSortKey = testDesignationSortKey(t, owner.userID, time.Now().AddDate(0, 0, -5))
-		}, http.StatusBadRequest, ""},
+		}, http.StatusBadRequest, "clock_skew"},
 		{"malformed signature", func(r *putDesignationRequest) { r.Signature = "!!" }, http.StatusBadRequest, ""},
 	}
 	for _, tc := range cases {
