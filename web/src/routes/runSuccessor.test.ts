@@ -129,6 +129,12 @@ describe('designate', () => {
       kind: 'rejected',
       message: 'some other refusal',
     })
+    // Only a 400 carries the clock meaning.
+    expect(await fail(new ApiError(422, 'other status', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other status',
+    })
   })
 
   it('maps server answers: stale for a moved grant, the server message for a same-day refusal', async () => {
@@ -305,6 +311,12 @@ describe('claim', () => {
       ok: false,
       kind: 'rejected',
       message: 'some other refusal',
+    })
+    // Only a 400 carries the clock meaning.
+    expect(await fail(new ApiError(422, 'other status', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other status',
     })
   })
 
