@@ -47,11 +47,11 @@ const AMBIGUOUS_ERROR =
 export const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
 // Distinct from UNREACHABLE_ERROR: a groupIdConflict means the request DID
 // reach the server and got a real answer (409 group_id_taken), not that it
-// failed to connect -- see runCreateGroup.ts's own doc comment on why this
-// is its own CreateGroupErrorKind (PR #142 round 2 review) rather than
-// folded into 'definitelyUncommitted'. Phrased as a plain retry prompt
-// since handleSubmit's groupIdConflict branch below clears `pending`
-// first, so the very next submit generates a fresh groupId automatically.
+// failed to connect -- see the group_id_taken branch of runCreateGroup below
+// on why this is its own CreateGroupErrorKind (PR #142 round 2 review) rather
+// than folded into 'definitelyUncommitted'. Phrased as a plain retry prompt
+// since CreateGroupScreen's handleSubmit clears `pending` on a groupIdConflict,
+// so the very next submit generates a fresh groupId automatically.
 const GROUP_ID_CONFLICT_ERROR = 'That request could not be completed. Try again.'
 /** The line the form shows for a failed create. */
 export function createGroupErrorText(kind: CreateGroupErrorKind): string {
