@@ -95,6 +95,13 @@ describe('runLeave', () => {
     expect(await run(failing(409, 'conflict_retry'))).toEqual({ ok: false, kind: 'stale' })
   })
 
+  it('says the device clock is wrong for a refused signing day (400 clock_skew), not a plain refusal', async () => {
+    expect(await run(failing(400, 'clock_skew'))).toEqual({ ok: false, kind: 'clockSkew' })
+    // Only a 400 with the code means a clock problem.
+    expect(await run(failing(422, 'clock_skew'))).toEqual({ ok: false, kind: 'refused' })
+    expect(await run(failing(400, 'bad_signature'))).toEqual({ ok: false, kind: 'refused' })
+  })
+
   it('maps 401 and 404, and treats everything else as ambiguous', async () => {
     expect(await run(failing(401))).toEqual({ ok: false, kind: 'authRequired' })
     expect(await run(failing(404))).toEqual({ ok: false, kind: 'notFound' })
@@ -241,6 +248,12 @@ describe('leaveFailureMessage', () => {
   it('has a message for every failure kind, none claiming a leave that did not happen', () => {
     expect(leaveFailureMessage('coldKeys')).toContain('needs your password again')
     expect(leaveFailureMessage('grantMissing')).toContain('Nothing was changed')
+  })
+
+  it('says the device clock is wrong for clockSkew, also after a successor was promoted', () => {
+    expect(leaveFailureMessage('clockSkew')).toBe(CLOCK_SKEW_MESSAGE)
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain('bob is now an admin')
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain(CLOCK_SKEW_MESSAGE)
   })
 
   it('keeps the plain messages when no promotion happened, and for session errors', () => {
@@ -430,20 +443,6 @@ describe('runLeave in a Rotating group (#178)', () => {
     expect(leaveFailureMessage('refused')).toContain('nothing was changed')
     expect(leaveFailureMessage('refused')).not.toContain("couldn't confirm")
     expect(leaveFailureMessage('refused', 'bob')).toContain("didn't go through")
-  })
-
-  it('says the device clock is wrong for a refused signing day (400 clock_skew), not a plain refusal', async () => {
-    const h = harness({
-      leave: () => Promise.reject(new ApiError(400, 'day is not within tolerance', 'clock_skew')),
-    })
-    expect(await runLeave(h.deps, plain, 'plain')).toEqual({ ok: false, kind: 'clockSkew' })
-    // Only a 400 with the code means a clock problem.
-    const other = harness({ leave: () => Promise.reject(new ApiError(422, 'x', 'clock_skew')) })
-    expect(await runLeave(other.deps, plain, 'plain')).toEqual({ ok: false, kind: 'refused' })
-    expect(leaveFailureMessage('clockSkew')).toBe(CLOCK_SKEW_MESSAGE)
-    // After a successor was promoted, the message still says what happened, and why a retry needs a fixed clock.
-    expect(leaveFailureMessage('clockSkew', 'bob')).toContain('bob is now an admin')
-    expect(leaveFailureMessage('clockSkew', 'bob')).toContain(CLOCK_SKEW_MESSAGE)
   })
 
   it('has a message for every new failure', () => {
