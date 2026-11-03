@@ -414,6 +414,7 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 	stranger := registerTestUser(t, h)
 	today := time.Now().UTC().Format("2006-01-02")
 	oldDay := time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02")
+	futureDay := time.Now().UTC().AddDate(0, 0, 5).Format("2006-01-02")
 	staleRef := "GRANT#" + creator.userID + "#2020-01-01#0000000000000000"
 
 	good := signedAdmission(t, h, creator, groupID, inviteID, invitee)
@@ -438,7 +439,8 @@ func TestCompleteInviteRejectsBadAdmission(t *testing.T) {
 		{"signature empty", withSig(good, ""), 400, ""},
 		{"stale grant ref", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, staleRef, today), 409, "grantor_ref_stale"},
 		{"signed generation differs from the request's", signedAdmissionAt(t, h, creator, groupID, inviteID, invitee, good.InviterGrantRef, today, 1), 400, "bad_signature"},
-		{"day too old", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, "", oldDay), 400, ""},
+		{"day too old", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, "", oldDay), 400, "clock_skew"},
+		{"day in the future", signedAdmissionWith(t, h, creator, groupID, inviteID, invitee, "", futureDay), 400, "clock_skew"},
 		{"day malformed", &admissionRequest{InviterGrantRef: good.InviterGrantRef, Day: "07/10/2026", Signature: good.Signature}, 400, ""},
 	}
 	for _, tc := range cases {
