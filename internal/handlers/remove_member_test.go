@@ -199,6 +199,10 @@ func TestRemoveMemberRejections(t *testing.T) {
 	stale := removalGrant(t, owner, gid, adm.userID, "GRANT#"+owner.userID+"#2020-01-01#0000000000000000")
 	otherSubject := removalGrant(t, owner, gid, mem.userID, ref)
 	plainWithBody := removalGrant(t, owner, gid, mem.userID, ref)
+	tooOld := good()
+	tooOld.GrantSortKey = testGrantSortKey(t, adm.userID, time.Now().AddDate(0, 0, -5))
+	tooNew := good()
+	tooNew.GrantSortKey = testGrantSortKey(t, adm.userID, time.Now().AddDate(0, 0, 5))
 
 	cases := []struct {
 		name   string
@@ -219,6 +223,8 @@ func TestRemoveMemberRejections(t *testing.T) {
 		{"demotion signed by another key", ownerCookie, adm.userID, &forged, 400, "bad_signature"},
 		{"demotion with stale grantor ref", ownerCookie, adm.userID, &stale, 409, "grantor_ref_stale"},
 		{"demotion sort key for another subject", ownerCookie, adm.userID, &otherSubject, 400, "bad_grant_sort_key"},
+		{"demotion day too old", ownerCookie, adm.userID, &tooOld, 400, "clock_skew"},
+		{"demotion day in the future", ownerCookie, adm.userID, &tooNew, 400, "clock_skew"},
 		{"plain member with a demotion attached", ownerCookie, mem.userID, &plainWithBody, 409, "conflict_retry"},
 	}
 	for _, tc := range cases {

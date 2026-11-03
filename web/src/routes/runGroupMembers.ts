@@ -11,6 +11,7 @@ import type {
   MemberEntry,
   MemberRole,
 } from '@/lib/api/groups'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 
 /** The roster plus what the caller needs to act on it. */
@@ -186,6 +187,11 @@ export async function changeRole(
           return err.code !== undefined && STALE_CODES.has(err.code)
             ? { ok: false, kind: 'stale' }
             : { ok: false, kind: 'rejected', message: err.message }
+        }
+        if (err.status === 400 && err.code === 'clock_skew') {
+          // The server refused the signing day: nothing was saved, and trying again cannot
+          // help until the clock is right.
+          return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
         }
         if (err.status === 401) {
           return { ok: false, kind: 'authRequired' }

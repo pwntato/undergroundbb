@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { MemberEntry } from '@/lib/api/groups'
 import { leaveFailureMessage, leavePlan, runLeave, type LeaveDeps } from './runLeaveGroup'
 import type { MembersView } from './runGroupMembers'
@@ -92,6 +93,13 @@ describe('runLeave', () => {
   it('tells last_admin apart from other 409s', async () => {
     expect(await run(failing(409, 'last_admin'))).toEqual({ ok: false, kind: 'lastAdmin' })
     expect(await run(failing(409, 'conflict_retry'))).toEqual({ ok: false, kind: 'stale' })
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew), not a plain refusal', async () => {
+    expect(await run(failing(400, 'clock_skew'))).toEqual({ ok: false, kind: 'clockSkew' })
+    // Only a 400 with the code means a clock problem.
+    expect(await run(failing(422, 'clock_skew'))).toEqual({ ok: false, kind: 'refused' })
+    expect(await run(failing(400, 'bad_signature'))).toEqual({ ok: false, kind: 'refused' })
   })
 
   it('maps 401 and 404, and treats everything else as ambiguous', async () => {
@@ -240,6 +248,12 @@ describe('leaveFailureMessage', () => {
   it('has a message for every failure kind, none claiming a leave that did not happen', () => {
     expect(leaveFailureMessage('coldKeys')).toContain('needs your password again')
     expect(leaveFailureMessage('grantMissing')).toContain('Nothing was changed')
+  })
+
+  it('says the device clock is wrong for clockSkew, also after a successor was promoted', () => {
+    expect(leaveFailureMessage('clockSkew')).toBe(CLOCK_SKEW_MESSAGE)
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain('bob is now an admin')
+    expect(leaveFailureMessage('clockSkew', 'bob')).toContain(CLOCK_SKEW_MESSAGE)
   })
 
   it('keeps the plain messages when no promotion happened, and for session errors', () => {

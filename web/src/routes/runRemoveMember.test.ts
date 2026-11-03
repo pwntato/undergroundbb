@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { GroupDetail, MemberRole, RemoveMemberRequest } from '@/lib/api/groups'
 import {
   removeFailureMessage,
@@ -312,6 +313,18 @@ describe('runRemoveMember: server answers', () => {
       ok: false,
       kind: 'rejected',
       message: 'bad thing',
+    })
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew)', async () => {
+    expect(
+      await answer(new ApiError(400, 'grantSortKey: day is not within tolerance', 'clock_skew')),
+    ).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+    // Only a 400 with the code means a clock problem.
+    expect(await answer(new ApiError(422, 'other', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other',
     })
   })
 

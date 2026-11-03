@@ -367,6 +367,35 @@ func TestChangeRoleRejections(t *testing.T) {
 	}
 }
 
+// A grant day outside the server's window is a 400 with the clock_skew code, in
+// both directions; a sort key for the wrong subject stays a plain 400.
+func TestChangeRoleRefusedDayIsClockSkew(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createPrivateGroup(t, h, owner, ownerCookie)
+	target := registerTestUser(t, h)
+	addMember(t, gid, target, "member")
+	root := backdatedRef(t, gid, owner)
+
+	for name, tc := range map[string]struct {
+		key  string
+		code string
+	}{
+		"day in the past":      {testGrantSortKey(t, target.userID, time.Now().AddDate(0, 0, -5)), "clock_skew"},
+		"day in the future":    {testGrantSortKey(t, target.userID, time.Now().AddDate(0, 0, 5)), "clock_skew"},
+		"key for someone else": {testGrantSortKey(t, owner.userID, time.Now()), ""},
+	} {
+		req := signedRoleRequest(t, owner, gid, target.userID, "ambassador", root)
+		req.GrantSortKey = tc.key
+		rec := doChangeRole(t, h, ownerCookie, gid, target.userID, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", name, rec.Code, rec.Body.String())
+		} else if got := errCode(t, rec); got != tc.code {
+			t.Errorf("%s: code %q, want %q", name, got, tc.code)
+		}
+	}
+}
+
 func TestChangeRoleRequiresSession(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	if rec := doChangeRole(t, h, nil, "3f0c7a52-1111-4222-8333-444455556666", "3f0c7a52-1111-4222-8333-444455556667", changeRoleRequest{}); rec.Code != http.StatusUnauthorized {

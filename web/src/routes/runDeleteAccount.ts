@@ -299,6 +299,8 @@ const LEAVE_REASONS: Record<
   rotationInProgress: 'has a key rotation still running, so wait for it to finish and try again',
   cannotCheck: "couldn't be checked: the group could not be read",
   refused: 'was refused by the server, so it was not left; reload and try again',
+  clockSkew:
+    "was not left because this device's date or time looks wrong; check the date and time on this device, then try again",
   notFound: 'no longer lists you',
   ambiguous: "couldn't be confirmed",
 }
