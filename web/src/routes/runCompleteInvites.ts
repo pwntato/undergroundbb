@@ -229,8 +229,8 @@ async function completeOne(
     // own: logged loudly (console.error, not console.warn -- this is
     // exactly the failure mode a malicious server would try to hide
     // among ordinary noise) and given its own reason so a caller
-    // surfacing per-invite outcomes (none does yet -- #83's own
-    // surfacing is the natural home for this) can tell it apart from a
+    // surfacing per-invite outcomes (none does yet; #83 shipped the
+    // server-side overdue flags, not this) can tell it apart from a
     // plain network hiccup.
     if (err instanceof InviteMACError) {
       console.error(
