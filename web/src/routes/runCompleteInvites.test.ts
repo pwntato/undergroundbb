@@ -4,6 +4,7 @@ import type { PendingInviteCompletion } from '@/lib/api/invites'
 import * as ed25519 from '@/lib/crypto/ed25519'
 import { inviteAcceptancePayload } from '@/lib/crypto/invite'
 import {
+  CLOCK_SKEW_REASON,
   runCompleteInvites,
   type CompleteInvitesDeps,
   type OwnMembershipForCompletion,
@@ -173,6 +174,25 @@ describe('runCompleteInvites', () => {
     ])
     expect(errorSpy).not.toHaveBeenCalled()
     errorSpy.mockRestore()
+  })
+
+  it('reports a refused day (400 clock_skew) as its own reason, not the server text', async () => {
+    const run = async (err: ApiError) =>
+      runCompleteInvites(makeDeps({ completeInvite: vi.fn().mockRejectedValue(err) }))
+    expect(
+      await run(new ApiError(400, 'admission.day: not within tolerance', 'clock_skew')),
+    ).toEqual([{ inviteId: INVITE_ID, ok: false, reason: CLOCK_SKEW_REASON }])
+    // Only a 400 with the code means a clock problem.
+    expect(await run(new ApiError(400, 'admission.day: must be a UTC date'))).toEqual([
+      {
+        inviteId: INVITE_ID,
+        ok: false,
+        reason: 'ApiError(400): admission.day: must be a UTC date',
+      },
+    ])
+    expect(await run(new ApiError(422, 'other', 'clock_skew'))).toEqual([
+      { inviteId: INVITE_ID, ok: false, reason: 'ApiError(422): other' },
+    ])
   })
 
   it('one invite failing does not prevent a second, independent invite from completing', async () => {

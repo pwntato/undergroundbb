@@ -21,6 +21,9 @@ import * as ed25519 from '@/lib/crypto/ed25519'
 import { inviteAcceptancePayload } from '@/lib/crypto/invite'
 import type { CompleteInviteResult } from '@/lib/crypto/worker-protocol'
 
+/** The per-invite reason for a day the server refused; the invite stays pending for the next login. */
+export const CLOCK_SKEW_REASON = "this device's date or time looks wrong"
+
 /** One group's own membership, the shape completeInvite needs to unwrap the inviter's own copy. */
 export interface OwnMembershipForCompletion {
   readonly generation: number
@@ -209,6 +212,11 @@ async function completeOne(
     if (err instanceof ApiError && err.code === 'group_full') {
       return { inviteId: invite.inviteId, ok: false, reason: 'group is at its member limit' }
     }
+    // The server refused the admission's day: this device's clock is off. Nothing was
+    // written and the invite stays pending, so the next login retries it with a fresh day.
+    if (err instanceof ApiError && err.status === 400 && err.code === 'clock_skew') {
+      return { inviteId: invite.inviteId, ok: false, reason: CLOCK_SKEW_REASON }
+    }
     // InviteMACError means one of two things (PR #146 round-2 review):
     // either the server just attempted the exact key-substitution this
     // MAC exists to block, or -- the legitimate, permanent case -- the
@@ -221,8 +229,8 @@ async function completeOne(
     // own: logged loudly (console.error, not console.warn -- this is
     // exactly the failure mode a malicious server would try to hide
     // among ordinary noise) and given its own reason so a caller
-    // surfacing per-invite outcomes (none does yet -- #83's own
-    // surfacing is the natural home for this) can tell it apart from a
+    // surfacing per-invite outcomes (none does yet; #83 shipped the
+    // server-side overdue flags, not this) can tell it apart from a
     // plain network hiccup.
     if (err instanceof InviteMACError) {
       console.error(
