@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail } from '@/lib/api/groups'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
 import {
   claim,
@@ -113,6 +114,27 @@ describe('designate', () => {
     })
     expect(await designate(always, adminView(), BOB, 90)).toMatchObject({ kind: 'rejected' })
     expect(always.signSuccessorDesignation).toHaveBeenCalledTimes(2)
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew), not the server text', async () => {
+    const fail = (e: unknown) =>
+      designate(deps({ putDesignation: vi.fn().mockRejectedValue(e) }), adminView(), BOB, 90)
+    expect(
+      await fail(
+        new ApiError(400, 'designationSortKey: day is not within tolerance', 'clock_skew'),
+      ),
+    ).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+    expect(await fail(new ApiError(400, 'some other refusal'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'some other refusal',
+    })
+    // Only a 400 carries the clock meaning.
+    expect(await fail(new ApiError(422, 'other status', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other status',
+    })
   })
 
   it('maps server answers: stale for a moved grant, the server message for a same-day refusal', async () => {
@@ -277,6 +299,25 @@ describe('claim', () => {
     const d = deps('2026-09-01', { claimDesignation: claimFn })
     expect(await claim(d, GROUP, D_KEY)).toEqual({ ok: true })
     expect(d.signSuccessorClaim).toHaveBeenCalledTimes(2)
+  })
+
+  it('says the device clock is wrong for a refused signing day (400 clock_skew), not the server text', async () => {
+    const fail = (e: unknown) =>
+      claim(deps('2026-09-01', { claimDesignation: vi.fn().mockRejectedValue(e) }), GROUP, D_KEY)
+    expect(
+      await fail(new ApiError(400, 'claimSortKey: day is not within tolerance', 'clock_skew')),
+    ).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+    expect(await fail(new ApiError(400, 'some other refusal'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'some other refusal',
+    })
+    // Only a 400 carries the clock meaning.
+    expect(await fail(new ApiError(422, 'other status', 'clock_skew'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: 'other status',
+    })
   })
 
   it('shows the server message for not_inactive and treats a changed situation as stale', async () => {

@@ -490,11 +490,11 @@ func TestClaimDesignationBadInput(t *testing.T) {
 		{"claim day far in the past", func(r *claimDesignationRequest) {
 			r.ClaimSortKey = testGrantSortKey(t, w.bob.userID, daysAgo(5))
 			resign(r)
-		}, 400, ""},
+		}, 400, "clock_skew"},
 		{"claim day in the future", func(r *claimDesignationRequest) {
 			r.ClaimSortKey = testGrantSortKey(t, w.bob.userID, time.Now().AddDate(0, 0, 5))
 			resign(r)
-		}, 400, ""},
+		}, 400, "clock_skew"},
 		{"malformed signature", func(r *claimDesignationRequest) { r.Signature = "!!" }, 400, ""},
 		{"signed for a different designation", func(r *claimDesignationRequest) {
 			// Differ from the real key whatever its random last character is:

@@ -119,7 +119,7 @@ func (h *Handler) putDesignation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "designationSortKey: day is not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "designationSortKey: day is not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	// Strictly the same rule as a role change: the admin's own grant must be

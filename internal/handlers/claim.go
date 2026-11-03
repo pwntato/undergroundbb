@@ -105,7 +105,7 @@ func (h *Handler) claimDesignation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(claimDay.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "claimSortKey: day is not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "claimSortKey: day is not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	sig, err := decodeBase64Field(req.Signature, ed25519SignatureSize, maxSignatureLen)
