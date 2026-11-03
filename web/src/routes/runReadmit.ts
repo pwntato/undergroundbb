@@ -29,6 +29,7 @@ import { fingerprint } from '@/lib/crypto/fingerprint'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type { SignReadmissionRequest, SignReadmissionResult } from '@/lib/crypto/worker-protocol'
 import { ownHistoryFor } from './ownHistory'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { isLiveKeysError } from './runListGroups'
 import {
   ChainReadError,
@@ -291,6 +292,11 @@ function failureOf(err: unknown): { readonly ok: false } & ReadmitFailure {
   if (err instanceof ApiError) {
     if (err.code !== undefined && STALE_CODES.has(err.code)) return { ok: false, kind: 'stale' }
     if (err.code === 'subject_deleted') return { ok: false, kind: 'deleted' }
+    if (err.status === 400 && err.code === 'clock_skew') {
+      // The server refused the signing day: nothing was saved, and trying again cannot
+      // help until the clock is right.
+      return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
+    }
     if (err.status === 401) return { ok: false, kind: 'authRequired' }
     if (err.status === 403) return { ok: false, kind: 'forbidden' }
     if (err.status === 404) return { ok: false, kind: 'notFound' }

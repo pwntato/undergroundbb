@@ -316,7 +316,7 @@ What an answer means: `conflict_retry` sends the **same bytes** again (up to 3 t
 `membership_changed` and `key_epoch_stale` load the context and **seal again** (up to 2 times); `comment_gone` stops and
 reloads; no answer or a 5xx keeps the sealed bytes, and the next Save with the same text resends exactly those (the server
 answers 200 for stored bytes even after the signing day has passed). A signing day outside the server's tolerance (post create, comment
-create, comment edit, post edit, group create, successor designation, successor claim, invite admission) is 400 `clock_skew`: nothing is resent, the form stays, and the message says this device's date
+create, comment edit, post edit, group create, successor designation, successor claim, invite admission, re-admission) is 400 `clock_skew`: nothing is resent, the form stays, and the message says this device's date
 or time looks wrong. Save waits until the text differs from the original.
 Delete asks "Delete this comment? Replies stay." and, like the edit form, says "Any member may have kept a copy of the
 original." A repeated delete is safe (a tombstone answers the same 204), so a failure with no clear answer is just tried

@@ -41,6 +41,7 @@ import {
   type ReadmitDeps,
 } from './runReadmit'
 import { fingerprint } from '@/lib/crypto/fingerprint'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import { approveFailureMessage, prepareApprove, runApprove, type ApproveDeps } from './runApprove'
 import { base64ToBytes } from '@/lib/crypto/base64'
 
@@ -2813,6 +2814,25 @@ describe('re-admitting a member', () => {
         message: 'your role changed on the same day',
       })
       expect(readmitFailureMessage(out as never)).toBe('your role changed on the same day')
+    })
+
+    it('says the device clock is wrong for a refused signing day (400 clock_skew)', async () => {
+      const out = await withPostError(
+        new ApiError(400, 'day: not within tolerance of the current UTC day', 'clock_skew'),
+      )
+      expect(out).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+      expect(readmitFailureMessage(out as never)).toBe(CLOCK_SKEW_MESSAGE)
+      // Only a 400 with the code means a clock problem.
+      expect(await withPostError(new ApiError(400, 'day: must be a date'))).toEqual({
+        ok: false,
+        kind: 'rejected',
+        message: 'day: must be a date',
+      })
+      expect(await withPostError(new ApiError(422, 'other', 'clock_skew'))).toEqual({
+        ok: false,
+        kind: 'rejected',
+        message: 'other',
+      })
     })
 
     it('treats bad_signature as changed keys, a deleted subject as deleted', async () => {

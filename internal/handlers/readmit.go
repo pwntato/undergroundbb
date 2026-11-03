@@ -119,7 +119,7 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(admissionDay.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "day: not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "day: not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	if !h.admissionGrantDaysOK(w, r, groupID, userID, currentRef, admissionDay, "day", "could not re-admit") {
