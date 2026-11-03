@@ -99,6 +99,35 @@ func TestReadmitEndpoint(t *testing.T) {
 	}
 }
 
+// A day outside the server's window is a 400 with the clock_skew code, in both
+// directions; a malformed day is a plain 400 without it.
+func TestReadmitRefusedDayIsClockSkew(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, owner, _, _, ownerCookie, _, _ := rotatingGroupWith(t, h)
+	dave, _ := loggedInUser(t, h)
+	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, dave.userID)
+
+	for name, tc := range map[string]struct {
+		day  string
+		code string
+	}{
+		"day in the past":   {time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02"), "clock_skew"},
+		"day in the future": {time.Now().UTC().AddDate(0, 0, 5).Format("2006-01-02"), "clock_skew"},
+		"malformed day":     {"07/10/2026", ""},
+	} {
+		body := readmitBodyWith(t, h, owner, gid, dave, newUUID(t), tc.day, 0)
+		rec := doJSON(t, h, http.MethodPost, "/api/groups/"+gid+"/members/"+dave.userID+"/readmit", ownerCookie, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", name, rec.Code, rec.Body.String())
+			continue
+		}
+		if got := errCode(t, rec); got != tc.code {
+			t.Errorf("%s: code %q, want %q", name, got, tc.code)
+		}
+	}
+}
+
 func setGrantSortKey(t *testing.T, gid, userID, ref string) {
 	t.Helper()
 	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
