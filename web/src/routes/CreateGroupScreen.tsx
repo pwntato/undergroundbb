@@ -30,34 +30,14 @@ import { useSession } from '@/lib/session/useSession'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { useLiveKeys } from './useLiveKeys'
-import { runCreateGroup, type CreateGroupErrorKind, type GroupFormInput } from './runCreateGroup'
+import {
+  AUTH_REQUIRED_ERROR,
+  createGroupErrorText,
+  runCreateGroup,
+  type GroupFormInput,
+} from './runCreateGroup'
 import { buildGroupListEntry } from './buildGroupListEntry'
 import { NEW_GROUP_STATE_KEY } from './newGroupNavigationState'
-
-const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
-const AMBIGUOUS_ERROR =
-  "We couldn't confirm whether your group was created. Try again — resubmitting is safe."
-const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
-// Distinct from UNREACHABLE_ERROR: a groupIdConflict means the request DID
-// reach the server and got a real answer (409 group_id_taken), not that it
-// failed to connect -- see runCreateGroup.ts's own doc comment on why this
-// is its own CreateGroupErrorKind (PR #142 round 2 review) rather than
-// folded into 'definitelyUncommitted'. Phrased as a plain retry prompt
-// since handleSubmit's groupIdConflict branch below clears `pending`
-// first, so the very next submit generates a fresh groupId automatically.
-const GROUP_ID_CONFLICT_ERROR = 'That request could not be completed. Try again.'
-function errorMessageFor(kind: CreateGroupErrorKind): string {
-  switch (kind) {
-    case 'definitelyUncommitted':
-      return UNREACHABLE_ERROR
-    case 'ambiguous':
-      return AMBIGUOUS_ERROR
-    case 'authRequired':
-      return AUTH_REQUIRED_ERROR
-    case 'groupIdConflict':
-      return GROUP_ID_CONFLICT_ERROR
-  }
-}
 
 /**
  * Reports whether err is worker.ts's signGroupCreation throwing because
@@ -145,11 +125,11 @@ export function CreateGroupScreen() {
           // resending the one that just 409'd, which would otherwise 409
           // again on every subsequent attempt.
           setPending(undefined)
-          setError(errorMessageFor(result.kind))
+          setError(createGroupErrorText(result.kind))
           return
         }
         setPending({ groupId, groupKeyB64, values, form })
-        setError(errorMessageFor(result.kind))
+        setError(createGroupErrorText(result.kind))
         return
       }
 

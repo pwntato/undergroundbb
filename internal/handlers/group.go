@@ -281,7 +281,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if skew := time.Since(day.UTC()); skew < -grantDaySkewTolerance || skew > 24*time.Hour+grantDaySkewTolerance {
-		WriteError(w, http.StatusBadRequest, "rootGrantSortKey: day is not within tolerance of the current UTC day")
+		WriteErrorWithCode(w, http.StatusBadRequest, "rootGrantSortKey: day is not within tolerance of the current UTC day", "clock_skew")
 		return
 	}
 	rootGrantSortKey := req.RootGrantSortKey

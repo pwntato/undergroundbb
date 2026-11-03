@@ -24,6 +24,7 @@
 // function just reports which failures are ambiguous via CreateGroupResult.
 
 import { ApiError } from '@/lib/api/auth'
+import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { CreateGroupRequest, CreateGroupResponse } from '@/lib/api/groups'
 import type { SignGroupCreationResult } from '@/lib/crypto/worker-protocol'
 
@@ -38,7 +39,35 @@ export interface GroupFormInput {
 }
 
 export type CreateGroupErrorKind =
-  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'groupIdConflict'
+  'definitelyUncommitted' | 'ambiguous' | 'authRequired' | 'groupIdConflict' | 'clockSkew'
+
+const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
+const AMBIGUOUS_ERROR =
+  "We couldn't confirm whether your group was created. Try again — resubmitting is safe."
+export const AUTH_REQUIRED_ERROR = 'Your session has expired. Log in again and retry.'
+// Distinct from UNREACHABLE_ERROR: a groupIdConflict means the request DID
+// reach the server and got a real answer (409 group_id_taken), not that it
+// failed to connect -- see runCreateGroup.ts's own doc comment on why this
+// is its own CreateGroupErrorKind (PR #142 round 2 review) rather than
+// folded into 'definitelyUncommitted'. Phrased as a plain retry prompt
+// since handleSubmit's groupIdConflict branch below clears `pending`
+// first, so the very next submit generates a fresh groupId automatically.
+const GROUP_ID_CONFLICT_ERROR = 'That request could not be completed. Try again.'
+/** The line the form shows for a failed create. */
+export function createGroupErrorText(kind: CreateGroupErrorKind): string {
+  switch (kind) {
+    case 'definitelyUncommitted':
+      return UNREACHABLE_ERROR
+    case 'ambiguous':
+      return AMBIGUOUS_ERROR
+    case 'authRequired':
+      return AUTH_REQUIRED_ERROR
+    case 'groupIdConflict':
+      return GROUP_ID_CONFLICT_ERROR
+    case 'clockSkew':
+      return CLOCK_SKEW_MESSAGE
+  }
+}
 
 export type CreateGroupResult =
   | {
@@ -145,6 +174,11 @@ export async function runCreateGroup(
       // clear its cached groupId/group key so the next submit generates
       // fresh ones, instead of resending the one that's now known-taken.
       return { ok: false, kind: 'groupIdConflict', error: err }
+    }
+    if (err instanceof ApiError && err.status === 400 && err.code === 'clock_skew') {
+      // The server refused the root grant's day: this device's clock is off.
+      // Nothing was written; the screen says so instead of "couldn't reach".
+      return { ok: false, kind: 'clockSkew', error: err }
     }
     if (isDefinitelyUncommitted(err)) {
       return { ok: false, kind: 'definitelyUncommitted', error: err }
