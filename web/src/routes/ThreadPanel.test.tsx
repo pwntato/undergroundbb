@@ -266,10 +266,14 @@ describe('ThreadPanel reply box', () => {
     expect(render([comment()], { reply: { replyTo: '0001' } })).not.toContain('beside')
   })
 
-  it('falls back to the bottom box when the target is not on the page', () => {
-    const html = render([comment()], { reply: { replyTo: '0042' } })
-    expect(html).toContain('Add a comment')
+  it('keeps a target that is not on the page out of the plain bottom box, and cannot send (#330)', () => {
+    const html = render([comment()], { reply: { replyTo: '0042', draft: 'typed before' } })
+    expect(html).not.toContain('Add a comment')
     expect(html).not.toContain('Your reply')
+    expect(html).toContain('Reply to a comment that is still loading')
+    expect(html).toContain('typed before')
+    // The one Send button is off, so nothing can seal under the hidden comment.
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/)
   })
 
   it('shows the notice, the error and the byte count, and flags a draft over the limit', () => {

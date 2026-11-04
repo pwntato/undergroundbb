@@ -7,14 +7,15 @@
 //   - Editing the text or moving the box drops the last error, since it was
 //     about something else.
 //   - A send that succeeds clears the draft and closes the inline box.
-//   - The comment being replied to must be on the page. When the first page of
-//     the thread (re)loads and the target is not in it -- the comment was deleted,
-//     or a reply restored after the password step points at one on a later page --
-//     the target is dropped, the draft is kept, and the box says it is now a new
-//     comment. A target missing from a first page that has a later page is not gone
-//     yet: the screen loads on until it shows, and only the last page without it
-//     drops it (#330). Otherwise the bottom box would be labelled as a new comment while
-//     still sealing under the missing one, and fail the same way every time.
+//   - The comment being replied to must be on the page. When the thread's last page is
+//     loaded and the target is not on screen -- the comment was deleted -- the target is
+//     dropped, the draft is kept, and the box says it is now a new comment. Otherwise the
+//     bottom box would be labelled as a new comment while still sealing under the missing
+//     one, and fail the same way every time.
+//   - A target missing from a first page that has a later page is not gone yet (a reply
+//     restored after the password step can point at one): the screen loads on until it
+//     shows, and only the last page without it drops it (#330). Meanwhile the bottom box
+//     cannot send (replyFallbackBox.ts).
 
 export interface ReplyState {
   /** The path being replied to, or null for a new top-level comment. */

@@ -18,6 +18,7 @@ import { COPY_ADVISORY } from './editCopy'
 import { ReactionBar } from './ReactionBar'
 import { summarizeReactions } from './reactionSummary'
 import { ReplyBox } from './ReplyBox'
+import { fallbackBox } from './replyFallbackBox'
 import { attachesBeside } from './runCreateComment'
 import { DELETED_POST_TEXT, editedMark } from './postNotes'
 import { PostContent, PostControls, type PostListControls } from './GroupPostsPanel'
@@ -294,6 +295,7 @@ export function ThreadPanel({
     reply?.replyTo !== null && reply?.replyTo !== undefined
       ? comments.find((c) => c.path === reply.replyTo)?.path
       : undefined
+  const bottom = fallbackBox({ replyTo: reply?.replyTo ?? null, commentCount: comments.length })
   const empty = comments.length === 0 && !loading && error === null
   return (
     <div className="flex w-full max-w-xl flex-col gap-4 text-left">
@@ -428,7 +430,9 @@ export function ThreadPanel({
           )}
           <ReplyBox
             id="reply-top"
-            label={comments.length === 0 ? 'Write the first comment' : 'Add a comment'}
+            label={bottom.label}
+            hint={bottom.hint}
+            unchanged={bottom.waiting}
             value={reply.draft}
             maxBytes={reply.maxBytes}
             sending={reply.sending}
