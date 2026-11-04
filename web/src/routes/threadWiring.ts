@@ -71,7 +71,7 @@ export async function loadPageInto(
   if (cursor === undefined && result.ok) {
     io.dispatchReply({
       type: 'firstPageLoaded',
-      paths: result.comments.map((c) => c.path),
+      paths: result.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
       hasMore: result.nextCursor !== undefined,
     })
     io.dispatchControls({

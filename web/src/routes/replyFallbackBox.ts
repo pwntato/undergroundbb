@@ -18,7 +18,7 @@ export function fallbackBox(input: {
   if (input.replyTo !== null) {
     return {
       label: 'Reply to a comment that is still loading',
-      hint: 'You can send this once the comment shows. If the thread ends without it, this goes in as a new comment.',
+      hint: 'You can send this once the comment shows. If the thread ends without it, this goes in as a new comment. Or post it as a new comment now.',
       waiting: true,
     }
   }

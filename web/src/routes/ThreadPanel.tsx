@@ -433,6 +433,14 @@ export function ThreadPanel({
             label={bottom.label}
             hint={bottom.hint}
             unchanged={bottom.waiting}
+            onCancel={
+              bottom.waiting
+                ? () => {
+                    reply.onOpen(null)
+                  }
+                : undefined
+            }
+            cancelLabel="Post as a new comment instead"
             value={reply.draft}
             maxBytes={reply.maxBytes}
             sending={reply.sending}

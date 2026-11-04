@@ -223,6 +223,23 @@ describe('loadPageInto', () => {
     expect(h.controls().mode).toEqual({ kind: 'idle' })
   })
 
+  it('drops a target that is only a deleted placeholder, so the draft is not left without a box (#330)', async () => {
+    const h = harness({ replyTo: '0002', draft: 'typed' })
+    await loadPageInto(
+      h.io,
+      () =>
+        Promise.resolve({
+          ok: true,
+          comments: [view('0001'), { deleted: true, path: '0002', depth: 1 }],
+          reactions: [],
+        } satisfies ThreadPageResult),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.reply()).toMatchObject({ replyTo: null, draft: 'typed', error: TARGET_GONE_MESSAGE })
+  })
+
   it('keeps a target that is on the first page', async () => {
     const h = harness({ replyTo: '0001', draft: 'typed' })
     await loadPageInto(

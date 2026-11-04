@@ -41,14 +41,14 @@ export type ReplyEvent =
   | { readonly type: 'sendStarted' }
   | { readonly type: 'sendFailed'; readonly error: string }
   | { readonly type: 'sent'; readonly notice: string }
-  /** The first page of the thread was loaded; `paths` are all the comments on screen. */
+  /** The first page of the thread was loaded; `paths` are the comments on screen that are not deleted. */
   | {
       readonly type: 'firstPageLoaded'
       readonly paths: readonly string[]
       /** A later page exists, so a target missing from this one may still be on it. */
       readonly hasMore: boolean
     }
-  /** The last page is loaded; `paths` are all the comments on screen. */
+  /** The last page is loaded; `paths` are the comments on screen that are not deleted. */
   | { readonly type: 'endReached'; readonly paths: readonly string[] }
 
 /** The server refused the signing day: this device's clock is off, or the write was sealed too long ago. */

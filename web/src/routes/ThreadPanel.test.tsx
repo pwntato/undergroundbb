@@ -276,6 +276,14 @@ describe('ThreadPanel reply box', () => {
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/)
   })
 
+  it('lets the reader post a waiting reply as a new comment, and offers no such button otherwise', () => {
+    const waiting = render([comment()], { reply: { replyTo: '0042', draft: 'typed before' } })
+    expect(waiting).toContain('Post as a new comment instead')
+    const plain = render([comment()], { reply: { replyTo: null, draft: 'typed before' } })
+    expect(plain).not.toContain('Post as a new comment instead')
+    expect(plain).not.toContain('>Cancel<')
+  })
+
   it('shows the notice, the error and the byte count, and flags a draft over the limit', () => {
     const html = render([comment()], {
       reply: { notice: 'Comment sent.', error: 'It failed.', draft: '€'.repeat(40), maxBytes: 100 },
@@ -392,6 +400,35 @@ describe('ThreadPanel reactions (#46)', () => {
     expect(rows[2]).toContain('Could not save your reaction.')
     expect(rows[0]).not.toContain('Could not save')
     expect(rows[1]).not.toContain('Could not save')
+  })
+})
+
+describe('ThreadPanel waiting reply box (#330)', () => {
+  it('its "Post as a new comment instead" button moves the box to the top level', () => {
+    const opened: (string | null)[] = []
+    const tree = ThreadPanel({
+      groupId: 'g1',
+      comments: [comment()],
+      loading: false,
+      error: null,
+      hasMore: true,
+      onLoadMore: () => {},
+      reply: {
+        replyTo: '0042',
+        draft: 'typed before',
+        maxBytes: 100,
+        sending: false,
+        error: null,
+        notice: null,
+        onOpen: (to) => opened.push(to),
+        onEdit: () => {},
+        onSend: () => {},
+      },
+    })
+    const box = elementsOf(tree).find((e) => e.type === ReplyBox && e.props['id'] === 'reply-top')!
+    ;(box.props['onCancel'] as () => void)()
+    expect(box.props['cancelLabel']).toBe('Post as a new comment instead')
+    expect(opened).toEqual([null])
   })
 })
 

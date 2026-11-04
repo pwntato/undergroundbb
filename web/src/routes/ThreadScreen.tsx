@@ -422,17 +422,17 @@ function Thread({
       lastAsked: lastAutoCursor.current,
     })
     if (edit.kind === 'gone') dispatchControls({ type: 'endReached', livePaths: live })
-    // The reply target is sought the same way. A deleted comment still counts as shown
-    // (the reply reducer has always kept a target that is only a placeholder).
+    // The reply target is sought the same way. A deleted placeholder is never drawn with a
+    // box, so a target that is only a placeholder is gone, as for an edit.
     const reply = seekForm({
       formKey: replyPath,
       settled,
       shown,
-      live: shown,
+      live,
       cursor: state.cursor,
       lastAsked: lastAutoCursor.current,
     })
-    if (reply.kind === 'gone') dispatchReply({ type: 'endReached', paths: shown })
+    if (reply.kind === 'gone') dispatchReply({ type: 'endReached', paths: live })
     const more = edit.kind === 'loadMore' ? edit : reply.kind === 'loadMore' ? reply : undefined
     if (more !== undefined && more.kind === 'loadMore') {
       lastAutoCursor.current = more.cursor
