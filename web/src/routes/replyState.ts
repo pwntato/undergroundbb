@@ -11,7 +11,9 @@
 //     the thread (re)loads and the target is not in it -- the comment was deleted,
 //     or a reply restored after the password step points at one on a later page --
 //     the target is dropped, the draft is kept, and the box says it is now a new
-//     comment. Otherwise the bottom box would be labelled as a new comment while
+//     comment. A target missing from a first page that has a later page is not gone
+//     yet: the screen loads on until it shows, and only the last page without it
+//     drops it (#330). Otherwise the bottom box would be labelled as a new comment while
 //     still sealing under the missing one, and fail the same way every time.
 
 export interface ReplyState {
@@ -39,7 +41,14 @@ export type ReplyEvent =
   | { readonly type: 'sendFailed'; readonly error: string }
   | { readonly type: 'sent'; readonly notice: string }
   /** The first page of the thread was loaded; `paths` are all the comments on screen. */
-  | { readonly type: 'firstPageLoaded'; readonly paths: readonly string[] }
+  | {
+      readonly type: 'firstPageLoaded'
+      readonly paths: readonly string[]
+      /** A later page exists, so a target missing from this one may still be on it. */
+      readonly hasMore: boolean
+    }
+  /** The last page is loaded; `paths` are all the comments on screen. */
+  | { readonly type: 'endReached'; readonly paths: readonly string[] }
 
 /** The server refused the signing day: this device's clock is off, or the write was sealed too long ago. */
 export const CLOCK_SKEW_MESSAGE =
@@ -62,6 +71,18 @@ export function nextReplyState(state: ReplyState, event: ReplyEvent): ReplyState
     case 'sendFailed':
       return { ...state, sending: false, error: event.error }
     case 'firstPageLoaded':
+      // A target not on this page may be on a later one: the screen loads on (formSeek.ts),
+      // and `endReached` drops it if it never shows (#330).
+      if (
+        state.sending ||
+        state.replyTo === null ||
+        event.hasMore ||
+        event.paths.includes(state.replyTo)
+      ) {
+        return state
+      }
+      return { ...state, replyTo: null, error: TARGET_GONE_MESSAGE }
+    case 'endReached':
       if (state.sending || state.replyTo === null || event.paths.includes(state.replyTo)) {
         return state
       }

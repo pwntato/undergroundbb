@@ -67,9 +67,13 @@ export async function loadPageInto(
   const result = await loadPage(cursor)
   if (!isCurrent()) return
   io.dispatch({ type: 'pageLoaded', result })
-  // The first page is everything on screen, so a reply target missing from it is gone from view.
+  // A reply target missing from the first page may be on a later one; the screen seeks it.
   if (cursor === undefined && result.ok) {
-    io.dispatchReply({ type: 'firstPageLoaded', paths: result.comments.map((c) => c.path) })
+    io.dispatchReply({
+      type: 'firstPageLoaded',
+      paths: result.comments.map((c) => c.path),
+      hasMore: result.nextCursor !== undefined,
+    })
     io.dispatchControls({
       type: 'firstPageLoaded',
       livePaths: result.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),

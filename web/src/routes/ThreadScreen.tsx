@@ -405,27 +405,49 @@ function Thread({
 
   // A form restored after the password step (or kept over a reload) can hang on a comment
   // that is on a later page: load on, one page at a time, until it shows. When the thread
-  // ends without it, the comment is gone and the form closes (#328).
+  // ends without it, the comment is gone and the form closes (#328). The same for a reply
+  // target (#330).
   const formPath = controlsState.mode.kind === 'idle' ? undefined : controlsState.mode.path
+  const replyPath = replyState.replyTo ?? undefined
   useEffect(() => {
-    const seek = seekForm({
+    const settled = state.loaded && !state.loading && state.failure === null
+    const shown = state.comments.map((c) => c.path)
+    const live = state.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path)
+    const edit = seekForm({
       formKey: formPath,
-      settled: state.loaded && !state.loading && state.failure === null,
-      shown: state.comments.map((c) => c.path),
-      live: state.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
+      settled,
+      shown,
+      live,
       cursor: state.cursor,
       lastAsked: lastAutoCursor.current,
     })
-    if (seek.kind === 'gone') {
-      dispatchControls({
-        type: 'endReached',
-        livePaths: state.comments.filter((c) => !isDeletedComment(c)).map((c) => c.path),
-      })
-    } else if (seek.kind === 'loadMore') {
-      lastAutoCursor.current = seek.cursor
-      load(seek.cursor)
+    if (edit.kind === 'gone') dispatchControls({ type: 'endReached', livePaths: live })
+    // The reply target is sought the same way. A deleted comment still counts as shown
+    // (the reply reducer has always kept a target that is only a placeholder).
+    const reply = seekForm({
+      formKey: replyPath,
+      settled,
+      shown,
+      live: shown,
+      cursor: state.cursor,
+      lastAsked: lastAutoCursor.current,
+    })
+    if (reply.kind === 'gone') dispatchReply({ type: 'endReached', paths: shown })
+    const more = edit.kind === 'loadMore' ? edit : reply.kind === 'loadMore' ? reply : undefined
+    if (more !== undefined && more.kind === 'loadMore') {
+      lastAutoCursor.current = more.cursor
+      load(more.cursor)
     }
-  }, [formPath, state.loaded, state.loading, state.failure, state.comments, state.cursor, load])
+  }, [
+    formPath,
+    replyPath,
+    state.loaded,
+    state.loading,
+    state.failure,
+    state.comments,
+    state.cursor,
+    load,
+  ])
 
   const handleSave = () => {
     const mode = controlsState.mode
