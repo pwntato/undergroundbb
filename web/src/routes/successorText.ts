@@ -37,6 +37,14 @@ export function adminStatusText(
   }
 }
 
+/**
+ * Shown in place of the wait-until-a-date line when the server's day already allows the claim
+ * but this device's day does not: the device clock is behind (#341).
+ */
+export function clockBehindText(adminName: string): string {
+  return `${adminName} named you as their successor, and the waiting period has passed on the server, but this device's date or time looks behind it. Check the date and time on this device, then reload this page.`
+}
+
 /** The lines a designated member reads about one offer. */
 export function offerText(offer: SuccessorOffer, adminName: string): string {
   if (!offer.periodElapsed) {

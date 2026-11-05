@@ -5,8 +5,10 @@
 //
 // Every API answer updates the estimate, so the last one is as fresh as the last call. A
 // caller that needs a current reading makes an API call first (the claim reloads the group).
-// The header has one-second resolution and includes the trip time, which is nothing against
-// the two-hour window this is used for.
+// The header has one-second resolution and the answer takes a moment to arrive, so the estimate
+// can be off by a second or two. Callers compare UTC days, so that can only matter in the first
+// seconds after midnight, and there the device really is behind (the trip time makes the
+// estimate run late, not early).
 
 let offsetMs: number | undefined
 

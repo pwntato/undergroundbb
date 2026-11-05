@@ -18,7 +18,8 @@ import {
 } from '@/lib/groups/designation'
 import { isDeletedUser, memberLabel } from './memberLabel'
 import type { SuccessorView } from './runSuccessor'
-import { adminStatusText, offerText } from './successorText'
+import { serverNowMs } from '@/lib/api/serverClock'
+import { adminStatusText, clockBehindText, offerText } from './successorText'
 
 export interface DesignationChoice {
   readonly successorUserId: string
@@ -154,6 +155,16 @@ export function SuccessorPanel({
     view.members,
     utcDayMs(nowMs),
   )
+  // Claimable by the server's day, not by this device's: the device clock is behind (#341).
+  // The server's time at `nowMs` is `nowMs` plus the offset the API answers last showed, which is
+  // as fresh as the reload that produced this view. Unknown until an answer arrived.
+  const serverAtNow = serverNowMs(nowMs)
+  const serverOffers =
+    serverAtNow === undefined
+      ? []
+      : successorOffers(userId, view.designations, view.grants, view.members, utcDayMs(serverAtNow))
+  const clockBehind = (key: string) =>
+    serverOffers.some((o) => o.designation.sortKey === key && o.periodElapsed)
   if (offers.length === 0) {
     return (
       <p className="max-w-md text-sm text-muted-foreground">
@@ -169,7 +180,11 @@ export function SuccessorPanel({
         const adminName = memberLabel(offer.adminUserId, usernames)
         return (
           <div key={key} className="flex flex-col gap-2 rounded-md border px-3 py-3">
-            <p className="text-sm">{offerText(offer, adminName)}</p>
+            <p className="text-sm">
+              {!offer.periodElapsed && clockBehind(key)
+                ? clockBehindText(adminName)
+                : offerText(offer, adminName)}
+            </p>
             {offer.periodElapsed && confirmingClaim !== key && (
               <Button
                 type="button"
