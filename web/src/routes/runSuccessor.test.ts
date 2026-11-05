@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail } from '@/lib/api/groups'
+import { forgetServerClock, noteServerDate } from '@/lib/api/serverClock'
 import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
 import {
@@ -253,6 +254,59 @@ describe('claim', () => {
     expect(d.signSuccessorClaim).not.toHaveBeenCalled()
   })
 
+  describe('a device clock behind the server (#341)', () => {
+    // 2026-08-30 is the first day the period has elapsed (designated 2026-06-01, 90 days).
+    const deviceBehind = (serverIso: string, over: Partial<ClaimDeps> = {}) =>
+      deps('2026-08-29', { serverNow: () => at(serverIso), ...over })
+
+    it('says the clock is wrong, not "claim from <date>", when the server day allows the claim', async () => {
+      const d = deviceBehind('2026-08-30')
+      const out = await claim(d, GROUP, D_KEY)
+      expect(out).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+      expect(d.signSuccessorClaim).not.toHaveBeenCalled()
+      expect(d.claimDesignation).not.toHaveBeenCalled()
+    })
+
+    it('still names the date when the claim is early by the server day too', async () => {
+      const d = deviceBehind('2026-08-29')
+      const out = await claim(d, GROUP, D_KEY)
+      expect(out).toMatchObject({ ok: false, kind: 'rejected' })
+      expect(JSON.stringify(out)).toContain('2026-08-30')
+      expect(JSON.stringify(out)).not.toContain(CLOCK_SKEW_MESSAGE)
+    })
+
+    it('names the date when the server time is not known', async () => {
+      const out = await claim(
+        deviceBehind('2026-08-30', { serverNow: () => undefined }),
+        GROUP,
+        D_KEY,
+      )
+      expect(JSON.stringify(out)).toContain('2026-08-30')
+      forgetServerClock()
+      const noReader = await claim(deps('2026-08-29'), GROUP, D_KEY)
+      expect(JSON.stringify(noReader)).toContain('2026-08-30')
+    })
+
+    it('by default reads the clock the API answers keep, so the screen needs no wiring', async () => {
+      // The device says 2026-08-29 12:00; the last API answer said the server is a day ahead.
+      noteServerDate(
+        { headers: { get: (n) => (n === 'date' ? 'Sun, 30 Aug 2026 12:00:00 GMT' : null) } },
+        at('2026-08-29'),
+      )
+      try {
+        const out = await claim(deps('2026-08-29'), GROUP, D_KEY)
+        expect(out).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+      } finally {
+        forgetServerClock()
+      }
+    })
+
+    it('does not get in the way of a claim the device day already allows', async () => {
+      const d = deps('2026-09-01', { serverNow: () => at('2026-09-01') })
+      expect(await claim(d, GROUP, D_KEY)).toEqual({ ok: true })
+    })
+  })
+
   it('re-checks against the day the claim is signed on, not the day the screen loaded', async () => {
     // Today by the clock is the last day it would not work; the worker's clock has
     // crossed midnight, so the signed day is the first day it works... and the
@@ -317,6 +371,58 @@ describe('claim', () => {
       ok: false,
       kind: 'rejected',
       message: 'other status',
+    })
+  })
+
+  describe('not_inactive from a signed day the server has already passed (#341)', () => {
+    // The device signs 2026-09-01; the server said not_inactive from that signed day.
+    const refused = (over: Partial<ClaimDeps>) =>
+      claim(
+        deps('2026-09-01', {
+          claimDesignation: vi
+            .fn()
+            .mockRejectedValue(
+              new ApiError(409, 'you can try again from 2026-09-01 (UTC)', 'not_inactive'),
+            ),
+          ...over,
+        }),
+        GROUP,
+        D_KEY,
+      )
+
+    it('says the clock is wrong when the server day is already after the signed day', async () => {
+      expect(await refused({ serverNow: () => at('2026-09-02') })).toEqual({
+        ok: false,
+        kind: 'rejected',
+        message: CLOCK_SKEW_MESSAGE,
+      })
+    })
+
+    it('keeps the server message when the server day is the signed day, or is unknown', async () => {
+      const same = await refused({ serverNow: () => at('2026-09-01') })
+      expect(same).toMatchObject({
+        kind: 'rejected',
+        message: expect.stringContaining('try again from'),
+      })
+      const unknown = await refused({ serverNow: () => undefined })
+      expect(unknown).toMatchObject({
+        kind: 'rejected',
+        message: expect.stringContaining('try again from'),
+      })
+    })
+
+    it('does not change the other 409 codes', async () => {
+      const out = await claim(
+        deps('2026-09-01', {
+          serverNow: () => at('2026-09-02'),
+          claimDesignation: vi
+            .fn()
+            .mockRejectedValue(new ApiError(409, 'joined later', 'designation_before_join')),
+        }),
+        GROUP,
+        D_KEY,
+      )
+      expect(out).toMatchObject({ kind: 'rejected', message: 'joined later' })
     })
   })
 

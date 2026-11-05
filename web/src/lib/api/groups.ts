@@ -6,6 +6,7 @@
 import type { AdmissionRecord } from '@/lib/crypto/admission'
 import type { DesignationRecord, GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import { ApiError } from './auth.js'
+import { noteServerDate } from './serverClock.js'
 
 export interface WireArgon2Params {
   readonly memoryKiB: number
@@ -43,6 +44,7 @@ async function putOrPostJSON<T>(method: 'POST' | 'PUT', path: string, body: unkn
 }
 
 async function handleJSON<T>(res: Response): Promise<T> {
+  noteServerDate(res)
   let data: unknown
   try {
     data = await res.json()

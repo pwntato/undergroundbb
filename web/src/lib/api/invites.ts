@@ -4,6 +4,7 @@
 // groups.ts's own convention.
 
 import { ApiError } from './auth.js'
+import { noteServerDate } from './serverClock.js'
 import type { WireWrappedKey } from './groups.js'
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
@@ -35,6 +36,7 @@ async function del(path: string): Promise<void> {
 }
 
 async function handleJSON<T>(res: Response): Promise<T> {
+  noteServerDate(res)
   let data: unknown
   try {
     data = await res.json()

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { forgetServerClock, noteServerDate } from '@/lib/api/serverClock'
 import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
 import { SuccessorPanel, type DesignationChoice } from './SuccessorPanel'
 import type { SuccessorView } from './runSuccessor'
@@ -49,14 +50,20 @@ function render(
   v: SuccessorView,
   userId: string,
   nowIso: string,
-  extra: { confirmingClaim?: string | null; busy?: boolean; choice?: DesignationChoice } = {},
+  extra: {
+    confirmingClaim?: string | null
+    busy?: boolean
+    choice?: DesignationChoice
+    /** The device's exact time, when a test needs more than the day. */
+    nowMs?: number
+  } = {},
 ): string {
   return renderToStaticMarkup(
     createElement(SuccessorPanel, {
       view: v,
       userId,
       usernames: USERNAMES,
-      nowMs: at(nowIso),
+      nowMs: extra.nowMs ?? at(nowIso),
       busy: extra.busy ?? false,
       choice: extra.choice ?? { successorUserId: '', periodDays: '90' },
       onChoice: () => undefined,
@@ -187,6 +194,49 @@ describe('SuccessorPanel, designated member', () => {
     expect(html).toContain('alice_admin named you')
     expect(html).toContain('2026-08-30')
     expect(html).not.toContain('Claim admin role')
+  })
+
+  describe('a device clock behind the server (#341)', () => {
+    // The designation is claimable from 2026-08-30. The device says 29 Aug 23:30 UTC; the server
+    // says 30 Aug 00:30 UTC, so the server's day allows it and the device's does not.
+    const device = Date.parse('2026-08-29T23:30:00Z')
+    const v = () => view('member', [designation(BOB)])
+    // What the last API answer said the server's time was, when the device's was `device`.
+    const serverSaid = (iso: string, deviceMs = device) => {
+      forgetServerClock()
+      noteServerDate(
+        { headers: { get: (n: string) => (n === 'date' ? new Date(iso).toUTCString() : null) } },
+        deviceMs,
+      )
+    }
+    afterEach(forgetServerClock)
+
+    it('says the device clock is behind, offers no claim button, and does not name a wait date', () => {
+      serverSaid('2026-08-30T00:30:00Z')
+      const html = render(v(), BOB, '2026-08-29', { nowMs: device })
+      expect(html).toContain('looks behind')
+      expect(html).toContain('Check the date and time on this device')
+      expect(html).not.toContain('Claim admin role')
+      expect(html).not.toContain('You can claim the admin role from')
+    })
+
+    it('still names the date when the server day is early too, or when the server time is unknown', () => {
+      serverSaid('2026-08-29T23:45:00Z')
+      const early = render(v(), BOB, '2026-08-29', { nowMs: device })
+      expect(early).toContain('You can claim the admin role from 2026-08-30')
+      expect(early).not.toContain('looks behind')
+      forgetServerClock()
+      const unknown = render(v(), BOB, '2026-08-29', { nowMs: device })
+      expect(unknown).toContain('You can claim the admin role from 2026-08-30')
+      expect(unknown).not.toContain('looks behind')
+    })
+
+    it('offers the claim as usual once the device day has caught up', () => {
+      serverSaid('2026-08-30T12:00:00Z', at('2026-08-30'))
+      const html = render(v(), BOB, '2026-08-30')
+      expect(html).toContain('Claim admin role')
+      expect(html).not.toContain('looks behind')
+    })
   })
 
   it('once the period has elapsed, offers the claim as a two-step action', () => {
