@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './auth'
+import { forgetServerClock, serverNowMs } from './serverClock'
 import {
   CommentPathError,
   createComment,
@@ -29,6 +30,36 @@ function stubFetch(status: number, body: unknown) {
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
+
+describe('API answers feed the server clock (#341)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    forgetServerClock()
+  })
+
+  it('a real call records the server time from its Date header', async () => {
+    forgetServerClock()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-05T00:30:00Z'))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: '',
+        headers: { get: (n: string) => (n === 'date' ? 'Thu, 05 Nov 2026 01:30:00 GMT' : null) },
+        json: () => Promise.resolve({ groups: [] }),
+      }),
+    )
+    try {
+      await listGroups()
+      // The device says 00:30, the server said 01:30: the estimate is the server's time.
+      expect(serverNowMs()).toBe(Date.parse('2026-11-05T01:30:00Z'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('listGroups', () => {
   beforeEach(() => {

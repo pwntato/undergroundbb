@@ -3,6 +3,8 @@
 // side of every shape here. Every binary field crosses the wire as
 // standard-padded base64, matching decodeBase64Field's own expectation.
 
+import { noteServerDate } from './serverClock.js'
+
 export interface WireArgon2Params {
   readonly memoryKiB: number
   readonly iterations: number
@@ -52,6 +54,7 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function handleJSON<T>(res: Response): Promise<T> {
+  noteServerDate(res)
   let data: unknown
   try {
     data = await res.json()

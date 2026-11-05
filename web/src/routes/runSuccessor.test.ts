@@ -253,6 +253,44 @@ describe('claim', () => {
     expect(d.signSuccessorClaim).not.toHaveBeenCalled()
   })
 
+  describe('a device clock behind the server (#341)', () => {
+    // 2026-08-30 is the first day the period has elapsed (designated 2026-06-01, 90 days).
+    const deviceBehind = (serverIso: string, over: Partial<ClaimDeps> = {}) =>
+      deps('2026-08-29', { serverNow: () => at(serverIso), ...over })
+
+    it('says the clock is wrong, not "claim from <date>", when the server day allows the claim', async () => {
+      const d = deviceBehind('2026-08-30')
+      const out = await claim(d, GROUP, D_KEY)
+      expect(out).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+      expect(d.signSuccessorClaim).not.toHaveBeenCalled()
+      expect(d.claimDesignation).not.toHaveBeenCalled()
+    })
+
+    it('still names the date when the claim is early by the server day too', async () => {
+      const d = deviceBehind('2026-08-29')
+      const out = await claim(d, GROUP, D_KEY)
+      expect(out).toMatchObject({ ok: false, kind: 'rejected' })
+      expect(JSON.stringify(out)).toContain('2026-08-30')
+      expect(JSON.stringify(out)).not.toContain(CLOCK_SKEW_MESSAGE)
+    })
+
+    it('names the date when the server time is not known', async () => {
+      const out = await claim(
+        deviceBehind('2026-08-30', { serverNow: () => undefined }),
+        GROUP,
+        D_KEY,
+      )
+      expect(JSON.stringify(out)).toContain('2026-08-30')
+      const noReader = await claim(deps('2026-08-29'), GROUP, D_KEY)
+      expect(JSON.stringify(noReader)).toContain('2026-08-30')
+    })
+
+    it('does not get in the way of a claim the device day already allows', async () => {
+      const d = deps('2026-09-01', { serverNow: () => at('2026-09-01') })
+      expect(await claim(d, GROUP, D_KEY)).toEqual({ ok: true })
+    })
+  })
+
   it('re-checks against the day the claim is signed on, not the day the screen loaded', async () => {
     // Today by the clock is the last day it would not work; the worker's clock has
     // crossed midnight, so the signed day is the first day it works... and the

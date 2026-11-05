@@ -287,6 +287,11 @@ export interface ClaimDeps extends LoadSuccessorDeps {
   readonly userId: string
   /** The clock, ms since the epoch. Defaults to Date.now. */
   readonly now?: () => number
+  /**
+   * The server's current time, ms since the epoch, or undefined when not known (#341).
+   * Read after the group is reloaded, so the reading is as fresh as that answer.
+   */
+  readonly serverNow?: () => number | undefined
 }
 
 /**
@@ -310,7 +315,19 @@ export async function claim(
   const { view } = fresh
   const today = utcDayMs((deps.now ?? Date.now)())
   const early = claimBlocker(view, deps.userId, designationSortKey, today)
-  if (early !== null) return { ok: false, kind: 'rejected', message: early }
+  if (early !== null) {
+    // Too early by this device's day. If it is not too early by the server's day, the device
+    // clock is behind: the server would judge the claim by the day the device signs, so
+    // "you can claim from <date>" would send the user to wait for a day that has already come.
+    const serverNow = deps.serverNow?.()
+    if (
+      serverNow !== undefined &&
+      claimBlocker(view, deps.userId, designationSortKey, utcDayMs(serverNow)) === null
+    ) {
+      return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
+    }
+    return { ok: false, kind: 'rejected', message: early }
+  }
 
   for (let attempt = 1; attempt <= MAX_SIGN_ATTEMPTS; attempt++) {
     let signed: { claimSortKey: string; signature: string }

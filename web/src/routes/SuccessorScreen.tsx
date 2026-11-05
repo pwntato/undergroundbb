@@ -19,6 +19,7 @@ import {
   putDesignation,
 } from '@/lib/api/groups'
 import { signSuccessorClaim, signSuccessorDesignation } from '@/lib/crypto/worker-client'
+import { serverNowMs } from '@/lib/api/serverClock'
 import { SUGGESTED_PERIOD_DAYS } from '@/lib/groups/designation'
 import { useSession } from '@/lib/session/useSession'
 import { memberLabel } from './memberLabel'
@@ -186,7 +187,7 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
       'claim',
       () =>
         claim(
-          { ...LOAD_DEPS, signSuccessorClaim, claimDesignation, userId },
+          { ...LOAD_DEPS, signSuccessorClaim, claimDesignation, userId, serverNow: serverNowMs },
           groupId,
           designationSortKey,
         ),
