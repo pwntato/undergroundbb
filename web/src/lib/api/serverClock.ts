@@ -1,10 +1,12 @@
 // How far this device's clock is from the server's -- #341. A device clock that runs behind
 // can make a claim look too early ("You can claim from <date>") on the very day the server
-// already accepts it, and the server cannot say so: it only ever sees the day the device
-// chose. The API's own `Date` header is the one place the client can read the server's time.
+// already accepts it, and for the first two hours of that day the server cannot say so: it only
+// ever sees the day the device chose, and accepts a signed day up to two hours past that day's
+// end. The API's own `Date` header is the one place the client can read the server's time.
 //
-// Every API answer updates the estimate, so the last one is as fresh as the last call. A
-// caller that needs a current reading makes an API call first (the claim reloads the group).
+// The answers read through `handleJSON` in auth.ts, groups.ts and invites.ts update the estimate
+// (the other API modules read their answers themselves and do not), so it is as fresh as the last
+// such call. A caller that needs a current reading makes one first (the claim reloads the group).
 // The header has one-second resolution and the answer takes a moment to arrive, so the estimate
 // can be off by a second or two. Callers compare UTC days, so that can only matter in the first
 // seconds after midnight, and there the device really is behind (the trip time makes the

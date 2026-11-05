@@ -364,6 +364,16 @@ export async function claim(
       ) {
         continue
       }
+      // The server measured the admins' inactivity to the day this device signed. If the server's
+      // own day is already later, a slow clock signed a day that has passed (the server still
+      // accepts it for the first two hours of its day), and "try again from <date>" would name
+      // today. The 409 itself refreshed the estimate (#341).
+      if (err instanceof ApiError && err.status === 409 && err.code === 'not_inactive') {
+        const serverNow = (deps.serverNow ?? serverNowMs)()
+        if (serverNow !== undefined && utcDayMs(serverNow) > signedDay) {
+          return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
+        }
+      }
       return mapApiError(err, CLAIM_STALE_CODES)
     }
   }

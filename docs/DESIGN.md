@@ -1828,15 +1828,19 @@ replace an admin who is only away.
     `grantDaySkewTolerance` behind its clock, as for every client-dated grant, so a slow clock or a
     request that crosses midnight can sign yesterday. A gate measured to the server's today would
     pass a claim the verifier's floor rejects, for good.
-  - *What the client says about a slow clock (#341).* Because the server only sees the signed day, it
-    cannot tell a slow clock from an early claim: both come back as `not_inactive`, or the client's own
-    check stops first. So the client compares the device's day with the server's, read from the `Date`
+  - *What the client says about a slow clock (#341).* The server only sees the signed day. For the first
+    two hours of its day it accepts a claim signed the day before, so there a slow clock and an early
+    claim both come back as `not_inactive` "try again from <date>" (or the client's own check stops
+    first); later in the day a claim signed a day behind is outside the window and gets `clock_skew`.
+    So the client compares the device's day with the server's, read from the `Date`
     header of the API answers (`serverClock.ts`; a cached answer, one with an `Age` header, is ignored).
     The claim panel does it where the Claim button is hidden: an offer that is early by the device's day
     but not by the server's shows "the waiting period has passed on the server, but this device's date or
     time looks behind it" instead of "you can claim from <date>", with no button. `claim()` repeats the
-    check after the group reload as a backstop and returns the clock message. With no reading, or when the
-    claim is early by both days, the date message is unchanged.
+    check after the group reload as a backstop and returns the clock message. A `not_inactive` answer for
+    a signed day that is already before the server's day is shown as the clock message too (the 409
+    refreshes the reading), since its date would name today. With no reading, or when the claim is early
+    by both days, the date message is unchanged.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
   day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
@@ -1926,7 +1930,7 @@ replace an admin who is only away.
   (`lib/groups/designation.ts`) mirror the verifier's: newest designation of the admin, no second
   one on its day, no grant to the admin from its day through the claim day, not already cited, the
   admin still an admin, `claimDay - designationDay >= periodDays`. They are advisory: they cannot
-  see last-login days, so the server's `not_inactive` is shown as its own message, and nothing
+  see last-login days, so the server's `not_inactive` is shown as its own message (the clock message instead when its signed day is already before the server's day, #341), and nothing
   here verifies a signature.
 - **Build order**: (1a) both payloads and contexts in Go and TS with vectors (pure builders, so
   shipping them early is harmless: nothing emits a claim row yet); (1b) `DESIGNATION#` rows, PUT/GET

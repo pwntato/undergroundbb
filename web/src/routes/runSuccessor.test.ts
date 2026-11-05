@@ -374,6 +374,58 @@ describe('claim', () => {
     })
   })
 
+  describe('not_inactive from a signed day the server has already passed (#341)', () => {
+    // The device signs 2026-09-01; the server said not_inactive from that signed day.
+    const refused = (over: Partial<ClaimDeps>) =>
+      claim(
+        deps('2026-09-01', {
+          claimDesignation: vi
+            .fn()
+            .mockRejectedValue(
+              new ApiError(409, 'you can try again from 2026-09-01 (UTC)', 'not_inactive'),
+            ),
+          ...over,
+        }),
+        GROUP,
+        D_KEY,
+      )
+
+    it('says the clock is wrong when the server day is already after the signed day', async () => {
+      expect(await refused({ serverNow: () => at('2026-09-02') })).toEqual({
+        ok: false,
+        kind: 'rejected',
+        message: CLOCK_SKEW_MESSAGE,
+      })
+    })
+
+    it('keeps the server message when the server day is the signed day, or is unknown', async () => {
+      const same = await refused({ serverNow: () => at('2026-09-01') })
+      expect(same).toMatchObject({
+        kind: 'rejected',
+        message: expect.stringContaining('try again from'),
+      })
+      const unknown = await refused({ serverNow: () => undefined })
+      expect(unknown).toMatchObject({
+        kind: 'rejected',
+        message: expect.stringContaining('try again from'),
+      })
+    })
+
+    it('does not change the other 409 codes', async () => {
+      const out = await claim(
+        deps('2026-09-01', {
+          serverNow: () => at('2026-09-02'),
+          claimDesignation: vi
+            .fn()
+            .mockRejectedValue(new ApiError(409, 'joined later', 'designation_before_join')),
+        }),
+        GROUP,
+        D_KEY,
+      )
+      expect(out).toMatchObject({ kind: 'rejected', message: 'joined later' })
+    })
+  })
+
   it('shows the server message for not_inactive and treats a changed situation as stale', async () => {
     const fail = (e: unknown) =>
       claim(deps('2026-09-01', { claimDesignation: vi.fn().mockRejectedValue(e) }), GROUP, D_KEY)
