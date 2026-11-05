@@ -322,7 +322,7 @@ Delete asks "Delete this comment? Replies stay." and, like the edit form, says "
 original." A repeated delete is safe (a tombstone answers the same 204), so a failure with no clear answer is just tried
 again. A 404 on a new comment or an edit means the post was deleted (or the reader left): the thread turns **read-only**
 (no reply box, no Edit; Delete stays). An open edit form and the reply draft are kept across the password step
-(`savedEdits.ts`, #319). A restored form can hang on a comment that is not on the first page: the thread then loads
+(`savedEdits.ts`, #319); both are scoped to their post (or group), and the parent screen drops them as soon as the remounted screen has taken them (#339, #340). A restored form can hang on a comment that is not on the first page: the thread then loads
 later pages, one at a time, until the comment shows (`formSeek.ts`, #328), and closes the form only if the thread ends
 without it (the comment was deleted meanwhile). A restored reply draft aimed at a later-page comment is sought the same
 way (#330). Until it shows, the bottom box is labelled as a reply to a comment that is still loading (or could not be
