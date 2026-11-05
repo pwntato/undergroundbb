@@ -191,8 +191,16 @@ func (h *Handler) readmitMember(w http.ResponseWriter, r *http.Request) {
 // earlier grant shares the ref's day. It writes the refusal and returns false.
 func (h *Handler) admissionGrantDaysOK(w http.ResponseWriter, r *http.Request, groupID, inviterID, currentRef string, admissionDay time.Time, dayField, failMsg string) bool {
 	grantDay, ok := idgen.ValidGrantSortKey(currentRef, inviterID)
-	if !ok || grantDay.After(admissionDay) {
+	if !ok {
+		// A stored grant ref that does not parse is a server data fault, not the caller's clock.
 		WriteError(w, http.StatusBadRequest, dayField+": before your own grant's day")
+		return false
+	}
+	if grantDay.After(admissionDay) {
+		// The day passed the window check, so a grant dated after it means two device clocks
+		// disagree: usually this one is behind, but a fast granter can also date a grant up to
+		// the tolerance ahead, and that clears at 00:00 UTC (#335).
+		WriteErrorWithCode(w, http.StatusBadRequest, dayField+": before your own grant's day", "clock_skew")
 		return false
 	}
 	grants, err := h.db.ListGrantsTo(r.Context(), groupID, inviterID)

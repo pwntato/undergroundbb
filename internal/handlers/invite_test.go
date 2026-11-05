@@ -473,6 +473,10 @@ func TestCompleteInviteRejectsDayBeforeInviterGrant(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
 	}
+	// In-window day, grant dated after it: the device clock is behind the grant (#335).
+	if got := errCode(t, rec); got != "clock_skew" {
+		t.Errorf("code = %q, want clock_skew", got)
+	}
 	if m, err := h.db.GetMembership(t.Context(), groupID, invitee.userID); err != nil || m != nil {
 		t.Fatalf("a refused admission still made the invitee a member: %v, %v", m, err)
 	}

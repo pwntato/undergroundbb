@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,8 +156,14 @@ func TestReadmitRefusesDayBeforeOwnGrant(t *testing.T) {
 
 	setGrantSortKey(t, gid, amb.userID, testGrantSortKey(t, amb.userID, time.Now().AddDate(0, 0, 1)))
 	body := readmitBody(t, h, amb, gid, dave, 0)
-	if got := doReadmit(t, h, ambCookie, gid, dave.userID, body); got != http.StatusBadRequest {
-		t.Fatalf("grant dated tomorrow, admission today: %d, want 400", got)
+	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+gid+"/members/"+dave.userID+"/readmit", ambCookie, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("grant dated tomorrow, admission today: %d, want 400", rec.Code)
+	}
+	// A grant dated after an in-window admission day means two device clocks disagree
+	// (this one behind, or the granter's ahead) (#335): the client must be able to say so.
+	if got := errCode(t, rec); got != "clock_skew" {
+		t.Errorf("code %q, want clock_skew", got)
 	}
 	if strAttr(admissionRow(t, gid, dave.userID), "InviterUserID") != before {
 		t.Fatal("a refused re-admission replaced the admission")
@@ -241,5 +248,32 @@ func TestReadmitEndpointAmbassadorAndRunningRotation(t *testing.T) {
 	}
 	if strAttr(admissionRow(t, f.gid, f.dave.userID), "InviterUserID") != amb.userID {
 		t.Fatal("the ambassador's admission was not stored")
+	}
+}
+
+// A stored grant ref that does not parse is a server data fault, not the caller's clock:
+// it keeps the plain 400 with no clock_skew code (#335).
+func TestReadmitUnparseableOwnGrantIsNotClockSkew(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	gid, _, _, _, _, _, _ := rotatingGroupWith(t, h)
+	amb, ambCookie := loggedInUser(t, h)
+	addMember(t, gid, amb, "ambassador")
+	dave, _ := loggedInUser(t, h)
+	addMember(t, gid, dave, "member")
+	putAdmissionRow(t, gid, dave.userID)
+
+	body := readmitBody(t, h, amb, gid, dave, 0)
+	setGrantSortKey(t, gid, amb.userID, "not-a-grant-ref")
+	body.InviterGrantRef = "not-a-grant-ref"
+	rec := doJSON(t, h, http.MethodPost, "/api/groups/"+gid+"/members/"+dave.userID+"/readmit", ambCookie, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := errCode(t, rec); got != "" {
+		t.Errorf("code %q, want none", got)
+	}
+	// Many earlier refusals are uncoded 400s too: hold this one to the grant-day branch.
+	if !strings.Contains(rec.Body.String(), "before your own grant's day") {
+		t.Errorf("refused by another check: %s", rec.Body.String())
 	}
 }
