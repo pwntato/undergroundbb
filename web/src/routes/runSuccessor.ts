@@ -8,6 +8,7 @@
 // screen may have sat open across midnight.
 
 import { ApiError } from '@/lib/api/auth'
+import { serverNowMs } from '@/lib/api/serverClock'
 import type {
   ClaimDesignationRequest,
   GroupDetail,
@@ -289,7 +290,8 @@ export interface ClaimDeps extends LoadSuccessorDeps {
   readonly now?: () => number
   /**
    * The server's current time, ms since the epoch, or undefined when not known (#341).
-   * Read after the group is reloaded, so the reading is as fresh as that answer.
+   * Defaults to the estimate the API answers keep (serverClock.ts), read after the group is
+   * reloaded, so it is as fresh as that answer.
    */
   readonly serverNow?: () => number | undefined
 }
@@ -319,7 +321,7 @@ export async function claim(
     // Too early by this device's day. If it is not too early by the server's day, the device
     // clock is behind: the server would judge the claim by the day the device signs, so
     // "you can claim from <date>" would send the user to wait for a day that has already come.
-    const serverNow = deps.serverNow?.()
+    const serverNow = (deps.serverNow ?? serverNowMs)()
     if (
       serverNow !== undefined &&
       claimBlocker(view, deps.userId, designationSortKey, utcDayMs(serverNow)) === null

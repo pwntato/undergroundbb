@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
 import type { GroupDetail } from '@/lib/api/groups'
+import { forgetServerClock, noteServerDate } from '@/lib/api/serverClock'
 import { CLOCK_SKEW_MESSAGE } from './replyState'
 import type { DesignationRecord, GrantRecord } from '@/lib/crypto/grant-chain'
 import {
@@ -281,8 +282,23 @@ describe('claim', () => {
         D_KEY,
       )
       expect(JSON.stringify(out)).toContain('2026-08-30')
+      forgetServerClock()
       const noReader = await claim(deps('2026-08-29'), GROUP, D_KEY)
       expect(JSON.stringify(noReader)).toContain('2026-08-30')
+    })
+
+    it('by default reads the clock the API answers keep, so the screen needs no wiring', async () => {
+      // The device says 2026-08-29 12:00; the last API answer said the server is a day ahead.
+      noteServerDate(
+        { headers: { get: (n) => (n === 'date' ? 'Sun, 30 Aug 2026 12:00:00 GMT' : null) } },
+        at('2026-08-29'),
+      )
+      try {
+        const out = await claim(deps('2026-08-29'), GROUP, D_KEY)
+        expect(out).toEqual({ ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE })
+      } finally {
+        forgetServerClock()
+      }
     })
 
     it('does not get in the way of a claim the device day already allows', async () => {
