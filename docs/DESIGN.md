@@ -1828,6 +1828,13 @@ replace an admin who is only away.
     `grantDaySkewTolerance` behind its clock, as for every client-dated grant, so a slow clock or a
     request that crosses midnight can sign yesterday. A gate measured to the server's today would
     pass a claim the verifier's floor rejects, for good.
+  - *What the client says about a slow clock (#341).* Because the server only sees the signed day, it
+    cannot tell a slow clock from an early claim: both come back as `not_inactive`, or the client's own
+    check stops first. So `claim()` compares the device's day with the server's, read from the `Date`
+    header of the API answers (`serverClock.ts`; the group reload just before gives a fresh reading,
+    and a cached answer, one with an `Age` header, is ignored). When the claim is early by the device's
+    day but not by the server's, it says the device's date or time looks wrong instead of "you can claim
+    from <date>". With no reading, or when the claim is early by both, the date message is unchanged.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
   day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
