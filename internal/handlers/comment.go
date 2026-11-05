@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -212,6 +213,9 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	// number: asked first, so the skip rule below never sends such a reply to a
 	// "next free path" under nothing. A deleted comment is a tombstone and is
 	// still there, so replies under it are fine.
+	// Who hears of it (#68): the post's author for a top-level comment, the parent's author for
+	// a reply, whoever it is.
+	recipient := post.AuthorUserID
 	if parent := idgen.CommentParentPath(req.Path); parent != "" {
 		have, perr := h.db.GetComment(r.Context(), postID, parent)
 		if perr != nil {
@@ -222,7 +226,14 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 			writeParentGone(w)
 			return
 		}
+		recipient = have.AuthorUserID
 	}
+	notify, nerr := h.notifyRecipient(r.Context(), groupID, recipient, userID)
+	if nerr != nil {
+		WriteInternalError(w, r, nerr, "could not create the comment")
+		return
+	}
+	in.NotifyUserID = notify
 	next, nerr := h.db.NextCommentPath(r.Context(), postID, idgen.CommentParentPath(req.Path))
 	switch {
 	case errors.Is(nerr, db.ErrCommentSiblingsFull):
@@ -456,4 +467,24 @@ func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction, postDe
 		}
 	}
 	return kept
+}
+
+// notifyRecipient is who a notification for something `actorID` just did to `recipientID`'s post or
+// comment goes to (#68): the recipient, or "" when nobody should be told. Nobody is told of their
+// own activity, and nobody who is no longer a member of the group, since the notification would
+// point at a thread they cannot open. A recipient who leaves right after this read keeps a
+// notification that the client filters (the post resolves to nothing they can read) and that
+// expires with the post.
+func (h *Handler) notifyRecipient(ctx context.Context, groupID, recipientID, actorID string) (string, error) {
+	if recipientID == "" || recipientID == actorID {
+		return "", nil
+	}
+	m, err := h.db.GetMembership(ctx, groupID, recipientID)
+	if err != nil {
+		return "", err
+	}
+	if m == nil {
+		return "", nil
+	}
+	return recipientID, nil
 }

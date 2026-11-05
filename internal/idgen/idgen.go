@@ -243,3 +243,16 @@ func CommentParentPath(path string) string {
 	}
 	return ""
 }
+
+// NotificationSortKey returns a fresh "NOTIF#<YYYY-MM-DD, UTC>#<rand>" sort key for a notification
+// written at now. The random half is 128 bits as 32 lowercase hex characters, the id convention
+// docs/DESIGN.md pins for every <rand> ("Sort keys carry a day and a random id"), and the day is
+// the only time component: a notification lives in one named person's partition, so anything
+// finer would be an activity log for them.
+func NotificationSortKey(now time.Time) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("idgen: generate notification sort key: %w", err)
+	}
+	return fmt.Sprintf("NOTIF#%s#%x", now.UTC().Format("2006-01-02"), b[:]), nil
+}

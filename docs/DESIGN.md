@@ -3043,6 +3043,19 @@ link to that comment rather than to the top of a thread. `read` is the flag the 
 the mark-read operation act on, and it carries two costs worth stating here rather than discovering
 in M7:
 
+**What writes one (#68).** The comment and reaction handlers, in the same transaction as the write
+that causes it, so a refused write tells nobody and a resend of a comment that landed writes none.
+A top-level comment notifies the post's author; a reply notifies the author of the comment it is
+under (the direct parent only, not the post's author or the rest of the thread); a reaction notifies
+the author of the post or comment it is on, once per reactor and target (a changed emoji or a resend
+writes no second one; taking a reaction back and giving it again does). Nobody is notified of their
+own activity or after leaving the group, and a tombstoned comment still has its author, so a reply
+under one notifies them. The reaction's first-time test is a read before the write, so two first
+reactions racing can each notify. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path
+or the reaction's target (`0000` for the post). The TTL is the post's, copied, as for comments. The
+sort key's random half is 128 bits as 32 hex characters, per the convention below. Reading and
+marking read are separate work (#69, #145).
+
 - **Unread count is the one read in this design whose cost grows with retained history.** A flag is
   an attribute, not a key component, so counting unread items is a `Query` over the user's whole
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the

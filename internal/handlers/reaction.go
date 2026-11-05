@@ -141,6 +141,26 @@ func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
 	if marker != nil {
 		in.MarkerGeneration = marker.Generation
 	}
+	// Who hears of it (#68): the author of the post or comment reacted to. A comment that is gone
+	// is left for PutReaction to refuse; a tombstone keeps its author.
+	recipient := post.AuthorUserID
+	if target != db.PostLevelReactionTarget {
+		have, gerr := h.db.GetComment(r.Context(), postID, target)
+		if gerr != nil {
+			WriteInternalError(w, r, gerr, "could not save the reaction")
+			return
+		}
+		recipient = ""
+		if have != nil {
+			recipient = have.AuthorUserID
+		}
+	}
+	notify, nerr := h.notifyRecipient(r.Context(), groupID, recipient, userID)
+	if nerr != nil {
+		WriteInternalError(w, r, nerr, "could not save the reaction")
+		return
+	}
+	in.NotifyUserID = notify
 	err = h.db.PutReaction(r.Context(), in)
 	switch {
 	case err == nil:

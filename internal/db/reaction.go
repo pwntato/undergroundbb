@@ -49,6 +49,10 @@ type PutReactionInput struct {
 	MarkerPresent    bool
 	MarkerGeneration int64
 	Now              time.Time
+	// NotifyUserID is who is told of this reaction (#68): the author of the post or comment it is
+	// on. Empty when nobody is. They are told once per reactor and target: a reaction that
+	// replaces the reactor's earlier one (a different emoji, or a resend) writes no second one.
+	NotifyUserID string
 }
 
 // PutReaction writes a reaction in one transaction with the checks that make
@@ -70,6 +74,20 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 	})
 	if err != nil {
 		return fmt.Errorf("db: marshal reaction: %w", err)
+	}
+	notify := in.NotifyUserID != ""
+	if notify {
+		// A read before the write, so a changed emoji or a resend does not notify twice. Two
+		// first reactions racing could both notify; the recipient sees one extra line.
+		out, gerr := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName:      aws.String(c.table),
+			ConsistentRead: aws.Bool(true),
+			Key:            reactionKey(in.PostID, in.Target, in.ReactorID),
+		})
+		if gerr != nil {
+			return fmt.Errorf("db: get reaction: %w", gerr)
+		}
+		notify = out.Item == nil
 	}
 	items := []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(c.table), Item: item}},
@@ -101,6 +119,16 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 		epochIndex  = 3
 		markerIndex = 4
 	)
+	if notify {
+		put, nerr := notification{
+			recipientID: in.NotifyUserID, kind: NotificationReaction, actorID: in.ReactorID,
+			groupID: in.GroupID, postID: in.PostID, cmtPath: in.Target, ttl: in.PostTTL, now: in.Now,
+		}.put(c.table)
+		if nerr != nil {
+			return nerr
+		}
+		items = append(items, put)
+	}
 	targetIndex := -1
 	if in.Target != PostLevelReactionTarget {
 		targetIndex = len(items)
