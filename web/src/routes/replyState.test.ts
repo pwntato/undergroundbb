@@ -75,27 +75,68 @@ describe('firstPageLoaded', () => {
       { type: 'sendFailed', error: TARGET_GONE_MESSAGE },
     ])
     expect(failed.replyTo).toBe('0001')
-    const reloaded = nextReplyState(failed, { type: 'firstPageLoaded', paths: ['0002'] })
+    const reloaded = nextReplyState(failed, {
+      type: 'firstPageLoaded',
+      paths: ['0002'],
+      hasMore: false,
+    })
     expect(reloaded).toMatchObject({ replyTo: null, draft: 'my reply', error: TARGET_GONE_MESSAGE })
     // The next Send aims at the top level, not under the gone comment.
     expect(guessPath(attachParent(reloaded.replyTo), ['0002'])).toBe('0003')
   })
 
-  it('drops a restored target that is on a later page', () => {
+  it('drops a target missing from the only page', () => {
     const restored: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0060', draft: 'typed before' }
     expect(
-      nextReplyState(restored, { type: 'firstPageLoaded', paths: ['0001', '0002'] }),
+      nextReplyState(restored, {
+        type: 'firstPageLoaded',
+        paths: ['0001', '0002'],
+        hasMore: false,
+      }),
     ).toMatchObject({ replyTo: null, draft: 'typed before', error: TARGET_GONE_MESSAGE })
+  })
+
+  it('keeps a target missing from the first page while a later page exists (#330)', () => {
+    const restored: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0060', draft: 'typed before' }
+    expect(
+      nextReplyState(restored, { type: 'firstPageLoaded', paths: ['0001', '0002'], hasMore: true }),
+    ).toBe(restored)
   })
 
   it('keeps a target that is on the page, and leaves a top-level box alone', () => {
     const under: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0001', draft: 'x' }
-    expect(nextReplyState(under, { type: 'firstPageLoaded', paths: ['0001'] })).toBe(under)
-    expect(nextReplyState(typed, { type: 'firstPageLoaded', paths: [] })).toBe(typed)
+    expect(
+      nextReplyState(under, { type: 'firstPageLoaded', paths: ['0001'], hasMore: false }),
+    ).toBe(under)
+    expect(nextReplyState(typed, { type: 'firstPageLoaded', paths: [], hasMore: false })).toBe(
+      typed,
+    )
   })
 
   it('does not move the target under a send in flight', () => {
     const sending = run([{ type: 'opened', replyTo: '0001' }, { type: 'sendStarted' }])
-    expect(nextReplyState(sending, { type: 'firstPageLoaded', paths: [] })).toBe(sending)
+    expect(nextReplyState(sending, { type: 'firstPageLoaded', paths: [], hasMore: false })).toBe(
+      sending,
+    )
+  })
+})
+
+describe('endReached', () => {
+  const restored: ReplyState = { ...INITIAL_REPLY_STATE, replyTo: '0060', draft: 'typed before' }
+
+  it('drops a target that never showed, keeping the draft', () => {
+    expect(nextReplyState(restored, { type: 'endReached', paths: ['0001', '0002'] })).toMatchObject(
+      { replyTo: null, draft: 'typed before', error: TARGET_GONE_MESSAGE },
+    )
+  })
+
+  it('keeps a target that showed on a later page', () => {
+    expect(nextReplyState(restored, { type: 'endReached', paths: ['0001', '0060'] })).toBe(restored)
+  })
+
+  it('leaves a top-level box and a send in flight alone', () => {
+    expect(nextReplyState(typed, { type: 'endReached', paths: [] })).toBe(typed)
+    const sending = nextReplyState(restored, { type: 'sendStarted' })
+    expect(nextReplyState(sending, { type: 'endReached', paths: [] })).toBe(sending)
   })
 })

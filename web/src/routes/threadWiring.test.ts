@@ -223,6 +223,23 @@ describe('loadPageInto', () => {
     expect(h.controls().mode).toEqual({ kind: 'idle' })
   })
 
+  it('drops a target that is only a deleted placeholder, so the draft is not left without a box (#330)', async () => {
+    const h = harness({ replyTo: '0002', draft: 'typed' })
+    await loadPageInto(
+      h.io,
+      () =>
+        Promise.resolve({
+          ok: true,
+          comments: [view('0001'), { deleted: true, path: '0002', depth: 1 }],
+          reactions: [],
+        } satisfies ThreadPageResult),
+      () => true,
+      undefined,
+      false,
+    )
+    expect(h.reply()).toMatchObject({ replyTo: null, draft: 'typed', error: TARGET_GONE_MESSAGE })
+  })
+
   it('keeps a target that is on the first page', async () => {
     const h = harness({ replyTo: '0001', draft: 'typed' })
     await loadPageInto(
@@ -379,6 +396,23 @@ describe('sendReply', () => {
     await s.send({ loadedPaths: h.thread().comments.map((c) => c.path) })
     expect(created.mock.calls[1]![1].path).toBe('0003')
     expect(h.reply()).toMatchObject({ draft: '', notice: 'Comment sent.', replyTo: null })
+  })
+
+  it('drops the target as soon as the server says it is gone, even if the reload would keep it (#330)', async () => {
+    // A target on a later page, with the page that would show it failing: the reload alone
+    // leaves replyTo set, which is how an error and a "still waiting" box ended up side by side.
+    const h = harness({ replyTo: '0060', draft: 'my reply' })
+    const created = vi.fn().mockRejectedValueOnce(new ApiError(409, 'gone', 'parent_gone'))
+    const s = sendHarness(h, created)
+
+    await s.send({ loadedPaths: ['0001'] })
+
+    expect(h.reply()).toMatchObject({
+      replyTo: null,
+      draft: 'my reply',
+      error: TARGET_GONE_MESSAGE,
+    })
+    expect(s.reload).toHaveBeenCalledTimes(1)
   })
 
   it('guesses the next number under the target from the comments on screen', async () => {

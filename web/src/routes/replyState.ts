@@ -7,12 +7,17 @@
 //   - Editing the text or moving the box drops the last error, since it was
 //     about something else.
 //   - A send that succeeds clears the draft and closes the inline box.
-//   - The comment being replied to must be on the page. When the first page of
-//     the thread (re)loads and the target is not in it -- the comment was deleted,
-//     or a reply restored after the password step points at one on a later page --
-//     the target is dropped, the draft is kept, and the box says it is now a new
-//     comment. Otherwise the bottom box would be labelled as a new comment while
-//     still sealing under the missing one, and fail the same way every time.
+//   - The comment being replied to must be on the page. When the thread's last page is
+//     loaded and the target is not on screen -- the comment was deleted -- the target is
+//     dropped, the draft is kept, and the box says it is now a new comment. Otherwise the
+//     bottom box would be labelled as a new comment while still sealing under the missing
+//     one, and fail the same way every time.
+//   - A target missing from a first page that has a later page is not gone yet (a reply
+//     restored after the password step can point at one): the screen loads on until it
+//     shows. The target is dropped when the last page ends without it, when it shows only
+//     as a deleted placeholder, when a send is answered parent_gone, or when the reader
+//     chooses "Make this a new comment" (#330). Meanwhile the bottom box cannot send
+//     (replyFallbackBox.ts).
 
 export interface ReplyState {
   /** The path being replied to, or null for a new top-level comment. */
@@ -38,8 +43,15 @@ export type ReplyEvent =
   | { readonly type: 'sendStarted' }
   | { readonly type: 'sendFailed'; readonly error: string }
   | { readonly type: 'sent'; readonly notice: string }
-  /** The first page of the thread was loaded; `paths` are all the comments on screen. */
-  | { readonly type: 'firstPageLoaded'; readonly paths: readonly string[] }
+  /** The first page of the thread was loaded; `paths` are the comments on screen that are not deleted. */
+  | {
+      readonly type: 'firstPageLoaded'
+      readonly paths: readonly string[]
+      /** A later page exists, so a target missing from this one may still be on it. */
+      readonly hasMore: boolean
+    }
+  /** The last page is loaded; `paths` are the comments on screen that are not deleted. */
+  | { readonly type: 'endReached'; readonly paths: readonly string[] }
 
 /** The server refused the signing day: this device's clock is off, or the write was sealed too long ago. */
 export const CLOCK_SKEW_MESSAGE =
@@ -62,6 +74,18 @@ export function nextReplyState(state: ReplyState, event: ReplyEvent): ReplyState
     case 'sendFailed':
       return { ...state, sending: false, error: event.error }
     case 'firstPageLoaded':
+      // A target not on this page may be on a later one: the screen loads on (formSeek.ts),
+      // and `endReached` drops it if it never shows (#330).
+      if (
+        state.sending ||
+        state.replyTo === null ||
+        event.hasMore ||
+        event.paths.includes(state.replyTo)
+      ) {
+        return state
+      }
+      return { ...state, replyTo: null, error: TARGET_GONE_MESSAGE }
+    case 'endReached':
       if (state.sending || state.replyTo === null || event.paths.includes(state.replyTo)) {
         return state
       }

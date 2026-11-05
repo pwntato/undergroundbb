@@ -25,6 +25,7 @@ export function ReplyBox({
   onChange,
   onSubmit,
   onCancel,
+  cancelLabel,
 }: {
   /** Unique on the page, for the label. */
   readonly id: string
@@ -42,8 +43,10 @@ export function ReplyBox({
   readonly unchanged?: boolean | undefined
   readonly onChange: (value: string) => void
   readonly onSubmit: () => void
-  /** Shown for an inline box; the bottom box has nothing to close. */
+  /** Shown for an inline box, and for the bottom box while it waits for its reply target. */
   readonly onCancel?: (() => void) | undefined
+  /** The button's label; "Cancel" when absent (the waiting bottom box uses it to move the draft to a new comment). */
+  readonly cancelLabel?: string | undefined
 }) {
   const bytes = utf8Length(value)
   const problem = validateComment(value, maxBytes)
@@ -88,7 +91,7 @@ export function ReplyBox({
         </Button>
         {onCancel !== undefined && (
           <Button type="button" variant="outline" disabled={sending} onClick={onCancel}>
-            Cancel
+            {cancelLabel ?? 'Cancel'}
           </Button>
         )}
       </div>

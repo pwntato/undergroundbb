@@ -266,10 +266,38 @@ describe('ThreadPanel reply box', () => {
     expect(render([comment()], { reply: { replyTo: '0001' } })).not.toContain('beside')
   })
 
-  it('falls back to the bottom box when the target is not on the page', () => {
-    const html = render([comment()], { reply: { replyTo: '0042' } })
-    expect(html).toContain('Add a comment')
+  it('keeps a target that is not on the page out of the plain bottom box, and cannot send (#330)', () => {
+    const html = render([comment()], { reply: { replyTo: '0042', draft: 'typed before' } })
+    expect(html).not.toContain('Add a comment')
     expect(html).not.toContain('Your reply')
+    expect(html).toContain('Reply to a comment that is still loading')
+    expect(html).toContain('typed before')
+    // The one Send button is off, so nothing can seal under the hidden comment.
+    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/)
+  })
+
+  it('shows the draft in the bottom box when the target is only a deleted placeholder', () => {
+    const html = render([comment(), { deleted: true, path: '0002', depth: 1 }], {
+      reply: { replyTo: '0002', draft: 'typed before' },
+    })
+    expect(html).toContain('typed before')
+  })
+
+  it('says a failed page load is a failure, not a load in progress', () => {
+    const html = render([comment()], {
+      error: 'Could not load',
+      reply: { replyTo: '0042', draft: 'typed before' },
+    })
+    expect(html).toContain('Couldn&#x27;t load the comment you are replying to')
+    expect(html).not.toContain('still loading')
+  })
+
+  it('lets the reader post a waiting reply as a new comment, and offers no such button otherwise', () => {
+    const waiting = render([comment()], { reply: { replyTo: '0042', draft: 'typed before' } })
+    expect(waiting).toContain('Make this a new comment')
+    const plain = render([comment()], { reply: { replyTo: null, draft: 'typed before' } })
+    expect(plain).not.toContain('Make this a new comment')
+    expect(plain).not.toContain('>Cancel<')
   })
 
   it('shows the notice, the error and the byte count, and flags a draft over the limit', () => {
@@ -388,6 +416,35 @@ describe('ThreadPanel reactions (#46)', () => {
     expect(rows[2]).toContain('Could not save your reaction.')
     expect(rows[0]).not.toContain('Could not save')
     expect(rows[1]).not.toContain('Could not save')
+  })
+})
+
+describe('ThreadPanel waiting reply box (#330)', () => {
+  it('its "Make this a new comment" button moves the box to the top level', () => {
+    const opened: (string | null)[] = []
+    const tree = ThreadPanel({
+      groupId: 'g1',
+      comments: [comment()],
+      loading: false,
+      error: null,
+      hasMore: true,
+      onLoadMore: () => {},
+      reply: {
+        replyTo: '0042',
+        draft: 'typed before',
+        maxBytes: 100,
+        sending: false,
+        error: null,
+        notice: null,
+        onOpen: (to) => opened.push(to),
+        onEdit: () => {},
+        onSend: () => {},
+      },
+    })
+    const box = elementsOf(tree).find((e) => e.type === ReplyBox && e.props['id'] === 'reply-top')!
+    ;(box.props['onCancel'] as () => void)()
+    expect(box.props['cancelLabel']).toBe('Make this a new comment')
+    expect(opened).toEqual([null])
   })
 })
 
