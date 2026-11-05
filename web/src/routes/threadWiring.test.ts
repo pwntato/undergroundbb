@@ -398,6 +398,23 @@ describe('sendReply', () => {
     expect(h.reply()).toMatchObject({ draft: '', notice: 'Comment sent.', replyTo: null })
   })
 
+  it('drops the target as soon as the server says it is gone, even if the reload would keep it (#330)', async () => {
+    // A target on a later page, with the page that would show it failing: the reload alone
+    // leaves replyTo set, which is how an error and a "still waiting" box ended up side by side.
+    const h = harness({ replyTo: '0060', draft: 'my reply' })
+    const created = vi.fn().mockRejectedValueOnce(new ApiError(409, 'gone', 'parent_gone'))
+    const s = sendHarness(h, created)
+
+    await s.send({ loadedPaths: ['0001'] })
+
+    expect(h.reply()).toMatchObject({
+      replyTo: null,
+      draft: 'my reply',
+      error: TARGET_GONE_MESSAGE,
+    })
+    expect(s.reload).toHaveBeenCalledTimes(1)
+  })
+
   it('guesses the next number under the target from the comments on screen', async () => {
     const h = harness({ replyTo: '0001', draft: 'x' })
     const s = sendHarness(h, vi.fn().mockResolvedValue({ path: 'ok' }))

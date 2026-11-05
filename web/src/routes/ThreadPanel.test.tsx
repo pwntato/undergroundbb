@@ -276,11 +276,27 @@ describe('ThreadPanel reply box', () => {
     expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled/)
   })
 
+  it('shows the draft in the bottom box when the target is only a deleted placeholder', () => {
+    const html = render([comment(), { deleted: true, path: '0002', depth: 1 }], {
+      reply: { replyTo: '0002', draft: 'typed before' },
+    })
+    expect(html).toContain('typed before')
+  })
+
+  it('says a failed page load is a failure, not a load in progress', () => {
+    const html = render([comment()], {
+      error: 'Could not load',
+      reply: { replyTo: '0042', draft: 'typed before' },
+    })
+    expect(html).toContain('Couldn&#x27;t load the comment you are replying to')
+    expect(html).not.toContain('still loading')
+  })
+
   it('lets the reader post a waiting reply as a new comment, and offers no such button otherwise', () => {
     const waiting = render([comment()], { reply: { replyTo: '0042', draft: 'typed before' } })
-    expect(waiting).toContain('Post as a new comment instead')
+    expect(waiting).toContain('Make this a new comment')
     const plain = render([comment()], { reply: { replyTo: null, draft: 'typed before' } })
-    expect(plain).not.toContain('Post as a new comment instead')
+    expect(plain).not.toContain('Make this a new comment')
     expect(plain).not.toContain('>Cancel<')
   })
 
@@ -404,7 +420,7 @@ describe('ThreadPanel reactions (#46)', () => {
 })
 
 describe('ThreadPanel waiting reply box (#330)', () => {
-  it('its "Post as a new comment instead" button moves the box to the top level', () => {
+  it('its "Make this a new comment" button moves the box to the top level', () => {
     const opened: (string | null)[] = []
     const tree = ThreadPanel({
       groupId: 'g1',
@@ -427,7 +443,7 @@ describe('ThreadPanel waiting reply box (#330)', () => {
     })
     const box = elementsOf(tree).find((e) => e.type === ReplyBox && e.props['id'] === 'reply-top')!
     ;(box.props['onCancel'] as () => void)()
-    expect(box.props['cancelLabel']).toBe('Post as a new comment instead')
+    expect(box.props['cancelLabel']).toBe('Make this a new comment')
     expect(opened).toEqual([null])
   })
 })

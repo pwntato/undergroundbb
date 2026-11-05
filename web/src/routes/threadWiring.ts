@@ -4,8 +4,9 @@
 //
 //   - loadPageInto: one page load. A page that arrives after the thread started
 //     over (or after the screen went away) is dropped. The first page also tells
-//     the reply box which comments are on screen, so a reply aimed at one that is
-//     not (deleted, or restored from before the password step) is dropped.
+//     the reply box which live comments are on screen, so a reply aimed at one that is
+//     not (deleted) is dropped. A target that may be on a later page is kept while
+//     the screen seeks it (#330).
 //   - sendReply: one press of Send. The send target comes from the reply state,
 //     the path guess from the comments on screen, and a gone parent reloads the
 //     thread.
@@ -181,7 +182,12 @@ export async function sendReply(
     io.dispatchControls({ type: 'madeReadOnly', message: SEND_ERRORS.notFound })
   }
   // The comment replied to is gone: show the thread as it is now.
-  if (result.kind === 'parentGone') io.reload()
+  // The server has said the target is gone: drop it now, not when the seek ends, since a later
+  // page that fails to load would keep an error and a "still waiting" box side by side.
+  if (result.kind === 'parentGone') {
+    io.dispatchReply({ type: 'endReached', paths: [] })
+    io.reload()
+  }
 }
 
 /** Seals again at most this many times for one press, after the group's key moved. */

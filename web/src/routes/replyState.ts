@@ -14,8 +14,10 @@
 //     one, and fail the same way every time.
 //   - A target missing from a first page that has a later page is not gone yet (a reply
 //     restored after the password step can point at one): the screen loads on until it
-//     shows, and only the last page without it drops it (#330). Meanwhile the bottom box
-//     cannot send (replyFallbackBox.ts).
+//     shows. The target is dropped when the last page ends without it, when it shows only
+//     as a deleted placeholder, when a send is answered parent_gone, or when the reader
+//     chooses "Make this a new comment" (#330). Meanwhile the bottom box cannot send
+//     (replyFallbackBox.ts).
 
 export interface ReplyState {
   /** The path being replied to, or null for a new top-level comment. */

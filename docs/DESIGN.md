@@ -325,7 +325,10 @@ again. A 404 on a new comment or an edit means the post was deleted (or the read
 (`savedEdits.ts`, #319). A restored form can hang on a comment that is not on the first page: the thread then loads
 later pages, one at a time, until the comment shows (`formSeek.ts`, #328), and closes the form only if the thread ends
 without it (the comment was deleted meanwhile). A restored reply draft aimed at a later-page comment is sought the same
-way (#330); only the last page without it moves the draft to a new top-level comment.
+way (#330). Until it shows, the bottom box is labelled as a reply to a comment that is still loading (or could not be
+loaded, when a page failed) and cannot send; its "Make this a new comment" button moves the draft to the top level. The
+draft moves there by itself when the last page ends without the comment, when the comment shows only as a deleted
+placeholder, or when a send is answered `parent_gone`.
 
 **For Edit and Delete on a post (#45, web).** `web/src/routes/runEditPost.ts`, `postControls.ts`, `postWiring.ts`, and the
 loop shared with comments in `runEdit.ts`. The same rules as for a comment (author edits, author or admin deletes, the

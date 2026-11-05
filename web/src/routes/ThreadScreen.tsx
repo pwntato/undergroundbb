@@ -441,6 +441,7 @@ function Thread({
   }, [
     formPath,
     replyPath,
+    replyState.sending,
     state.loaded,
     state.loading,
     state.failure,

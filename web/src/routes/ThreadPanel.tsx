@@ -290,12 +290,17 @@ export function ThreadPanel({
       />
     )
   }
-  // A box left pointing at a comment that is not on the page falls back to the bottom one.
+  // A box left pointing at a comment that is not on the page, or only a deleted placeholder
+  // (which draws no box), falls back to the bottom one.
   const inlineAt =
     reply?.replyTo !== null && reply?.replyTo !== undefined
-      ? comments.find((c) => c.path === reply.replyTo)?.path
+      ? comments.find((c) => c.path === reply.replyTo && !isDeletedComment(c))?.path
       : undefined
-  const bottom = fallbackBox({ replyTo: reply?.replyTo ?? null, commentCount: comments.length })
+  const bottom = fallbackBox({
+    replyTo: reply?.replyTo ?? null,
+    commentCount: comments.length,
+    loadFailed: error !== null,
+  })
   const empty = comments.length === 0 && !loading && error === null
   return (
     <div className="flex w-full max-w-xl flex-col gap-4 text-left">
@@ -440,7 +445,7 @@ export function ThreadPanel({
                   }
                 : undefined
             }
-            cancelLabel="Post as a new comment instead"
+            cancelLabel="Make this a new comment"
             value={reply.draft}
             maxBytes={reply.maxBytes}
             sending={reply.sending}

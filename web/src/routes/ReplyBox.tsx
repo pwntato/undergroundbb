@@ -43,9 +43,9 @@ export function ReplyBox({
   readonly unchanged?: boolean | undefined
   readonly onChange: (value: string) => void
   readonly onSubmit: () => void
-  /** Shown for an inline box; the bottom box has nothing to close. */
+  /** Shown for an inline box, and for the bottom box while it waits for its reply target. */
   readonly onCancel?: (() => void) | undefined
-  /** The cancel button's label; "Cancel" when absent. */
+  /** The button's label; "Cancel" when absent (the waiting bottom box uses it to move the draft to a new comment). */
   readonly cancelLabel?: string | undefined
 }) {
   const bytes = utf8Length(value)
