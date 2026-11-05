@@ -197,8 +197,9 @@ func (h *Handler) admissionGrantDaysOK(w http.ResponseWriter, r *http.Request, g
 		return false
 	}
 	if grantDay.After(admissionDay) {
-		// The day passed the window check, so a grant dated after it almost always means the
-		// device clock is behind the day the server dated the grant (#335).
+		// The day passed the window check, so a grant dated after it means two device clocks
+		// disagree: usually this one is behind, but a fast granter can also date a grant up to
+		// the tolerance ahead, and that clears at 00:00 UTC (#335).
 		WriteErrorWithCode(w, http.StatusBadRequest, dayField+": before your own grant's day", "clock_skew")
 		return false
 	}

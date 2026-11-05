@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,8 +160,8 @@ func TestReadmitRefusesDayBeforeOwnGrant(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("grant dated tomorrow, admission today: %d, want 400", rec.Code)
 	}
-	// A grant dated after an in-window admission day is the device clock being behind the
-	// server-dated grant (#335): the client must be able to say so.
+	// A grant dated after an in-window admission day means two device clocks disagree
+	// (this one behind, or the granter's ahead) (#335): the client must be able to say so.
 	if got := errCode(t, rec); got != "clock_skew" {
 		t.Errorf("code %q, want clock_skew", got)
 	}
@@ -270,5 +271,9 @@ func TestReadmitUnparseableOwnGrantIsNotClockSkew(t *testing.T) {
 	}
 	if got := errCode(t, rec); got != "" {
 		t.Errorf("code %q, want none", got)
+	}
+	// Many earlier refusals are uncoded 400s too: hold this one to the grant-day branch.
+	if !strings.Contains(rec.Body.String(), "before your own grant's day") {
+		t.Errorf("refused by another check: %s", rec.Body.String())
 	}
 }

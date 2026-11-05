@@ -294,7 +294,8 @@ function failureOf(err: unknown): { readonly ok: false } & ReadmitFailure {
     if (err.code === 'subject_deleted') return { ok: false, kind: 'deleted' }
     if (err.status === 400 && err.code === 'clock_skew') {
       // The server refused the signing day: nothing was saved, and trying again cannot
-      // help until the clock is right.
+      // help until the clock is right (or, when a granter's fast clock dated the inviter's
+      // grant ahead, until 00:00 UTC).
       return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
     }
     if (err.status === 401) return { ok: false, kind: 'authRequired' }
