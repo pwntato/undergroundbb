@@ -54,6 +54,10 @@ export function GroupPostsScreen() {
   // comes back with the list. Replaced on every ask, with nothing when none was open.
   const [savedEdits, setSavedEdits] = useState<SavedEdits | undefined>(undefined)
   // Stable, so the list's load effect does not restart when this component re-renders.
+  // Cleared once the remounted list has taken it (#339).
+  const handleRestored = useCallback(() => {
+    setSavedEdits(undefined)
+  }, [])
   const handleColdKeys = useCallback((edits?: SavedEdits) => {
     setSavedEdits(edits)
     send('coldKeys')
@@ -97,6 +101,7 @@ export function GroupPostsScreen() {
         groupId={groupId}
         userId={userId}
         initialEdits={savedEdits}
+        onRestored={handleRestored}
         onColdKeys={handleColdKeys}
       />
     </>
@@ -107,11 +112,14 @@ function PostsList({
   groupId,
   userId,
   initialEdits,
+  onRestored,
   onColdKeys: askForPassword,
 }: {
   readonly groupId: string
   readonly userId: string
   readonly initialEdits: SavedEdits | undefined
+  /** Called once the saved edit form was taken, so the parent can let go of it. */
+  readonly onRestored: () => void
   readonly onColdKeys: (edits?: SavedEdits) => void
 }) {
   // One resolver per visit, so an author is read and pinned once.
@@ -141,6 +149,10 @@ function PostsList({
     nextPostControlsState,
     restoredPostControls(initialEdits, groupId),
   )
+  // The initial state above is read at mount only: the parent can let go of the snapshot.
+  useEffect(() => {
+    onRestored()
+  }, [onRestored])
   // The edit form open right now, for the password step.
   const modeNow = useRef(controlsState.mode)
   useEffect(() => {

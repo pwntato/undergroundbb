@@ -79,7 +79,7 @@ function harness(reply: Partial<ReplyState> = {}) {
     liveReply: () =>
       replyState.draft === ''
         ? undefined
-        : { replyTo: replyState.replyTo, draft: replyState.draft },
+        : { postId: POST, replyTo: replyState.replyTo, draft: replyState.draft },
   }
   return {
     io,
@@ -309,7 +309,11 @@ describe('loadPageInto', () => {
       undefined,
       false,
     )
-    expect(typed.coldKeys).toHaveBeenCalledWith({ replyTo: '0004', draft: 'half written' })
+    expect(typed.coldKeys).toHaveBeenCalledWith({
+      postId: POST,
+      replyTo: '0004',
+      draft: 'half written',
+    })
     // A failed load is not a first page: the target stays.
     expect(typed.reply().replyTo).toBe('0004')
 
@@ -466,7 +470,11 @@ describe('sendReply', () => {
     const s = sendHarness(h)
     s.sealComment.mockRejectedValue(new Error('no live keys cached'))
     await s.send()
-    expect(h.coldKeys).toHaveBeenCalledWith({ replyTo: '0004', draft: 'half written' })
+    expect(h.coldKeys).toHaveBeenCalledWith({
+      postId: POST,
+      replyTo: '0004',
+      draft: 'half written',
+    })
     expect(h.reply()).toMatchObject({ sending: false, error: SEND_ERRORS.coldKeys })
   })
 
@@ -518,7 +526,7 @@ describe('sendReply', () => {
 
 describe('SavedReply', () => {
   it('is what the password step keeps', () => {
-    const r: SavedReply = { replyTo: null, draft: 'x' }
+    const r: SavedReply = { postId: POST, replyTo: null, draft: 'x' }
     expect(r.draft).toBe('x')
   })
 })
@@ -879,7 +887,11 @@ describe('toggleReaction', () => {
     const r = reactHarness(h)
     r.sealReaction.mockRejectedValue(new Error('no live keys cached'))
     await r.press('0001', 1)
-    expect(h.coldKeys).toHaveBeenCalledWith({ replyTo: '0001', draft: 'typed so far' })
+    expect(h.coldKeys).toHaveBeenCalledWith({
+      postId: POST,
+      replyTo: '0001',
+      draft: 'typed so far',
+    })
     expect(r.putReaction).not.toHaveBeenCalled()
     expect(h.thread().reactionError?.message).toBe(REACTION_ERRORS.coldKeys)
   })
@@ -1135,7 +1147,11 @@ describe('saveEdit', () => {
     e.sealCommentEdit.mockRejectedValue(new Error('no live keys cached'))
     e.open()
     await e.save()
-    expect(h.coldKeys).toHaveBeenCalledWith({ replyTo: '0004', draft: 'half written' })
+    expect(h.coldKeys).toHaveBeenCalledWith({
+      postId: POST,
+      replyTo: '0004',
+      draft: 'half written',
+    })
     expect(h.controls().error).toBe(EDIT_ERRORS.coldKeys)
   })
 })

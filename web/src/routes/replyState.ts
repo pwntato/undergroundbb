@@ -37,6 +37,18 @@ export const INITIAL_REPLY_STATE: ReplyState = {
   notice: null,
 }
 
+/** The state a thread for `postId` starts with: the saved reply if it was written under that post. */
+export function restoredReplyState(
+  saved:
+    | { readonly postId: string; readonly replyTo: string | null; readonly draft: string }
+    | undefined,
+  postId: string,
+): ReplyState {
+  return saved?.postId === postId
+    ? { ...INITIAL_REPLY_STATE, replyTo: saved.replyTo, draft: saved.draft }
+    : INITIAL_REPLY_STATE
+}
+
 export type ReplyEvent =
   | { readonly type: 'opened'; readonly replyTo: string | null }
   | { readonly type: 'edited'; readonly draft: string }

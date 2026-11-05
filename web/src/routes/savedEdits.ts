@@ -10,7 +10,10 @@
 //     replaced on every ask, with nothing when no form was open, so an edit that
 //     was saved is never brought back.
 //   - A snapshot belongs to one screen's subject (a post's thread, a group's list)
-//     and is not used for any other.
+//     and is not used for any other. The saved reply is scoped the same way: it carries
+//     the post id it was written under (#340).
+//   - The parent lets go of the snapshot as soon as the remounted screen has taken it
+//     (`onRestored`, #339), so it cannot outlive the visit it was taken for.
 //   - It is the form's mode alone, never a busy or error state: the screen that
 //     comes back is idle. Whether what it hangs on is still there is the screen's
 //     own check: the screen loads pages until the form's item shows (formSeek.ts,

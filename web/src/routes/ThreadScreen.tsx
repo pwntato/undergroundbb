@@ -53,7 +53,7 @@ import {
   type SavedEdits,
 } from './savedEdits'
 import { seekForm } from './formSeek'
-import { INITIAL_REPLY_STATE, nextReplyState } from './replyState'
+import { nextReplyState, restoredReplyState } from './replyState'
 import { makePinKeys } from './rotationDeps'
 import { DEFAULT_MAX_COMMENT_BYTES } from './runCreateComment'
 import { DEFAULT_POST_LIMITS, type PostLimits } from './runCreatePost'
@@ -116,6 +116,12 @@ export function ThreadScreen() {
   const [saved, setSaved] = useState<SavedReply | undefined>(undefined)
   // Likewise the edit forms open then (#319): what was typed into them comes back too.
   const [savedEdits, setSavedEdits] = useState<SavedEdits | undefined>(undefined)
+  // Cleared once a remounted thread has taken them (#339), so a held snapshot never outlives
+  // the visit it was taken for.
+  const handleRestored = useCallback(() => {
+    setSaved(undefined)
+    setSavedEdits(undefined)
+  }, [])
   // Stable, so the thread's load effect does not restart when this component re-renders.
   const handleColdKeys = useCallback((reply?: SavedReply, edits?: SavedEdits) => {
     setSaved(reply)
@@ -165,6 +171,7 @@ export function ThreadScreen() {
         postTitle={typeof postTitle === 'string' ? postTitle : undefined}
         initialReply={saved}
         initialEdits={savedEdits}
+        onRestored={handleRestored}
         onColdKeys={handleColdKeys}
       />
     </>
@@ -178,6 +185,7 @@ function Thread({
   postTitle,
   initialReply,
   initialEdits,
+  onRestored,
   onColdKeys: askForPassword,
 }: {
   readonly groupId: string
@@ -186,6 +194,8 @@ function Thread({
   readonly postTitle: string | undefined
   readonly initialReply: SavedReply | undefined
   readonly initialEdits: SavedEdits | undefined
+  /** Called once the saved reply and edit forms were taken, so the parent can let go of them. */
+  readonly onRestored: () => void
   readonly onColdKeys: (reply?: SavedReply, edits?: SavedEdits) => void
 }) {
   // One resolver per visit, so an author is read and pinned once.
@@ -208,10 +218,12 @@ function Thread({
   const [state, dispatch] = useReducer(nextThreadState, INITIAL_THREAD_STATE)
   const [replyState, dispatchReply] = useReducer(
     nextReplyState,
-    initialReply === undefined
-      ? INITIAL_REPLY_STATE
-      : { ...INITIAL_REPLY_STATE, replyTo: initialReply.replyTo, draft: initialReply.draft },
+    restoredReplyState(initialReply, postId),
   )
+  // The initial state above is read at mount only: the parent can let go of the snapshot.
+  useEffect(() => {
+    onRestored()
+  }, [onRestored])
   const [controlsState, dispatchControls] = useReducer(
     nextControlsState,
     restoredCommentControls(initialEdits, postId),
@@ -268,9 +280,9 @@ function Thread({
       liveReply: () =>
         replyNow.current.draft === ''
           ? undefined
-          : { replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
+          : { postId, replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
     }),
-    [onColdKeys],
+    [onColdKeys, postId],
   )
   const loadPage = useCallback(
     (cursor: string | undefined) =>
@@ -325,11 +337,11 @@ function Thread({
         onColdKeys(
           replyNow.current.draft === ''
             ? undefined
-            : { replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
+            : { postId, replyTo: replyNow.current.replyTo, draft: replyNow.current.draft },
         )
       },
     }),
-    [onColdKeys],
+    [onColdKeys, postId],
   )
   // Reads the post again, e.g. after it was edited or deleted.
   const reloadPost = useCallback(() => {

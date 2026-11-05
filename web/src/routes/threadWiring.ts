@@ -39,6 +39,8 @@ import type { ThreadEvent } from './threadState'
 
 /** A reply in progress, kept across the password step. */
 export interface SavedReply {
+  /** The post the draft was written under: a comment path means nothing in another post (#340). */
+  readonly postId: string
   readonly replyTo: string | null
   readonly draft: string
 }
@@ -176,7 +178,7 @@ export async function sendReply(
       ? (result.message ?? SEND_ERRORS.rejected)
       : SEND_ERRORS[result.kind],
   )
-  if (result.kind === 'coldKeys') io.onColdKeys({ replyTo, draft: text })
+  if (result.kind === 'coldKeys') io.onColdKeys({ postId: input.postId, replyTo, draft: text })
   // A deleted post takes no new comments (the server answers 404): stop offering to write.
   if (result.kind === 'notFound') {
     io.dispatchControls({ type: 'madeReadOnly', message: SEND_ERRORS.notFound })
