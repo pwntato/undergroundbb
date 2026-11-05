@@ -1830,11 +1830,13 @@ replace an admin who is only away.
     pass a claim the verifier's floor rejects, for good.
   - *What the client says about a slow clock (#341).* Because the server only sees the signed day, it
     cannot tell a slow clock from an early claim: both come back as `not_inactive`, or the client's own
-    check stops first. So `claim()` compares the device's day with the server's, read from the `Date`
-    header of the API answers (`serverClock.ts`; the group reload just before gives a fresh reading,
-    and a cached answer, one with an `Age` header, is ignored). When the claim is early by the device's
-    day but not by the server's, it says the device's date or time looks wrong instead of "you can claim
-    from <date>". With no reading, or when the claim is early by both, the date message is unchanged.
+    check stops first. So the client compares the device's day with the server's, read from the `Date`
+    header of the API answers (`serverClock.ts`; a cached answer, one with an `Age` header, is ignored).
+    The claim panel does it where the Claim button is hidden: an offer that is early by the device's day
+    but not by the server's shows "the waiting period has passed on the server, but this device's date or
+    time looks behind it" instead of "you can claim from <date>", with no button. `claim()` repeats the
+    check after the group reload as a backstop and returns the clock message. With no reading, or when the
+    claim is early by both days, the date message is unchanged.
 - **What the verifier checks.** The designation's signature and the admin's right to sign it, by the
   same chain walk as any grant; the successor's claim signature under a key they held on the claim
   day; that the row's role is `admin` (the claim payload does not sign a role, and a designation can
