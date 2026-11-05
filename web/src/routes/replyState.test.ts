@@ -5,6 +5,7 @@ import {
   TARGET_GONE_MESSAGE,
   type ReplyEvent,
   type ReplyState,
+  restoredReplyState,
 } from './replyState'
 import { attachParent, guessPath } from './runCreateComment'
 
@@ -138,5 +139,22 @@ describe('endReached', () => {
     expect(nextReplyState(typed, { type: 'endReached', paths: [] })).toBe(typed)
     const sending = nextReplyState(restored, { type: 'sendStarted' })
     expect(nextReplyState(sending, { type: 'endReached', paths: [] })).toBe(sending)
+  })
+})
+
+describe('restoredReplyState (#340)', () => {
+  const saved = { postId: 'p1', replyTo: '0007', draft: 'typed' }
+
+  it('starts with the saved reply for the post it was written under', () => {
+    expect(restoredReplyState(saved, 'p1')).toEqual({
+      ...INITIAL_REPLY_STATE,
+      replyTo: '0007',
+      draft: 'typed',
+    })
+  })
+
+  it('starts empty for any other post, and with nothing saved', () => {
+    expect(restoredReplyState(saved, 'p2')).toBe(INITIAL_REPLY_STATE)
+    expect(restoredReplyState(undefined, 'p1')).toBe(INITIAL_REPLY_STATE)
   })
 })
