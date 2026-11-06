@@ -35,7 +35,14 @@ type notification struct {
 // needs no condition; what stops a retry writing a second one is that the item that causes it
 // rides in the same transaction (a repeated comment fails its own write, so none of it lands).
 func (n notification) put(table string) (types.TransactWriteItem, error) {
-	sk, err := idgen.NotificationSortKey(n.now)
+	// A reaction is never dated (docs/THREAT_MODEL.md): its notification carries a placeholder day
+	// rather than the day it was written, and its TTL is the post's, so nothing in the row says
+	// when the reaction was made.
+	day := idgen.NotificationDay(n.now)
+	if n.kind == NotificationReaction {
+		day = idgen.UndatedNotificationDay
+	}
+	sk, err := idgen.NotificationSortKey(day)
 	if err != nil {
 		return types.TransactWriteItem{}, err
 	}

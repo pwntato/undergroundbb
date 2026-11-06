@@ -472,9 +472,10 @@ func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction, postDe
 // notifyRecipient is who a notification for something `actorID` just did to `recipientID`'s post or
 // comment goes to (#68): the recipient, or "" when nobody should be told. Nobody is told of their
 // own activity, and nobody who is no longer a member of the group, since the notification would
-// point at a thread they cannot open. A recipient who leaves right after this read keeps a
-// notification that the client filters (the post resolves to nothing they can read) and that
-// expires with the post.
+// point at a thread they cannot open. Leaving a group removes no notification, though: every one
+// written before stays, and a post with no expiry gives a notification with no expiry, so the
+// reader has to drop notifications for groups the user is no longer in (and for posts that are
+// gone), not only the one this read can race with.
 func (h *Handler) notifyRecipient(ctx context.Context, groupID, recipientID, actorID string) (string, error) {
 	if recipientID == "" || recipientID == actorID {
 		return "", nil

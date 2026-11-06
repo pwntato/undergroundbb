@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/pwntato/undergroundbb/internal/config"
 )
 
 // notificationsOf reads every NOTIF# row in the user's partition.
@@ -176,8 +178,9 @@ func TestNobodyWhoHasLeftTheGroupIsNotified(t *testing.T) {
 }
 
 func TestAReactionNotifiesTheAuthorOfWhatItIsOnOnceWhateverTheEmoji(t *testing.T) {
-	h, _, pid, owner, bob, carol, _, bobCookie, carolCookie := notifFixture(t, 0)
-	storeCommentAt(t, pid, "0001", carol.userID, 0)
+	future := time.Now().Add(72 * time.Hour).Unix()
+	h, gid, pid, owner, bob, carol, _, bobCookie, carolCookie := notifFixture(t, future)
+	storeCommentAt(t, pid, "0001", carol.userID, future)
 	// On the post: the post's author. On the comment: the comment's author.
 	for _, c := range []struct {
 		target string
@@ -194,8 +197,19 @@ func TestAReactionNotifiesTheAuthorOfWhatItIsOnOnceWhateverTheEmoji(t *testing.T
 			t.Fatalf("target %s: %d notifications for %s, want 1 (a new emoji or a resend must not notify again)", c.target, len(got), c.who.userID)
 		}
 		n := got[0]
-		if strAttr(n, "Kind") != "reaction" || strAttr(n, "ActorUserID") != bob.userID || strAttr(n, "CmtPath") != c.target || strAttr(n, "PostID") != pid {
-			t.Errorf("target %s: notification = %v", c.target, n)
+		want := map[string]string{"Kind": "reaction", "ActorUserID": bob.userID, "GroupID": gid, "PostID": pid, "CmtPath": c.target}
+		for k, v := range want {
+			if strAttr(n, k) != v {
+				t.Errorf("target %s: %s = %q, want %q", c.target, k, strAttr(n, k), v)
+			}
+		}
+		// The post's TTL, copied: a reaction's notification must not say when it was made.
+		if numAttr(n, "TTL") != strconv.FormatInt(future, 10) {
+			t.Errorf("target %s: TTL = %s, want the post's %d", c.target, numAttr(n, "TTL"), future)
+		}
+		// And no day: a reaction is the one item the schema keeps undated.
+		if !regexp.MustCompile(`^NOTIF#0000-00-00#[0-9a-f]{32}$`).MatchString(strAttr(n, "SK")) {
+			t.Errorf("target %s: sort key %q carries a real day or the wrong shape", c.target, strAttr(n, "SK"))
 		}
 	}
 	// Taking it back and reacting again is a new reaction.
@@ -214,6 +228,54 @@ func TestAReactionNotifiesTheAuthorOfWhatItIsOnOnceWhateverTheEmoji(t *testing.T
 	}
 	if got := notificationsOf(t, owner.userID); len(got) != 2 {
 		t.Errorf("owner has %d notifications after a second reactor, want 2", len(got))
+	}
+}
+
+func TestNobodyWhoHasLeftTheGroupIsNotifiedOfAReaction(t *testing.T) {
+	h, gid, pid, owner, _, _, _, bobCookie, _ := notifFixture(t, 0)
+	if _, err := rawDDB(t).DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(testTableName()),
+		Key:       map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("MEMBER#" + owner.userID)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doReaction(t, h, http.MethodPut, bobCookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("react: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := notificationsOf(t, owner.userID); len(got) != 0 {
+		t.Errorf("a non-member was notified of a reaction: %v", got)
+	}
+}
+
+// Deleting an account clears the notifications it was sent: each names who interacted with the
+// person, in which group and on what day, and one about a post that never expires would otherwise
+// stay for good.
+func TestDeletingAnAccountRemovesItsNotifications(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	owner, ownerCookie := loggedInUser(t, h)
+	gid := createOpenPrivateGroup(t, h, owner, ownerCookie)
+	bob, bobCookie := loggedInUser(t, h)
+	addMember(t, gid, bob, "member")
+	postKey := "POST#2026-10-28#00112233445566d2"
+	storePostAt(t, gid, postKey, bob.userID, 0)
+	pid := pidOf(gid, postKey)
+	if rec := doComment(t, h, ownerCookie, pid, signedComment(t, gid, owner, copts{})); rec.Code != http.StatusCreated {
+		t.Fatalf("comment: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReaction(t, h, http.MethodPut, ownerCookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("react: %d", rec.Code)
+	}
+	if got := notificationsOf(t, bob.userID); len(got) != 2 {
+		t.Fatalf("bob has %d notifications before deleting, want 2", len(got))
+	}
+	if rec := doLeave(t, h, bobCookie, gid); rec.Code != http.StatusOK {
+		t.Fatalf("leave: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doDeleteAccount(t, h, bobCookie); rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := notificationsOf(t, bob.userID); len(got) != 0 {
+		t.Errorf("%d notifications survived account deletion: %v", len(got), got)
 	}
 }
 

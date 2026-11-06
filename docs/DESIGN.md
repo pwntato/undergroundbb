@@ -1755,7 +1755,7 @@ this case: the departing user does, so deletion needs no one else's signature an
 successor. Once no membership remains, one transaction tombstones `PROFILE` (`DeletedAt` set; username,
 salt, wrapped private keys, preferences and lock state removed; the public keys stay so grants and
 signatures the user made still verify), deletes the `USERNAME#` claim (the name is free again) and
-deletes `RECOVERY`. Pins, the login challenge, invites they sent and invites addressed to them are
+deletes `RECOVERY`. Pins, the login challenge, notifications, invites they sent and invites addressed to them are
 swept afterwards, and a repeated call finishes any leftovers. `PROFILE` is never deleted, so the uuid
 cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tombstone with `deleted:
 true` and an empty username, which the web client shows as "deleted user" (id in the tooltip) in
@@ -3025,7 +3025,8 @@ is a plaintext epoch attribute like any other; if it is derived from the moment 
 made, then the item does carry a creation time in the clear, and the claim below is simply false.
 Copied from the parent, the attribute says when the *post* expires and reveals nothing about the
 reaction. Given that, a reaction is the one item in this schema that discloses an association
-without a date, and adding a timestamp later would be adding a disclosure, not filling a gap.
+without a date, and adding a timestamp later would be adding a disclosure, not filling a gap. The
+notification a reaction sends keeps to this: its key carries a placeholder day, not the real one.
 
 **Notification items hold identifiers, not text.** The server knows thread structure and author
 ids — those are metadata — so it can tell that someone replied to your post without being able to
@@ -3043,19 +3044,6 @@ link to that comment rather than to the top of a thread. `read` is the flag the 
 the mark-read operation act on, and it carries two costs worth stating here rather than discovering
 in M7:
 
-**What writes one (#68).** The comment and reaction handlers, in the same transaction as the write
-that causes it, so a refused write tells nobody and a resend of a comment that landed writes none.
-A top-level comment notifies the post's author; a reply notifies the author of the comment it is
-under (the direct parent only, not the post's author or the rest of the thread); a reaction notifies
-the author of the post or comment it is on, once per reactor and target (a changed emoji or a resend
-writes no second one; taking a reaction back and giving it again does). Nobody is notified of their
-own activity or after leaving the group, and a tombstoned comment still has its author, so a reply
-under one notifies them. The reaction's first-time test is a read before the write, so two first
-reactions racing can each notify. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path
-or the reaction's target (`0000` for the post). The TTL is the post's, copied, as for comments. The
-sort key's random half is 128 bits as 32 hex characters, per the convention below. Reading and
-marking read are separate work (#69, #145).
-
 - **Unread count is the one read in this design whose cost grows with retained history.** A flag is
   an attribute, not a key component, so counting unread items is a `Query` over the user's whole
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
@@ -3066,6 +3054,25 @@ marking read are separate work (#69, #145).
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
   the rotation loop, and it should be built with the same expectation that it is interruptible.
+
+**What writes one (#68).** The comment and reaction handlers, in the same transaction as the write
+that causes it, so a refused write tells nobody and a resend of a comment that landed writes none.
+A top-level comment notifies the post's author; a reply notifies the author of the comment it is
+under (the direct parent only, not the post's author or the rest of the thread); a reaction notifies
+the author of the post or comment it is on, once per reactor and target (a changed emoji or a resend
+writes no second one; taking a reaction back and giving it again does). Nobody is notified of their
+own activity or of anything in a group they have left, and a tombstoned comment still has its author, so a reply
+under one notifies them. The reaction's first-time test is a read before the write, so two first
+reactions racing can each notify. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path
+or the reaction's target (`0000` for the post). The TTL is the post's, copied, as for comments.
+**A reaction notification carries no day**: its key is `NOTIF#0000-00-00#<rand>`, because a real day
+would date the reaction, which is the one item this schema keeps undated (see "Message content" in
+THREAT_MODEL.md); a reader orders those by something other than the key. Reply notifications carry
+the real day. The sort key's random half is 128 bits as 32 hex characters, per the convention below. Leaving a group
+removes none of the notifications written for it, and one about a post that never expires never
+expires, so the reader drops notifications for groups the user is no longer in as well as for posts
+that are gone. Deleting the account sweeps every `NOTIF#` row. Reading and marking read are separate
+work (#69, #145).
 
 Both halves of that rendering need a mechanism, and neither is free:
 

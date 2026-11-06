@@ -16,7 +16,8 @@ in the sort key, because that is what makes a reaction removable. It does **not*
 carries the target and the reactor, with no day prefix and no timestamp, and reactions record no
 creation time. They are the one item here that discloses an association without a date — a property
 that depends on the reaction's TTL being **copied from its parent post** rather than computed when
-the reaction is written, since a computed one would date it in plaintext.
+the reaction is written, since a computed one would date it in plaintext. The notification a
+reaction sends is held to the same rule: its key carries a placeholder day, not the real one.
 
 **Private keys.** Stored encrypted under an Argon2id-derived key. The password is never transmitted
 and never stored in any form, including hashed.
@@ -150,13 +151,17 @@ partition. That is a per-user timeline rather than a per-group one, and it spans
 user belongs to, so it is a distinct disclosure from "what day something was posted in this group" —
 which is why it gets the same day-granular, randomly-ordered treatment.
 
-**Their TTL discloses something the key does not, and rounding does not remove it.** A notification
-inherits the retention policy of the group that generated it, so the gap between a notification's day
-and its expiry day is that group's policy — which lets a reader who can decrypt nothing partition a
-user's notifications by originating group, and correlate those buckets against the retention policies
-visible on group `META` items in the same dump. It does not name the group, and in a deployment where
-most groups keep the 30-day default it distinguishes very little. It is a real edge, though, and it
-is the one disclosure in this section that comes from expiry rather than from a key.
+**Their TTL discloses something the key does not, and rounding does not remove it.** A notification's
+TTL is copied from the post it points at, so the gap between a notification's day and its expiry
+day is that group's retention policy minus the post's age when the activity happened. That varies,
+but it still lets a reader who can decrypt nothing partition a user's notifications by originating
+group and correlate the buckets against the retention policies visible on group `META` items in the
+same dump. And the item itself carries the group's id and the actor's id in the clear (identifiers
+only, no text), so it names the group outright. Neither is hidden; the notification is what
+discloses who interacted with this user, in which group, and on what day. **Reaction notifications
+are the exception on the day**: their key carries a placeholder day (`0000-00-00`), because a real
+one would date a reaction, which the schema otherwise never does. They still say who reacted to
+what. Deleting the account sweeps every notification.
 
 **`LastLoginDay` is a third place a day hides, and it is per user rather than per item.** `PROFILE`
 carries the UTC day of the user's last successful login (#161), kept so the successor-claim check can
