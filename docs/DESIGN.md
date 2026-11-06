@@ -3107,8 +3107,9 @@ first, in plain key order. The cursor is the sort key of the last row to resume 
 deleted or added before it between pages cannot make a page skip or repeat one. A row is dropped when
 the caller is no longer a member of the post's group, or the post is missing, a tombstone or past its
 TTL; a page is filled past dropped rows, reading 100 rows at a time and at most ten times per request
-(1000 rows examined, each distinct post and group checked once), after which the page comes back short
-with a cursor to continue. There is no cap on the range. `PUT /api/notifications/read` takes up to
+(1000 rows examined, each distinct post and group checked once), or after about four seconds,
+whichever comes first, after which the page comes back short with a cursor to continue. The time
+bound matters because a timeout returns no cursor, so the same rows would be retried for ever. There is no cap on the range. `PUT /api/notifications/read` takes up to
 25 ids from the caller's own partition and sets `Read`; an id with no row is skipped, so marking never
 creates one. The web list links each row to the thread, not to the comment (the thread has no comment
 anchors yet) and shows no unread count (#145).
