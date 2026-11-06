@@ -2513,7 +2513,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Rotation cooldown | `USER#<uuid>` | `ROTCOOLDOWN` | | | TTL, end of the UTC day after the cooldown setting |
 | Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
 | Rotation handoff counter | `USER#<uuid>` | `HANDOFFSEQ` | | | never (absent reads as 0; deleted with the account) |
-| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>`; for a reaction, `NOTIF#0000-00-00#<hash>` (see "What writes one (#68)") | | | group policy |
+| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>`; for a reaction, `NOTIF#0000-00-00#<post day>#<hash>` (see "What writes one (#68)") | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
 and drifted every time a row was added — a new row would arrive and the separate list would not be
@@ -3067,14 +3067,24 @@ notifies them. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's pa
 target (`0000` for the post). The TTL is the post's, copied, as for comments, so a notification
 expires with its post (and never, for a post that never expires).
 
-**A reaction notification carries no day, and its key is computed.** Its key is
-`NOTIF#0000-00-00#<hash>`, the hash being the first 128 bits (32 hex characters) of a SHA-256 over the
-post, the target and the reactor. No real day, because a real day would date the reaction, the one
-item this schema keeps undated (see "Message content" in THREAT_MODEL.md); computed, so that taking
+**A reaction notification carries no day of its own, and its key is computed.** Its key is
+`NOTIF#0000-00-00#<post day>#<hash>`, the hash being the first 128 bits (32 hex characters) of a
+SHA-256 over the post, the target and the reactor. The placeholder stands where a reply has its day,
+because a real day would date the reaction, the one item this schema keeps undated (see "Message
+content" in THREAT_MODEL.md). `<post day>` is the day of the post the reaction is on, the one inside
+`post_id`: not when the reaction happened, and nothing the row does not already say, since its
+`PostID` is in the clear. It is in the key so that "newest post first" is plain key order (#69). It is
+computed, so that taking
 the reaction back deletes its notification directly, a changed emoji or a resend lands on the same
 row (keeping its `read` flag), and un-reacting in a loop cannot add rows. The hash hides nothing the
 row does not already hold, which names the post, the target and the reactor. A reply notification
-keeps the real day and a random 128-bit id, per the convention below.
+keeps the real day and a random 128-bit id, per the convention below. Rows #68 wrote before the post
+day was in the key (`NOTIF#0000-00-00#<hash>`) are moved by `cmd/rekey-reaction-notifs`, a one-time
+operator command. Until it has run, taking back such a reaction, or deleting its comment or post,
+misses its row, and the list shows old rows in no useful order among the reactions (their hash is
+compared where a new row has its post day). The command moves a row only if the reaction it announces
+still exists; a row whose reaction is gone is deleted instead, since moving it would leave nothing
+able to delete it.
 
 **Deleting something deletes what it sent.** Taking a reaction back, deleting the comment or post
 it is on, deletes its notification from the author's partition, whether or not that author is still
@@ -3085,10 +3095,24 @@ row. Replies *to* a deleted comment are other people's comments and keep theirs.
 
 **What the reader (#69) does with them.** Leaving a group removes none of the notifications written
 for it, so it drops notifications for groups the user is no longer in and for posts that are gone.
-Reaction notifications have no time to order by (the key has none, the TTL is the post's, and the
-only time-like value is the post's day inside `post_id`), so the list shows reply notifications
-newest first and the reaction notifications after them, newest post first by the day in `post_id`.
+Reaction notifications have no time to order by, but the key carries the post's day (see above), so
+the list is one descending read of the `NOTIF#` range: reply notifications newest day first, then
+reaction notifications newest post first.
 Reading and marking read are separate work (#69, #145).
+
+**How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
+over the user's `NOTIF#` range: replies carry a real day and sort above the reaction range (its
+placeholder day is `0000-00-00`), so replies come newest day first and then reactions newest post
+first, in plain key order. The cursor is the sort key of the last row to resume after, so a row
+deleted or added before it between pages cannot make a page skip or repeat one. A row is dropped when
+the caller is no longer a member of the post's group, or the post is missing, a tombstone or past its
+TTL; a page is filled past dropped rows, reading 100 rows at a time and at most ten times per request
+(1000 rows examined, each distinct post and group checked once), or after about four seconds,
+whichever comes first, after which the page comes back short with a cursor to continue. The time
+bound matters because a timeout returns no cursor, so the same rows would be retried for ever. There is no cap on the range. `PUT /api/notifications/read` takes up to
+25 ids from the caller's own partition and sets `Read`; an id with no row is skipped, so marking never
+creates one. The web list links each row to the thread, not to the comment (the thread has no comment
+anchors yet) and shows no unread count (#145).
 
 Both halves of that rendering need a mechanism, and neither is free:
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,5 +208,37 @@ func TestDeletingReplyNotificationsIsScopedToThePostAndWalksEveryPage(t *testing
 		if !rowExists(t, c, k) {
 			t.Errorf("a notification that was not the deleted comment's was removed: %v", k["SK"])
 		}
+	}
+}
+
+func TestReactionNotificationKeyCarriesThePostsDayAndIsComputed(t *testing.T) {
+	gid := "11111111-1111-4111-8111-111111111111"
+	old := gid + "#2026-10-01#00112233445566a1"
+	newer := gid + "#2026-10-28#00112233445566a2"
+	sk := func(pid, target, reactor string) string {
+		return reactionNotificationKey("recipient", pid, target, reactor)["SK"].(*types.AttributeValueMemberS).Value
+	}
+	k := sk(old, "0001", "bob")
+	if !regexp.MustCompile(`^NOTIF#0000-00-00#2026-10-01#[0-9a-f]{32}$`).MatchString(k) {
+		t.Fatalf("key %q: want the placeholder, the post's day, a 32-hex hash", k)
+	}
+	if k != sk(old, "0001", "bob") {
+		t.Error("the key is not computed: the same reaction gave two keys")
+	}
+	for name, other := range map[string]string{
+		"target": sk(old, "0002", "bob"), "reactor": sk(old, "0001", "carol"), "post": sk(newer, "0001", "bob"),
+	} {
+		if other == k {
+			t.Errorf("a different %s gave the same key", name)
+		}
+	}
+	// Newest post first is plain descending key order.
+	if sk(newer, "0001", "bob") <= sk(old, "0001", "bob") {
+		t.Error("a newer post does not sort above an older one")
+	}
+	// The migration builds the same key from the hash alone.
+	hash := k[strings.LastIndex(k, "#")+1:]
+	if got := ReactionNotificationSortKey(old, hash); got != k {
+		t.Errorf("ReactionNotificationSortKey = %q, want %q", got, k)
 	}
 }

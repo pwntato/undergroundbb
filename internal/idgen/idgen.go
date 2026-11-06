@@ -260,10 +260,18 @@ func NotificationSortKey(day string) (string, error) {
 
 // UndatedNotificationDay stands in for the day in a reaction notification's sort key. A reaction
 // is the one item the schema keeps undated (docs/THREAT_MODEL.md, "Message content"), and a
-// notification that carried the day someone reacted would date it. The key keeps the day's shape
-// so every NOTIF# key parses alike; it sorts before every real day. A reader orders those by the
-// post's day instead (docs/DESIGN.md, "What the reader does with them").
+// notification that carried the day someone reacted would date it. The key keeps the day's shape,
+// so the placeholder is where a reply's day would be and sorts before every real day; a reaction's
+// key has one more part after it, the day of the post it is on (db.ReactionNotificationSortKey),
+// which is what the list orders those by (docs/DESIGN.md, "What the reader does with them").
 const UndatedNotificationDay = "0000-00-00"
 
 // NotificationDay is the day for a notification written at now, in the key's format.
 func NotificationDay(now time.Time) string { return now.UTC().Format("2006-01-02") }
+
+var notificationSortKeyPattern = regexp.MustCompile(`^NOTIF#(0000-00-00#\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2})#[0-9a-f]{32}$`)
+
+// ValidNotificationSortKey reports whether s has the shape of a notification's sort key: a reply's
+// "NOTIF#<day>#<rand>" or a reaction's "NOTIF#0000-00-00#<post day>#<hash>". The days are not
+// checked for being real dates.
+func ValidNotificationSortKey(s string) bool { return notificationSortKeyPattern.MatchString(s) }

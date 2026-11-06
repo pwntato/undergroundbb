@@ -12,7 +12,9 @@ import { GroupPostsScreen } from '@/routes/GroupPostsScreen'
 import { ThreadScreen } from '@/routes/ThreadScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
+import { AppHeader } from '@/routes/AppHeader'
 import { InvitesScreen } from '@/routes/InvitesScreen'
+import { NotificationsScreen } from '@/routes/NotificationsScreen'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
 import { SignupScreen } from '@/routes/SignupScreen'
@@ -64,6 +66,7 @@ function App() {
   return (
     <SessionProvider>
       <BrowserRouter>
+        <AppHeader />
         <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
           <Routes>
             <Route path="/" element={<Home />} />
@@ -177,6 +180,14 @@ function App() {
               element={
                 <RequireAuth>
                   <InvitesScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/notifications"
+              element={
+                <RequireAuth>
+                  <NotificationsScreen />
                 </RequireAuth>
               }
             />

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -70,8 +71,23 @@ func reactionNotificationKey(recipientID, postID, target, reactorID string) map[
 	h := sha256.Sum256([]byte("reaction\x00" + postID + "\x00" + target + "\x00" + reactorID))
 	return map[string]types.AttributeValue{
 		"PK": &types.AttributeValueMemberS{Value: "USER#" + recipientID},
-		"SK": &types.AttributeValueMemberS{Value: "NOTIF#" + idgen.UndatedNotificationDay + "#" + hex.EncodeToString(h[:16])},
+		"SK": &types.AttributeValueMemberS{Value: ReactionNotificationSortKey(postID, hex.EncodeToString(h[:16]))},
 	}
+}
+
+// ReactionNotificationSortKey is "NOTIF#0000-00-00#<post day>#<hash>": the placeholder where a
+// reply notification has its day, then the day of the POST the reaction is on, then the hash. The
+// post's day is not the reaction's: the row already names the post in the clear (PostID), so the
+// key adds nothing a reader of the row does not have, and it dates nothing about the reaction. It
+// makes the reaction range list newest post first in plain key order (#69). hash is the 32 hex
+// characters computed by reactionNotificationKey; the cmd/rekey-reaction-notifs migration uses
+// this to move rows written before the day was in the key.
+func ReactionNotificationSortKey(postID, hash string) string {
+	day := idgen.UndatedNotificationDay
+	if _, sk, ok := idgen.ParsePostID(postID); ok {
+		day = strings.Split(sk, "#")[1]
+	}
+	return "NOTIF#" + idgen.UndatedNotificationDay + "#" + day + "#" + hash
 }
 
 // putReaction is the transaction item that writes a reaction's notification: an update, so a

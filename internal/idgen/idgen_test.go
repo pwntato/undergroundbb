@@ -316,3 +316,25 @@ func TestCommentParentPath(t *testing.T) {
 		}
 	}
 }
+
+func TestValidNotificationSortKey(t *testing.T) {
+	h := "0123456789abcdef0123456789abcdef"
+	for _, ok := range []string{
+		"NOTIF#2026-10-20#" + h,            // a reply
+		"NOTIF#0000-00-00#2026-10-15#" + h, // a reaction: placeholder, post day, hash
+	} {
+		if !ValidNotificationSortKey(ok) {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{
+		"", "NOTIF#", "POST#2026-10-20#" + h, "NOTIF#2026-10-20#" + h[:31], "NOTIF#2026-10-20#" + h + "0",
+		"NOTIF#2026-10-20#" + strings.ToUpper(h), "NOTIF#0000-00-00#2026-10-15#" + h[:31],
+		"NOTIF#2026-10-20#2026-10-15#" + h, // a real day in the placeholder's place
+		"NOTIF#0000-00-00#20261015#" + h,
+	} {
+		if ValidNotificationSortKey(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
