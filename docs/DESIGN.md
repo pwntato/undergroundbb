@@ -3090,6 +3090,17 @@ only time-like value is the post's day inside `post_id`), so the list shows repl
 newest first and the reaction notifications after them, newest post first by the day in `post_id`.
 Reading and marking read are separate work (#69, #145).
 
+**How the list is served (#69).** `GET /api/notifications?cursor=&limit=` pages the reply range
+natively in key order (descending, so newest day first; the cursor is `r:<sort key>` of the last row
+read) and fills a page past dropped rows, up to the same pass bound `ListPosts` uses. Once replies
+run out it reads the undated reaction range once, capped at 500 rows, drops the same rows, sorts by
+the day inside `post_id` (newest first, ties by sort key) and pages that list by offset (`x:<n>`).
+The cap is the cost bound: the range is read whole because its keys are hashes. A row is dropped when
+the caller is no longer a member of the post's group, or the post is missing, a tombstone or past
+its TTL. `PUT /api/notifications/read` takes up to 25 ids from the caller's own partition and sets
+`Read`; an id with no row is skipped, so marking never creates one. The web list links each row to the
+thread, not to the comment (the thread has no comment anchors yet) and shows no unread count (#145).
+
 Both halves of that rendering need a mechanism, and neither is free:
 
 - **The group name.** In a **private** group the name and description are encrypted under the group
