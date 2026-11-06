@@ -454,3 +454,32 @@ func TestDeletingAPostRemovesTheNotificationsOfItsReactions(t *testing.T) {
 		t.Errorf("%d notifications of a deleted post's reactions survived: %v", len(got), got)
 	}
 }
+
+// One notification per reactor, target and post: the same person reacting to two things of the
+// same author, or to two posts of theirs, is two notifications, and taking one back leaves the other.
+func TestReactionNotificationsAreKeyedByPostTargetAndReactor(t *testing.T) {
+	h, gid, pid, owner, _, _, _, bobCookie, carolCookie := notifFixture(t, 0)
+	storeCommentAt(t, pid, "0001", owner.userID, 0)
+	otherKey := "POST#2026-10-28#00112233445566d3"
+	storePostAt(t, gid, otherKey, owner.userID, 0)
+	otherPid := pidOf(gid, otherKey)
+	react := func(cookie *http.Cookie, p, target string) {
+		t.Helper()
+		if rec := doReaction(t, h, http.MethodPut, cookie, p, target, sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+			t.Fatalf("react %s %s: %d", p, target, rec.Code)
+		}
+	}
+	react(bobCookie, pid, "0000")      // the post
+	react(bobCookie, pid, "0001")      // a comment of the same author on the same post
+	react(bobCookie, otherPid, "0000") // another post of the same author
+	react(carolCookie, pid, "0000")    // another reactor
+	if got := notificationsOf(t, owner.userID); len(got) != 4 {
+		t.Fatalf("owner has %d notifications, want 4 (post, comment, other post, other reactor)", len(got))
+	}
+	if rec := doReaction(t, h, http.MethodDelete, bobCookie, pid, "0001", nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("unreact: %d", rec.Code)
+	}
+	if got := notificationsOf(t, owner.userID); len(got) != 3 {
+		t.Errorf("taking back one reaction left %d notifications, want 3", len(got))
+	}
+}
