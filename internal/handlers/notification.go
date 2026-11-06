@@ -23,6 +23,12 @@ const (
 	maxMarkRead = 25
 )
 
+// notificationTimeBudget is how long one request keeps reading past dropped rows before it returns
+// the page it has, short, with a cursor to continue. Each distinct post costs a read, so a long run
+// of dropped rows could otherwise outlast the Lambda timeout, and a timeout returns no cursor: the
+// same rows would be retried forever. A variable so a test can shrink it.
+var notificationTimeBudget = 4 * time.Second
+
 // notificationEntry is one notification as the client renders it: identifiers only, never text
 // (docs/DESIGN.md, "Notification items hold identifiers, not text").
 type notificationEntry struct {
@@ -114,6 +120,7 @@ func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 	f := &notificationFilter{h: h, r: r, userID: userID, now: time.Now(), member: map[string]bool{}, post: map[string]bool{}}
 	resp := listNotificationsResponse{Notifications: []notificationEntry{}}
+	started := time.Now()
 	for pass := 0; pass < notificationMaxPasses; pass++ {
 		rows, last, done, err := h.db.ListNotifications(r.Context(), userID, after, notificationReadBatch)
 		if err != nil {
@@ -143,6 +150,9 @@ func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		after = last
+		if time.Since(started) > notificationTimeBudget {
+			break
+		}
 	}
 	// Everything up to `after` is shown or dropped; resume strictly after it.
 	resp.NextCursor = after

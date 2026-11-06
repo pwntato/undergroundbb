@@ -16,7 +16,7 @@ import { useSession } from '@/lib/session/useSession'
 import { groupLabel } from './groupLabel'
 import { NotificationsPanel, type NotificationsLoad } from './NotificationsPanel'
 import { runListGroups } from './runListGroups'
-import { runMarkRead } from './runMarkRead'
+import { markFailedAfter, runMarkRead } from './runMarkRead'
 import { useUsernames } from './useUsernames'
 
 export function NotificationsScreen() {
@@ -78,7 +78,7 @@ export function NotificationsScreen() {
     }
   }, [session.userId])
 
-  const markRead = useCallback(async (ids: readonly string[]) => {
+  const markRead = useCallback(async (ids: readonly string[], fresh: boolean) => {
     const result = await runMarkRead(ids, markNotificationsRead)
     const done = new Set(result.marked)
     setLoad((prev) =>
@@ -86,7 +86,7 @@ export function NotificationsScreen() {
         ? { ...prev, items: prev.items.map((n) => (done.has(n.id) ? { ...n, read: true } : n)) }
         : prev,
     )
-    setMarkFailed(result.failed)
+    setMarkFailed((prev) => markFailedAfter(prev, result.failed, fresh))
   }, [])
 
   const onLoadMore = useCallback(() => {
@@ -128,10 +128,13 @@ export function NotificationsScreen() {
         markFailed={markFailed}
         onLoadMore={onLoadMore}
         onMarkAllRead={() => {
-          void markRead(items.filter((n) => !n.read).map((n) => n.id))
+          void markRead(
+            items.filter((n) => !n.read).map((n) => n.id),
+            true,
+          )
         }}
         onOpen={(n) => {
-          if (!n.read) void markRead([n.id])
+          if (!n.read) void markRead([n.id], false)
         }}
       />
       <Button asChild variant="outline">

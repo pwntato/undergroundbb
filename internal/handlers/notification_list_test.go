@@ -395,3 +395,33 @@ func TestListNotificationsDeletingAnEarlierRowDoesNotSkipOne(t *testing.T) {
 		t.Fatalf("second page %v, want the second row", got)
 	}
 }
+
+// A request that has used its time budget returns the page it has, short, with a cursor, instead of
+// reading on: a long run of dropped rows must not outlast the Lambda timeout.
+func TestListNotificationsStopsReadingPastItsTimeBudget(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	gone := pidOf(gid, "POST#2026-10-30#00112233445566a5")
+	putManyReactions(t, owner.userID, bob.userID, gid, gone, 2*notificationReadBatch)
+	live := reactSK(pOld, 0)
+	putNotif(t, owner.userID, live, "reaction", bob.userID, gid, pOld)
+
+	// The live row sorts after the 200 dropped ones (older post day). With a spent budget the first
+	// request reads one batch and stops; following the cursors still reaches the row.
+	old := notificationTimeBudget
+	notificationTimeBudget = -1
+	t.Cleanup(func() { notificationTimeBudget = old })
+	first := getList(t, h, c, "")
+	if len(first.Notifications) != 0 || first.NextCursor == "" {
+		t.Fatalf("first page %v cursor %q: want short with a cursor after one batch", ids(first), first.NextCursor)
+	}
+	var got []string
+	cursor := first.NextCursor
+	for i := 0; cursor != "" && i < 10; i++ {
+		l := getList(t, h, c, "?cursor="+cursor)
+		got = append(got, ids(l)...)
+		cursor = l.NextCursor
+	}
+	if !equalIDs(got, []string{live}) {
+		t.Fatalf("following the cursors found %v, want the live row", got)
+	}
+}

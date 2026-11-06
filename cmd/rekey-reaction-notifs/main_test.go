@@ -140,8 +140,9 @@ func TestRekeyMovesOldRowsAndLeavesTheRest(t *testing.T) {
 			t.Errorf("attribute %s not carried", k)
 		}
 	}
-	if r := get(t, ddb, table, uid, new2)["Read"].(*types.AttributeValueMemberBOOL); r.Value {
-		t.Error("the row written after the deploy was overwritten by the old one")
+	// The row written after the deploy is the one kept, and it carries the old row's read flag.
+	if r := get(t, ddb, table, uid, new2)["Read"].(*types.AttributeValueMemberBOOL); !r.Value {
+		t.Error("the new row did not take over the old row's read flag")
 	}
 	if get(t, ddb, table, uid, reply) == nil {
 		t.Error("a reply row was touched")
@@ -369,6 +370,88 @@ func TestRekeyCountsARowThatAppearedMidMoveAsRetryThenSupersedesTheOldOne(t *tes
 	}
 	if rep := f.run(t, ddb, table, true); rep.Moved+rep.Superseded+rep.Orphaned+rep.Retry != 0 {
 		t.Fatalf("final dry run: %+v, want all zero", rep)
+	}
+}
+
+// A notification the user already read must not come back as new: the old row is read, the new one
+// (written after the deploy, e.g. by a changed emoji, which found no row and wrote Read=false)
+// is not. The new row wins, carrying the read flag.
+func TestRekeySupersededRowKeepsTheReadFlagOfTheOldOne(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		oldRead, newRead bool
+		wantRead         bool
+	}{
+		{"old read, new unread", true, false, true},
+		{"old unread, new unread", false, false, false},
+		{"old unread, new read", false, true, true},
+		{"both read", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ddb, table := localClient(t)
+			f := newRace(t, ddb, table)
+			setRead := func(sk string, read bool) {
+				if _, err := ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{TableName: &table,
+					Key:                       map[string]types.AttributeValue{"PK": s("USER#" + f.uid), "SK": s(sk)},
+					UpdateExpression:          aws.String("SET #r = :v"),
+					ExpressionAttributeNames:  map[string]string{"#r": "Read"},
+					ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberBOOL{Value: read}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setRead(f.oldSK, tc.oldRead)
+			newRow := map[string]types.AttributeValue{}
+			for k, v := range f.newRow {
+				newRow[k] = v
+			}
+			newRow["Read"] = &types.AttributeValueMemberBOOL{Value: tc.newRead}
+			put(t, ddb, table, newRow)
+			if dry := f.run(t, ddb, table, true); dry.Superseded != 1 {
+				t.Fatalf("dry run: %+v", dry)
+			}
+			if get(t, ddb, table, f.uid, f.newSK)["Read"].(*types.AttributeValueMemberBOOL).Value != tc.newRead {
+				t.Fatal("a dry run changed the new row")
+			}
+			if rep := f.run(t, ddb, table, false); rep.Superseded != 1 || rep.Retry != 0 {
+				t.Fatalf("run: %+v", rep)
+			}
+			if get(t, ddb, table, f.uid, f.oldSK) != nil {
+				t.Fatal("the old row is still there")
+			}
+			got := get(t, ddb, table, f.uid, f.newSK)["Read"].(*types.AttributeValueMemberBOOL).Value
+			if got != tc.wantRead {
+				t.Fatalf("surviving row Read = %v, want %v", got, tc.wantRead)
+			}
+		})
+	}
+}
+
+// The new row's reaction was taken back between the migration's read and its transaction: the new
+// row is gone, so the old one stays for the next run (which deletes it as an orphan), reported as
+// retry.
+func TestRekeySupersedeCancelledWhenTheNewRowVanishesIsRetry(t *testing.T) {
+	ddb, table := localClient(t)
+	f := newRace(t, ddb, table)
+	put(t, ddb, table, f.newRow)
+	if _, err := ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{TableName: &table,
+		Key:                       map[string]types.AttributeValue{"PK": s("USER#" + f.uid), "SK": s(f.oldSK)},
+		UpdateExpression:          aws.String("SET #r = :v"),
+		ExpressionAttributeNames:  map[string]string{"#r": "Read"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberBOOL{Value: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	racing := onTransaction(ddb, func() {
+		if _, err := ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{TableName: &table,
+			Key: map[string]types.AttributeValue{"PK": s("USER#" + f.uid), "SK": s(f.newSK)}}); err != nil {
+			t.Error(err)
+		}
+	})
+	rep := f.run(t, racing, table, false)
+	if rep.Superseded != 0 || rep.Retry != 1 {
+		t.Fatalf("racing run: %+v, want superseded 0 retry 1", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) == nil {
+		t.Fatal("the old row was deleted although the new one vanished")
 	}
 }
 

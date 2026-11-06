@@ -95,7 +95,7 @@ export function NotificationsPanel({
       <div className="flex flex-wrap justify-center gap-2">
         {anyUnread && (
           <Button variant="outline" onClick={onMarkAllRead}>
-            Mark all read
+            Mark these read
           </Button>
         )}
         {load.hasMore && (

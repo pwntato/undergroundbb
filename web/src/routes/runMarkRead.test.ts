@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runMarkRead } from './runMarkRead'
+import { markFailedAfter, runMarkRead } from './runMarkRead'
 
 const idsOf = (n: number) => Array.from({ length: n }, (_, i) => `id${String(i)}`)
 
@@ -34,5 +34,19 @@ describe('runMarkRead', () => {
     expect(call).toBe(2)
     expect(r.marked).toEqual(idsOf(25))
     expect(r.failed).toBe(true)
+  })
+})
+
+describe('markFailedAfter', () => {
+  it('lets a button-started mark replace the alert with its own result', () => {
+    expect(markFailedAfter(true, false, true)).toBe(false)
+    expect(markFailedAfter(false, true, true)).toBe(true)
+    expect(markFailedAfter(true, true, true)).toBe(true)
+  })
+
+  it('never lets a row opened in the list hide an earlier failure', () => {
+    expect(markFailedAfter(true, false, false)).toBe(true)
+    expect(markFailedAfter(false, true, false)).toBe(true)
+    expect(markFailedAfter(false, false, false)).toBe(false)
   })
 })

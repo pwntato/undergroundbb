@@ -14,6 +14,12 @@ describe('headerShownOn', () => {
     expect(headerShownOn('/account/rotate-keys/step')).toBe(false)
   })
 
+  it('hides it however the router would spell the route: other cases and encoded characters', () => {
+    for (const path of ['/Signup', '/SIGNUP', '/Recovery', '/Account/Password', '/%73ignup']) {
+      expect(headerShownOn(path), path).toBe(false)
+    }
+  })
+
   it('shows it everywhere else, including routes that merely start the same way', () => {
     for (const path of [
       '/',

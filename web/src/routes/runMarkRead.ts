@@ -27,3 +27,12 @@ export async function runMarkRead(
   }
   return { marked, failed: false }
 }
+
+/**
+ * Whether the "couldn't mark those" alert shows after a mark finishes. A request the user started
+ * with the button (`fresh`) replaces the alert with its own result; any other (a row opened in the
+ * list) can only add one, so a later success cannot hide a failure that left rows unread.
+ */
+export function markFailedAfter(previous: boolean, failed: boolean, fresh: boolean): boolean {
+  return fresh ? failed : previous || failed
+}

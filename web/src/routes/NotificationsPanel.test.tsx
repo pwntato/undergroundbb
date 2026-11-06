@@ -50,7 +50,7 @@ describe('NotificationsPanel', () => {
   it('shows an empty list as nothing new, with no buttons', () => {
     const html = render({ status: 'ready', items: [], hasMore: false })
     expect(html).toContain('Nothing new.')
-    expect(html).not.toContain('Mark all read')
+    expect(html).not.toContain('Mark these read')
     expect(html).not.toContain('Load more')
   })
 
@@ -66,13 +66,13 @@ describe('NotificationsPanel', () => {
     expect(html).toContain('alice replied to your post in Roof Group')
     expect(html).toContain('href="/groups/g1/posts/g1%232026-10-01%2300112233445566a1"')
     expect(html).toContain('data-unread="true"')
-    expect(html).toContain('Mark all read')
+    expect(html).toContain('Mark these read')
   })
 
-  it('shows a read notification without the marker, and no Mark all read when none are unread', () => {
+  it('shows a read notification without the marker, and no Mark these read when none are unread', () => {
     const html = render({ status: 'ready', items: [note({ read: true })], hasMore: false })
     expect(html).not.toContain('data-unread')
-    expect(html).not.toContain('Mark all read')
+    expect(html).not.toContain('Mark these read')
   })
 
   it('falls back to Someone and a group when the names did not resolve', () => {

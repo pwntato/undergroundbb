@@ -32,7 +32,9 @@ type rekeyReport struct {
 	// Moved rows were rewritten under the new key.
 	Moved int `json:"moved"`
 	// Superseded old rows were deleted because the new key already existed: the reaction was given
-	// again after the deploy, and that row (and its Read flag) wins.
+	// again, or its emoji changed or the request was resent, after the deploy. The new row wins, but
+	// it is marked read first if the old one was, so a notification the user already read does not
+	// come back as new.
 	Superseded int `json:"superseded"`
 	// Orphaned old rows were deleted, not moved, because the reaction they announce is gone: it was
 	// taken back (or its comment or post deleted) after the deploy, when the delete computed the new
@@ -61,6 +63,12 @@ func oldHash(sk string) (string, bool) {
 		return "", false
 	}
 	return h, true
+}
+
+// isRead reports whether a notification row has Read set.
+func isRead(item map[string]types.AttributeValue) bool {
+	v, ok := item["Read"].(*types.AttributeValueMemberBOOL)
+	return ok && v.Value
 }
 
 func str(item map[string]types.AttributeValue, k string) string {
@@ -140,8 +148,27 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 				if opts.dryRun {
 					continue
 				}
-				if _, err := ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(table), Key: key(sk)}); err != nil {
-					return report, fmt.Errorf("delete superseded %s: %w", sk, err)
+				// One transaction: the read flag is carried over and the old row removed together.
+				items := []types.TransactWriteItem{{Delete: &types.Delete{TableName: aws.String(table), Key: key(sk)}}}
+				if isRead(item) && !isRead(existing.Item) {
+					items = append(items, types.TransactWriteItem{Update: &types.Update{
+						TableName: aws.String(table), Key: key(newSK),
+						UpdateExpression:          aws.String("SET #read = :true"),
+						ConditionExpression:       aws.String("attribute_exists(PK)"),
+						ExpressionAttributeNames:  map[string]string{"#read": "Read"},
+						ExpressionAttributeValues: map[string]types.AttributeValue{":true": &types.AttributeValueMemberBOOL{Value: true}},
+					}})
+				}
+				if _, err := ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+					var cancelled *types.TransactionCanceledException
+					if errors.As(err, &cancelled) {
+						// The new row vanished (its reaction taken back) since the read: leave the old
+						// row for the next run, which sees it as an orphan.
+						report.Superseded--
+						report.Retry++
+						continue
+					}
+					return report, fmt.Errorf("supersede %s: %w", sk, err)
 				}
 				continue
 			}
