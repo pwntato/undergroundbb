@@ -1040,3 +1040,27 @@ type Reaction struct {
 	Ciphertext []byte `dynamodbav:"Ciphertext"`
 	TTL        int64  `dynamodbav:"TTL,omitempty"`
 }
+
+// Notification is the USER#<uuid> / NOTIF#<day>#<rand> item (#68, docs/DESIGN.md, "Notification
+// items hold identifiers, not text"): that someone replied to or reacted to something of the
+// recipient's, as identifiers only. The server cannot name the group or the actor in words and
+// never holds a word of content, so the client renders the sentence. No CreatedAt: a reply
+// notification's sort key carries the day, and a reaction's a placeholder (a reaction is never
+// dated). TTL is copied from the post the notification points at, so it expires with it (never,
+// for a post that never expires) and says nothing about when the activity happened.
+type Notification struct {
+	Record
+
+	// Kind is NotificationReply or NotificationReaction (package db).
+	Kind        string `dynamodbav:"Kind"`
+	ActorUserID string `dynamodbav:"ActorUserID"`
+	GroupID     string `dynamodbav:"GroupID"`
+	// PostID is the post's full address, as comments and reactions key it.
+	PostID string `dynamodbav:"PostID"`
+	// CmtPath is where the notification lands: the new reply's path, or the comment a reaction is
+	// on (0000 for the post itself).
+	CmtPath string `dynamodbav:"CmtPath"`
+	// Read is stored explicitly (never omitted) so an unread filter has an attribute to test.
+	Read bool  `dynamodbav:"Read"`
+	TTL  int64 `dynamodbav:"TTL,omitempty"`
+}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -212,6 +213,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	// number: asked first, so the skip rule below never sends such a reply to a
 	// "next free path" under nothing. A deleted comment is a tombstone and is
 	// still there, so replies under it are fine.
+	parentAuthor := ""
 	if parent := idgen.CommentParentPath(req.Path); parent != "" {
 		have, perr := h.db.GetComment(r.Context(), postID, parent)
 		if perr != nil {
@@ -222,7 +224,20 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 			writeParentGone(w)
 			return
 		}
+		parentAuthor = have.AuthorUserID
 	}
+	// Who hears of it (#68): the post's author for a top-level comment, the parent's author for
+	// a reply, whoever it is.
+	recipient := post.AuthorUserID
+	if parentAuthor != "" {
+		recipient = parentAuthor
+	}
+	notify, nerr := h.notifyRecipient(r.Context(), groupID, recipient, userID)
+	if nerr != nil {
+		WriteInternalError(w, r, nerr, "could not create the comment")
+		return
+	}
+	in.NotifyUserID = notify
 	next, nerr := h.db.NextCommentPath(r.Context(), postID, idgen.CommentParentPath(req.Path))
 	switch {
 	case errors.Is(nerr, db.ErrCommentSiblingsFull):
@@ -456,4 +471,41 @@ func withoutDeletedTargets(rows []models.Comment, rxns []models.Reaction, postDe
 		}
 	}
 	return kept
+}
+
+// notifyRecipient is who a notification for something `actorID` just did to `recipientID`'s post or
+// comment goes to (#68): the recipient, or "" when nobody should be told. Nobody is told of their
+// own activity, and nobody who is no longer a member of the group, since the notification would
+// point at a thread they cannot open. Leaving a group removes no notification, though: every one
+// written before stays, and a post with no expiry gives a notification with no expiry, so the
+// reader has to drop notifications for groups the user is no longer in (and for posts that are
+// gone), not only the one this read can race with.
+func (h *Handler) notifyRecipient(ctx context.Context, groupID, recipientID, actorID string) (string, error) {
+	if recipientID == "" || recipientID == actorID {
+		return "", nil
+	}
+	m, err := h.db.GetMembership(ctx, groupID, recipientID)
+	if err != nil {
+		return "", err
+	}
+	if m == nil {
+		return "", nil
+	}
+	return recipientID, nil
+}
+
+// replyAudience is who a comment at path answers: the post's author for a top-level comment, the
+// parent comment's author for a reply (a tombstone keeps its author), or "" when the parent is
+// gone. At the depth cap the client writes a reply beside the comment it answers, so the parent
+// here is that comment's own parent: the audience is whoever the path says, not whoever was meant.
+func (h *Handler) replyAudience(ctx context.Context, postID string, post *models.Post, path string) (string, error) {
+	parent := idgen.CommentParentPath(path)
+	if parent == "" {
+		return post.AuthorUserID, nil
+	}
+	have, err := h.db.GetComment(ctx, postID, parent)
+	if err != nil || have == nil {
+		return "", err
+	}
+	return have.AuthorUserID, nil
 }

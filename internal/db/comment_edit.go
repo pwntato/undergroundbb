@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -196,7 +197,7 @@ func (c *Client) EditComment(ctx context.Context, in EditCommentInput) error {
 // sees them all. Until the sweep ends the reader ignores reactions on a
 // tombstone anyway (getThread drops them). ErrCommentGone when the row does
 // not exist.
-func (c *Client) DeleteComment(ctx context.Context, postID, path string) error {
+func (c *Client) DeleteComment(ctx context.Context, postID, path, replyRecipientID, authorID string) error {
 	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                aws.String(c.table),
 		Key:                      commentKey(postID, path),
@@ -214,12 +215,18 @@ func (c *Client) DeleteComment(ctx context.Context, postID, path string) error {
 		}
 		return fmt.Errorf("db: delete comment: %w", err)
 	}
-	return c.sweepReactions(ctx, postID, path)
+	if err := c.sweepReactions(ctx, postID, path, authorID); err != nil {
+		return err
+	}
+	if replyRecipientID != "" {
+		return c.deleteReplyNotifications(ctx, replyRecipientID, postID, path)
+	}
+	return nil
 }
 
 // sweepReactions deletes every reaction on one comment: the keys that begin
 // RXN#<path># (the closing '#' keeps a reply's "<path>.0001" out).
-func (c *Client) sweepReactions(ctx context.Context, postID, path string) error {
+func (c *Client) sweepReactions(ctx context.Context, postID, path, authorID string) error {
 	var start map[string]types.AttributeValue
 	for {
 		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
@@ -237,8 +244,20 @@ func (c *Client) sweepReactions(ctx context.Context, postID, path string) error 
 			return fmt.Errorf("db: sweep reactions: %w", err)
 		}
 		keys := make([]map[string]types.AttributeValue, 0, len(out.Items))
+		notifs := make([]map[string]types.AttributeValue, 0, len(out.Items))
 		for _, it := range out.Items {
 			keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+			// The notification each reaction sent the comment's author goes with it.
+			if sk, ok := it["SK"].(*types.AttributeValueMemberS); ok && authorID != "" {
+				reactor := strings.TrimPrefix(sk.Value, ReactionSortKeyPrefix+path+"#")
+				notifs = append(notifs, reactionNotificationKey(authorID, postID, path, reactor))
+			}
+		}
+		// Notifications first: a reaction row is the only pointer to its notification's key (it is
+		// computed from the reactor), so deleting it first and failing before the notification
+		// would strand that notification where no repeat of the delete can find it.
+		if err := c.batchDelete(ctx, notifs); err != nil {
+			return fmt.Errorf("db: sweep reactions: %w", err)
 		}
 		if err := c.batchDelete(ctx, keys); err != nil {
 			return fmt.Errorf("db: sweep reactions: %w", err)

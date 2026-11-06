@@ -314,7 +314,7 @@ func TestPutReactionTransactionRefusesAStaleView(t *testing.T) {
 	if err := h.db.PutReaction(context.Background(), input()); err != nil {
 		t.Fatalf("a fresh view: %v", err)
 	}
-	if err := h.db.DeleteReaction(context.Background(), pid, "0000", owner.userID); err != nil {
+	if err := h.db.DeleteReaction(context.Background(), pid, "0000", owner.userID, ""); err != nil {
 		t.Fatal(err)
 	}
 

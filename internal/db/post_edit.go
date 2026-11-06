@@ -138,13 +138,13 @@ func (c *Client) EditPost(ctx context.Context, in EditPostInput) error {
 }
 
 // DeletePost turns a post into a tombstone and then removes the reactions on
-// the post itself. As DeleteComment does: the row stays (its comments keep
+// the post itself, with the notifications they sent the post's author (authorID). As DeleteComment does: the row stays (its comments keep
 // their place, and stay readable), the sealed text and everything that dates
 // it go, Deleted is set, repeating the delete finishes a half-done sweep, and
 // ErrPostGone says the row does not exist. A deleted post takes no new
 // comments or reactions and cannot be edited: their transactions check it is
 // not a tombstone. Comments already on it, and their reactions, are untouched.
-func (c *Client) DeletePost(ctx context.Context, groupID, sortKey, postID string) error {
+func (c *Client) DeletePost(ctx context.Context, groupID, sortKey, postID, authorID string) error {
 	_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                aws.String(c.table),
 		Key:                      postKey(groupID, sortKey),
@@ -162,5 +162,5 @@ func (c *Client) DeletePost(ctx context.Context, groupID, sortKey, postID string
 		}
 		return fmt.Errorf("db: delete post: %w", err)
 	}
-	return c.sweepReactions(ctx, postID, PostLevelReactionTarget)
+	return c.sweepReactions(ctx, postID, PostLevelReactionTarget, authorID)
 }

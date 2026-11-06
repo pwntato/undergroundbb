@@ -260,7 +260,15 @@ func (h *Handler) deleteComment(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "only the author or an admin can delete a comment")
 		return
 	}
-	if err := h.db.DeleteComment(r.Context(), postID, path); err != nil {
+	// Its notifications go with it: the one it sent whoever it answered, and (in the database) the
+	// ones its reactions sent its author. An admin deleting someone's comment still clears them,
+	// since both are addressed from the comment's own author and parent, not from the caller.
+	replyRecipient, err := h.replyAudience(r.Context(), postID, post, path)
+	if err != nil {
+		WriteInternalError(w, r, err, fail)
+		return
+	}
+	if err := h.db.DeleteComment(r.Context(), postID, path, replyRecipient, have.AuthorUserID); err != nil {
 		if errors.Is(err, db.ErrCommentGone) {
 			WriteError(w, http.StatusNotFound, "comment not found")
 			return

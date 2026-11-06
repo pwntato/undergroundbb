@@ -243,3 +243,27 @@ func CommentParentPath(path string) string {
 	}
 	return ""
 }
+
+// NotificationSortKey returns a fresh "NOTIF#<day>#<rand>" sort key for a reply notification,
+// day being the UTC day it was written (NotificationDay). The random half is 128 bits as 32
+// lowercase hex characters, the id convention docs/DESIGN.md pins for every <rand>, and the day is
+// the only time component: a notification lives in one named person's partition, so anything
+// finer would be an activity log for them. Reaction notifications do not use this: their key is
+// computed (db.reactionNotificationKey) under UndatedNotificationDay.
+func NotificationSortKey(day string) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("idgen: generate notification sort key: %w", err)
+	}
+	return fmt.Sprintf("NOTIF#%s#%x", day, b[:]), nil
+}
+
+// UndatedNotificationDay stands in for the day in a reaction notification's sort key. A reaction
+// is the one item the schema keeps undated (docs/THREAT_MODEL.md, "Message content"), and a
+// notification that carried the day someone reacted would date it. The key keeps the day's shape
+// so every NOTIF# key parses alike; it sorts before every real day. A reader orders those by the
+// post's day instead (docs/DESIGN.md, "What the reader does with them").
+const UndatedNotificationDay = "0000-00-00"
+
+// NotificationDay is the day for a notification written at now, in the key's format.
+func NotificationDay(now time.Time) string { return now.UTC().Format("2006-01-02") }

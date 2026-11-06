@@ -14,7 +14,7 @@ func TestDeletePostOfAMissingRowIsRefusedAndWritesNothing(t *testing.T) {
 	c := testClient(t)
 	gid := newUserID(t)
 	sortKey := "POST#2026-10-28#00112233445566ff"
-	if err := c.DeletePost(context.Background(), gid, sortKey, gid+"#2026-10-28#00112233445566ff"); !errors.Is(err, ErrPostGone) {
+	if err := c.DeletePost(context.Background(), gid, sortKey, gid+"#2026-10-28#00112233445566ff", ""); !errors.Is(err, ErrPostGone) {
 		t.Fatalf("err = %v, want ErrPostGone", err)
 	}
 	got, err := c.GetPost(context.Background(), gid, sortKey)

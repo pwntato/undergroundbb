@@ -67,6 +67,11 @@ type CreateCommentInput struct {
 	MarkerGeneration int64
 	// Now is when the write happens, to refuse a post that has just expired.
 	Now time.Time
+	// NotifyUserID is who is told of this comment (#68): the post's author for a top-level
+	// comment, the parent comment's author for a reply. Empty when nobody is (the author
+	// replied to themselves, or the recipient has left the group). The notification is written
+	// in the same transaction, so a resend of a comment that already landed writes none.
+	NotifyUserID string
 }
 
 // GetPost reads one post row with a consistent read; nil when it does not
@@ -173,6 +178,16 @@ func (c *Client) CreateComment(ctx context.Context, in CreateCommentInput) error
 		epochIndex  = 3
 		markerIndex = 4
 	)
+	if in.NotifyUserID != "" {
+		put, nerr := notification{
+			recipientID: in.NotifyUserID, kind: NotificationReply, actorID: in.AuthorUserID,
+			groupID: in.GroupID, postID: in.PostID, cmtPath: in.Path, ttl: in.PostTTL, now: in.Now,
+		}.put(c.table)
+		if nerr != nil {
+			return nerr
+		}
+		items = append(items, put)
+	}
 	parentIndex := -1
 	if parent := idgen.CommentParentPath(in.Path); parent != "" {
 		parentIndex = len(items)

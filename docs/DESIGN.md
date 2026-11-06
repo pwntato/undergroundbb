@@ -1755,7 +1755,7 @@ this case: the departing user does, so deletion needs no one else's signature an
 successor. Once no membership remains, one transaction tombstones `PROFILE` (`DeletedAt` set; username,
 salt, wrapped private keys, preferences and lock state removed; the public keys stay so grants and
 signatures the user made still verify), deletes the `USERNAME#` claim (the name is free again) and
-deletes `RECOVERY`. Pins, the login challenge, invites they sent and invites addressed to them are
+deletes `RECOVERY`. Pins, the login challenge, notifications, invites they sent and invites addressed to them are
 swept afterwards, and a repeated call finishes any leftovers. `PROFILE` is never deleted, so the uuid
 cannot be re-registered (see the AAD table). `GET /api/users/{id}` serves a tombstone with `deleted:
 true` and an empty username, which the web client shows as "deleted user" (id in the tooltip) in
@@ -2513,7 +2513,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Rotation cooldown | `USER#<uuid>` | `ROTCOOLDOWN` | | | TTL, end of the UTC day after the cooldown setting |
 | Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
 | Rotation handoff counter | `USER#<uuid>` | `HANDOFFSEQ` | | | never (absent reads as 0; deleted with the account) |
-| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
+| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>`; for a reaction, `NOTIF#0000-00-00#<hash>` (see "What writes one (#68)") | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
 and drifted every time a row was added — a new row would arrive and the separate list would not be
@@ -3025,7 +3025,8 @@ is a plaintext epoch attribute like any other; if it is derived from the moment 
 made, then the item does carry a creation time in the clear, and the claim below is simply false.
 Copied from the parent, the attribute says when the *post* expires and reveals nothing about the
 reaction. Given that, a reaction is the one item in this schema that discloses an association
-without a date, and adding a timestamp later would be adding a disclosure, not filling a gap.
+without a date, and adding a timestamp later would be adding a disclosure, not filling a gap. The
+notification a reaction sends keeps to this: its key carries a placeholder day, not the real one.
 
 **Notification items hold identifiers, not text.** The server knows thread structure and author
 ids — those are metadata — so it can tell that someone replied to your post without being able to
@@ -3054,6 +3055,41 @@ in M7:
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
   the rotation loop, and it should be built with the same expectation that it is interruptible.
 
+**What writes one (#68).** The comment and reaction handlers, in the same transaction as the write
+that causes it, so a refused write tells nobody and a resend of a comment that landed writes none.
+A top-level comment notifies the post's author; a reply notifies the author of the comment whose
+path it sits under (the direct parent only, not the post's author or the rest of the thread; at the
+depth cap the client writes a reply beside the comment it answers, so the notification goes to that
+comment's parent's author, not to the author of the comment actually answered); a reaction notifies
+the author of the post or comment it is on. Nobody is notified of their own activity or of anything
+in a group they have left, and a tombstoned comment still has its author, so a reply under one
+notifies them. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path or the reaction's
+target (`0000` for the post). The TTL is the post's, copied, as for comments, so a notification
+expires with its post (and never, for a post that never expires).
+
+**A reaction notification carries no day, and its key is computed.** Its key is
+`NOTIF#0000-00-00#<hash>`, the hash being the first 128 bits (32 hex characters) of a SHA-256 over the
+post, the target and the reactor. No real day, because a real day would date the reaction, the one
+item this schema keeps undated (see "Message content" in THREAT_MODEL.md); computed, so that taking
+the reaction back deletes its notification directly, a changed emoji or a resend lands on the same
+row (keeping its `read` flag), and un-reacting in a loop cannot add rows. The hash hides nothing the
+row does not already hold, which names the post, the target and the reactor. A reply notification
+keeps the real day and a random 128-bit id, per the convention below.
+
+**Deleting something deletes what it sent.** Taking a reaction back, deleting the comment or post
+it is on, deletes its notification from the author's partition, whether or not that author is still
+a member. Deleting a comment deletes the notification it sent whoever it answered (a read of that
+person's `NOTIF#` rows filtered on post and path, since reply keys are random; comment deletes are
+rare enough for that) and the ones its reactions sent. Deleting the account sweeps every `NOTIF#`
+row. Replies *to* a deleted comment are other people's comments and keep theirs.
+
+**What the reader (#69) does with them.** Leaving a group removes none of the notifications written
+for it, so it drops notifications for groups the user is no longer in and for posts that are gone.
+Reaction notifications have no time to order by (the key has none, the TTL is the post's, and the
+only time-like value is the post's day inside `post_id`), so the list shows reply notifications
+newest first and the reaction notifications after them, newest post first by the day in `post_id`.
+Reading and marking read are separate work (#69, #145).
+
 Both halves of that rendering need a mechanism, and neither is free:
 
 - **The group name.** In a **private** group the name and description are encrypted under the group
@@ -3079,8 +3115,9 @@ user item exposing only the username and the public keys, current and superseded
 those itself — it decrypts the address to send them — so it can use only what it can read. An email
 says there is activity and links to it; it names neither the group nor the actor. Anything richer
 would mean handing the group name to the server, which is the property this design exists to keep.
-**A notification inherits the expiration policy of the group that generated it**, so it never
-outlives the content it points at. Notifications live in the user's partition rather than a group's,
+**A notification inherits the expiration policy of the group that generated it**, by copying its
+post's TTL, so it does not outlive the post it points at (and deleting what sent it deletes it: see
+"Deleting something deletes what it sent"). Notifications live in the user's partition rather than a group's,
 so a single user's list mixes policies from every group they belong to — and one from a group with
 expiration disabled does not expire either. A notification whose target has already been deleted is
 filtered on read like any other expired item, since the client renders from identifiers and an
@@ -3133,7 +3170,7 @@ cross to fill a screen, and a quiet group can need several empty-day queries to 
 Anything needing sub-day server-side time filtering or server-side intra-day ordering would require
 a schema migration, so this is a deliberate and hard-to-reverse choice, not an incidental one.
 
-**`NOTIF#` uses the same random id, and for a sharper reason.** Notifications live in the *user's*
+**`NOTIF#` uses the same random id (for a reply; a reaction's is computed and undated, see "What writes one (#68)"), and for a sharper reason.** Notifications live in the *user's*
 partition, so a time-ordered id there is a millisecond-resolution activity log for one named person
 spanning every group they belong to — a worse disclosure per item than posts, which are at least
 scoped to a group. It carries a day prefix for the same reason posts do.

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
+	"github.com/pwntato/undergroundbb/internal/models"
 )
 
 // putReactionRequest is the body of PUT /api/posts/{postId}/reactions/{target}.
@@ -141,6 +143,19 @@ func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
 	if marker != nil {
 		in.MarkerGeneration = marker.Generation
 	}
+	// Who hears of it (#68): the author of the post or comment reacted to. A comment that is gone
+	// is left for PutReaction to refuse; a tombstone keeps its author.
+	recipient, gerr := h.reactionAudience(r.Context(), postID, post, target)
+	if gerr != nil {
+		WriteInternalError(w, r, gerr, "could not save the reaction")
+		return
+	}
+	notify, nerr := h.notifyRecipient(r.Context(), groupID, recipient, userID)
+	if nerr != nil {
+		WriteInternalError(w, r, nerr, "could not save the reaction")
+		return
+	}
+	in.NotifyUserID = notify
 	err = h.db.PutReaction(r.Context(), in)
 	switch {
 	case err == nil:
@@ -197,9 +212,29 @@ func (h *Handler) deleteReaction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.db.DeleteReaction(r.Context(), postID, target, userID); err != nil {
+	// The reaction's notification goes with it, to whoever it was sent: the author of what it was
+	// on, whether or not they are still a member. A comment that is gone has nothing to remove.
+	recipient, err := h.reactionAudience(r.Context(), postID, post, target)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not remove the reaction")
+		return
+	}
+	if err := h.db.DeleteReaction(r.Context(), postID, target, userID, recipient); err != nil {
 		WriteInternalError(w, r, err, "could not remove the reaction")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reactionAudience is who a reaction on target is addressed to: the post's author for the post, the
+// comment's author for a comment (a tombstone keeps its author), or "" when the comment is gone.
+func (h *Handler) reactionAudience(ctx context.Context, postID string, post *models.Post, target string) (string, error) {
+	if target == db.PostLevelReactionTarget {
+		return post.AuthorUserID, nil
+	}
+	have, err := h.db.GetComment(ctx, postID, target)
+	if err != nil || have == nil {
+		return "", err
+	}
+	return have.AuthorUserID, nil
 }
