@@ -10,7 +10,11 @@ export function notificationText(
   groupLabelText: string,
 ): string {
   const who = actor === undefined || actor === '' ? 'Someone' : actor
-  const where = n.cmtPath === '0000' ? 'your post' : 'your comment'
+  // A reply's cmtPath is the reply's own path (never 0000), and the server sent it to whoever the
+  // path names: a path with no dot is top-level, so it went to the post's author. A reaction's
+  // cmtPath is its target, 0000 for the post.
+  const onPost = n.kind === 'reply' ? !n.cmtPath.includes('.') : n.cmtPath === '0000'
+  const where = onPost ? 'your post' : 'your comment'
   const verb = n.kind === 'reply' ? 'replied to' : 'reacted to'
   return `${who} ${verb} ${where} in ${groupLabelText}`
 }

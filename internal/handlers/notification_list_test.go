@@ -45,11 +45,20 @@ func putNotif(t *testing.T, recipient, sk, kind, actor, gid, pid string) {
 		Item: map[string]types.AttributeValue{
 			"PK": s("USER#" + recipient), "SK": s(sk), "Type": s("NOTIFICATION"),
 			"Kind": s(kind), "ActorUserID": s(actor), "GroupID": s(gid), "PostID": s(pid),
-			"CmtPath": s("0000"), "Read": &types.AttributeValueMemberBOOL{Value: false},
+			"CmtPath": s(cmtPathFor(kind)), "Read": &types.AttributeValueMemberBOOL{Value: false},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// cmtPathFor is the path a real row of this kind carries: a reply's is its own (never 0000), a
+// reaction on a post is 0000.
+func cmtPathFor(kind string) string {
+	if kind == "reply" {
+		return "0001"
+	}
+	return "0000"
 }
 
 func replySK(day string, n int) string {
@@ -223,7 +232,7 @@ func TestListNotificationsRejectsBadInput(t *testing.T) {
 	if rec := doNotifications(t, h, nil, http.MethodGet, "/api/notifications", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no session: %d", rec.Code)
 	}
-	for _, q := range []string{"?limit=0", "?limit=51", "?limit=x", "?cursor=zzz", "?cursor=r:nope", "?cursor=x:-1", "?cursor=x:y"} {
+	for _, q := range []string{"?limit=0", "?limit=51", "?limit=x", "?cursor=zzz", "?cursor=r:nope", "?cursor=r:" + reactSK(1), "?cursor=x:-1", "?cursor=x:y"} {
 		if rec := doNotifications(t, h, c, http.MethodGet, "/api/notifications"+q, nil); rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: %d", q, rec.Code)
 		}

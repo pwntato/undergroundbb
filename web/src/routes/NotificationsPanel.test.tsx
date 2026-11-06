@@ -12,7 +12,7 @@ const note = (over: Partial<WireNotification> = {}): WireNotification => ({
   actorUserId: 'u1',
   groupId: 'g1',
   postId: 'g1#2026-10-01#00112233445566a1',
-  cmtPath: '0000',
+  cmtPath: '0001',
   read: false,
   ...over,
 })

@@ -118,7 +118,8 @@ func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 	inReactions, replyAfter, offset := false, "", 0
 	if c := r.URL.Query().Get("cursor"); c != "" {
 		switch {
-		case strings.HasPrefix(c, "r:") && idgen.ValidNotificationSortKey(c[2:]):
+		case strings.HasPrefix(c, "r:") && idgen.ValidNotificationSortKey(c[2:]) &&
+			!strings.HasPrefix(c[2:], "NOTIF#"+idgen.UndatedNotificationDay):
 			replyAfter = c[2:]
 		case strings.HasPrefix(c, "x:"):
 			n, err := strconv.Atoi(c[2:])
@@ -157,7 +158,6 @@ func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 				replyAfter = last
 			}
 			if done {
-				inReactions = true
 				break
 			}
 			if len(resp.Notifications) >= limit {
