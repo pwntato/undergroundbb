@@ -1044,9 +1044,10 @@ type Reaction struct {
 // Notification is the USER#<uuid> / NOTIF#<day>#<rand> item (#68, docs/DESIGN.md, "Notification
 // items hold identifiers, not text"): that someone replied to or reacted to something of the
 // recipient's, as identifiers only. The server cannot name the group or the actor in words and
-// never holds a word of content, so the client renders the sentence. No CreatedAt: the sort key
-// carries the day. TTL is copied from the post the notification points at, so it never outlives
-// it and says nothing about when the activity happened.
+// never holds a word of content, so the client renders the sentence. No CreatedAt: a reply
+// notification's sort key carries the day, and a reaction's a placeholder (a reaction is never
+// dated). TTL is copied from the post the notification points at, so it expires with it (never,
+// for a post that never expires) and says nothing about when the activity happened.
 type Notification struct {
 	Record
 

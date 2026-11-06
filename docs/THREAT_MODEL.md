@@ -161,7 +161,8 @@ only, no text), so it names the group outright. Neither is hidden; the notificat
 discloses who interacted with this user, in which group, and on what day. **Reaction notifications
 are the exception on the day**: their key carries a placeholder day (`0000-00-00`), because a real
 one would date a reaction, which the schema otherwise never does. They still say who reacted to
-what. Deleting the account sweeps every notification.
+what. Taking a reaction back, or deleting the comment or post it is on, deletes its notification, as
+deleting a comment deletes the one it sent; deleting the account sweeps every notification.
 
 **`LastLoginDay` is a third place a day hides, and it is per user rather than per item.** `PROFILE`
 carries the UTC day of the user's last successful login (#161), kept so the successor-claim check can

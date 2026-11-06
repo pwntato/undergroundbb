@@ -213,9 +213,7 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 	// number: asked first, so the skip rule below never sends such a reply to a
 	// "next free path" under nothing. A deleted comment is a tombstone and is
 	// still there, so replies under it are fine.
-	// Who hears of it (#68): the post's author for a top-level comment, the parent's author for
-	// a reply, whoever it is.
-	recipient := post.AuthorUserID
+	parentAuthor := ""
 	if parent := idgen.CommentParentPath(req.Path); parent != "" {
 		have, perr := h.db.GetComment(r.Context(), postID, parent)
 		if perr != nil {
@@ -226,7 +224,13 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 			writeParentGone(w)
 			return
 		}
-		recipient = have.AuthorUserID
+		parentAuthor = have.AuthorUserID
+	}
+	// Who hears of it (#68): the post's author for a top-level comment, the parent's author for
+	// a reply, whoever it is.
+	recipient := post.AuthorUserID
+	if parentAuthor != "" {
+		recipient = parentAuthor
 	}
 	notify, nerr := h.notifyRecipient(r.Context(), groupID, recipient, userID)
 	if nerr != nil {
@@ -488,4 +492,20 @@ func (h *Handler) notifyRecipient(ctx context.Context, groupID, recipientID, act
 		return "", nil
 	}
 	return recipientID, nil
+}
+
+// replyAudience is who a comment at path answers: the post's author for a top-level comment, the
+// parent comment's author for a reply (a tombstone keeps its author), or "" when the parent is
+// gone. At the depth cap the client writes a reply beside the comment it answers, so the parent
+// here is that comment's own parent: the audience is whoever the path says, not whoever was meant.
+func (h *Handler) replyAudience(ctx context.Context, postID string, post *models.Post, path string) (string, error) {
+	parent := idgen.CommentParentPath(path)
+	if parent == "" {
+		return post.AuthorUserID, nil
+	}
+	have, err := h.db.GetComment(ctx, postID, parent)
+	if err != nil || have == nil {
+		return "", err
+	}
+	return have.AuthorUserID, nil
 }

@@ -50,8 +50,8 @@ type PutReactionInput struct {
 	MarkerGeneration int64
 	Now              time.Time
 	// NotifyUserID is who is told of this reaction (#68): the author of the post or comment it is
-	// on. Empty when nobody is. They are told once per reactor and target: a reaction that
-	// replaces the reactor's earlier one (a different emoji, or a resend) writes no second one.
+	// on. Empty when nobody is. The notification has one row per reactor and target (see
+	// reactionNotificationKey): a different emoji or a resend lands on it again.
 	NotifyUserID string
 }
 
@@ -74,20 +74,6 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 	})
 	if err != nil {
 		return fmt.Errorf("db: marshal reaction: %w", err)
-	}
-	notify := in.NotifyUserID != ""
-	if notify {
-		// A read before the write, so a changed emoji or a resend does not notify twice. Two
-		// first reactions racing could both notify; the recipient sees one extra line.
-		out, gerr := c.ddb.GetItem(ctx, &dynamodb.GetItemInput{
-			TableName:      aws.String(c.table),
-			ConsistentRead: aws.Bool(true),
-			Key:            reactionKey(in.PostID, in.Target, in.ReactorID),
-		})
-		if gerr != nil {
-			return fmt.Errorf("db: get reaction: %w", gerr)
-		}
-		notify = out.Item == nil
 	}
 	items := []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(c.table), Item: item}},
@@ -119,15 +105,11 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 		epochIndex  = 3
 		markerIndex = 4
 	)
-	if notify {
-		put, nerr := notification{
+	if in.NotifyUserID != "" {
+		items = append(items, notification{
 			recipientID: in.NotifyUserID, kind: NotificationReaction, actorID: in.ReactorID,
 			groupID: in.GroupID, postID: in.PostID, cmtPath: in.Target, ttl: in.PostTTL, now: in.Now,
-		}.put(c.table)
-		if nerr != nil {
-			return nerr
-		}
-		items = append(items, put)
+		}.putReaction(c.table))
 	}
 	targetIndex := -1
 	if in.Target != PostLevelReactionTarget {
@@ -158,18 +140,25 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 	return fmt.Errorf("db: put reaction: %w", err)
 }
 
-// DeleteReaction removes the reactor's reaction on a target. Removing one that
-// is not there is not an error, so undoing is safe to repeat. It reads no key
-// and checks no generation: taking back what you said needs neither.
-func (c *Client) DeleteReaction(ctx context.Context, postID, target, reactorID string) error {
+// DeleteReaction removes the reactor's reaction on a target and the notification it sent to
+// recipientID (the author of what it was on; "" when there is none to remove). Removing one that
+// is not there is not an error, so undoing is safe to repeat. It reads no key and checks no
+// generation: taking back what you said needs neither.
+func (c *Client) DeleteReaction(ctx context.Context, postID, target, reactorID, recipientID string) error {
 	if _, ok := idgen.ValidCommentPath(target); !ok && target != PostLevelReactionTarget {
 		return fmt.Errorf("db: delete reaction: bad target %q", target)
 	}
-	_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	items := []types.TransactWriteItem{{Delete: &types.Delete{
 		TableName: aws.String(c.table),
 		Key:       reactionKey(postID, target, reactorID),
-	})
-	if err != nil {
+	}}}
+	if recipientID != "" {
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName: aws.String(c.table),
+			Key:       reactionNotificationKey(recipientID, postID, target, reactorID),
+		}})
+	}
+	if _, err := c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
 		return fmt.Errorf("db: delete reaction: %w", err)
 	}
 	return nil

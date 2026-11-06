@@ -231,7 +231,7 @@ func (h *Handler) deletePost(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusForbidden, "only the author or an admin can delete a post")
 		return
 	}
-	if err := h.db.DeletePost(r.Context(), groupID, postSortKey, postID); err != nil {
+	if err := h.db.DeletePost(r.Context(), groupID, postSortKey, postID, post.AuthorUserID); err != nil {
 		if errors.Is(err, db.ErrPostGone) {
 			postNotFound(w)
 			return

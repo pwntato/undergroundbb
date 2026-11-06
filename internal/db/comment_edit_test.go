@@ -13,7 +13,7 @@ import (
 func TestDeleteCommentOfAMissingRowIsRefusedAndWritesNothing(t *testing.T) {
 	c := testClient(t)
 	pid := "g-" + newUserID(t) + "#2026-10-28#00112233445566ff"
-	if err := c.DeleteComment(context.Background(), pid, "0001"); !errors.Is(err, ErrCommentGone) {
+	if err := c.DeleteComment(context.Background(), pid, "0001", "", ""); !errors.Is(err, ErrCommentGone) {
 		t.Fatalf("err = %v, want ErrCommentGone", err)
 	}
 	got, err := c.GetComment(context.Background(), pid, "0001")

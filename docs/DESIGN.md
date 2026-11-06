@@ -3057,22 +3057,38 @@ in M7:
 
 **What writes one (#68).** The comment and reaction handlers, in the same transaction as the write
 that causes it, so a refused write tells nobody and a resend of a comment that landed writes none.
-A top-level comment notifies the post's author; a reply notifies the author of the comment it is
-under (the direct parent only, not the post's author or the rest of the thread); a reaction notifies
-the author of the post or comment it is on, once per reactor and target (a changed emoji or a resend
-writes no second one; taking a reaction back and giving it again does). Nobody is notified of their
-own activity or of anything in a group they have left, and a tombstoned comment still has its author, so a reply
-under one notifies them. The reaction's first-time test is a read before the write, so two first
-reactions racing can each notify. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path
-or the reaction's target (`0000` for the post). The TTL is the post's, copied, as for comments.
-**A reaction notification carries no day**: its key is `NOTIF#0000-00-00#<rand>`, because a real day
-would date the reaction, which is the one item this schema keeps undated (see "Message content" in
-THREAT_MODEL.md); a reader orders those by something other than the key. Reply notifications carry
-the real day. The sort key's random half is 128 bits as 32 hex characters, per the convention below. Leaving a group
-removes none of the notifications written for it, and one about a post that never expires never
-expires, so the reader drops notifications for groups the user is no longer in as well as for posts
-that are gone. Deleting the account sweeps every `NOTIF#` row. Reading and marking read are separate
-work (#69, #145).
+A top-level comment notifies the post's author; a reply notifies the author of the comment whose
+path it sits under (the direct parent only, not the post's author or the rest of the thread; at the
+depth cap the client writes a reply beside the comment it answers, so the notification goes to that
+comment's parent's author, not to the author of the comment actually answered); a reaction notifies
+the author of the post or comment it is on. Nobody is notified of their own activity or of anything
+in a group they have left, and a tombstoned comment still has its author, so a reply under one
+notifies them. `kind` is `reply` or `reaction`; `cmt_path` is the new reply's path or the reaction's
+target (`0000` for the post). The TTL is the post's, copied, as for comments, so a notification
+expires with its post (and never, for a post that never expires).
+
+**A reaction notification carries no day, and its key is computed.** Its key is
+`NOTIF#0000-00-00#<hash>`, the hash being the first 128 bits (32 hex characters) of a SHA-256 over the
+post, the target and the reactor. No real day, because a real day would date the reaction, the one
+item this schema keeps undated (see "Message content" in THREAT_MODEL.md); computed, so that taking
+the reaction back deletes its notification directly, a changed emoji or a resend lands on the same
+row (keeping its `read` flag), and un-reacting in a loop cannot add rows. The hash hides nothing the
+row does not already hold, which names the post, the target and the reactor. A reply notification
+keeps the real day and a random 128-bit id, per the convention below.
+
+**Deleting something deletes what it sent.** Taking a reaction back, deleting the comment or post
+it is on, deletes its notification from the author's partition, whether or not that author is still
+a member. Deleting a comment deletes the notification it sent whoever it answered (a read of that
+person's `NOTIF#` rows filtered on post and path, since reply keys are random; comment deletes are
+rare enough for that) and the ones its reactions sent. Deleting the account sweeps every `NOTIF#`
+row. Replies *to* a deleted comment are other people's comments and keep theirs.
+
+**What the reader (#69) does with them.** Leaving a group removes none of the notifications written
+for it, so it drops notifications for groups the user is no longer in and for posts that are gone.
+Reaction notifications have no time to order by (the key has none, the TTL is the post's, and the
+only time-like value is the post's day inside `post_id`), so the list shows reply notifications
+newest first and the reaction notifications after them, newest post first by the day in `post_id`.
+Reading and marking read are separate work (#69, #145).
 
 Both halves of that rendering need a mechanism, and neither is free:
 
