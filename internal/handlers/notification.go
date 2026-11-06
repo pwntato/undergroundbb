@@ -3,9 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pwntato/undergroundbb/internal/db"
@@ -16,9 +14,11 @@ import (
 const (
 	defaultNotificationPageSize = 20
 	maxNotificationPageSize     = 50
-	// notificationMaxPasses bounds the reply reads one request makes while dropping rows for
-	// groups left and posts gone (the same bound ListPosts uses).
-	notificationMaxPasses = db.ListPostsMaxPasses
+	// notificationReadBatch rows are read per pass, and at most notificationMaxPasses passes per
+	// request, while dropping rows for groups left and posts gone: a request examines at most
+	// 1000 rows and checks each distinct post once.
+	notificationReadBatch = 100
+	notificationMaxPasses = 10
 	// maxMarkRead is how many ids one mark-read request takes.
 	maxMarkRead = 25
 )
@@ -86,20 +86,12 @@ func (f *notificationFilter) keep(n models.Notification) (bool, error) {
 	return live, nil
 }
 
-// postDay is the day inside a post id ("" for a malformed one, which sorts last).
-func postDay(postID string) string {
-	_, sk, ok := idgen.ParsePostID(postID)
-	if !ok {
-		return ""
-	}
-	return strings.Split(sk, "#")[1]
-}
-
-// listNotifications implements GET /api/notifications?cursor=&limit= (#69). Reply notifications
-// first, newest day first, paged in key order; then reaction notifications, newest post first by
-// the day in post_id (their keys carry no time, so that range is read once, sorted, and paged by
-// offset). The cursor is opaque: "r:<sort key>" in the reply range, "x:<offset>" in the reaction
-// range.
+// listNotifications implements GET /api/notifications?cursor=&limit= (#69). One descending read of
+// the user's NOTIF# range is the whole order: reply notifications newest day first, then reaction
+// notifications newest post first (the post's day is in their key, docs/DESIGN.md "What the reader
+// does with them"). The cursor is the sort key of the last row to resume after. Rows the caller
+// should not see are dropped and the page is filled past them, up to notificationMaxPasses reads
+// of notificationReadBatch rows; past that the page is returned short with a cursor to continue.
 func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -115,95 +107,45 @@ func (h *Handler) listNotifications(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	inReactions, replyAfter, offset := false, "", 0
-	if c := r.URL.Query().Get("cursor"); c != "" {
-		switch {
-		case strings.HasPrefix(c, "r:") && idgen.ValidNotificationSortKey(c[2:]) &&
-			!strings.HasPrefix(c[2:], "NOTIF#"+idgen.UndatedNotificationDay):
-			replyAfter = c[2:]
-		case strings.HasPrefix(c, "x:"):
-			n, err := strconv.Atoi(c[2:])
-			if err != nil || n < 0 {
-				WriteError(w, http.StatusBadRequest, "cursor: malformed")
-				return
-			}
-			inReactions, offset = true, n
-		default:
-			WriteError(w, http.StatusBadRequest, "cursor: malformed")
-			return
-		}
-	}
-	f := &notificationFilter{h: h, r: r, userID: userID, now: time.Now(), member: map[string]bool{}, post: map[string]bool{}}
-	fail := func(err error) { WriteInternalError(w, r, err, "could not list notifications") }
-	resp := listNotificationsResponse{Notifications: []notificationEntry{}}
-
-	if !inReactions {
-		for pass := 0; ; pass++ {
-			rows, last, done, err := h.db.ListReplyNotifications(r.Context(), userID, replyAfter, limit-len(resp.Notifications))
-			if err != nil {
-				fail(err)
-				return
-			}
-			for _, n := range rows {
-				keep, err := f.keep(n)
-				if err != nil {
-					fail(err)
-					return
-				}
-				if keep {
-					resp.Notifications = append(resp.Notifications, notificationEntryOf(n))
-				}
-			}
-			if last != "" {
-				replyAfter = last
-			}
-			if done {
-				break
-			}
-			if len(resp.Notifications) >= limit {
-				resp.NextCursor = "r:" + replyAfter
-				WriteJSON(w, http.StatusOK, resp)
-				return
-			}
-			if pass+1 == notificationMaxPasses {
-				// Everything up to replyAfter is shown or dropped; resume strictly after it.
-				resp.NextCursor = "r:" + replyAfter
-				WriteJSON(w, http.StatusOK, resp)
-				return
-			}
-		}
-	}
-
-	rows, err := h.db.ListReactionNotifications(r.Context(), userID)
-	if err != nil {
-		fail(err)
+	after := r.URL.Query().Get("cursor")
+	if after != "" && !idgen.ValidNotificationSortKey(after) {
+		WriteError(w, http.StatusBadRequest, "cursor: malformed")
 		return
 	}
-	var kept []models.Notification
-	for _, n := range rows {
-		keep, err := f.keep(n)
+	f := &notificationFilter{h: h, r: r, userID: userID, now: time.Now(), member: map[string]bool{}, post: map[string]bool{}}
+	resp := listNotificationsResponse{Notifications: []notificationEntry{}}
+	for pass := 0; pass < notificationMaxPasses; pass++ {
+		rows, last, done, err := h.db.ListNotifications(r.Context(), userID, after, notificationReadBatch)
 		if err != nil {
-			fail(err)
+			WriteInternalError(w, r, err, "could not list notifications")
 			return
 		}
-		if keep {
-			kept = append(kept, n)
+		for i, n := range rows {
+			keep, err := f.keep(n)
+			if err != nil {
+				WriteInternalError(w, r, err, "could not list notifications")
+				return
+			}
+			if !keep {
+				continue
+			}
+			resp.Notifications = append(resp.Notifications, notificationEntryOf(n))
+			if len(resp.Notifications) == limit {
+				if i < len(rows)-1 || !done {
+					resp.NextCursor = n.SK
+				}
+				WriteJSON(w, http.StatusOK, resp)
+				return
+			}
 		}
-	}
-	sort.SliceStable(kept, func(i, j int) bool {
-		di, dj := postDay(kept[i].PostID), postDay(kept[j].PostID)
-		if di != dj {
-			return di > dj
+		if done {
+			WriteJSON(w, http.StatusOK, resp)
+			return
 		}
-		return kept[i].SK < kept[j].SK
-	})
-	for offset < len(kept) && len(resp.Notifications) < limit {
-		resp.Notifications = append(resp.Notifications, notificationEntryOf(kept[offset]))
-		offset++
+		after = last
 	}
-	if offset < len(kept) {
-		resp.NextCursor = "x:" + strconv.Itoa(offset)
-	}
+	// Everything up to `after` is shown or dropped; resume strictly after it.
+	resp.NextCursor = after
 	WriteJSON(w, http.StatusOK, resp)
 }
 

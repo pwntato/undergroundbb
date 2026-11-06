@@ -52,7 +52,9 @@ export function NotificationsPanel({
   return (
     <div className="flex w-full flex-col gap-3 text-left">
       {load.items.length === 0 && (
-        <p className="text-center text-sm text-muted-foreground">Nothing new.</p>
+        <p className="text-center text-sm text-muted-foreground">
+          {load.hasMore ? 'Nothing to show yet.' : 'Nothing new.'}
+        </p>
       )}
       {load.items.length > 0 && (
         <ul className="flex flex-col gap-2">

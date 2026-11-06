@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,13 +62,48 @@ func cmtPathFor(kind string) string {
 	return "0000"
 }
 
+// putManyReactions stores n reaction notifications on pid, in 25-row batches so a test that needs
+// hundreds of rows does not hammer DynamoDB Local with one request each.
+func putManyReactions(t *testing.T, recipient, actor, gid, pid string, n int) {
+	t.Helper()
+	var reqs []types.WriteRequest
+	flush := func() {
+		if len(reqs) == 0 {
+			return
+		}
+		if _, err := rawDDB(t).BatchWriteItem(context.Background(), &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{testTableName(): reqs},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		reqs = nil
+	}
+	for i := 0; i < n; i++ {
+		reqs = append(reqs, types.WriteRequest{PutRequest: &types.PutRequest{Item: map[string]types.AttributeValue{
+			"PK": s("USER#" + recipient), "SK": s(reactSK(pid, i)), "Type": s("NOTIFICATION"),
+			"Kind": s("reaction"), "ActorUserID": s(actor), "GroupID": s(gid), "PostID": s(pid),
+			"CmtPath": s("0000"), "Read": &types.AttributeValueMemberBOOL{Value: false},
+		}}})
+		if len(reqs) == 25 {
+			flush()
+		}
+	}
+	flush()
+}
+
 func replySK(day string, n int) string {
 	return "NOTIF#" + day + "#" + strings.Repeat("0", 31) + string(rune('a'+n))
 }
 
-func reactSK(n int) string {
-	return "NOTIF#" + idgen.UndatedNotificationDay + "#" + strings.Repeat("0", 31) + string(rune('a'+n))
+// reactSK is a reaction notification's key for a reaction on pid: the placeholder, the post's day,
+// then a hash stand-in.
+func reactSK(pid string, n int) string {
+	_, sk, _ := idgen.ParsePostID(pid)
+	return "NOTIF#" + idgen.UndatedNotificationDay + "#" + strings.Split(sk, "#")[1] + "#" + hexN(n)
 }
+
+// hexN is a 32-character hex id that sorts by n.
+func hexN(n int) string { return fmt.Sprintf("%032x", n) }
 
 type listed struct {
 	Notifications []notificationEntry `json:"notifications"`
@@ -124,12 +160,11 @@ func TestListNotificationsRepliesNewestFirstThenReactionsNewestPostFirst(t *test
 	h, gid, owner, bob, c, pOld, pMid, pNew := listFixture(t)
 	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
 	putNotif(t, owner.userID, replySK("2026-10-25", 2), "reply", bob.userID, gid, pOld)
-	// Key order of the reactions is the opposite of the order they must be listed in.
-	putNotif(t, owner.userID, reactSK(1), "reaction", bob.userID, gid, pOld)
-	putNotif(t, owner.userID, reactSK(2), "reaction", bob.userID, gid, pNew)
-	putNotif(t, owner.userID, reactSK(3), "reaction", bob.userID, gid, pMid)
+	putNotif(t, owner.userID, reactSK(pOld, 1), "reaction", bob.userID, gid, pOld)
+	putNotif(t, owner.userID, reactSK(pNew, 2), "reaction", bob.userID, gid, pNew)
+	putNotif(t, owner.userID, reactSK(pMid, 3), "reaction", bob.userID, gid, pMid)
 	got := ids(getList(t, h, c, ""))
-	want := []string{replySK("2026-10-25", 2), replySK("2026-10-20", 1), reactSK(2), reactSK(3), reactSK(1)}
+	want := []string{replySK("2026-10-25", 2), replySK("2026-10-20", 1), reactSK(pNew, 2), reactSK(pMid, 3), reactSK(pOld, 1)}
 	if !equalIDs(got, want) {
 		t.Fatalf("order:\n got %v\nwant %v", got, want)
 	}
@@ -150,7 +185,7 @@ func TestListNotificationsDropsLeftGroupsAndGonePosts(t *testing.T) {
 	expired := pidOf(gid, "POST#2026-10-31#00112233445566a7")
 	storePostAt(t, gid, "POST#2026-10-31#00112233445566a7", owner.userID, 1) // TTL long past, row not yet swept
 	putNotif(t, owner.userID, replySK("2026-10-24", 5), "reply", bob.userID, gid, expired)
-	putNotif(t, owner.userID, reactSK(4), "reaction", bob.userID, gid, expired)
+	putNotif(t, owner.userID, reactSK(expired, 4), "reaction", bob.userID, gid, expired)
 	// A group the owner is not in (never joined): its notification must not show.
 	otherGid := "11111111-1111-4111-8111-111111111111"
 	otherPid := pidOf(otherGid, "POST#2026-10-28#00112233445566a6")
@@ -160,12 +195,12 @@ func TestListNotificationsDropsLeftGroupsAndGonePosts(t *testing.T) {
 	putNotif(t, owner.userID, replySK("2026-10-21", 2), "reply", bob.userID, gid, deleted)
 	putNotif(t, owner.userID, replySK("2026-10-22", 3), "reply", bob.userID, gid, missing)
 	putNotif(t, owner.userID, replySK("2026-10-23", 4), "reply", bob.userID, otherGid, otherPid)
-	putNotif(t, owner.userID, reactSK(1), "reaction", bob.userID, gid, pMid)
-	putNotif(t, owner.userID, reactSK(2), "reaction", bob.userID, gid, deleted)
-	putNotif(t, owner.userID, reactSK(3), "reaction", bob.userID, otherGid, otherPid)
+	putNotif(t, owner.userID, reactSK(pMid, 1), "reaction", bob.userID, gid, pMid)
+	putNotif(t, owner.userID, reactSK(deleted, 2), "reaction", bob.userID, gid, deleted)
+	putNotif(t, owner.userID, reactSK(otherPid, 3), "reaction", bob.userID, otherGid, otherPid)
 	_ = pNew
 	got := ids(getList(t, h, c, ""))
-	want := []string{replySK("2026-10-20", 1), reactSK(1)}
+	want := []string{replySK("2026-10-20", 1), reactSK(pMid, 1)}
 	if !equalIDs(got, want) {
 		t.Fatalf("kept:\n got %v\nwant %v", got, want)
 	}
@@ -176,9 +211,9 @@ func TestListNotificationsPagesThroughRepliesThenReactions(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		putNotif(t, owner.userID, replySK("2026-10-2"+string(rune('0'+i)), i), "reply", bob.userID, gid, pOld)
 	}
-	putNotif(t, owner.userID, reactSK(1), "reaction", bob.userID, gid, pOld)
-	putNotif(t, owner.userID, reactSK(2), "reaction", bob.userID, gid, pNew)
-	putNotif(t, owner.userID, reactSK(3), "reaction", bob.userID, gid, pMid)
+	putNotif(t, owner.userID, reactSK(pOld, 1), "reaction", bob.userID, gid, pOld)
+	putNotif(t, owner.userID, reactSK(pNew, 2), "reaction", bob.userID, gid, pNew)
+	putNotif(t, owner.userID, reactSK(pMid, 3), "reaction", bob.userID, gid, pMid)
 	var all []string
 	cursor, pages := "", 0
 	for {
@@ -200,7 +235,7 @@ func TestListNotificationsPagesThroughRepliesThenReactions(t *testing.T) {
 			t.Fatal("cursor never ends")
 		}
 	}
-	want := []string{replySK("2026-10-22", 2), replySK("2026-10-21", 1), replySK("2026-10-20", 0), reactSK(2), reactSK(3), reactSK(1)}
+	want := []string{replySK("2026-10-22", 2), replySK("2026-10-21", 1), replySK("2026-10-20", 0), reactSK(pNew, 2), reactSK(pMid, 3), reactSK(pOld, 1)}
 	if !equalIDs(all, want) {
 		t.Fatalf("paged:\n got %v\nwant %v", all, want)
 	}
@@ -232,7 +267,7 @@ func TestListNotificationsRejectsBadInput(t *testing.T) {
 	if rec := doNotifications(t, h, nil, http.MethodGet, "/api/notifications", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no session: %d", rec.Code)
 	}
-	for _, q := range []string{"?limit=0", "?limit=51", "?limit=x", "?cursor=zzz", "?cursor=r:nope", "?cursor=r:" + reactSK(1), "?cursor=x:-1", "?cursor=x:y"} {
+	for _, q := range []string{"?limit=0", "?limit=51", "?limit=x", "?cursor=zzz", "?cursor=r:" + replySK("2026-10-20", 1)} {
 		if rec := doNotifications(t, h, c, http.MethodGet, "/api/notifications"+q, nil); rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: %d", q, rec.Code)
 		}
@@ -283,5 +318,80 @@ func TestMarkNotificationsReadRejectsBadInput(t *testing.T) {
 	}
 	if rec := doNotifications(t, h, nil, http.MethodPut, "/api/notifications/read", map[string]any{"ids": []string{replySK("2026-10-20", 0)}}); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no session: %d", rec.Code)
+	}
+}
+
+// A reaction's sort key is a valid cursor: the list is one range, so a page can end inside the
+// reaction rows.
+func TestListNotificationsPagesAcrossTheReactionRows(t *testing.T) {
+	h, gid, owner, bob, c, pOld, pMid, pNew := listFixture(t)
+	for i, pid := range []string{pOld, pNew, pMid} {
+		putNotif(t, owner.userID, reactSK(pid, i), "reaction", bob.userID, gid, pid)
+	}
+	first := getList(t, h, c, "?limit=1")
+	second := getList(t, h, c, "?limit=1&cursor="+first.NextCursor)
+	third := getList(t, h, c, "?limit=1&cursor="+second.NextCursor)
+	got := append(append(ids(first), ids(second)...), ids(third)...)
+	want := []string{reactSK(pNew, 1), reactSK(pMid, 2), reactSK(pOld, 0)}
+	if !equalIDs(got, want) || third.NextCursor != "" {
+		t.Fatalf("got %v (end cursor %q), want %v", got, third.NextCursor, want)
+	}
+}
+
+// Past 500 reaction rows the list is still newest post first: nothing is capped or sampled.
+func TestListNotificationsNewestReactionIsFirstPastFiveHundredRows(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, pNew := listFixture(t)
+	putManyReactions(t, owner.userID, bob.userID, gid, pOld, 520)
+	newest := reactSK(pNew, 0)
+	putNotif(t, owner.userID, newest, "reaction", bob.userID, gid, pNew)
+	if got := ids(getList(t, h, c, "?limit=1")); !equalIDs(got, []string{newest}) {
+		t.Fatalf("first row %v, want the newest post's reaction", got)
+	}
+}
+
+// Many dropped rows in a row do not hide a live one behind them.
+func TestListNotificationsFindsALiveRowBehindManyDroppedOnes(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	gone := pidOf(gid, "POST#2026-10-30#00112233445566a5")
+	putManyReactions(t, owner.userID, bob.userID, gid, gone, 500)
+	live := reactSK(pOld, 0)
+	putNotif(t, owner.userID, live, "reaction", bob.userID, gid, pOld)
+	if got := ids(getList(t, h, c, "")); !equalIDs(got, []string{live}) {
+		t.Fatalf("got %v, want the live row", got)
+	}
+}
+
+// More dropped rows than one request examines: the page comes back short with a cursor, and
+// following it reaches the live row.
+func TestListNotificationsContinuesPastTheExaminedBound(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	gone := pidOf(gid, "POST#2026-10-30#00112233445566a5")
+	putManyReactions(t, owner.userID, bob.userID, gid, gone, notificationReadBatch*notificationMaxPasses+5)
+	live := reactSK(pOld, 0)
+	putNotif(t, owner.userID, live, "reaction", bob.userID, gid, pOld)
+	first := getList(t, h, c, "")
+	if len(first.Notifications) != 0 || first.NextCursor == "" {
+		t.Fatalf("first page %v cursor %q: want short with a cursor", ids(first), first.NextCursor)
+	}
+	if got := ids(getList(t, h, c, "?cursor="+first.NextCursor)); !equalIDs(got, []string{live}) {
+		t.Fatalf("second page %v, want the live row", got)
+	}
+}
+
+// A row removed from before the cursor between pages does not make the next page skip one.
+func TestListNotificationsDeletingAnEarlierRowDoesNotSkipOne(t *testing.T) {
+	h, gid, owner, bob, c, pOld, pMid, pNew := listFixture(t)
+	for _, pid := range []string{pNew, pMid, pOld} {
+		putNotif(t, owner.userID, reactSK(pid, 1), "reaction", bob.userID, gid, pid)
+	}
+	first := getList(t, h, c, "?limit=1")
+	if _, err := rawDDB(t).DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(testTableName()),
+		Key:       map[string]types.AttributeValue{"PK": s("USER#" + owner.userID), "SK": s(first.Notifications[0].ID)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(getList(t, h, c, "?limit=1&cursor="+first.NextCursor)); !equalIDs(got, []string{reactSK(pMid, 1)}) {
+		t.Fatalf("second page %v, want the second row", got)
 	}
 }

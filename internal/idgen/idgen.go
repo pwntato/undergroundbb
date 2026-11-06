@@ -268,8 +268,9 @@ const UndatedNotificationDay = "0000-00-00"
 // NotificationDay is the day for a notification written at now, in the key's format.
 func NotificationDay(now time.Time) string { return now.UTC().Format("2006-01-02") }
 
-var notificationSortKeyPattern = regexp.MustCompile(`^NOTIF#\d{4}-\d{2}-\d{2}#[0-9a-f]{32}$`)
+var notificationSortKeyPattern = regexp.MustCompile(`^NOTIF#(0000-00-00#\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2})#[0-9a-f]{32}$`)
 
-// ValidNotificationSortKey reports whether s has the shape of a notification's sort key, reply or
-// reaction (the day is not checked: a reaction's is the placeholder).
+// ValidNotificationSortKey reports whether s has the shape of a notification's sort key: a reply's
+// "NOTIF#<day>#<rand>" or a reaction's "NOTIF#0000-00-00#<post day>#<hash>". The days are not
+// checked for being real dates.
 func ValidNotificationSortKey(s string) bool { return notificationSortKeyPattern.MatchString(s) }

@@ -54,6 +54,13 @@ describe('NotificationsPanel', () => {
     expect(html).not.toContain('Load more')
   })
 
+  it('keeps Load more on an empty page that still has a cursor (the server dropped every row)', () => {
+    const html = render({ status: 'ready', items: [], hasMore: true })
+    expect(html).toContain('Nothing to show yet.')
+    expect(html).not.toContain('Nothing new.')
+    expect(html).toContain('Load more')
+  })
+
   it('renders the sentence, the thread link and the unread marker', () => {
     const html = render({ status: 'ready', items: [note()], hasMore: false })
     expect(html).toContain('alice replied to your post in Roof Group')

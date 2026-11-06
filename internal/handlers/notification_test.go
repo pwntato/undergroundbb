@@ -210,7 +210,7 @@ func TestAReactionNotifiesTheAuthorOfWhatItIsOnOnceWhateverTheEmoji(t *testing.T
 			t.Errorf("target %s: TTL = %s, want the post's %d", c.target, numAttr(n, "TTL"), future)
 		}
 		// And no day: a reaction is the one item the schema keeps undated.
-		if !regexp.MustCompile(`^NOTIF#0000-00-00#[0-9a-f]{32}$`).MatchString(strAttr(n, "SK")) {
+		if !regexp.MustCompile(`^NOTIF#0000-00-00#\d{4}-\d{2}-\d{2}#[0-9a-f]{32}$`).MatchString(strAttr(n, "SK")) {
 			t.Errorf("target %s: sort key %q carries a real day or the wrong shape", c.target, strAttr(n, "SK"))
 		}
 	}

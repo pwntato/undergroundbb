@@ -160,8 +160,9 @@ same dump. And the item itself carries the group's id and the actor's id in the 
 only, no text), so it names the group outright. Neither is hidden; the notification is what
 discloses who interacted with this user, in which group, and on what day. **Reaction notifications
 are the exception on the day**: their key carries a placeholder day (`0000-00-00`), because a real
-one would date a reaction, which the schema otherwise never does. They still say who reacted to
-what. Taking a reaction back, or deleting the comment or post it is on, deletes its notification, as
+one would date a reaction, which the schema otherwise never does. The key does carry the day of the
+post the reaction is on, which the row already holds in `PostID`, so it adds nothing. They still say
+who reacted to what. Taking a reaction back, or deleting the comment or post it is on, deletes its notification, as
 deleting a comment deletes the one it sent; deleting the account sweeps every notification.
 
 **`LastLoginDay` is a third place a day hides, and it is per user rather than per item.** `PROFILE`
