@@ -34,6 +34,15 @@ type rekeyReport struct {
 	// Superseded old rows were deleted because the new key already existed: the reaction was given
 	// again after the deploy, and that row (and its Read flag) wins.
 	Superseded int `json:"superseded"`
+	// Orphaned old rows were deleted, not moved, because the reaction they announce is gone: it was
+	// taken back (or its comment or post deleted) after the deploy, when the delete computed the new
+	// key and missed the old row. Moving one would strand it, since a reaction row is the only
+	// pointer to its notification.
+	Orphaned int `json:"orphaned"`
+	// Retry rows were not moved because their transaction was cancelled for a reason other than the
+	// row already being gone (a conflicting transaction, throttling). They are still on the old
+	// key: run the command again until a dry run reports moved 0 and retry 0.
+	Retry int `json:"retry"`
 	// Skipped rows could not be moved: no readable PostID. They are left alone and listed so an
 	// operator can look.
 	Skipped []string `json:"skipped,omitempty"`
@@ -100,6 +109,25 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 			key := func(sk string) map[string]types.AttributeValue {
 				return map[string]types.AttributeValue{"PK": item["PK"], "SK": &types.AttributeValueMemberS{Value: sk}}
 			}
+			// The reaction this row announces must still exist: its row is RXN#<target>#<reactor> in
+			// the post's partition, and the notification names all three.
+			rxn, err := ddb.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(table), ConsistentRead: aws.Bool(true), Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: db.PostPartition(postID)},
+				"SK": &types.AttributeValueMemberS{Value: db.ReactionSortKeyPrefix + str(item, "CmtPath") + "#" + str(item, "ActorUserID")},
+			}})
+			if err != nil {
+				return report, fmt.Errorf("read reaction for %s: %w", sk, err)
+			}
+			if rxn.Item == nil {
+				report.Orphaned++
+				if opts.dryRun {
+					continue
+				}
+				if _, err := ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(table), Key: key(sk)}); err != nil {
+					return report, fmt.Errorf("delete orphaned %s: %w", sk, err)
+				}
+				continue
+			}
 			existing, err := ddb.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(table), Key: key(newSK), ConsistentRead: aws.Bool(true)})
 			if err != nil {
 				return report, fmt.Errorf("read %s: %w", newSK, err)
@@ -129,9 +157,13 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 			}})
 			var cancelled *types.TransactionCanceledException
 			if errors.As(err, &cancelled) {
-				// The old row was deleted (the reaction taken back) or the new one appeared since the
-				// read: either way there is nothing left to move. Count it as not moved.
 				report.Moved--
+				if nothingLeftToMove(cancelled) {
+					// The old row was deleted (the reaction taken back) or the new one appeared since
+					// the read: either way there is nothing left to move.
+					continue
+				}
+				report.Retry++
 				continue
 			}
 			if err != nil {
@@ -143,4 +175,21 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 		}
 		in.ExclusiveStartKey = out.LastEvaluatedKey
 	}
+}
+
+// nothingLeftToMove is true when every reason a move's transaction was cancelled is a failed
+// condition (the old row is gone or the new one exists). Any other reason, a conflicting
+// transaction or throttling, leaves the old row in place and needing another run.
+func nothingLeftToMove(c *types.TransactionCanceledException) bool {
+	failed := false
+	for _, r := range c.CancellationReasons {
+		switch aws.ToString(r.Code) {
+		case "ConditionalCheckFailed":
+			failed = true
+		case "None", "":
+		default:
+			return false
+		}
+	}
+	return failed
 }

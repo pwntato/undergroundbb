@@ -233,7 +233,7 @@ func TestReactionNotificationKeyCarriesThePostsDayAndIsComputed(t *testing.T) {
 		}
 	}
 	// Newest post first is plain descending key order.
-	if !(sk(newer, "0001", "bob") > sk(old, "0001", "bob")) {
+	if sk(newer, "0001", "bob") <= sk(old, "0001", "bob") {
 		t.Error("a newer post does not sort above an older one")
 	}
 	// The migration builds the same key from the hash alone.

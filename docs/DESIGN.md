@@ -3080,8 +3080,11 @@ row (keeping its `read` flag), and un-reacting in a loop cannot add rows. The ha
 row does not already hold, which names the post, the target and the reactor. A reply notification
 keeps the real day and a random 128-bit id, per the convention below. Rows #68 wrote before the post
 day was in the key (`NOTIF#0000-00-00#<hash>`) are moved by `cmd/rekey-reaction-notifs`, a one-time
-operator command; until it has run, taking back such a reaction misses its row (the row waits for the
-post's TTL or deletion) and the list shows it after the newer ones.
+operator command. Until it has run, taking back such a reaction, or deleting its comment or post,
+misses its row, and the list shows old rows in no useful order among the reactions (their hash is
+compared where a new row has its post day). The command moves a row only if the reaction it announces
+still exists; a row whose reaction is gone is deleted instead, since moving it would leave nothing
+able to delete it.
 
 **Deleting something deletes what it sent.** Taking a reaction back, deleting the comment or post
 it is on, deletes its notification from the author's partition, whether or not that author is still

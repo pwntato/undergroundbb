@@ -102,6 +102,9 @@ func TestRekeyMovesOldRowsAndLeavesTheRest(t *testing.T) {
 	old1, new1 := "NOTIF#0000-00-00#"+h1, "NOTIF#0000-00-00#2026-10-15#"+h1
 	old2, new2 := "NOTIF#0000-00-00#"+h2, "NOTIF#0000-00-00#2026-10-15#"+h2
 	reply := "NOTIF#2026-10-20#" + h3
+	// The reaction these notifications announce (RXN#<target>#<reactor> under the post): both are on
+	// the post itself ("0000") by "actor".
+	put(t, ddb, table, map[string]types.AttributeValue{"PK": s("POST#" + pid), "SK": s("RXN#0000#actor"), "Type": s("REACTION")})
 	put(t, ddb, table, row(old1, "reaction", true))
 	// old2's reaction was given again after the deploy: the new row exists, unread, and must win.
 	put(t, ddb, table, row(old2, "reaction", true))
@@ -146,6 +149,66 @@ func TestRekeyMovesOldRowsAndLeavesTheRest(t *testing.T) {
 	again, err := rekeyReactionNotifications(context.Background(), ddb, table, rekeyOptions{onlyUsers: only})
 	if err != nil || again.Moved != 0 || again.Superseded != 0 {
 		t.Fatalf("second run is not a no-op: %+v, %v", again, err)
+	}
+}
+
+// A reaction taken back before the migration ran left its old notification behind (the delete
+// computed the new key and missed it). Moving that row would strand it where nothing can delete it,
+// so the migration deletes it and reports it.
+func TestRekeyDeletesAnOrphanedRowInsteadOfMovingIt(t *testing.T) {
+	ddb, table := localClient(t)
+	uid, _ := idgen.UUID()
+	gid, _ := idgen.UUID()
+	pid := gid + "#2026-10-15#00112233445566a1"
+	hash := "00000000000000000000000000000007"
+	oldSK, newSK := "NOTIF#0000-00-00#"+hash, "NOTIF#0000-00-00#2026-10-15#"+hash
+	put(t, ddb, table, map[string]types.AttributeValue{
+		"PK": s("USER#" + uid), "SK": s(oldSK), "Type": s("NOTIFICATION"), "Kind": s("reaction"),
+		"ActorUserID": s("bob"), "GroupID": s(gid), "PostID": s(pid), "CmtPath": s("0001"),
+	}) // no RXN#0001#bob row under the post: bob took the reaction back
+	only := map[string]bool{uid: true}
+
+	dry, err := rekeyReactionNotifications(context.Background(), ddb, table, rekeyOptions{dryRun: true, onlyUsers: only})
+	if err != nil || dry.Orphaned != 1 || dry.Moved != 0 {
+		t.Fatalf("dry run: %+v, %v", dry, err)
+	}
+	if get(t, ddb, table, uid, oldSK) == nil {
+		t.Fatal("a dry run deleted the orphan")
+	}
+	rep, err := rekeyReactionNotifications(context.Background(), ddb, table, rekeyOptions{onlyUsers: only})
+	if err != nil || rep.Orphaned != 1 || rep.Moved != 0 {
+		t.Fatalf("run: %+v, %v", rep, err)
+	}
+	if get(t, ddb, table, uid, oldSK) != nil || get(t, ddb, table, uid, newSK) != nil {
+		t.Fatal("the orphan was kept or moved to the new key")
+	}
+}
+
+func TestNothingLeftToMove(t *testing.T) {
+	reasons := func(codes ...string) *types.TransactionCanceledException {
+		var rs []types.CancellationReason
+		for _, c := range codes {
+			rs = append(rs, types.CancellationReason{Code: aws.String(c)})
+		}
+		return &types.TransactionCanceledException{CancellationReasons: rs}
+	}
+	for _, tc := range []struct {
+		name string
+		err  *types.TransactionCanceledException
+		want bool
+	}{
+		{"old row gone", reasons("None", "ConditionalCheckFailed"), true},
+		{"new row appeared", reasons("ConditionalCheckFailed", "None"), true},
+		{"both", reasons("ConditionalCheckFailed", "ConditionalCheckFailed"), true},
+		{"conflicting transaction", reasons("TransactionConflict", "None"), false},
+		{"throttled", reasons("ThrottlingError", "None"), false},
+		{"a failed condition and a conflict", reasons("ConditionalCheckFailed", "TransactionConflict"), false},
+		{"no reasons given", reasons(), false},
+		{"only None", reasons("None", "None"), false},
+	} {
+		if got := nothingLeftToMove(tc.err); got != tc.want {
+			t.Errorf("%s: nothingLeftToMove = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
