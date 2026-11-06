@@ -157,13 +157,7 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 			}})
 			var cancelled *types.TransactionCanceledException
 			if errors.As(err, &cancelled) {
-				report.Moved--
-				if nothingLeftToMove(cancelled) {
-					// The old row was deleted (the reaction taken back) or the new one appeared since
-					// the read: either way there is nothing left to move.
-					continue
-				}
-				report.Retry++
+				report.recordCancelled(cancelled)
 				continue
 			}
 			if err != nil {
@@ -192,4 +186,14 @@ func nothingLeftToMove(c *types.TransactionCanceledException) bool {
 		}
 	}
 	return failed
+}
+
+// recordCancelled undoes the optimistic Moved count for a move whose transaction was cancelled. If
+// every reason is a failed condition (the old row was deleted, or the new one appeared since the
+// read) there is nothing left to move; otherwise the old row is still there and is counted as Retry.
+func (r *rekeyReport) recordCancelled(c *types.TransactionCanceledException) {
+	r.Moved--
+	if !nothingLeftToMove(c) {
+		r.Retry++
+	}
 }

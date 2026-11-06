@@ -212,6 +212,22 @@ func TestNothingLeftToMove(t *testing.T) {
 	}
 }
 
+func TestACancelledMoveIsCountedAsRetryUnlessTheRowIsGone(t *testing.T) {
+	cancelled := func(code string) *types.TransactionCanceledException {
+		return &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String(code)}}}
+	}
+	gone := rekeyReport{Moved: 1}
+	gone.recordCancelled(cancelled("ConditionalCheckFailed"))
+	if gone.Moved != 0 || gone.Retry != 0 {
+		t.Errorf("row gone: %+v, want moved 0 retry 0", gone)
+	}
+	busy := rekeyReport{Moved: 1}
+	busy.recordCancelled(cancelled("TransactionConflict"))
+	if busy.Moved != 0 || busy.Retry != 1 {
+		t.Errorf("conflict: %+v, want moved 0 retry 1", busy)
+	}
+}
+
 func TestRekeySkipsARowWithNoReadablePostID(t *testing.T) {
 	ddb, table := localClient(t)
 	uid, _ := idgen.UUID()
