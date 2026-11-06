@@ -9,8 +9,10 @@
 // notification, because the delete computes the new key, and the list shows old rows in no useful
 // order among the reactions. A row whose reaction is gone by the time the command runs is deleted
 // rather than moved, since a moved row would have nothing left able to delete it. Run it until a
-// dry run reports moved 0 and retry 0: a move whose transaction was cancelled for any reason but a
-// failed condition (a conflicting transaction, throttling) is counted as retry and left in place.
+// dry run reports moved, superseded, orphaned and retry all 0: a move whose transaction was cancelled
+// for any reason but the old row already being gone (the new row or a conflicting transaction
+// appeared, the reaction was taken back mid-move, throttling) is counted as retry and left in place,
+// where the next run deals with it.
 //
 // It fails safe: REKEY_DRY_RUN defaults to true and only the exact string "false" turns writing on,
 // the same convention as cmd/purge and cmd/wipe-v1-keyrows.

@@ -39,9 +39,11 @@ type rekeyReport struct {
 	// key and missed the old row. Moving one would strand it, since a reaction row is the only
 	// pointer to its notification.
 	Orphaned int `json:"orphaned"`
-	// Retry rows were not moved because their transaction was cancelled for a reason other than the
-	// row already being gone (a conflicting transaction, throttling). They are still on the old
-	// key: run the command again until a dry run reports moved 0 and retry 0.
+	// Retry rows were not moved because their transaction was cancelled for any reason but the old
+	// row already being gone: the new row or a conflicting transaction appeared, the reaction was
+	// taken back mid-move, or throttling. They are still on the old key: run the command again until
+	// a dry run reports moved, superseded, orphaned and retry all 0 (retry itself is always 0 in a dry
+	// run, which sends no transaction; the other three are what show a row left to handle).
 	Retry int `json:"retry"`
 	// Skipped rows could not be moved: no readable PostID. They are left alone and listed so an
 	// operator can look.
@@ -111,10 +113,11 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 			}
 			// The reaction this row announces must still exist: its row is RXN#<target>#<reactor> in
 			// the post's partition, and the notification names all three.
-			rxn, err := ddb.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(table), ConsistentRead: aws.Bool(true), Key: map[string]types.AttributeValue{
+			rxnKey := map[string]types.AttributeValue{
 				"PK": &types.AttributeValueMemberS{Value: db.PostPartition(postID)},
 				"SK": &types.AttributeValueMemberS{Value: db.ReactionSortKeyPrefix + str(item, "CmtPath") + "#" + str(item, "ActorUserID")},
-			}})
+			}
+			rxn, err := ddb.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(table), ConsistentRead: aws.Bool(true), Key: rxnKey})
 			if err != nil {
 				return report, fmt.Errorf("read reaction for %s: %w", sk, err)
 			}
@@ -151,9 +154,13 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 				moved[k] = v
 			}
 			moved["SK"] = &types.AttributeValueMemberS{Value: newSK}
+			// The reaction is checked again inside the transaction: the read above is a separate
+			// request, and a reaction taken back in between would otherwise be moved and stranded.
+			// The order matters: nothingLeftToMove reads the Delete's reason by its position.
 			_, err = ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
 				{Put: &types.Put{TableName: aws.String(table), Item: moved, ConditionExpression: aws.String("attribute_not_exists(PK)")}},
 				{Delete: &types.Delete{TableName: aws.String(table), Key: key(sk), ConditionExpression: aws.String("attribute_exists(PK)")}},
+				{ConditionCheck: &types.ConditionCheck{TableName: aws.String(table), Key: rxnKey, ConditionExpression: aws.String("attribute_exists(PK)")}},
 			}})
 			var cancelled *types.TransactionCanceledException
 			if errors.As(err, &cancelled) {
@@ -171,26 +178,23 @@ func rekeyReactionNotifications(ctx context.Context, ddb *dynamodb.Client, table
 	}
 }
 
-// nothingLeftToMove is true when every reason a move's transaction was cancelled is a failed
-// condition (the old row is gone or the new one exists). Any other reason, a conflicting
-// transaction or throttling, leaves the old row in place and needing another run.
+// deleteItem is the position of the old row's Delete in a move's transaction.
+const deleteItem = 1
+
+// nothingLeftToMove is true only when the move's Delete failed its own condition: the old row is
+// gone, so there is nothing to move. Every other cancellation leaves the old row in place and needing
+// another run: the Put's condition failing (the new row appeared, so the next run deletes the old
+// one as superseded), the reaction check failing (the reaction was taken back mid-move, so the next
+// run deletes the old one as orphaned), a conflicting transaction, or throttling.
 func nothingLeftToMove(c *types.TransactionCanceledException) bool {
-	failed := false
-	for _, r := range c.CancellationReasons {
-		switch aws.ToString(r.Code) {
-		case "ConditionalCheckFailed":
-			failed = true
-		case "None", "":
-		default:
-			return false
-		}
+	if len(c.CancellationReasons) <= deleteItem {
+		return false
 	}
-	return failed
+	return aws.ToString(c.CancellationReasons[deleteItem].Code) == "ConditionalCheckFailed"
 }
 
-// recordCancelled undoes the optimistic Moved count for a move whose transaction was cancelled. If
-// every reason is a failed condition (the old row was deleted, or the new one appeared since the
-// read) there is nothing left to move; otherwise the old row is still there and is counted as Retry.
+// recordCancelled undoes the optimistic Moved count for a move whose transaction was cancelled, and
+// counts it as Retry unless the old row is gone.
 func (r *rekeyReport) recordCancelled(c *types.TransactionCanceledException) {
 	r.Moved--
 	if !nothingLeftToMove(c) {

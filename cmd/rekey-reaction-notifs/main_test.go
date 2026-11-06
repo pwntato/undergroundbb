@@ -9,6 +9,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
@@ -184,27 +185,31 @@ func TestRekeyDeletesAnOrphanedRowInsteadOfMovingIt(t *testing.T) {
 	}
 }
 
-func TestNothingLeftToMove(t *testing.T) {
-	reasons := func(codes ...string) *types.TransactionCanceledException {
-		var rs []types.CancellationReason
-		for _, c := range codes {
-			rs = append(rs, types.CancellationReason{Code: aws.String(c)})
-		}
-		return &types.TransactionCanceledException{CancellationReasons: rs}
+// reasons builds a cancellation in the order a move's transaction lists its items: the Put of the
+// new row, the Delete of the old one, the check that the reaction still exists.
+func reasons(codes ...string) *types.TransactionCanceledException {
+	var rs []types.CancellationReason
+	for _, c := range codes {
+		rs = append(rs, types.CancellationReason{Code: aws.String(c)})
 	}
+	return &types.TransactionCanceledException{CancellationReasons: rs}
+}
+
+func TestNothingLeftToMove(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  *types.TransactionCanceledException
 		want bool
 	}{
-		{"old row gone", reasons("None", "ConditionalCheckFailed"), true},
-		{"new row appeared", reasons("ConditionalCheckFailed", "None"), true},
-		{"both", reasons("ConditionalCheckFailed", "ConditionalCheckFailed"), true},
-		{"conflicting transaction", reasons("TransactionConflict", "None"), false},
-		{"throttled", reasons("ThrottlingError", "None"), false},
-		{"a failed condition and a conflict", reasons("ConditionalCheckFailed", "TransactionConflict"), false},
+		{"old row gone", reasons("None", "ConditionalCheckFailed", "None"), true},
+		{"old row gone and the new one appeared", reasons("ConditionalCheckFailed", "ConditionalCheckFailed", "None"), true},
+		{"new row appeared, old row still there", reasons("ConditionalCheckFailed", "None", "None"), false},
+		{"reaction taken back mid-move, old row still there", reasons("None", "None", "ConditionalCheckFailed"), false},
+		{"conflicting transaction", reasons("None", "TransactionConflict", "None"), false},
+		{"throttled", reasons("ThrottlingError", "None", "None"), false},
 		{"no reasons given", reasons(), false},
-		{"only None", reasons("None", "None"), false},
+		{"too few reasons to include the delete", reasons("ConditionalCheckFailed"), false},
+		{"only None", reasons("None", "None", "None"), false},
 	} {
 		if got := nothingLeftToMove(tc.err); got != tc.want {
 			t.Errorf("%s: nothingLeftToMove = %v, want %v", tc.name, got, tc.want)
@@ -212,19 +217,138 @@ func TestNothingLeftToMove(t *testing.T) {
 	}
 }
 
-func TestACancelledMoveIsCountedAsRetryUnlessTheRowIsGone(t *testing.T) {
-	cancelled := func(code string) *types.TransactionCanceledException {
-		return &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String(code)}}}
-	}
+func TestACancelledMoveIsCountedAsRetryUnlessTheOldRowIsGone(t *testing.T) {
 	gone := rekeyReport{Moved: 1}
-	gone.recordCancelled(cancelled("ConditionalCheckFailed"))
+	gone.recordCancelled(reasons("None", "ConditionalCheckFailed", "None"))
 	if gone.Moved != 0 || gone.Retry != 0 {
-		t.Errorf("row gone: %+v, want moved 0 retry 0", gone)
+		t.Errorf("old row gone: %+v, want moved 0 retry 0", gone)
 	}
-	busy := rekeyReport{Moved: 1}
-	busy.recordCancelled(cancelled("TransactionConflict"))
-	if busy.Moved != 0 || busy.Retry != 1 {
-		t.Errorf("conflict: %+v, want moved 0 retry 1", busy)
+	for name, c := range map[string]*types.TransactionCanceledException{
+		"conflict":            reasons("None", "TransactionConflict", "None"),
+		"new row appeared":    reasons("ConditionalCheckFailed", "None", "None"),
+		"reaction taken back": reasons("None", "None", "ConditionalCheckFailed"),
+	} {
+		r := rekeyReport{Moved: 1}
+		r.recordCancelled(c)
+		if r.Moved != 0 || r.Retry != 1 {
+			t.Errorf("%s: %+v, want moved 0 retry 1", name, r)
+		}
+	}
+}
+
+// onTransaction returns a client whose TransactWriteItems calls run fn once, just before the
+// request is sent: the moment a conflicting write can land between the migration's reads and its
+// transaction.
+func onTransaction(ddb *dynamodb.Client, fn func()) *dynamodb.Client {
+	done := false
+	return dynamodb.New(ddb.Options(), func(o *dynamodb.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("rekey-test",
+				func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+					if !done && middleware.GetOperationName(ctx) == "TransactWriteItems" {
+						done = true
+						fn()
+					}
+					return next.HandleInitialize(ctx, in)
+				}), middleware.Before)
+		})
+	})
+}
+
+// raceFixture is one old-key row, the reaction it announces, and the keys involved.
+type raceFixture struct {
+	uid, rxnPK, rxnSK, oldSK, newSK string
+	only                            map[string]bool
+	newRow                          map[string]types.AttributeValue
+}
+
+func newRace(t *testing.T, ddb *dynamodb.Client, table string) raceFixture {
+	t.Helper()
+	uid, _ := idgen.UUID()
+	gid, _ := idgen.UUID()
+	pid := gid + "#2026-10-15#00112233445566a1"
+	hash := "000000000000000000000000000000aa"
+	f := raceFixture{uid: uid, rxnPK: "POST#" + pid, rxnSK: "RXN#0001#bob",
+		oldSK: "NOTIF#0000-00-00#" + hash, newSK: "NOTIF#0000-00-00#2026-10-15#" + hash, only: map[string]bool{uid: true}}
+	f.newRow = map[string]types.AttributeValue{
+		"PK": s("USER#" + uid), "SK": s(f.newSK), "Type": s("NOTIFICATION"), "Kind": s("reaction"),
+		"ActorUserID": s("bob"), "GroupID": s(gid), "PostID": s(pid), "CmtPath": s("0001"),
+		"Read": &types.AttributeValueMemberBOOL{Value: false},
+	}
+	put(t, ddb, table, map[string]types.AttributeValue{"PK": s(f.rxnPK), "SK": s(f.rxnSK), "Type": s("REACTION")})
+	old := map[string]types.AttributeValue{}
+	for k, v := range f.newRow {
+		old[k] = v
+	}
+	old["SK"] = s(f.oldSK)
+	put(t, ddb, table, old)
+	return f
+}
+
+func (f raceFixture) run(t *testing.T, ddb *dynamodb.Client, table string, dry bool) rekeyReport {
+	t.Helper()
+	rep, err := rekeyReactionNotifications(context.Background(), ddb, table, rekeyOptions{dryRun: dry, onlyUsers: f.only})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rep
+}
+
+// A reaction taken back after the migration read it but before its transaction: the move must not
+// land, or the row would sit on the new key with no reaction row left to point at it.
+func TestRekeyDoesNotMoveARowWhoseReactionIsTakenBackMidMove(t *testing.T) {
+	ddb, table := localClient(t)
+	f := newRace(t, ddb, table)
+	racing := onTransaction(ddb, func() {
+		if _, err := ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{TableName: &table,
+			Key: map[string]types.AttributeValue{"PK": s(f.rxnPK), "SK": s(f.rxnSK)}}); err != nil {
+			t.Error(err)
+		}
+	})
+	rep := f.run(t, racing, table, false)
+	if rep.Moved != 0 || rep.Retry != 1 {
+		t.Fatalf("racing run: %+v, want moved 0 retry 1", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) == nil || get(t, ddb, table, f.uid, f.newSK) != nil {
+		t.Fatal("the row was moved although its reaction was gone")
+	}
+	// The next run deletes it as an orphan, and then a dry run has nothing left to report.
+	if rep := f.run(t, ddb, table, false); rep.Orphaned != 1 || rep.Moved != 0 {
+		t.Fatalf("second run: %+v, want orphaned 1", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) != nil || get(t, ddb, table, f.uid, f.newSK) != nil {
+		t.Fatal("a notification for a taken-back reaction is still stored")
+	}
+	if rep := f.run(t, ddb, table, true); rep.Moved+rep.Superseded+rep.Orphaned+rep.Retry != 0 {
+		t.Fatalf("final dry run: %+v, want all zero", rep)
+	}
+}
+
+// The new row appearing after the migration read (the reaction was given again) cancels the move
+// with the old row still in place. That is a retry, not a finished row: a dry run afterwards must
+// show it, and the next run removes it.
+func TestRekeyCountsARowThatAppearedMidMoveAsRetryThenSupersedesTheOldOne(t *testing.T) {
+	ddb, table := localClient(t)
+	f := newRace(t, ddb, table)
+	racing := onTransaction(ddb, func() { put(t, ddb, table, f.newRow) })
+	rep := f.run(t, racing, table, false)
+	if rep.Moved != 0 || rep.Retry != 1 {
+		t.Fatalf("racing run: %+v, want moved 0 retry 1", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) == nil {
+		t.Fatal("the old row is gone although the move was cancelled")
+	}
+	if dry := f.run(t, ddb, table, true); dry.Superseded != 1 {
+		t.Fatalf("dry run after the race: %+v, want superseded 1 (so an operator sees it is not done)", dry)
+	}
+	if rep := f.run(t, ddb, table, false); rep.Superseded != 1 {
+		t.Fatalf("second run: %+v, want superseded 1", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) != nil || get(t, ddb, table, f.uid, f.newSK) == nil {
+		t.Fatal("want only the new row left")
+	}
+	if rep := f.run(t, ddb, table, true); rep.Moved+rep.Superseded+rep.Orphaned+rep.Retry != 0 {
+		t.Fatalf("final dry run: %+v, want all zero", rep)
 	}
 }
 

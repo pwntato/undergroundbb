@@ -320,6 +320,21 @@ AWS_REGION=us-west-2 TABLE_NAME=<table> go run ./cmd/wipe-v1-keyrows            
 AWS_REGION=us-west-2 TABLE_NAME=<table> WIPE_DRY_RUN=false go run ./cmd/wipe-v1-keyrows   # delete
 ```
 
+**One-time migration for reaction notifications (#69).** A reaction notification's sort key now carries
+the day of the post it is on (`NOTIF#0000-00-00#<post day>#<hash>`), so the notification list is plain
+key order. Rows written before that have no post day; run `cmd/rekey-reaction-notifs` once per
+environment, after the code that writes the new key is deployed, from a shell with your own AWS
+credentials. It is not a Lambda and the Lambda roles do not carry the `dynamodb:Scan` it needs. It
+defaults to a dry run and only the exact string `REKEY_DRY_RUN=false` writes. It moves a row only if
+the reaction it announces still exists (a row whose reaction was taken back is deleted, reported as
+`orphaned`), and a move that was cancelled is reported as `retry` and left for the next run. Repeat
+the write run until a dry run reports `moved`, `superseded`, `orphaned` and `retry` all 0:
+
+```sh
+AWS_REGION=us-west-2 TABLE_NAME=<table> go run ./cmd/rekey-reaction-notifs                        # report only
+AWS_REGION=us-west-2 TABLE_NAME=<table> REKEY_DRY_RUN=false go run ./cmd/rekey-reaction-notifs    # write
+```
+
 `authorization_type = "NONE"` on the Function URL is intentional, not an oversight — CloudFront
 (#8) is the intended access-control boundary, matching `docs/DESIGN.md`'s infrastructure diagram.
 
