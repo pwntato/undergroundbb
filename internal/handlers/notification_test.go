@@ -432,31 +432,39 @@ func TestDeletingACommentRemovesItsNotificationsAndTheOnesItsReactionsSent(t *te
 	}
 }
 
-// Deleting a post removes the notifications its own reactions sent the author.
-func TestDeletingAPostRemovesTheNotificationsOfItsReactions(t *testing.T) {
-	h, _, pid, owner, _, _, ownerCookie, bobCookie, _ := notifFixture(t, 0)
-	if rec := doReaction(t, h, http.MethodPut, bobCookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
-		t.Fatalf("react: %d", rec.Code)
-	}
-	if got := notificationsOf(t, owner.userID); len(got) != 1 {
-		t.Fatalf("owner has %d notifications, want 1", len(got))
-	}
+func doDeletePost(t *testing.T, h *Handler, cookie *http.Cookie, pid string) *httptest.ResponseRecorder {
+	t.Helper()
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/posts/"+url.PathEscape(pid), nil)
-	req.AddCookie(ownerCookie)
+	req.AddCookie(cookie)
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("delete post: %d %s", rec.Code, rec.Body.String())
+	return rec
+}
+
+// Deleting a post removes the notifications its own reactions sent the post's author, whoever
+// deletes it: here an admin deletes a member's post, so the author cannot be taken from the caller.
+func TestDeletingAPostRemovesTheNotificationsOfItsReactionsEvenWhenAnAdminDeletesIt(t *testing.T) {
+	h, gid, _, _, bob, carol, ownerCookie, _, carolCookie := notifFixture(t, 0)
+	postKey := "POST#2026-10-28#00112233445566d4"
+	storePostAt(t, gid, postKey, bob.userID, 0) // bob's post; the group's owner is its admin
+	pid := pidOf(gid, postKey)
+	_ = carol
+	if rec := doReaction(t, h, http.MethodPut, carolCookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("react: %d", rec.Code)
 	}
-	if got := notificationsOf(t, owner.userID); len(got) != 0 {
+	if got := notificationsOf(t, bob.userID); len(got) != 1 {
+		t.Fatalf("bob has %d notifications, want 1", len(got))
+	}
+	if rec := doDeletePost(t, h, ownerCookie, pid); rec.Code != http.StatusNoContent {
+		t.Fatalf("admin deletes bob's post: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := notificationsOf(t, bob.userID); len(got) != 0 {
 		t.Errorf("%d notifications of a deleted post's reactions survived: %v", len(got), got)
 	}
 }
 
-// One notification per reactor, target and post: the same person reacting to two things of the
-// same author, or to two posts of theirs, is two notifications, and taking one back leaves the other.
 func TestReactionNotificationsAreKeyedByPostTargetAndReactor(t *testing.T) {
 	h, gid, pid, owner, _, _, _, bobCookie, carolCookie := notifFixture(t, 0)
 	storeCommentAt(t, pid, "0001", owner.userID, 0)

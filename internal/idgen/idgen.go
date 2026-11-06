@@ -244,13 +244,12 @@ func CommentParentPath(path string) string {
 	return ""
 }
 
-// NotificationSortKey returns a fresh "NOTIF#<YYYY-MM-DD, UTC>#<rand>" sort key for a notification. The random half is 128 bits as 32 lowercase hex characters, the id convention
-// docs/DESIGN.md pins for every <rand> ("Sort keys carry a day and a random id"), and the day is
+// NotificationSortKey returns a fresh "NOTIF#<day>#<rand>" sort key for a reply notification,
+// day being the UTC day it was written (NotificationDay). The random half is 128 bits as 32
+// lowercase hex characters, the id convention docs/DESIGN.md pins for every <rand>, and the day is
 // the only time component: a notification lives in one named person's partition, so anything
-// finer would be an activity log for them.
-//
-// day is the UTC day to put in the key, or UndatedNotificationDay for a notification that must not
-// date what it is about (a reaction's: see that constant).
+// finer would be an activity log for them. Reaction notifications do not use this: their key is
+// computed (db.reactionNotificationKey) under UndatedNotificationDay.
 func NotificationSortKey(day string) (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -262,8 +261,8 @@ func NotificationSortKey(day string) (string, error) {
 // UndatedNotificationDay stands in for the day in a reaction notification's sort key. A reaction
 // is the one item the schema keeps undated (docs/THREAT_MODEL.md, "Message content"), and a
 // notification that carried the day someone reacted would date it. The key keeps the day's shape
-// so every NOTIF# key parses alike; it sorts before every real day. A reader orders these by
-// something other than the key.
+// so every NOTIF# key parses alike; it sorts before every real day. A reader orders those by the
+// post's day instead (docs/DESIGN.md, "What the reader does with them").
 const UndatedNotificationDay = "0000-00-00"
 
 // NotificationDay is the day for a notification written at now, in the key's format.

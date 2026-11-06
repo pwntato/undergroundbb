@@ -244,13 +244,20 @@ func (c *Client) sweepReactions(ctx context.Context, postID, path, authorID stri
 			return fmt.Errorf("db: sweep reactions: %w", err)
 		}
 		keys := make([]map[string]types.AttributeValue, 0, len(out.Items))
+		notifs := make([]map[string]types.AttributeValue, 0, len(out.Items))
 		for _, it := range out.Items {
 			keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
 			// The notification each reaction sent the comment's author goes with it.
 			if sk, ok := it["SK"].(*types.AttributeValueMemberS); ok && authorID != "" {
 				reactor := strings.TrimPrefix(sk.Value, ReactionSortKeyPrefix+path+"#")
-				keys = append(keys, reactionNotificationKey(authorID, postID, path, reactor))
+				notifs = append(notifs, reactionNotificationKey(authorID, postID, path, reactor))
 			}
+		}
+		// Notifications first: a reaction row is the only pointer to its notification's key (it is
+		// computed from the reactor), so deleting it first and failing before the notification
+		// would strand that notification where no repeat of the delete can find it.
+		if err := c.batchDelete(ctx, notifs); err != nil {
+			return fmt.Errorf("db: sweep reactions: %w", err)
 		}
 		if err := c.batchDelete(ctx, keys); err != nil {
 			return fmt.Errorf("db: sweep reactions: %w", err)

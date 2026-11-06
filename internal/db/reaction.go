@@ -108,7 +108,7 @@ func (c *Client) PutReaction(ctx context.Context, in PutReactionInput) error {
 	if in.NotifyUserID != "" {
 		items = append(items, notification{
 			recipientID: in.NotifyUserID, kind: NotificationReaction, actorID: in.ReactorID,
-			groupID: in.GroupID, postID: in.PostID, cmtPath: in.Target, ttl: in.PostTTL, now: in.Now,
+			groupID: in.GroupID, postID: in.PostID, cmtPath: in.Target, ttl: in.PostTTL,
 		}.putReaction(c.table))
 	}
 	targetIndex := -1

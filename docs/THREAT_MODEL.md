@@ -146,7 +146,7 @@ behind. No row carries a creation time at finer than day resolution except this 
 a test account's `PROFILE`, whose `CreatedAt` the purge compares against its cutoff; a real member's
 `MEMBER#` row keeps only its UTC day, because the successor claim reads it as the join date.
 
-**This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` in the *user's* own
+**This includes notifications**, which are `NOTIF#<YYYY-MM-DD, UTC>#<rand>` (a reaction's has a placeholder day and a computed id, see below) in the *user's* own
 partition. That is a per-user timeline rather than a per-group one, and it spans every group the
 user belongs to, so it is a distinct disclosure from "what day something was posted in this group" —
 which is why it gets the same day-granular, randomly-ordered treatment.

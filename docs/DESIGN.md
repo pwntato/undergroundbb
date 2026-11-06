@@ -2513,7 +2513,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Rotation cooldown | `USER#<uuid>` | `ROTCOOLDOWN` | | | TTL, end of the UTC day after the cooldown setting |
 | Rotation handoff | `USER#<uuid>` | `HANDOFF#<gid>` | | | never (deleted on use; by the client when its start is refused; by the next `rotate-keys` commit when it names another key or the caller is no longer an admin of that group; with the account) |
 | Rotation handoff counter | `USER#<uuid>` | `HANDOFFSEQ` | | | never (absent reads as 0; deleted with the account) |
-| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>` | | | group policy |
+| Notification | `USER#<uuid>` | `NOTIF#<YYYY-MM-DD, UTC>#<rand>`; for a reaction, `NOTIF#0000-00-00#<hash>` (see "What writes one (#68)") | | | group policy |
 
 **The TTL column is part of the table on purpose.** This assignment was prose for several revisions
 and drifted every time a row was added — a new row would arrive and the separate list would not be
@@ -3115,8 +3115,9 @@ user item exposing only the username and the public keys, current and superseded
 those itself — it decrypts the address to send them — so it can use only what it can read. An email
 says there is activity and links to it; it names neither the group nor the actor. Anything richer
 would mean handing the group name to the server, which is the property this design exists to keep.
-**A notification inherits the expiration policy of the group that generated it**, so it never
-outlives the content it points at. Notifications live in the user's partition rather than a group's,
+**A notification inherits the expiration policy of the group that generated it**, by copying its
+post's TTL, so it does not outlive the post it points at (and deleting what sent it deletes it: see
+"Deleting something deletes what it sent"). Notifications live in the user's partition rather than a group's,
 so a single user's list mixes policies from every group they belong to — and one from a group with
 expiration disabled does not expire either. A notification whose target has already been deleted is
 filtered on read like any other expired item, since the client renders from identifiers and an
@@ -3169,7 +3170,7 @@ cross to fill a screen, and a quiet group can need several empty-day queries to 
 Anything needing sub-day server-side time filtering or server-side intra-day ordering would require
 a schema migration, so this is a deliberate and hard-to-reverse choice, not an incidental one.
 
-**`NOTIF#` uses the same random id, and for a sharper reason.** Notifications live in the *user's*
+**`NOTIF#` uses the same random id (for a reply; a reaction's is computed and undated, see "What writes one (#68)"), and for a sharper reason.** Notifications live in the *user's*
 partition, so a time-ordered id there is a millisecond-resolution activity log for one named person
 spanning every group they belong to — a worse disclosure per item than posts, which are at least
 scoped to a group. It carries a day prefix for the same reason posts do.
