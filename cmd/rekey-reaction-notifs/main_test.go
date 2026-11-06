@@ -324,6 +324,26 @@ func TestRekeyDoesNotMoveARowWhoseReactionIsTakenBackMidMove(t *testing.T) {
 	}
 }
 
+// The old row deleted after the migration read it (its post's TTL, or an account sweep): the move
+// must not write the new row, or it would bring back a notification that was deleted.
+func TestRekeyDoesNotRecreateARowDeletedMidMove(t *testing.T) {
+	ddb, table := localClient(t)
+	f := newRace(t, ddb, table)
+	racing := onTransaction(ddb, func() {
+		if _, err := ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{TableName: &table,
+			Key: map[string]types.AttributeValue{"PK": s("USER#" + f.uid), "SK": s(f.oldSK)}}); err != nil {
+			t.Error(err)
+		}
+	})
+	rep := f.run(t, racing, table, false)
+	if rep.Moved != 0 || rep.Retry != 0 {
+		t.Fatalf("racing run: %+v, want moved 0 retry 0 (nothing left to move)", rep)
+	}
+	if get(t, ddb, table, f.uid, f.oldSK) != nil || get(t, ddb, table, f.uid, f.newSK) != nil {
+		t.Fatal("a row deleted mid-move was brought back on the new key")
+	}
+}
+
 // The new row appearing after the migration read (the reaction was given again) cancels the move
 // with the old row still in place. That is a retry, not a finished row: a dry run afterwards must
 // show it, and the next run removes it.

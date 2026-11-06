@@ -7,8 +7,7 @@
 
 const HIDDEN_ON = ['/signup', '/recovery', '/account/password', '/account/rotate-keys'] as const
 
-/** Whether the header link is shown on this pathname (a trailing slash does not matter). */
+/** Whether the header link is shown on this pathname. A trailing slash or a sub-path is the same route. */
 export function headerShownOn(pathname: string): boolean {
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
-  return !HIDDEN_ON.some((hidden) => path === hidden || path.startsWith(`${hidden}/`))
+  return !HIDDEN_ON.some((hidden) => pathname === hidden || pathname.startsWith(`${hidden}/`))
 }
