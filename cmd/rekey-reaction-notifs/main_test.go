@@ -40,9 +40,10 @@ func TestOldHash(t *testing.T) {
 		t.Errorf("old key: %q %v", got, ok)
 	}
 	for _, sk := range []string{
-		"NOTIF#0000-00-00#2026-10-01#" + h,  // already the new shape
-		"NOTIF#2026-10-01#" + h,             // a reply
-		"NOTIF#0000-00-00#0123456789abcdef", // wrong length
+		"NOTIF#0000-00-00#2026-10-01#" + h,                  // already the new shape
+		"NOTIF#2026-10-01#" + h,                             // a reply
+		"NOTIF#0000-00-00#0123456789abcdef",                 // wrong length
+		"NOTIF#0000-00-00#0123456789abcdef#123456789abcdef", // 32 characters, but a "#" inside
 	} {
 		if _, ok := oldHash(sk); ok {
 			t.Errorf("%q taken for an old key", sk)
