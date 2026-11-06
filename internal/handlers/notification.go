@@ -59,7 +59,7 @@ type notificationFilter struct {
 
 func (f *notificationFilter) keep(n models.Notification) (bool, error) {
 	groupID, postSK, ok := idgen.ParsePostID(n.PostID)
-	if !ok || groupID != n.GroupID {
+	if !ok {
 		return false, nil
 	}
 	in, seen := f.member[groupID]

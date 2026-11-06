@@ -138,6 +138,10 @@ func TestListNotificationsDropsLeftGroupsAndGonePosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	missing := pidOf(gid, "POST#2026-10-30#00112233445566a5")
+	expired := pidOf(gid, "POST#2026-10-31#00112233445566a7")
+	storePostAt(t, gid, "POST#2026-10-31#00112233445566a7", owner.userID, 1) // TTL long past, row not yet swept
+	putNotif(t, owner.userID, replySK("2026-10-24", 5), "reply", bob.userID, gid, expired)
+	putNotif(t, owner.userID, reactSK(4), "reaction", bob.userID, gid, expired)
 	// A group the owner is not in (never joined): its notification must not show.
 	otherGid := "11111111-1111-4111-8111-111111111111"
 	otherPid := pidOf(otherGid, "POST#2026-10-28#00112233445566a6")
@@ -245,6 +249,9 @@ func TestMarkNotificationsReadSetsReadOnlyTheCallersOwnNamedRows(t *testing.T) {
 	}
 	if len(read) != 2 {
 		t.Fatalf("marking a missing id created a row: %v", read)
+	}
+	if rows := notificationsOf(t, owner.userID); len(rows) != 2 {
+		t.Fatalf("owner has %d rows, want 2 (marking a missing id must not create one)", len(rows))
 	}
 	for _, it := range notificationsOf(t, bob.userID) {
 		if r, _ := it["Read"].(*types.AttributeValueMemberBOOL); r == nil || r.Value {
