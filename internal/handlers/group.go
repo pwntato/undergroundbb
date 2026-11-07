@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -480,8 +481,7 @@ func encodeWrappedKey(k models.WrappedKey) wrappedKey {
 // public group, NameCiphertext/DescriptionCiphertext for a private one. The
 // member's own WrappedGroupKey is served for both: a private group needs it
 // to decrypt the name, and any group needs it for a key rotation's handoff
-// row. Unread and UnreadMore are the caller's unread notifications in the
-// group (#145); see unreadCounts.
+// row.
 type groupListEntry struct {
 	GroupID    string `json:"groupId"`
 	Visibility string `json:"visibility"`
@@ -504,16 +504,22 @@ type groupListEntry struct {
 	NameCiphertext        *wrappedBlob `json:"nameCiphertext,omitempty"`
 	DescriptionCiphertext *wrappedBlob `json:"descriptionCiphertext,omitempty"`
 	WrappedGroupKey       *wrappedKey  `json:"wrappedGroupKey,omitempty"`
+}
 
-	// Unread counts up to 99; UnreadMore means "at least this many" (more than 99, or the read
-	// stopped on its limits). Both are zero-valued on the group detail response.
-	Unread     int  `json:"unread"`
-	UnreadMore bool `json:"unreadMore"`
+// groupListItem is a groupListEntry as GET /api/groups returns it. Unread and UnreadMore are only
+// there when the request asked for counts (?unread=1) and the count worked (#145): absent means
+// "not counted", never zero, so a client cannot mistake it for a real zero. The group detail
+// response embeds groupListEntry, not this, so it has no such fields.
+type groupListItem struct {
+	groupListEntry
+	// Unread counts up to 99; UnreadMore means "at least this many".
+	Unread     *int `json:"unread,omitempty"`
+	UnreadMore bool `json:"unreadMore,omitempty"`
 }
 
 // listGroupsResponse is the wire shape of GET /api/groups.
 type listGroupsResponse struct {
-	Groups []groupListEntry `json:"groups"`
+	Groups []groupListItem `json:"groups"`
 }
 
 // listGroups implements GET /api/groups -- issue #35. Authenticated by
@@ -530,8 +536,10 @@ type listGroupsResponse struct {
 // comment), so this response hands back exactly the ciphertext and the
 // caller's own WrappedGroupKey and nothing more.
 //
-// Each entry also carries the caller's unread notification count for that
-// group (#145): see unreadCounts for what it reads and what it costs.
+// With ?unread=1 each entry also carries the caller's unread notification count for that group
+// (#145): see unreadCounts for what it reads and what it costs. Only Home asks, because the same
+// call serves login, Invites and Rotate keys, which never show it. The count is decoration: if it
+// fails the groups are returned without counts rather than failing the list.
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -554,12 +562,17 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	for _, m := range memberships {
 		memberOf[strings.TrimPrefix(m.PK, "GROUP#")] = true
 	}
-	unread, unreadMore, err := h.unreadCounts(r, userID, memberOf)
-	if err != nil {
-		WriteInternalError(w, r, err, "could not count unread notifications")
-		return
+	var unread map[string]int
+	var unreadMore map[string]bool
+	if r.URL.Query().Get("unread") == "1" {
+		var cerr error
+		unread, unreadMore, cerr = h.unreadCounts(r, userID, memberOf)
+		if cerr != nil {
+			log.Printf("%s %s: counting unread notifications: %v", r.Method, r.URL.Path, cerr)
+			unread, unreadMore = nil, nil
+		}
 	}
-	entries := make([]groupListEntry, 0, len(memberships))
+	entries := make([]groupListItem, 0, len(memberships))
 	for i, m := range memberships {
 		g := groups[i]
 		entry := groupListEntry{
@@ -569,8 +582,6 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 			Generation:     m.Generation,
 			NoRotation:     g.HasNoRotation(),
 			NameGeneration: g.NameGeneration,
-			Unread:         unread[strings.TrimPrefix(m.PK, "GROUP#")],
-			UnreadMore:     unreadMore[strings.TrimPrefix(m.PK, "GROUP#")],
 		}
 		if g.Visibility == models.VisibilityPublic {
 			entry.NamePlaintext = g.NamePlaintext
@@ -590,7 +601,13 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 		// survive a closed tab"), and it is their own ciphertext.
 		wk := encodeWrappedKey(m.WrappedGroupKey)
 		entry.WrappedGroupKey = &wk
-		entries = append(entries, entry)
+		item := groupListItem{groupListEntry: entry}
+		if unread != nil {
+			n := unread[entry.GroupID]
+			item.Unread = &n
+			item.UnreadMore = unreadMore[entry.GroupID]
+		}
+		entries = append(entries, item)
 	}
 
 	WriteJSON(w, http.StatusOK, listGroupsResponse{Groups: entries})

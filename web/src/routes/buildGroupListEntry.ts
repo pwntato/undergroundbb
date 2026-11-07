@@ -26,8 +26,6 @@ export function buildGroupListEntry(
       generation: 0,
       noRotation: true,
       nameGeneration: 0,
-      unread: 0,
-      unreadMore: false,
       ...(form.namePlaintext !== undefined && { namePlaintext: form.namePlaintext }),
       ...(form.descriptionPlaintext !== undefined && {
         descriptionPlaintext: form.descriptionPlaintext,
@@ -41,8 +39,6 @@ export function buildGroupListEntry(
     generation: 0,
     noRotation: form.revocationMode === 'open',
     nameGeneration: 0,
-    unread: 0,
-    unreadMore: false,
     ...(form.nameCiphertext !== undefined && { nameCiphertext: form.nameCiphertext }),
     ...(form.descriptionCiphertext !== undefined && {
       descriptionCiphertext: form.descriptionCiphertext,

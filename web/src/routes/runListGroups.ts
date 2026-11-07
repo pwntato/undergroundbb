@@ -13,7 +13,7 @@
 // degradation, not a fatal error for the whole list -- see
 // DisplayGroup.nameStatus's own doc comment.
 
-import type { GroupListEntry, ListGroupsResponse } from '@/lib/api/groups'
+import type { GroupListEntry, ListedGroup, ListGroupsResponse } from '@/lib/api/groups'
 import type { DecryptedGroupName } from '@/lib/crypto/worker-protocol'
 import { nameStamp } from '@/lib/groups/groupNameCache'
 import { groupLabel } from './groupLabel'
@@ -32,7 +32,7 @@ import { groupLabel } from './groupLabel'
  *   fresh login fixes every one of them at once, while an 'unreadable'
  *   entry would not be fixed by re-authenticating.
  */
-export type DisplayGroup = GroupListEntry & {
+export type DisplayGroup = ListedGroup & {
   readonly displayName: string | null
   readonly displayDescription: string | null
   readonly nameStatus: 'plaintext' | 'decrypted' | 'unreadable' | 'coldKeys'

@@ -3050,7 +3050,9 @@ in M7:
   ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
   and would make a **sixth** contested write, alongside the five named above — and it would put a
-  second contested attribute on `PROFILE`, which the credential re-wrap already contests.
+  second contested attribute on `PROFILE`, which the credential re-wrap already contests. The
+  shipped read (#145) is bounded: it stops after 1000 rows examined and 99 unread per group, so a
+  long history no longer costs more per count.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
   the rotation loop, and it should be built with the same expectation that it is interruptible.
@@ -3100,14 +3102,19 @@ the list is one descending read of the `NOTIF#` range: reply notifications newes
 reaction notifications newest post first.
 Reading and marking read are #69; the unread count is #145.
 
-**How the unread count is served (#145).** `GET /api/groups` carries `unread` and `unreadMore` on each
-entry. The handler reads the user's `NOTIF#` range newest first in the same batches, pass limit and
-time budget as the list, counts only unread rows the list would show (the user is in the group, the
-post is live), and stops counting a group at 99. `unreadMore` means "at least `unread`": the group
-passed 99, or the read hit a limit before the range ended (then every group has it). This is the
-filtered-`Query` option, not a `PROFILE` counter: the cost is bounded by the pass limit (1000 rows
-examined) and by retention, and no notification write or mark-read has to keep a counter exact. If
-that bound proves too costly the counter is the next step, with the sixth contested write it implies.
+**How the unread count is served (#145).** `GET /api/groups?unread=1` carries `unread` and `unreadMore` on
+each entry; without the parameter, and on the group detail response, there are no such fields (absent
+means "not counted", never zero). Only Home asks, since the same call serves login, Invites and Rotate
+keys. The handler reads the user's `NOTIF#` range newest first in the same batches, pass limit and time
+budget as the list, counts only unread rows the list would show (the user is in the group, the post is
+live), and stops counting a group at 99. `unreadMore` means "at least `unread`": the group passed 99, or
+the read hit a limit before the range ended and the group has some unread found. A group with none found
+gets no flag: read rows fill the window, so a flag on every group could not be cleared by marking
+everything read. The cost is that unread rows sitting past the window show no badge. A failed count is
+logged and the list is returned without counts. This is the filtered-`Query` option, not a `PROFILE`
+counter: the cost is bounded by the pass limit (1000 rows examined) and by retention, and no
+notification write or mark-read has to keep a counter exact. If that bound proves too costly the counter
+is the next step, with the sixth contested write it implies.
 
 **How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
 over the user's `NOTIF#` range: replies carry a real day and sort above the reaction range (its
@@ -3121,7 +3128,7 @@ whichever comes first, after which the page comes back short with a cursor to co
 bound matters because a timeout returns no cursor, so the same rows would be retried for ever. There is no cap on the range. `PUT /api/notifications/read` takes up to
 25 ids from the caller's own partition and sets `Read`; an id with no row is skipped, so marking never
 creates one. The web list links each row to the thread, not to the comment (the thread has no comment
-anchors yet) and shows no unread count (#145).
+anchors yet) and has no header badge (#145 added per-group counts on Home only).
 
 Both halves of that rendering need a mechanism, and neither is free:
 

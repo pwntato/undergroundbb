@@ -13,14 +13,27 @@ import (
 
 type unreadEntry struct {
 	GroupID    string `json:"groupId"`
-	Unread     int    `json:"unread"`
+	Unread     *int   `json:"unread"`
 	UnreadMore bool   `json:"unreadMore"`
+}
+
+// n is the count, or -1 when the response carried none.
+func (e unreadEntry) n() int {
+	if e.Unread == nil {
+		return -1
+	}
+	return *e.Unread
 }
 
 func unreadByGroup(t *testing.T, h *Handler, c *http.Cookie) map[string]unreadEntry {
 	t.Helper()
-	rec := doListGroups(t, h, c)
-	if rec.Code != http.StatusOK {
+	return unreadByGroupAt(t, h, c, "/api/groups?unread=1", http.StatusOK)
+}
+
+func unreadByGroupAt(t *testing.T, h *Handler, c *http.Cookie, path string, wantCode int) map[string]unreadEntry {
+	t.Helper()
+	rec := doNotifications(t, h, c, http.MethodGet, path, nil)
+	if rec.Code != wantCode {
 		t.Fatalf("list groups: %d %s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
@@ -70,10 +83,10 @@ func TestListGroupsCountsUnreadPerGroupAndOnlyWhatTheListShows(t *testing.T) {
 	markRowRead(t, owner.userID, replySK("2026-10-22", 3))
 
 	got := unreadByGroup(t, h, c)
-	if g := got[gid]; g.Unread != 3 || g.UnreadMore {
+	if g := got[gid]; g.n() != 3 || g.UnreadMore {
 		t.Fatalf("group 1: %+v, want 3 unread, not more", g)
 	}
-	if g := got[gid2]; g.Unread != 1 || g.UnreadMore {
+	if g := got[gid2]; g.n() != 1 || g.UnreadMore {
 		t.Fatalf("group 2: %+v, want 1 unread, not more", g)
 	}
 	if len(got) != 2 {
@@ -85,7 +98,7 @@ func TestListGroupsUnreadStopsAtNinetyNineAndSaysThereAreMore(t *testing.T) {
 	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
 	putManyReactions(t, owner.userID, bob.userID, gid, pOld, maxUnreadShown+1)
 	g := unreadByGroup(t, h, c)[gid]
-	if g.Unread != maxUnreadShown || !g.UnreadMore {
+	if g.n() != maxUnreadShown || !g.UnreadMore {
 		t.Fatalf("%+v, want %d and more", g, maxUnreadShown)
 	}
 
@@ -93,29 +106,100 @@ func TestListGroupsUnreadStopsAtNinetyNineAndSaysThereAreMore(t *testing.T) {
 	h2, gid2, owner2, bob2, c2, p2, _, _ := listFixture(t)
 	putManyReactions(t, owner2.userID, bob2.userID, gid2, p2, maxUnreadShown)
 	g = unreadByGroup(t, h2, c2)[gid2]
-	if g.Unread != maxUnreadShown || g.UnreadMore {
+	if g.n() != maxUnreadShown || g.UnreadMore {
 		t.Fatalf("%+v, want exactly %d and not more", g, maxUnreadShown)
 	}
 }
 
 func TestListGroupsUnreadIsALowerBoundWhenTheReadRunsOutOfBudget(t *testing.T) {
-	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
-	gone := pidOf(gid, "POST#2026-10-30#00112233445566a5")
+	h, gid, owner, bob, c, _, _, pNew := listFixture(t)
+	// The older post's rows are gone-post rows that fill the next batches; the live unread row on
+	// the newest post comes first, so the first batch finds it and the spent budget stops there.
+	gone := pidOf(gid, "POST#2026-09-01#00112233445566a5")
 	putManyReactions(t, owner.userID, bob.userID, gid, gone, 2*notificationReadBatch)
-	putNotif(t, owner.userID, reactSK(pOld, 0), "reaction", bob.userID, gid, pOld)
+	putNotif(t, owner.userID, reactSK(pNew, 0), "reaction", bob.userID, gid, pNew)
 
 	old := notificationTimeBudget
 	notificationTimeBudget = -1
 	t.Cleanup(func() { notificationTimeBudget = old })
 	g := unreadByGroup(t, h, c)[gid]
-	if !g.UnreadMore {
-		t.Fatalf("%+v, want unreadMore when the read stopped before the end", g)
+	if g.n() != 1 || !g.UnreadMore {
+		t.Fatalf("%+v, want 1 and more when the read stopped before the end", g)
+	}
+}
+
+// Past the row limit with everything read, a group has no badge: marking all read cannot clear a
+// "0+", because the read rows are what fill the window (review of #346).
+func TestListGroupsUnreadAllReadPastTheLimitIsZeroWithNoFlag(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	gid2 := createPrivateGroup(t, h, owner, c)
+	putManyReactions(t, owner.userID, bob.userID, gid, pOld, notificationMaxPasses*notificationReadBatch+1)
+	for i := 0; i < notificationMaxPasses*notificationReadBatch+1; i++ {
+		markRowRead(t, owner.userID, reactSK(pOld, i))
+	}
+	got := unreadByGroup(t, h, c)
+	for _, id := range []string{gid, gid2} {
+		if g := got[id]; g.n() != 0 || g.UnreadMore {
+			t.Fatalf("group %s: %+v, want 0 and no flag", id, g)
+		}
+	}
+}
+
+func TestListGroupsWithoutTheParameterCarriesNoCount(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
+	g := unreadByGroupAt(t, h, c, "/api/groups", http.StatusOK)[gid]
+	if g.n() != -1 || g.UnreadMore {
+		t.Fatalf("%+v, want no count when not asked", g)
+	}
+}
+
+func TestGroupDetailCarriesNoCount(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
+	rec := doNotifications(t, h, c, http.MethodGet, "/api/groups/"+gid, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail: %d %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"unread", "unreadMore"} {
+		if _, ok := raw[k]; ok {
+			t.Fatalf("group detail has %q", k)
+		}
+	}
+}
+
+// A count that fails must not fail the list (review of #346). A post row whose TTL is not a number
+// fails to unmarshal when the count looks the post up.
+func TestListGroupsStillLoadsWhenTheCountFails(t *testing.T) {
+	h, gid, owner, bob, c, _, _, _ := listFixture(t)
+	bad := pidOf(gid, "POST#2026-10-27#00112233445566a8")
+	storePostAt(t, gid, "POST#2026-10-27#00112233445566a8", owner.userID, 0)
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(testTableName()),
+		Key:                       map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("POST#2026-10-27#00112233445566a8")},
+		UpdateExpression:          aws.String("SET #t = :s"),
+		ExpressionAttributeNames:  map[string]string{"#t": "TTL"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":s": s("not a number")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	putNotif(t, owner.userID, replySK("2026-10-27", 1), "reply", bob.userID, gid, bad)
+	g, ok := unreadByGroup(t, h, c)[gid]
+	if !ok {
+		t.Fatal("group missing from the list")
+	}
+	if g.n() != -1 || g.UnreadMore {
+		t.Fatalf("%+v, want no count when the count failed", g)
 	}
 }
 
 func TestListGroupsUnreadIsZeroWithoutNotifications(t *testing.T) {
 	h, gid, _, _, c, _, _, _ := listFixture(t)
-	if g := unreadByGroup(t, h, c)[gid]; g.Unread != 0 || g.UnreadMore {
+	if g := unreadByGroup(t, h, c)[gid]; g.n() != 0 || g.UnreadMore {
 		t.Fatalf("%+v, want 0", g)
 	}
 }

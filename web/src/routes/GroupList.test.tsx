@@ -32,8 +32,6 @@ function displayGroup(overrides: Partial<DisplayGroup> = {}): DisplayGroup {
     generation: 0,
     noRotation: true,
     nameGeneration: 0,
-    unread: 0,
-    unreadMore: false,
     displayName: 'Book Club',
     displayDescription: 'We read books',
     nameStatus: 'plaintext',
@@ -165,11 +163,15 @@ describe('GroupList', () => {
         displayGroup({ groupId: 'a', unread: 3 }),
         displayGroup({ groupId: 'b', unread: 99, unreadMore: true }),
         displayGroup({ groupId: 'c', unread: 0 }),
+        displayGroup({ groupId: 'd', unread: 0, unreadMore: true }),
+        displayGroup({ groupId: 'e' }),
+        displayGroup({ groupId: 'f', unread: 1 }),
       ],
     })
     expect(html).toContain('aria-label="3 unread notifications"')
     expect(html).toContain('aria-label="99+ unread notifications"')
-    expect(html.match(/href="\/notifications"/g)).toHaveLength(2)
+    expect(html.match(/href="\/notifications"/g)).toHaveLength(3)
+    expect(html).toContain('aria-label="1 unread notification"')
     expect(html).not.toContain('0 unread')
   })
 })

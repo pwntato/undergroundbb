@@ -77,7 +77,7 @@ export function Home() {
       }
       try {
         const groups = await runListGroups({
-          listGroups,
+          listGroups: () => listGroups({ unread: true }),
           decryptGroupNames,
           getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
           getCachedGroupName,

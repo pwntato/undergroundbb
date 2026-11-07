@@ -19,7 +19,7 @@ const maxUnreadShown = 99
 // not by a counter that every notification write and mark-read would have to keep exact.
 //
 // more holds the groups whose count is only a lower bound: the group passed maxUnreadShown, or the
-// read stopped on a limit before the range ended (then every group is in it).
+// read stopped on a limit before the range ended and the group has some unread found.
 func (h *Handler) unreadCounts(r *http.Request, userID string, memberOf map[string]bool) (counts map[string]int, more map[string]bool, err error) {
 	counts = map[string]int{}
 	more = map[string]bool{}
@@ -60,9 +60,13 @@ func (h *Handler) unreadCounts(r *http.Request, userID string, memberOf map[stri
 			break
 		}
 	}
-	// Stopped on a limit with rows unread: every count is a lower bound.
-	for g := range memberOf {
-		more[g] = true
+	// Stopped on a limit: a count above zero is a lower bound. A group with none found gets no
+	// flag, or every group would show a badge, and reading everything would not clear it (read
+	// rows are what fill the window).
+	for g, n := range counts {
+		if n > 0 {
+			more[g] = true
+		}
 	}
 	return counts, more, nil
 }
