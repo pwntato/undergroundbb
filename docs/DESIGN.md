@@ -3098,7 +3098,16 @@ for it, so it drops notifications for groups the user is no longer in and for po
 Reaction notifications have no time to order by, but the key carries the post's day (see above), so
 the list is one descending read of the `NOTIF#` range: reply notifications newest day first, then
 reaction notifications newest post first.
-Reading and marking read are separate work (#69, #145).
+Reading and marking read are #69; the unread count is #145.
+
+**How the unread count is served (#145).** `GET /api/groups` carries `unread` and `unreadMore` on each
+entry. The handler reads the user's `NOTIF#` range newest first in the same batches, pass limit and
+time budget as the list, counts only unread rows the list would show (the user is in the group, the
+post is live), and stops counting a group at 99. `unreadMore` means "at least `unread`": the group
+passed 99, or the read hit a limit before the range ended (then every group has it). This is the
+filtered-`Query` option, not a `PROFILE` counter: the cost is bounded by the pass limit (1000 rows
+examined) and by retention, and no notification write or mark-read has to keep a counter exact. If
+that bound proves too costly the counter is the next step, with the sixth contested write it implies.
 
 **How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
 over the user's `NOTIF#` range: replies carry a real day and sort above the reaction range (its
