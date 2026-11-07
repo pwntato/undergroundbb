@@ -150,7 +150,9 @@ export interface ListGroupsResponse {
  * so it doesn't fit putOrPostJSON's POST/PUT shape and calls fetch directly
  * instead, reusing the same handleJSON error handling.
  */
-export async function listGroups(opts: { readonly unread?: boolean } = {}): Promise<ListGroupsResponse> {
+export async function listGroups(
+  opts: { readonly unread?: boolean } = {},
+): Promise<ListGroupsResponse> {
   const res = await fetch(opts.unread ? '/api/groups?unread=1' : '/api/groups', {
     credentials: 'same-origin',
   })

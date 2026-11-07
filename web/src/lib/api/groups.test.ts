@@ -69,6 +69,13 @@ describe('listGroups', () => {
     vi.unstubAllGlobals()
   })
 
+  it('asks for unread counts only when told to (#145)', async () => {
+    const fetchMock = stubFetch(200, { groups: [] })
+    await listGroups()
+    await listGroups({ unread: true })
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/groups', '/api/groups?unread=1'])
+  })
+
   it('GETs /api/groups with no body and returns the parsed groups list', async () => {
     const response = {
       groups: [
