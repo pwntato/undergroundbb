@@ -58,6 +58,24 @@ describe('startHeaderCounting', () => {
   })
 })
 
+describe('startHeaderCounting listener', () => {
+  it('stop() calls the unsubscribe it was given, once (no leaked listener)', () => {
+    const unsubscribe = vi.fn()
+    const listen = vi.fn().mockReturnValue(unsubscribe)
+    const started = startHeaderCounting({
+      now: () => 0,
+      settled: () => Promise.resolve(),
+      fetchTotal: () => Promise.resolve(t(1)),
+      onMarksSettled: listen,
+      apply: () => undefined,
+    })
+    expect(listen).toHaveBeenCalledTimes(1)
+    expect(unsubscribe).not.toHaveBeenCalled()
+    started.stop()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('refreshWhenShown', () => {
   it('asks for an unforced refresh only while the header shows', () => {
     const refresh = vi.fn().mockResolvedValue(undefined)
