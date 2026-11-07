@@ -97,6 +97,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/groups/{groupId}/convert-open", h.requireSession(h.convertOpen))
 	mux.HandleFunc("GET /api/users/{userId}", h.requireSession(h.getUser))
 	mux.HandleFunc("GET /api/notifications", h.requireSession(h.listNotifications))
+	mux.HandleFunc("GET /api/notifications/unread", h.requireSession(h.unreadTotal))
 	mux.HandleFunc("PUT /api/notifications/read", h.requireSession(h.markNotificationsRead))
 	mux.HandleFunc("POST /api/users:batch", h.requireSession(h.batchUsers))
 	mux.HandleFunc("GET /api/pins", h.requireSession(h.listPins))

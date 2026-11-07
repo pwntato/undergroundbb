@@ -61,3 +61,20 @@ export async function markNotificationsRead(ids: readonly string[]): Promise<voi
   })
   if (!res.ok) await readJSON(res)
 }
+
+export interface UnreadTotal {
+  /** The caller's unread notifications across their groups, at most 99. */
+  readonly unread: number
+  /** "At least this many" (#145): more than 99, or the server's read hit a limit. */
+  readonly unreadMore: boolean
+}
+
+/** GET /api/notifications/unread: the number the header badge shows. */
+export async function getUnreadTotal(): Promise<UnreadTotal> {
+  const res = await fetch('/api/notifications/unread', { credentials: 'same-origin' })
+  const data = (await readJSON(res)) as Partial<UnreadTotal>
+  if (typeof data.unread !== 'number' || typeof data.unreadMore !== 'boolean') {
+    throw new ApiError(res.status, 'malformed response')
+  }
+  return { unread: data.unread, unreadMore: data.unreadMore }
+}
