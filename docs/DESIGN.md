@@ -3127,7 +3127,8 @@ not every group's metadata. Unlike the groups list it has nothing else to return
 an error and the client shows no badge (never a stale or zero one). The client's counter (`unreadCounter.ts`)
 counts when the header appears and on navigation, skipped when the last attempt STARTED under 30
 seconds ago (worked, failed or still in flight, so a slow or failing count is not retried on every
-click; a failed count shows no badge for up to that long), and always when a mark-read finishes, on any
+click; a failed count shows no badge for at least that long, until the next navigation after it or the next
+finished mark-read: there is no timer), and always when a mark-read finishes, on any
 screen. Only the newest count to have started is shown, so an older answer landing last is dropped, and
 navigating does not cancel a count. A read of the count (the header's, and Home's groups call) first
 waits for any mark-read in flight: "Mark these read" sends its batches of 25 one after another and does

@@ -4,7 +4,8 @@
 // - A refresh that is not forced is skipped when the last attempt STARTED less than 30 seconds
 //   ago, whether it worked, failed or is still in flight: the header sits on every screen, so a
 //   read of up to 1000 rows per click would be too much, and a slow or failing count must not be
-//   retried on every navigation. A failed count shows no badge for up to that long.
+//   retried on every navigation. A failed count shows no badge for at least that long, until the
+//   next navigation after it (there is no timer) or the next finished mark-read.
 // - A forced refresh (a mark-read just finished) always runs.
 // - Every refresh waits for any mark-read in flight, so it never counts rows just read.
 // - Only the newest refresh to have STARTED is shown: an older answer landing last is dropped, and
@@ -43,6 +44,8 @@ export function createUnreadCounter(deps: {
     let total: UnreadTotal | null
     try {
       await deps.settled()
+      // Replaced (or disposed) while waiting for a mark-read: do not send a read nobody will show.
+      if (disposed || mine !== newest) return
       total = await deps.fetchTotal()
     } catch {
       total = null

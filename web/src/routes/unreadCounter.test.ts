@@ -143,4 +143,32 @@ describe('createUnreadCounter', () => {
     expect(s.applied).toEqual([])
     expect(s.fetchTotal).toHaveBeenCalledTimes(1)
   })
+
+  it('sends one read, not two, when a refresh is replaced while it waits for a mark-read', async () => {
+    const gate = deferred<void>()
+    const s = setup({ settled: () => gate.promise })
+    const waiting = s.counter.refresh(false)
+    await tick()
+    s.advance(UNREAD_MIN_GAP_MS) // a later navigation, outside the window
+    const forced = s.counter.refresh(true)
+    await tick()
+    gate.resolve()
+    await tick()
+    expect(s.fetchTotal).toHaveBeenCalledTimes(1)
+    s.fetches[0]!.resolve(t(0))
+    await Promise.all([waiting, forced])
+    expect(s.applied).toEqual([t(0)])
+  })
+
+  it('sends no read for a refresh that is disposed while it waits for a mark-read', async () => {
+    const gate = deferred<void>()
+    const s = setup({ settled: () => gate.promise })
+    const waiting = s.counter.refresh(false)
+    await tick()
+    s.counter.dispose()
+    gate.resolve()
+    await waiting
+    expect(s.fetchTotal).not.toHaveBeenCalled()
+    expect(s.applied).toEqual([])
+  })
 })
