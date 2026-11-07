@@ -14,6 +14,8 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { logoutRequest } from '@/lib/api/auth'
 import { getKeychain, listGroups } from '@/lib/api/groups'
+import { listGroupsWithUnread } from './listGroupsWithUnread'
+import { marksSettled } from './markReadTracker'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
@@ -77,7 +79,7 @@ export function Home() {
       }
       try {
         const groups = await runListGroups({
-          listGroups: () => listGroups({ unread: true }),
+          listGroups: () => listGroupsWithUnread({ settled: marksSettled, listGroups }),
           decryptGroupNames,
           getNameChain: (gid, nameGen, gen) => fetchNameChain(getKeychain, gid, nameGen, gen),
           getCachedGroupName,
