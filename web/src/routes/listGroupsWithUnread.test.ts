@@ -25,4 +25,23 @@ describe('listGroupsWithUnread', () => {
     expect(await p).toEqual({ groups: [] })
     expect(order).toEqual(['settled', 'list {"unread":true}'])
   })
+
+  it('stops waiting after the cap when a mark never finishes', async () => {
+    vi.useFakeTimers()
+    try {
+      const listGroups = vi.fn().mockResolvedValue({ groups: [] })
+      const p = listGroupsWithUnread({
+        settled: () => new Promise<void>(() => {}),
+        listGroups,
+        maxWaitMs: 3000,
+      })
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(listGroups).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await p
+      expect(listGroups).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

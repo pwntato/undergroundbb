@@ -8,17 +8,19 @@ import (
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
 
-// unreadCountTimeout bounds the whole count in GET /api/groups. The time budget below is only checked
-// between batches, and each distinct unread post costs a read inside a batch, so a slow table could
-// outlast the Lambda timeout and fail the list. With a deadline the overrun is an ordinary error, and
-// the list is returned without counts. A variable so a test can shrink it.
+// unreadCountTimeout bounds one whole count: GET /api/groups?unread=1 and GET /api/notifications/unread.
+// The time budget below is only checked between batches, and each distinct unread post costs a read
+// inside a batch, so a slow table could outlast the Lambda timeout. With a deadline the overrun is an
+// ordinary error: the groups list is returned without counts, and the total answers 500 (it has
+// nothing else to return). A variable so a test can shrink it.
 var unreadCountTimeout = 5 * time.Second
 
 // maxUnreadShown is the largest unread count reported for one group; one more sets UnreadMore, and
 // the client shows "99+" (#145).
 const maxUnreadShown = 99
 
-// unreadCounts counts the caller's unread notifications per group, for GET /api/groups (#145).
+// unreadCounts counts the caller's unread notifications per group, for GET /api/groups?unread=1 and
+// the header total (#145).
 // It reads the same descending NOTIF# range as the list, in the same batches and under the same
 // pass and time limits, and counts a row only when the list would show it: the caller is in the
 // group and the post is live. Rows already read cost nothing beyond the read that returned them.

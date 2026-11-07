@@ -3124,12 +3124,17 @@ count from `GET /api/notifications/unread`, `{unread, unreadMore}`: the per-grou
 and capped at 99 (`unreadMore` if any group's count is a lower bound or the sum passes 99), with the
 same reads, limits and 5 second deadline. It asks only for the caller's memberships (one GSI1 `Query`),
 not every group's metadata. Unlike the groups list it has nothing else to return, so a failed count is
-an error and the client shows no badge (never a stale or zero one). The client fetches when the header
-appears and on navigation, but not more than once every 30 seconds, and again whenever a mark-read
-finishes. A read of the count (the header's, and Home's groups call) first waits for any mark-read in
-flight: "Mark these read" sends its batches of 25 one after another and does not wait, so without the
-wait a user who goes straight Back could be shown a badge for rows they have just read, and Home's
-badge would stay until the next load. While a mark is in flight the header keeps its old number until
+an error and the client shows no badge (never a stale or zero one). The client's counter (`unreadCounter.ts`)
+counts when the header appears and on navigation, skipped when the last attempt STARTED under 30
+seconds ago (worked, failed or still in flight, so a slow or failing count is not retried on every
+click; a failed count shows no badge for up to that long), and always when a mark-read finishes, on any
+screen. Only the newest count to have started is shown, so an older answer landing last is dropped, and
+navigating does not cancel a count. A read of the count (the header's, and Home's groups call) first
+waits for any mark-read in flight: "Mark these read" sends its batches of 25 one after another and does
+not wait, so without the wait a user who goes straight Back could be shown a badge for rows they have
+just read, and Home's badge would stay until the next load. Home holds its whole list for that wait, so
+the wait is capped at 3 seconds: a mark that hangs does not hold Home, and past the cap the badges may
+still include rows being marked until the next load. While a mark is in flight the header keeps its old number until
 the marks finish, then counts again.
 
 **How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
