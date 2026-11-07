@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -82,4 +83,51 @@ func (h *Handler) unreadCounts(r *http.Request, userID string, memberOf map[stri
 		}
 	}
 	return counts, more, nil
+}
+
+type unreadTotalResponse struct {
+	// Unread is the caller's unread notifications across their groups, at most maxUnreadShown.
+	Unread int `json:"unread"`
+	// UnreadMore means "at least Unread".
+	UnreadMore bool `json:"unreadMore"`
+}
+
+// unreadTotal implements GET /api/notifications/unread (#145): the number the header badge shows.
+// It is the per-group count of GET /api/groups?unread=1 summed and capped at maxUnreadShown, with
+// the same reads, limits and deadline, but it asks only for the caller's memberships (one GSI1
+// Query) instead of every group's metadata. Unlike the groups list there is nothing else to
+// return, so a failed count is an error here; the client shows no badge.
+func (h *Handler) unreadTotal(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	groupIDs, err := h.db.ListMemberGroupIDs(r.Context(), userID)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not list groups")
+		return
+	}
+	memberOf := make(map[string]bool, len(groupIDs))
+	for _, id := range groupIDs {
+		memberOf[id] = true
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), unreadCountTimeout)
+	defer cancel()
+	counts, more, err := h.unreadCounts(r.WithContext(ctx), userID, memberOf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not count unread notifications")
+		return
+	}
+	resp := unreadTotalResponse{}
+	for g, n := range counts {
+		resp.Unread += n
+		if more[g] {
+			resp.UnreadMore = true
+		}
+	}
+	if resp.Unread > maxUnreadShown {
+		resp.Unread, resp.UnreadMore = maxUnreadShown, true
+	}
+	WriteJSON(w, http.StatusOK, resp)
 }

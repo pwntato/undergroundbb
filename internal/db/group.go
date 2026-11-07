@@ -403,6 +403,16 @@ func (c *Client) ListGroups(ctx context.Context, userID string) ([]models.Member
 	return kept, groups, nil
 }
 
+// ListMemberGroupIDs returns the ids of the groups userID belongs to: the one GSI1 Query and none of
+// ListGroups' per-group metadata reads, for callers that only need membership (the unread total).
+func (c *Client) ListMemberGroupIDs(ctx context.Context, userID string) ([]string, error) {
+	memberships, err := c.queryMembershipsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return membershipGroupIDs(memberships), nil
+}
+
 // queryMembershipsByUser runs the GSI1 Query for GSI1PK = "USER#<userID>" --
 // the first Query in this codebase; db.go's own package doc comment
 // ("Query construction is confined to this package") anticipates exactly

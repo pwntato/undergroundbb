@@ -241,3 +241,75 @@ func TestListGroupsUnreadIsZeroWithoutNotifications(t *testing.T) {
 		t.Fatalf("%+v, want 0", g)
 	}
 }
+
+type unreadTotalBody struct {
+	Unread     int  `json:"unread"`
+	UnreadMore bool `json:"unreadMore"`
+}
+
+func getUnreadTotal(t *testing.T, h *Handler, c *http.Cookie, wantCode int) unreadTotalBody {
+	t.Helper()
+	rec := doNotifications(t, h, c, http.MethodGet, "/api/notifications/unread", nil)
+	if rec.Code != wantCode {
+		t.Fatalf("unread total: %d %s", rec.Code, rec.Body.String())
+	}
+	var b unreadTotalBody
+	_ = json.Unmarshal(rec.Body.Bytes(), &b)
+	return b
+}
+
+func TestUnreadTotalRequiresASession(t *testing.T) {
+	h, _, _, _, _, _, _, _ := listFixture(t)
+	getUnreadTotal(t, h, nil, http.StatusUnauthorized)
+}
+
+func TestUnreadTotalSumsGroupsAndSkipsWhatTheListSkips(t *testing.T) {
+	h, gid, owner, bob, c, pOld, pMid, _ := listFixture(t)
+	gid2 := createPrivateGroup(t, h, owner, c)
+	p2 := pidOf(gid2, "POST#2026-10-20#00112233445566b1")
+	storePostAt(t, gid2, "POST#2026-10-20#00112233445566b1", owner.userID, 0)
+	otherGid := "11111111-1111-4111-8111-111111111111"
+	otherPid := pidOf(otherGid, "POST#2026-10-28#00112233445566a6")
+	storePostAt(t, otherGid, "POST#2026-10-28#00112233445566a6", bob.userID, 0)
+
+	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
+	putNotif(t, owner.userID, replySK("2026-10-21", 2), "reply", bob.userID, gid, pMid)
+	putNotif(t, owner.userID, replySK("2026-10-22", 3), "reply", bob.userID, gid, pMid) // read below
+	putNotif(t, owner.userID, replySK("2026-10-25", 6), "reply", bob.userID, gid2, p2)
+	putNotif(t, owner.userID, replySK("2026-10-24", 5), "reply", bob.userID, otherGid, otherPid) // not a member
+	putNotif(t, bob.userID, replySK("2026-10-26", 7), "reply", owner.userID, gid, pOld)          // someone else's
+	markRowRead(t, owner.userID, replySK("2026-10-22", 3))
+
+	if got := getUnreadTotal(t, h, c, http.StatusOK); got.Unread != 3 || got.UnreadMore {
+		t.Fatalf("%+v, want 3 across both groups, not more", got)
+	}
+}
+
+func TestUnreadTotalIsZeroWithNothingUnread(t *testing.T) {
+	h, _, _, _, c, _, _, _ := listFixture(t)
+	if got := getUnreadTotal(t, h, c, http.StatusOK); got.Unread != 0 || got.UnreadMore {
+		t.Fatalf("%+v, want 0", got)
+	}
+}
+
+// Two groups of 60 each are 120 in all: the total stops at 99 and says there are more.
+func TestUnreadTotalStopsAtNinetyNineAcrossGroups(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	gid2 := createPrivateGroup(t, h, owner, c)
+	p2 := pidOf(gid2, "POST#2026-10-20#00112233445566b1")
+	storePostAt(t, gid2, "POST#2026-10-20#00112233445566b1", owner.userID, 0)
+	putManyReactions(t, owner.userID, bob.userID, gid, pOld, 60)
+	putManyReactions(t, owner.userID, bob.userID, gid2, p2, 60)
+	if got := getUnreadTotal(t, h, c, http.StatusOK); got.Unread != maxUnreadShown || !got.UnreadMore {
+		t.Fatalf("%+v, want %d and more", got, maxUnreadShown)
+	}
+}
+
+func TestUnreadTotalIsAnErrorWhenTheCountTimesOut(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
+	old := unreadCountTimeout
+	unreadCountTimeout = time.Nanosecond
+	t.Cleanup(func() { unreadCountTimeout = old })
+	getUnreadTotal(t, h, c, http.StatusInternalServerError)
+}
