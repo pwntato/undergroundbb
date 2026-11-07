@@ -145,6 +145,26 @@ func TestListGroupsUnreadAllReadPastTheLimitIsZeroWithNoFlag(t *testing.T) {
 	}
 }
 
+// Exactly the row limit with the unread row inside it is an exact count, not a lower bound.
+func TestListGroupsUnreadExactlyAtTheRowLimitIsExact(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, pNew := listFixture(t)
+	total := notificationMaxPasses * notificationReadBatch
+	putManyReactions(t, owner.userID, bob.userID, gid, pOld, total-1)
+	for i := 0; i < total-1; i++ {
+		markRowRead(t, owner.userID, reactSK(pOld, i))
+	}
+	putNotif(t, owner.userID, reactSK(pNew, 0), "reaction", bob.userID, gid, pNew)
+	if g := unreadByGroup(t, h, c)[gid]; g.n() != 1 || g.UnreadMore {
+		t.Fatalf("%+v, want exactly 1 and no flag", g)
+	}
+	// One row more than the limit, the unread one among the first 1000, is a lower bound.
+	putNotif(t, owner.userID, reactSK(pOld, total), "reaction", bob.userID, gid, pOld)
+	markRowRead(t, owner.userID, reactSK(pOld, total))
+	if g := unreadByGroup(t, h, c)[gid]; g.n() != 1 || !g.UnreadMore {
+		t.Fatalf("%+v, want 1 and more past the limit", g)
+	}
+}
+
 func TestListGroupsWithoutTheParameterCarriesNoCount(t *testing.T) {
 	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
 	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)

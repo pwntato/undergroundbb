@@ -3051,7 +3051,7 @@ in M7:
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
   and would make a **sixth** contested write, alongside the five named above — and it would put a
   second contested attribute on `PROFILE`, which the credential re-wrap already contests. The
-  shipped read (#145) is bounded: it stops after 1000 rows examined and 99 unread per group, so a
+  shipped read (#145) is bounded: it examines at most 1000 rows and counts at most 99 per group, so a
   long history no longer costs more per count.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
@@ -3110,7 +3110,10 @@ budget as the list, counts only unread rows the list would show (the user is in 
 live), and stops counting a group at 99. `unreadMore` means "at least `unread`": the group passed 99, or
 the read hit a limit before the range ended and the group has some unread found. A group with none found
 gets no flag: read rows fill the window, so a flag on every group could not be cleared by marking
-everything read. The cost is that unread rows sitting past the window show no badge. A failed count is
+everything read. The cost is that unread rows sitting past the window show no badge, and that is not only old rows:
+every reply sorts above every reaction, so 1000 retained replies (read or not; a post with no expiry
+keeps them for good) fill the window before any reaction is reached, and a new unread reaction then gets
+no badge, though it is still on `/notifications`. A failed count is
 logged and the list is returned without counts. This is the filtered-`Query` option, not a `PROFILE`
 counter: the cost is bounded by the pass limit (1000 rows examined) and by retention, and no
 notification write or mark-read has to keep a counter exact. If that bound proves too costly the counter

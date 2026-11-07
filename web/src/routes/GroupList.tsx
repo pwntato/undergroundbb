@@ -23,7 +23,7 @@ function UnreadBadge({ group }: { readonly group: DisplayGroup }) {
   return (
     <Link
       to="/notifications"
-      className="ml-2 inline-block shrink-0 rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
+      className="ml-2 inline-block rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
       aria-label={unreadAriaLabel(label, group.unread ?? 0)}
     >
       {label}
@@ -60,9 +60,9 @@ export function GroupList({
           {load.groups.map((group) => (
             <li
               key={group.groupId}
-              className="flex items-center justify-between rounded-md border px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-md border px-3 py-2"
             >
-              <span className="min-w-0 font-medium">
+              <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                 {groupLabel(group)}
                 <UnreadBadge group={group} />
               </span>

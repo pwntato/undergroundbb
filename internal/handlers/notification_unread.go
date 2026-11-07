@@ -27,7 +27,14 @@ func (h *Handler) unreadCounts(r *http.Request, userID string, memberOf map[stri
 	started := time.Now()
 	after := ""
 	for pass := 0; pass < notificationMaxPasses; pass++ {
-		rows, last, done, err := h.db.ListNotifications(r.Context(), userID, after, notificationReadBatch)
+		// The last pass asks for one row more: a Query that uses its whole Limit returns a
+		// LastEvaluatedKey even when nothing is left, so exactly 1000 rows would look unfinished
+		// and show "1+" for a count that is exact.
+		batch := notificationReadBatch
+		if pass == notificationMaxPasses-1 {
+			batch++
+		}
+		rows, last, done, err := h.db.ListNotifications(r.Context(), userID, after, batch)
 		if err != nil {
 			return nil, nil, err
 		}
