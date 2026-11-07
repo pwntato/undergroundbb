@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -566,7 +567,9 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	var unreadMore map[string]bool
 	if r.URL.Query().Get("unread") == "1" {
 		var cerr error
-		unread, unreadMore, cerr = h.unreadCounts(r, userID, memberOf)
+		ctx, cancel := context.WithTimeout(r.Context(), unreadCountTimeout)
+		unread, unreadMore, cerr = h.unreadCounts(r.WithContext(ctx), userID, memberOf)
+		cancel()
 		if cerr != nil {
 			log.Printf("%s %s: counting unread notifications: %v", r.Method, r.URL.Path, cerr)
 			unread, unreadMore = nil, nil

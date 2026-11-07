@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -157,11 +158,15 @@ func TestListGroupsUnreadExactlyAtTheRowLimitIsExact(t *testing.T) {
 	if g := unreadByGroup(t, h, c)[gid]; g.n() != 1 || g.UnreadMore {
 		t.Fatalf("%+v, want exactly 1 and no flag", g)
 	}
-	// One row more than the limit, the unread one among the first 1000, is a lower bound.
-	putNotif(t, owner.userID, reactSK(pOld, total), "reaction", bob.userID, gid, pOld)
-	markRowRead(t, owner.userID, reactSK(pOld, total))
+	// Two rows more than the limit (1002), the unread one among the first 1001 read, is a lower
+	// bound. At 1001 the whole range is read but the Query still reports a next key, so that one
+	// row count is a known, harmless false plus and is not pinned here.
+	for _, i := range []int{total, total + 1} {
+		putNotif(t, owner.userID, reactSK(pOld, i), "reaction", bob.userID, gid, pOld)
+		markRowRead(t, owner.userID, reactSK(pOld, i))
+	}
 	if g := unreadByGroup(t, h, c)[gid]; g.n() != 1 || !g.UnreadMore {
-		t.Fatalf("%+v, want 1 and more past the limit", g)
+		t.Fatalf("%+v, want 1 and more past the limit (1002 rows)", g)
 	}
 }
 
@@ -194,6 +199,19 @@ func TestGroupDetailCarriesNoCount(t *testing.T) {
 
 // A count that fails must not fail the list (review of #346). A post row whose TTL is not a number
 // fails to unmarshal when the count looks the post up.
+// A count that runs out of time must not fail the list either (review of #346, round 3).
+func TestListGroupsStillLoadsWhenTheCountTimesOut(t *testing.T) {
+	h, gid, owner, bob, c, pOld, _, _ := listFixture(t)
+	putNotif(t, owner.userID, replySK("2026-10-20", 1), "reply", bob.userID, gid, pOld)
+	old := unreadCountTimeout
+	unreadCountTimeout = time.Nanosecond
+	t.Cleanup(func() { unreadCountTimeout = old })
+	g, ok := unreadByGroup(t, h, c)[gid]
+	if !ok || g.n() != -1 {
+		t.Fatalf("%+v ok=%v, want the group listed with no count", g, ok)
+	}
+}
+
 func TestListGroupsStillLoadsWhenTheCountFails(t *testing.T) {
 	h, gid, owner, bob, c, _, _, _ := listFixture(t)
 	bad := pidOf(gid, "POST#2026-10-27#00112233445566a8")

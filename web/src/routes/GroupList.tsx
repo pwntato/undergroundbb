@@ -24,7 +24,7 @@ function UnreadBadge({ group }: { readonly group: DisplayGroup }) {
     <Link
       to="/notifications"
       className="ml-2 inline-block rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
-      aria-label={unreadAriaLabel(label, group.unread ?? 0)}
+      aria-label={unreadAriaLabel(label)}
     >
       {label}
     </Link>
@@ -66,7 +66,7 @@ export function GroupList({
                 {groupLabel(group)}
                 <UnreadBadge group={group} />
               </span>
-              <span className="flex items-center gap-2">
+              <span className="flex flex-wrap items-center gap-2">
                 <Link
                   to={`/groups/${group.groupId}/posts`}
                   className="text-xs text-primary underline-offset-4 hover:underline"

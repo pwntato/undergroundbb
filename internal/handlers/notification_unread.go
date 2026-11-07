@@ -7,6 +7,12 @@ import (
 	"github.com/pwntato/undergroundbb/internal/idgen"
 )
 
+// unreadCountTimeout bounds the whole count in GET /api/groups. The time budget below is only checked
+// between batches, and each distinct unread post costs a read inside a batch, so a slow table could
+// outlast the Lambda timeout and fail the list. With a deadline the overrun is an ordinary error, and
+// the list is returned without counts. A variable so a test can shrink it.
+var unreadCountTimeout = 5 * time.Second
+
 // maxUnreadShown is the largest unread count reported for one group; one more sets UnreadMore, and
 // the client shows "99+" (#145).
 const maxUnreadShown = 99

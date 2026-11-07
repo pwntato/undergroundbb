@@ -3044,14 +3044,14 @@ link to that comment rather than to the top of a thread. `read` is the flag the 
 the mark-read operation act on, and it carries two costs worth stating here rather than discovering
 in M7:
 
-- **Unread count is the one read in this design whose cost grows with retained history.** A flag is
+- **Unread count is the one read in this design whose cost would grow with retained history if left unbounded.** A flag is
   an attribute, not a key component, so counting unread items is a `Query` over the user's whole
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
   ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
   and would make a **sixth** contested write, alongside the five named above — and it would put a
   second contested attribute on `PROFILE`, which the credential re-wrap already contests. The
-  shipped read (#145) is bounded: it examines at most 1000 rows and counts at most 99 per group, so a
+  shipped read (#145) is bounded: it examines about 1000 rows (1001 on the last read) and counts at most 99 per group, so a
   long history no longer costs more per count.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
@@ -3113,9 +3113,9 @@ gets no flag: read rows fill the window, so a flag on every group could not be c
 everything read. The cost is that unread rows sitting past the window show no badge, and that is not only old rows:
 every reply sorts above every reaction, so 1000 retained replies (read or not; a post with no expiry
 keeps them for good) fill the window before any reaction is reached, and a new unread reaction then gets
-no badge, though it is still on `/notifications`. A failed count is
+no badge, though it is still on `/notifications`. A failed or timed-out (5 seconds) count is
 logged and the list is returned without counts. This is the filtered-`Query` option, not a `PROFILE`
-counter: the cost is bounded by the pass limit (1000 rows examined) and by retention, and no
+counter: the cost is bounded by the pass limit (about 1000 rows examined, 1001 on the last read) and by retention, and no
 notification write or mark-read has to keep a counter exact. If that bound proves too costly the counter
 is the next step, with the sixth contested write it implies.
 

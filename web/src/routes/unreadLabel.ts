@@ -12,6 +12,6 @@ export function unreadLabel(
 }
 
 /** What a screen reader says for the badge. */
-export function unreadAriaLabel(label: string, unread: number): string {
-  return `${label} unread ${unread === 1 ? 'notification' : 'notifications'}`
+export function unreadAriaLabel(label: string): string {
+  return `${label} unread ${label === '1' ? 'notification' : 'notifications'}`
 }

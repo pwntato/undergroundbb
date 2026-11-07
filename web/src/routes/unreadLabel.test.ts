@@ -21,8 +21,9 @@ describe('unreadLabel', () => {
 
 describe('unreadAriaLabel', () => {
   it('is singular for one', () => {
-    expect(unreadAriaLabel('1', 1)).toBe('1 unread notification')
-    expect(unreadAriaLabel('2', 2)).toBe('2 unread notifications')
-    expect(unreadAriaLabel('99+', 99)).toBe('99+ unread notifications')
+    expect(unreadAriaLabel('1')).toBe('1 unread notification')
+    expect(unreadAriaLabel('2')).toBe('2 unread notifications')
+    expect(unreadAriaLabel('99+')).toBe('99+ unread notifications')
+    expect(unreadAriaLabel('1+')).toBe('1+ unread notifications')
   })
 })
