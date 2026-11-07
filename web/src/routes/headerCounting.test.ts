@@ -36,7 +36,7 @@ describe('startHeaderCounting', () => {
     s.started.stop()
   })
 
-  it('stop() unsubscribes from mark-reads and shows nothing more', async () => {
+  it('after stop() nothing more is fetched or shown', async () => {
     const s = setup()
     s.started.stop()
     await trackMarkRead(Promise.resolve())
@@ -46,7 +46,7 @@ describe('startHeaderCounting', () => {
     expect(s.applied).toEqual([])
   })
 
-  it("a stopped counter does not hear later mark-reads while another user's counter does", async () => {
+  it('stopping one counter leaves another one counting', async () => {
     const a = setup()
     a.started.stop()
     const b = setup()
