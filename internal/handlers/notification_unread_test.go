@@ -313,3 +313,17 @@ func TestUnreadTotalIsAnErrorWhenTheCountTimesOut(t *testing.T) {
 	t.Cleanup(func() { unreadCountTimeout = old })
 	getUnreadTotal(t, h, c, http.StatusInternalServerError)
 }
+
+// A group whose count is only a lower bound makes the total one, even well under 99.
+func TestUnreadTotalIsALowerBoundWhenAGroupsCountIs(t *testing.T) {
+	h, gid, owner, bob, c, _, _, pNew := listFixture(t)
+	gone := pidOf(gid, "POST#2026-09-01#00112233445566a5")
+	putManyReactions(t, owner.userID, bob.userID, gid, gone, 2*notificationReadBatch)
+	putNotif(t, owner.userID, reactSK(pNew, 0), "reaction", bob.userID, gid, pNew)
+	old := notificationTimeBudget
+	notificationTimeBudget = -1
+	t.Cleanup(func() { notificationTimeBudget = old })
+	if got := getUnreadTotal(t, h, c, http.StatusOK); got.Unread != 1 || !got.UnreadMore {
+		t.Fatalf("%+v, want 1 and more", got)
+	}
+}
