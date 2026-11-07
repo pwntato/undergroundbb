@@ -104,9 +104,8 @@ export interface CreateGroupResponse {
  * served for both: a private group needs it to decrypt the name, and any group
  * needs it for a key rotation's handoff row.
  *
- * No unread count -- see groupListEntry's own doc comment on the Go side
- * for why issue #35 ships without one despite its own one-line description
- * mentioning it.
+ * `unread` is the caller's unread notifications in the group (#145), at most
+ * 99; `unreadMore` means "at least this many" (see unreadCounts on the Go side).
  */
 export interface GroupListEntry {
   readonly groupId: string
@@ -124,6 +123,8 @@ export interface GroupListEntry {
    * rotation exists (rotation does not re-encrypt the name).
    */
   readonly nameGeneration: number
+  readonly unread: number
+  readonly unreadMore: boolean
 
   readonly namePlaintext?: string
   readonly descriptionPlaintext?: string

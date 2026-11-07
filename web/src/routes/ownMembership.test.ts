@@ -13,6 +13,8 @@ function entry(over: Partial<GroupListEntry>): GroupListEntry {
     generation: 2,
     noRotation: false,
     nameGeneration: 0,
+    unread: 0,
+    unreadMore: false,
     wrappedGroupKey: WRAP,
     ...over,
   }

@@ -27,6 +27,8 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
     generation: 0,
     noRotation: true,
     nameGeneration: 0,
+    unread: 0,
+    unreadMore: false,
     revocationMode: 'open',
     memberCap: 0,
     expirationDays: 30,

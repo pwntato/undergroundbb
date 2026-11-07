@@ -10,6 +10,7 @@ import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { DisplayGroup } from './runListGroups'
 import { groupLabel } from './groupLabel'
+import { unreadLabel } from './unreadLabel'
 
 export type LoadState =
   | { readonly status: 'loading' }
@@ -47,7 +48,18 @@ export function GroupList({
               key={group.groupId}
               className="flex items-center justify-between rounded-md border px-3 py-2"
             >
-              <span className="font-medium">{groupLabel(group)}</span>
+              <span className="font-medium">
+                {groupLabel(group)}
+                {unreadLabel(group.unread, group.unreadMore) !== null && (
+                  <Link
+                    to="/notifications"
+                    className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
+                    aria-label={`${unreadLabel(group.unread, group.unreadMore)} unread notifications`}
+                  >
+                    {unreadLabel(group.unread, group.unreadMore)}
+                  </Link>
+                )}
+              </span>
               <span className="flex items-center gap-2">
                 <Link
                   to={`/groups/${group.groupId}/posts`}

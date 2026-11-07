@@ -9,6 +9,8 @@ const VALID_ENTRY: GroupListEntry = {
   generation: 0,
   noRotation: true,
   nameGeneration: 0,
+  unread: 0,
+  unreadMore: false,
   namePlaintext: 'Book Club',
 }
 
