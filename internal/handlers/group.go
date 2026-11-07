@@ -480,8 +480,8 @@ func encodeWrappedKey(k models.WrappedKey) wrappedKey {
 // public group, NameCiphertext/DescriptionCiphertext for a private one. The
 // member's own WrappedGroupKey is served for both: a private group needs it
 // to decrypt the name, and any group needs it for a key rotation's handoff
-// row. There is no unread count field -- see listGroups' own doc comment for
-// why this issue ships without one.
+// row. Unread and UnreadMore are the caller's unread notifications in the
+// group (#145); see unreadCounts.
 type groupListEntry struct {
 	GroupID    string `json:"groupId"`
 	Visibility string `json:"visibility"`
@@ -504,6 +504,11 @@ type groupListEntry struct {
 	NameCiphertext        *wrappedBlob `json:"nameCiphertext,omitempty"`
 	DescriptionCiphertext *wrappedBlob `json:"descriptionCiphertext,omitempty"`
 	WrappedGroupKey       *wrappedKey  `json:"wrappedGroupKey,omitempty"`
+
+	// Unread counts up to 99; UnreadMore means "at least this many" (more than 99, or the read
+	// stopped on its limits). Both are zero-valued on the group detail response.
+	Unread     int  `json:"unread"`
+	UnreadMore bool `json:"unreadMore"`
 }
 
 // listGroupsResponse is the wire shape of GET /api/groups.
@@ -525,16 +530,8 @@ type listGroupsResponse struct {
 // comment), so this response hands back exactly the ciphertext and the
 // caller's own WrappedGroupKey and nothing more.
 //
-// Deliberately has NO unread-count field, unlike issue #35's own one-line
-// description ("returning groups with unread counts"). Investigating this
-// issue found that the only unread mechanism docs/DESIGN.md describes
-// depends on NOTIF# items (a notification's `read` flag), and nothing in
-// that chain exists yet: no posts (#42-46), no comments, no notifications
-// (M7+). Shipping a fabricated or always-zero count here would be worse
-// than omitting the field -- a client cannot tell "genuinely zero unread"
-// from "this deployment hasn't built unread tracking yet." Filed as a
-// separate follow-up (#145) once that infrastructure exists; adding it
-// later is additive to this response shape, not a breaking change.
+// Each entry also carries the caller's unread notification count for that
+// group (#145): see unreadCounts for what it reads and what it costs.
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -553,6 +550,15 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	// comment) rather than erroring the whole call, so memberships and
 	// groups are the same length here, in matching order, safe to zip by
 	// index rather than re-joining by id a second time.
+	memberOf := make(map[string]bool, len(memberships))
+	for _, m := range memberships {
+		memberOf[strings.TrimPrefix(m.PK, "GROUP#")] = true
+	}
+	unread, unreadMore, err := h.unreadCounts(r, userID, memberOf)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not count unread notifications")
+		return
+	}
 	entries := make([]groupListEntry, 0, len(memberships))
 	for i, m := range memberships {
 		g := groups[i]
@@ -563,6 +569,8 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 			Generation:     m.Generation,
 			NoRotation:     g.HasNoRotation(),
 			NameGeneration: g.NameGeneration,
+			Unread:         unread[strings.TrimPrefix(m.PK, "GROUP#")],
+			UnreadMore:     unreadMore[strings.TrimPrefix(m.PK, "GROUP#")],
 		}
 		if g.Visibility == models.VisibilityPublic {
 			entry.NamePlaintext = g.NamePlaintext
