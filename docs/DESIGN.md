@@ -3119,6 +3119,19 @@ counter: the cost is bounded by the pass limit (about 1000 rows examined, 1001 o
 notification write or mark-read has to keep a counter exact. If that bound proves too costly the counter
 is the next step, with the sixth contested write it implies.
 
+**The header badge (#145).** The header link on every signed-in screen shows the caller's total unread
+count from `GET /api/notifications/unread`, `{unread, unreadMore}`: the per-group counts above summed
+and capped at 99 (`unreadMore` if any group's count is a lower bound or the sum passes 99), with the
+same reads, limits and 5 second deadline. It asks only for the caller's memberships (one GSI1 `Query`),
+not every group's metadata. Unlike the groups list it has nothing else to return, so a failed count is
+an error and the client shows no badge (never a stale or zero one). The client fetches when the header
+appears and on navigation, but not more than once every 30 seconds, and again whenever a mark-read
+finishes. A read of the count (the header's, and Home's groups call) first waits for any mark-read in
+flight: "Mark these read" sends its batches of 25 one after another and does not wait, so without the
+wait a user who goes straight Back could be shown a badge for rows they have just read, and Home's
+badge would stay until the next load. While a mark is in flight the header keeps its old number until
+the marks finish, then counts again.
+
 **How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
 over the user's `NOTIF#` range: replies carry a real day and sort above the reaction range (its
 placeholder day is `0000-00-00`), so replies come newest day first and then reactions newest post
