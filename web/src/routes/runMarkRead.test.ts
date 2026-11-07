@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { markFailedAfter, runMarkRead } from './runMarkRead'
+import { describe, expect, it, vi } from 'vitest'
+import { marksSettled, onMarksSettled } from './markReadTracker'
+import { markFailedAfter, runMarkRead, runTrackedMarkRead } from './runMarkRead'
 
 const idsOf = (n: number) => Array.from({ length: n }, (_, i) => `id${String(i)}`)
 
@@ -48,5 +49,41 @@ describe('markFailedAfter', () => {
     expect(markFailedAfter(true, false, false)).toBe(true)
     expect(markFailedAfter(false, true, false)).toBe(true)
     expect(markFailedAfter(false, false, false)).toBe(false)
+  })
+})
+
+describe('runTrackedMarkRead', () => {
+  it('is in flight for the tracker while it runs and tells listeners when it finishes', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const mark = vi.fn().mockImplementation(() => gate)
+    const done = vi.fn()
+    const off = onMarksSettled(done)
+    const run = runTrackedMarkRead(['a', 'b'], mark)
+    let settled = false
+    void marksSettled().then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(mark).toHaveBeenCalledWith(['a', 'b'])
+    expect(settled).toBe(false)
+    expect(done).not.toHaveBeenCalled()
+    release()
+    expect(await run).toEqual({ marked: ['a', 'b'], failed: false })
+    await Promise.resolve()
+    expect(settled).toBe(true)
+    expect(done).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  it('still releases the tracker when a request fails', async () => {
+    const done = vi.fn()
+    const off = onMarksSettled(done)
+    const result = await runTrackedMarkRead(['a'], () => Promise.reject(new Error('x')))
+    expect(result).toEqual({ marked: [], failed: true })
+    expect(done).toHaveBeenCalledTimes(1)
+    off()
   })
 })
