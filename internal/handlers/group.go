@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -480,8 +482,7 @@ func encodeWrappedKey(k models.WrappedKey) wrappedKey {
 // public group, NameCiphertext/DescriptionCiphertext for a private one. The
 // member's own WrappedGroupKey is served for both: a private group needs it
 // to decrypt the name, and any group needs it for a key rotation's handoff
-// row. There is no unread count field -- see listGroups' own doc comment for
-// why this issue ships without one.
+// row.
 type groupListEntry struct {
 	GroupID    string `json:"groupId"`
 	Visibility string `json:"visibility"`
@@ -506,9 +507,20 @@ type groupListEntry struct {
 	WrappedGroupKey       *wrappedKey  `json:"wrappedGroupKey,omitempty"`
 }
 
+// groupListItem is a groupListEntry as GET /api/groups returns it. Unread and UnreadMore are only
+// there when the request asked for counts (?unread=1) and the count worked (#145): absent means
+// "not counted", never zero, so a client cannot mistake it for a real zero. The group detail
+// response embeds groupListEntry, not this, so it has no such fields.
+type groupListItem struct {
+	groupListEntry
+	// Unread counts up to 99; UnreadMore means "at least this many".
+	Unread     *int `json:"unread,omitempty"`
+	UnreadMore bool `json:"unreadMore,omitempty"`
+}
+
 // listGroupsResponse is the wire shape of GET /api/groups.
 type listGroupsResponse struct {
-	Groups []groupListEntry `json:"groups"`
+	Groups []groupListItem `json:"groups"`
 }
 
 // listGroups implements GET /api/groups -- issue #35. Authenticated by
@@ -525,16 +537,10 @@ type listGroupsResponse struct {
 // comment), so this response hands back exactly the ciphertext and the
 // caller's own WrappedGroupKey and nothing more.
 //
-// Deliberately has NO unread-count field, unlike issue #35's own one-line
-// description ("returning groups with unread counts"). Investigating this
-// issue found that the only unread mechanism docs/DESIGN.md describes
-// depends on NOTIF# items (a notification's `read` flag), and nothing in
-// that chain exists yet: no posts (#42-46), no comments, no notifications
-// (M7+). Shipping a fabricated or always-zero count here would be worse
-// than omitting the field -- a client cannot tell "genuinely zero unread"
-// from "this deployment hasn't built unread tracking yet." Filed as a
-// separate follow-up (#145) once that infrastructure exists; adding it
-// later is additive to this response shape, not a breaking change.
+// With ?unread=1 each entry also carries the caller's unread notification count for that group
+// (#145): see unreadCounts for what it reads and what it costs. Only Home asks, because the same
+// call serves login, Invites and Rotate keys, which never show it. The count is decoration: if it
+// fails the groups are returned without counts rather than failing the list.
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
@@ -553,7 +559,23 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	// comment) rather than erroring the whole call, so memberships and
 	// groups are the same length here, in matching order, safe to zip by
 	// index rather than re-joining by id a second time.
-	entries := make([]groupListEntry, 0, len(memberships))
+	memberOf := make(map[string]bool, len(memberships))
+	for _, m := range memberships {
+		memberOf[strings.TrimPrefix(m.PK, "GROUP#")] = true
+	}
+	var unread map[string]int
+	var unreadMore map[string]bool
+	if r.URL.Query().Get("unread") == "1" {
+		var cerr error
+		ctx, cancel := context.WithTimeout(r.Context(), unreadCountTimeout)
+		unread, unreadMore, cerr = h.unreadCounts(r.WithContext(ctx), userID, memberOf)
+		cancel()
+		if cerr != nil {
+			log.Printf("%s %s: counting unread notifications: %v", r.Method, r.URL.Path, cerr)
+			unread, unreadMore = nil, nil
+		}
+	}
+	entries := make([]groupListItem, 0, len(memberships))
 	for i, m := range memberships {
 		g := groups[i]
 		entry := groupListEntry{
@@ -582,7 +604,13 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 		// survive a closed tab"), and it is their own ciphertext.
 		wk := encodeWrappedKey(m.WrappedGroupKey)
 		entry.WrappedGroupKey = &wk
-		entries = append(entries, entry)
+		item := groupListItem{groupListEntry: entry}
+		if unread != nil {
+			n := unread[entry.GroupID]
+			item.Unread = &n
+			item.UnreadMore = unreadMore[entry.GroupID]
+		}
+		entries = append(entries, item)
 	}
 
 	WriteJSON(w, http.StatusOK, listGroupsResponse{Groups: entries})

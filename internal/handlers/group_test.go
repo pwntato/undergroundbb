@@ -708,7 +708,7 @@ func TestListGroupsReturnsPublicAndPrivate(t *testing.T) {
 
 	byID := make(map[string]groupListEntry, len(resp.Groups))
 	for _, g := range resp.Groups {
-		byID[g.GroupID] = g
+		byID[g.GroupID] = g.groupListEntry
 	}
 
 	priv, ok := byID[privateReq.GroupID]

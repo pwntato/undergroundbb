@@ -155,4 +155,23 @@ describe('GroupList', () => {
     expect(html).toContain('href="/groups/a/settings"')
     expect(html).toContain('href="/groups/b/settings"')
   })
+
+  it('shows an unread badge that links to the notification list, only when there is something', () => {
+    const html = render({
+      status: 'ready',
+      groups: [
+        displayGroup({ groupId: 'a', unread: 3 }),
+        displayGroup({ groupId: 'b', unread: 99, unreadMore: true }),
+        displayGroup({ groupId: 'c', unread: 0 }),
+        displayGroup({ groupId: 'd', unread: 0, unreadMore: true }),
+        displayGroup({ groupId: 'e' }),
+        displayGroup({ groupId: 'f', unread: 1 }),
+      ],
+    })
+    expect(html).toContain('aria-label="3 unread notifications"')
+    expect(html).toContain('aria-label="99+ unread notifications"')
+    expect(html.match(/href="\/notifications"/g)).toHaveLength(3)
+    expect(html).toContain('aria-label="1 unread notification"')
+    expect(html).not.toContain('0 unread')
+  })
 })

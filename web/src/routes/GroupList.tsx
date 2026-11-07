@@ -10,11 +10,26 @@ import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { DisplayGroup } from './runListGroups'
 import { groupLabel } from './groupLabel'
+import { unreadAriaLabel, unreadLabel } from './unreadLabel'
 
 export type LoadState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly groups: readonly DisplayGroup[] }
   | { readonly status: 'error' }
+
+function UnreadBadge({ group }: { readonly group: DisplayGroup }) {
+  const label = unreadLabel(group.unread, group.unreadMore)
+  if (label === null) return null
+  return (
+    <Link
+      to="/notifications"
+      className="ml-2 inline-block rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
+      aria-label={unreadAriaLabel(label)}
+    >
+      {label}
+    </Link>
+  )
+}
 
 export function GroupList({
   load,
@@ -45,10 +60,13 @@ export function GroupList({
           {load.groups.map((group) => (
             <li
               key={group.groupId}
-              className="flex items-center justify-between rounded-md border px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-md border px-3 py-2"
             >
-              <span className="font-medium">{groupLabel(group)}</span>
-              <span className="flex items-center gap-2">
+              <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                {groupLabel(group)}
+                <UnreadBadge group={group} />
+              </span>
+              <span className="flex flex-wrap items-center gap-2">
                 <Link
                   to={`/groups/${group.groupId}/posts`}
                   className="text-xs text-primary underline-offset-4 hover:underline"

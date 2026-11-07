@@ -3044,13 +3044,15 @@ link to that comment rather than to the top of a thread. `read` is the flag the 
 the mark-read operation act on, and it carries two costs worth stating here rather than discovering
 in M7:
 
-- **Unread count is the one read in this design whose cost grows with retained history.** A flag is
+- **Unread count is the one read in this design whose cost would grow with retained history if left unbounded.** A flag is
   an attribute, not a key component, so counting unread items is a `Query` over the user's whole
   `NOTIF#` range with a filter, and DynamoDB bills every item the filter examines rather than the
   ones it returns. Nothing scans, so the data model's claim holds, but a user with a long retained
   history pays for all of it on every count. A counter attribute on `PROFILE` is the standard fix
   and would make a **sixth** contested write, alongside the five named above — and it would put a
-  second contested attribute on `PROFILE`, which the credential re-wrap already contests.
+  second contested attribute on `PROFILE`, which the credential re-wrap already contests. The
+  shipped read (#145) is bounded: it examines about 1000 rows (1001 on the last read) and counts at most 99 per group, so a
+  long history no longer costs more per count.
 - **Marking read in bulk is a write per item.** DynamoDB has no bulk attribute update, so it is
   `BatchWriteItem` at 25 per call, issued from the browser — the same batched client-side shape as
   the rotation loop, and it should be built with the same expectation that it is interruptible.
@@ -3098,7 +3100,24 @@ for it, so it drops notifications for groups the user is no longer in and for po
 Reaction notifications have no time to order by, but the key carries the post's day (see above), so
 the list is one descending read of the `NOTIF#` range: reply notifications newest day first, then
 reaction notifications newest post first.
-Reading and marking read are separate work (#69, #145).
+Reading and marking read are #69; the unread count is #145.
+
+**How the unread count is served (#145).** `GET /api/groups?unread=1` carries `unread` and `unreadMore` on
+each entry; without the parameter, and on the group detail response, there are no such fields (absent
+means "not counted", never zero). Only Home asks, since the same call serves login, Invites and Rotate
+keys. The handler reads the user's `NOTIF#` range newest first in the same batches, pass limit and time
+budget as the list, counts only unread rows the list would show (the user is in the group, the post is
+live), and stops counting a group at 99. `unreadMore` means "at least `unread`": the group passed 99, or
+the read hit a limit before the range ended and the group has some unread found. A group with none found
+gets no flag: read rows fill the window, so a flag on every group could not be cleared by marking
+everything read. The cost is that unread rows sitting past the window show no badge, and that is not only old rows:
+every reply sorts above every reaction, so 1000 retained replies (read or not; a post with no expiry
+keeps them for good) fill the window before any reaction is reached, and a new unread reaction then gets
+no badge, though it is still on `/notifications`. A failed or timed-out (5 seconds) count is
+logged and the list is returned without counts. This is the filtered-`Query` option, not a `PROFILE`
+counter: the cost is bounded by the pass limit (about 1000 rows examined, 1001 on the last read) and by retention, and no
+notification write or mark-read has to keep a counter exact. If that bound proves too costly the counter
+is the next step, with the sixth contested write it implies.
 
 **How the list is served (#69).** `GET /api/notifications?cursor=&limit=` is one descending `Query`
 over the user's `NOTIF#` range: replies carry a real day and sort above the reaction range (its
@@ -3112,7 +3131,7 @@ whichever comes first, after which the page comes back short with a cursor to co
 bound matters because a timeout returns no cursor, so the same rows would be retried for ever. There is no cap on the range. `PUT /api/notifications/read` takes up to
 25 ids from the caller's own partition and sets `Read`; an id with no row is skipped, so marking never
 creates one. The web list links each row to the thread, not to the comment (the thread has no comment
-anchors yet) and shows no unread count (#145).
+anchors yet) and has no header badge (#145 added per-group counts on Home only).
 
 Both halves of that rendering need a mechanism, and neither is free:
 

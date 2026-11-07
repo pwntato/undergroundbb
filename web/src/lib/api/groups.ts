@@ -103,10 +103,6 @@ export interface CreateGroupResponse {
  * meaningless for that entry's visibility. The caller's own wrappedGroupKey is
  * served for both: a private group needs it to decrypt the name, and any group
  * needs it for a key rotation's handoff row.
- *
- * No unread count -- see groupListEntry's own doc comment on the Go side
- * for why issue #35 ships without one despite its own one-line description
- * mentioning it.
  */
 export interface GroupListEntry {
   readonly groupId: string
@@ -133,8 +129,18 @@ export interface GroupListEntry {
   readonly wrappedGroupKey?: WireWrappedKey
 }
 
+/**
+ * A GroupListEntry as GET /api/groups?unread=1 returns it (#145): `unread` is the caller's unread
+ * notifications in the group, at most 99, and `unreadMore` means "at least this many". Both are
+ * absent when the list was not asked for counts, and when the count failed (the list still loads).
+ */
+export type ListedGroup = GroupListEntry & {
+  readonly unread?: number
+  readonly unreadMore?: boolean
+}
+
 export interface ListGroupsResponse {
-  readonly groups: readonly GroupListEntry[]
+  readonly groups: readonly ListedGroup[]
 }
 
 /**
@@ -144,8 +150,12 @@ export interface ListGroupsResponse {
  * so it doesn't fit putOrPostJSON's POST/PUT shape and calls fetch directly
  * instead, reusing the same handleJSON error handling.
  */
-export async function listGroups(): Promise<ListGroupsResponse> {
-  const res = await fetch('/api/groups', { credentials: 'same-origin' })
+export async function listGroups(
+  opts: { readonly unread?: boolean } = {},
+): Promise<ListGroupsResponse> {
+  const res = await fetch(opts.unread ? '/api/groups?unread=1' : '/api/groups', {
+    credentials: 'same-origin',
+  })
   return handleJSON<ListGroupsResponse>(res)
 }
 
