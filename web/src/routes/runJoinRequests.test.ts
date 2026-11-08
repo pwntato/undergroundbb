@@ -525,7 +525,8 @@ describe('runApproveJoinRequest', () => {
     ['grantor_ref_stale', 409, 'stale'],
     ['grantor_changed', 409, 'stale'],
     ['requester_deleted', 410, 'deleted'],
-    ['bad_signature', 400, 'requesterKeysChanged'],
+    ['group_gone', 410, 'groupGone'],
+    ['bad_signature', 400, 'approverKeysChanged'],
   ] as const)('maps the server code %s to %s', async (code, status, kind) => {
     const p = person()
     const deps = approvalDeps(p, {
@@ -562,6 +563,15 @@ describe('runApproveJoinRequest', () => {
     const out = await runApproveJoinRequest(skew, GROUP, entryFor(p), fp)
     expect(out).toMatchObject({ ok: false, kind: 'rejected' })
     expect(joinApprovalFailureMessage(out as never)).toMatch(/date|time|clock/i)
+  })
+
+  it('words a deleted group and the approver own stale keys without blaming the requester', () => {
+    expect(joinApprovalFailureMessage({ ok: false, kind: 'groupGone' })).toBe(
+      'This group no longer exists.',
+    )
+    const own = joinApprovalFailureMessage({ ok: false, kind: 'approverKeysChanged' })
+    expect(own).toContain('Your keys changed')
+    expect(own).not.toContain('ask again')
   })
 
   it('keeps a group_full request pending: the list is not reloaded for it', () => {

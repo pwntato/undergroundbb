@@ -177,6 +177,10 @@ export type JoinApprovalFailure =
   | { readonly kind: 'gone' }
   | { readonly kind: 'forbidden' }
   | { readonly kind: 'deleted' }
+  /** The group was deleted. */
+  | { readonly kind: 'groupGone' }
+  /** The server refused YOUR admission signature: this tab holds keys that are no longer your current ones. */
+  | { readonly kind: 'approverKeysChanged' }
   | { readonly kind: 'authRequired' | 'coldKeys' }
   /** A key rotation is running; approving waits for it to finish. */
   | { readonly kind: 'rotationRunning' }
@@ -442,9 +446,13 @@ function failureOf(err: unknown): Fail {
         return { ok: false, kind: 'requestChanged' }
       case 'requester_deleted':
         return { ok: false, kind: 'deleted' }
+      case 'group_gone':
+        return { ok: false, kind: 'groupGone' }
       case 'bad_signature':
-        // The server holds different keys for them than the ones signed over.
-        return { ok: false, kind: 'requesterKeysChanged' }
+        // On approve the only bad_signature is the APPROVER's admission failing against their
+        // current key (the requester's keys come back as requester_keys_changed). The request is
+        // not cleared, so telling the requester to ask again would only meet request_pending.
+        return { ok: false, kind: 'approverKeysChanged' }
       case 'clock_skew':
         return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
     }
@@ -452,7 +460,6 @@ function failureOf(err: unknown): Fail {
     if (err.status === 401) return { ok: false, kind: 'authRequired' }
     if (err.status === 403) return { ok: false, kind: 'forbidden' }
     if (err.status === 404) return { ok: false, kind: 'gone' }
-    if (err.status === 410) return { ok: false, kind: 'deleted' }
     if (err.status < 500) return { ok: false, kind: 'rejected', message: err.message }
   }
   return { ok: false, kind: 'ambiguous' }
@@ -492,6 +499,9 @@ const FAILURE_MESSAGES: Record<
   gone: 'That request is gone: it was withdrawn, expired, or handled by someone else.',
   forbidden: 'Only a group admin or ambassador can approve requests.',
   deleted: 'That account was deleted.',
+  groupGone: 'This group no longer exists.',
+  approverKeysChanged:
+    'Your keys changed since this tab last signed in, so the approval was refused. Log in again and retry. The request is still waiting.',
   authRequired: 'Your session has expired. Log in again and retry.',
   coldKeys: 'This tab needs your password again to approve requests.',
   rotationRunning: 'A key rotation is running. Approving waits for it to finish.',
