@@ -102,6 +102,16 @@ export function GroupList({
                     Invite
                   </Link>
                 )}
+                {group.visibility === 'public' &&
+                  (group.role === 'admin' || group.role === 'ambassador') && (
+                    // #72: the queue of people asking to join this public group.
+                    <Link
+                      to={`/groups/${group.groupId}/requests`}
+                      className="text-xs text-primary underline-offset-4 hover:underline"
+                    >
+                      Requests
+                    </Link>
+                  )}
                 <span className="text-xs text-muted-foreground">{group.role}</span>
               </span>
             </li>

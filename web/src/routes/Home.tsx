@@ -187,6 +187,9 @@ export function Home() {
           <Link to="/invites">Invites</Link>
         </Button>
         <Button asChild variant="outline">
+          <Link to="/join-requests">Join requests</Link>
+        </Button>
+        <Button asChild variant="outline">
           <Link to="/account/password">Change password</Link>
         </Button>
         <Button asChild variant="outline">
