@@ -63,6 +63,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/account/recovery-code", h.recoveryCodeReset)
 	mux.HandleFunc("POST /api/groups", h.requireSession(h.createGroup))
 	mux.HandleFunc("GET /api/groups", h.requireSession(h.listGroups))
+	mux.HandleFunc("GET /api/groups/public", h.requireSession(h.listPublicGroups))
 	mux.HandleFunc("GET /api/groups/{groupId}", h.requireSession(h.getGroup))
 	mux.HandleFunc("PUT /api/groups/{groupId}", h.requireSession(h.updateGroup))
 	mux.HandleFunc("GET /api/groups/{groupId}/members", h.requireSession(h.listMembers))
