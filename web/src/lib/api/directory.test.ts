@@ -59,6 +59,8 @@ describe('listPublicGroups (#71)', () => {
       { groups: 'x' },
       { groups: [{ name: 'n' }] },
       { groups: [{ groupId: 1, name: 'n' }] },
+      { groups: [{ groupId: 'g', name: 5 }] },
+      { groups: [{ groupId: 'g', name: 'n', description: 5 }] },
       { groups: [], nextCursor: 5 },
     ]) {
       stubFetch(200, body)

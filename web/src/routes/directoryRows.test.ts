@@ -55,6 +55,10 @@ describe('snippet', () => {
     expect(out.length).toBeLessThanOrEqual(21)
     expect(out).not.toContain('wor…')
   })
+  it('backs up to the last space rather than ending mid-word', () => {
+    expect(snippet('alpha beta gamma delta', 13)).toBe('alpha beta…')
+  })
+
   it('cuts mid-word when there is no usable space', () => {
     expect(snippet('x'.repeat(50), 10)).toBe('x'.repeat(10) + '…')
   })
