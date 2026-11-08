@@ -809,3 +809,17 @@ func TestRemoveJoinRequestLeavesADeniedRequestToRunOutItsCoolOff(t *testing.T) {
 		t.Errorf("the denied request after RemoveJoinRequest = %+v (%v), want it kept with status denied", jr, err)
 	}
 }
+
+func TestApproveJoinRequestUncappedGroupGone(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 1)
+	if _, err := c.ddb.DeleteItem(context.Background(), deleteItemInput(c.table, "GROUP#"+g.gid, "META")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.approve(c, 0, 0); !errors.Is(err, ErrGroupGone) {
+		t.Fatalf("approval into a deleted group = %v, want ErrGroupGone", err)
+	}
+	if itemExists(t, c, "GROUP#"+g.gid, "MEMBER#"+g.users[0].UserID) {
+		t.Error("a membership was written into a deleted group")
+	}
+}
