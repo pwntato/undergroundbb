@@ -244,7 +244,7 @@ func TestExpiredJoinRequestsAreAbsent(t *testing.T) {
 	if rows, _, err := c.ListPendingJoinRequests(ctx, gid, now, 10, ""); err != nil || len(rows) != 0 {
 		t.Errorf("ListPendingJoinRequests = %v, %v, want none", rows, err)
 	}
-	if rows, err := c.ListJoinRequestsByUser(ctx, user.UserID, now); err != nil || len(rows) != 0 {
+	if rows, _, err := c.ListJoinRequestsByUser(ctx, user.UserID, now, 50, ""); err != nil || len(rows) != 0 {
 		t.Errorf("ListJoinRequestsByUser = %v, %v, want none", rows, err)
 	}
 	if err := c.WithdrawJoinRequest(ctx, gid, user.UserID, now); !errors.Is(err, ErrJoinRequestNotFound) {
@@ -433,7 +433,7 @@ func TestListJoinRequestsByUserReturnsEveryGroupsRequest(t *testing.T) {
 	if err := createReq(c, groups[0], other, newUserID(t)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := c.ListJoinRequestsByUser(ctx, user.UserID, time.Now())
+	rows, _, err := c.ListJoinRequestsByUser(ctx, user.UserID, time.Now(), 50, "")
 	if err != nil || len(rows) != 3 {
 		t.Fatalf("got %d rows (%v), want 3", len(rows), err)
 	}
@@ -821,5 +821,184 @@ func TestApproveJoinRequestUncappedGroupGone(t *testing.T) {
 	}
 	if itemExists(t, c, "GROUP#"+g.gid, "MEMBER#"+g.users[0].UserID) {
 		t.Error("a membership was written into a deleted group")
+	}
+}
+
+// A user who asked to join and then joins by invite no longer has a use for the request. If it stayed, it
+// would sit in the admin queue while they are a member and, once they leave, still be approvable: a
+// deliberate leave would be undone on the strength of something they asked before they joined.
+func TestCompletingAnInviteClearsThePendingJoinRequest(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid := putPublicGroup(t, c)
+	admin := requesterOf(t, c)
+	putTestMember(t, c, gid, admin.UserID, models.RoleAdmin)
+	user := requesterOf(t, c)
+
+	requestID := newUserID(t)
+	if err := createReq(c, gid, user, requestID); err != nil {
+		t.Fatal(err)
+	}
+	inviteID := "test-invite-" + randomSuffix(t)
+	if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, gid, admin.UserID, time.Now().Add(7*24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, user.UserID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CompleteInvite(ctx, testCompleteInviteInput(inviteID, gid, admin.UserID, user.UserID)); err != nil {
+		t.Fatalf("CompleteInvite: %v", err)
+	}
+
+	if itemExists(t, c, "GROUP#"+gid, "REQ#"+user.UserID) {
+		t.Error("the member's pending join request survived their joining by invite")
+	}
+	if rows, _, err := c.ListPendingJoinRequests(ctx, gid, time.Now(), 10, ""); err != nil || len(rows) != 0 {
+		t.Errorf("the admin queue lists %d request(s) from a member (%v)", len(rows), err)
+	}
+	if rows, _, err := c.ListJoinRequestsByUser(ctx, user.UserID, time.Now(), 50, ""); err != nil || len(rows) != 0 {
+		t.Errorf("the member's own list holds %d request(s) (%v)", len(rows), err)
+	}
+
+	// They leave; the request they made before joining must not bring them back.
+	if _, err := c.LeaveGroup(ctx, gid, user.UserID, nil, nil, false); err != nil {
+		t.Fatalf("LeaveGroup: %v", err)
+	}
+	err := c.ApproveJoinRequest(ctx, ApproveJoinRequestInput{
+		GroupID: gid, RequesterUserID: user.UserID, RequestID: requestID, ApproverUserID: admin.UserID,
+		Role: models.RoleMember, Admission: models.Admission{InviteID: requestID},
+	})
+	if !errors.Is(err, ErrJoinRequestNotFound) {
+		t.Errorf("approving after they left = %v, want ErrJoinRequestNotFound", err)
+	}
+	if itemExists(t, c, "GROUP#"+gid, "MEMBER#"+user.UserID) {
+		t.Error("a user who left was put back in the group by an old request")
+	}
+}
+
+func TestListJoinRequestsByUserPagesAndSkipsExpiredRows(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	user, other := requesterOf(t, c), requesterOf(t, c)
+	var groups []string
+	for i := 0; i < 6; i++ {
+		g := putPublicGroup(t, c)
+		groups = append(groups, g)
+		if err := createReq(c, g, user, newUserID(t)); err != nil {
+			t.Fatal(err)
+		}
+		// GSI1SK is day-plus-random, so within a day the order is not creation order: collect the
+		// expected order from the index itself below.
+	}
+	if err := createReq(c, groups[0], other, newUserID(t)); err != nil {
+		t.Fatal(err)
+	}
+	// Two rows expire before DynamoDB sweeps them.
+	for _, g := range []string{groups[1], groups[3]} {
+		_, err := c.ddb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(c.table), Key: map[string]types.AttributeValue{"PK": s("GROUP#" + g), "SK": s("REQ#" + user.UserID)},
+			UpdateExpression: aws.String("SET #t = :t"), ExpressionAttributeNames: map[string]string{"#t": "TTL"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":t": &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10)}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	live := map[string]bool{groups[0]: true, groups[2]: true, groups[4]: true, groups[5]: true}
+
+	walk := func(t *testing.T, limit int) (ids []string, pages int) {
+		t.Helper()
+		cursor := ""
+		for pages = 1; pages <= 30; pages++ {
+			rows, next, err := c.ListJoinRequestsByUser(ctx, user.UserID, time.Now(), limit, cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) > limit {
+				t.Fatalf("page of %d rows, limit %d", len(rows), limit)
+			}
+			for _, r := range rows {
+				if r.RequesterUserID != user.UserID {
+					t.Fatalf("another user's request in the list: %+v", r)
+				}
+				ids = append(ids, r.GroupID)
+			}
+			if next == "" {
+				return ids, pages
+			}
+			cursor = next
+		}
+		t.Fatal("the cursor never ended")
+		return nil, 0
+	}
+	check := func(t *testing.T, ids []string) {
+		t.Helper()
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if seen[id] {
+				t.Fatalf("%s listed twice", id)
+			}
+			if !live[id] {
+				t.Errorf("group %s should not be listed (expired or not the user's)", id)
+			}
+			seen[id] = true
+		}
+		for id := range live {
+			if !seen[id] {
+				t.Errorf("group %s never listed", id)
+			}
+		}
+	}
+
+	t.Run("pages of two cover each live request once", func(t *testing.T) {
+		ids, pages := walk(t, 2)
+		check(t, ids)
+		if pages < 2 {
+			t.Errorf("4 live requests at a limit of 2 took %d page(s)", pages)
+		}
+	})
+	t.Run("one big page", func(t *testing.T) {
+		ids, pages := walk(t, 50)
+		check(t, ids)
+		if pages != 1 {
+			t.Errorf("took %d pages", pages)
+		}
+	})
+	t.Run("a pass bound hands back a cursor that resumes, expired rows included", func(t *testing.T) {
+		old := maxJoinRequestPasses
+		maxJoinRequestPasses = 1
+		t.Cleanup(func() { maxJoinRequestPasses = old })
+		ids, _ := walk(t, 1)
+		check(t, ids)
+	})
+	t.Run("a malformed cursor is refused, not read", func(t *testing.T) {
+		if _, _, err := c.ListJoinRequestsByUser(ctx, user.UserID, time.Now(), 5, "nonsense"); err == nil {
+			t.Error("a cursor with no group part was accepted")
+		}
+	})
+}
+
+func TestPublicGroupNamesReturnsOnlyPublicGroupsAndBatches(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	if names, err := c.PublicGroupNames(ctx, nil); err != nil || len(names) != 0 {
+		t.Fatalf("no ids: %v, %v", names, err)
+	}
+	pub := putPublicGroup(t, c)
+	putRaw(t, c, map[string]types.AttributeValue{"PK": s("GROUP#" + pub), "SK": s("META"), "Type": s("Group"), "Visibility": s(models.VisibilityPublic), "NamePlaintext": s("Chess Club")})
+	private := newUserID(t)
+	putRaw(t, c, map[string]types.AttributeValue{"PK": s("GROUP#" + private), "SK": s("META"), "Type": s("Group"), "Visibility": s(models.VisibilityPrivate), "NamePlaintext": s("never shown")})
+	t.Cleanup(func() { removePartitions(t, c, "GROUP#"+private) })
+	ids := []string{pub, private, newUserID(t)}
+	// More than one BatchGetItem's worth of ids.
+	for i := 0; i < 120; i++ {
+		ids = append(ids, newUserID(t))
+	}
+	names, err := c.PublicGroupNames(ctx, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[pub] != "Chess Club" {
+		t.Errorf("names = %v, want only the public group", names)
 	}
 }

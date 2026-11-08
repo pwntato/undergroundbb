@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -247,14 +248,47 @@ type myJoinRequestEntry struct {
 	RetryAfter string `json:"retryAfter,omitempty"`
 }
 
-// myJoinRequests implements GET /api/join-requests : the caller's own live requests.
+type myJoinRequestsResponse struct {
+	Requests   []myJoinRequestEntry `json:"requests"`
+	NextCursor string               `json:"nextCursor,omitempty"`
+}
+
+// ownRequestCursorPattern is the cursor myJoinRequests issues: "<group uuid>/REQ#<YYYY-MM-DD>#<16 hex>".
+var ownRequestCursorPattern = regexp.MustCompile(`^[0-9a-f-]{36}/REQ#\d{4}-\d{2}-\d{2}#[0-9a-f]{16}$`)
+
+// myJoinRequests implements GET /api/join-requests?limit=&cursor= : the caller's own live requests,
+// oldest first. A user can have one request per public group, so it is paged, and the group names for a
+// page are read in one batch.
 func (h *Handler) myJoinRequests(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)
 	if !ok {
 		WriteError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	rows, err := h.db.ListJoinRequestsByUser(r.Context(), userID, time.Now())
+	limit := defaultJoinRequestPage
+	if s := r.URL.Query().Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > maxJoinRequestPage {
+			WriteError(w, http.StatusBadRequest, "limit: must be a number from 1 to "+strconv.Itoa(maxJoinRequestPage))
+			return
+		}
+		limit = n
+	}
+	cursor := r.URL.Query().Get("cursor")
+	if cursor != "" && !ownRequestCursorPattern.MatchString(cursor) {
+		WriteError(w, http.StatusBadRequest, "cursor: not a cursor this endpoint issued")
+		return
+	}
+	rows, next, err := h.db.ListJoinRequestsByUser(r.Context(), userID, time.Now(), limit, cursor)
+	if err != nil {
+		WriteInternalError(w, r, err, "could not list join requests")
+		return
+	}
+	ids := make([]string, 0, len(rows))
+	for i := range rows {
+		ids = append(ids, rows[i].GroupID)
+	}
+	names, err := h.db.PublicGroupNames(r.Context(), ids)
 	if err != nil {
 		WriteInternalError(w, r, err, "could not list join requests")
 		return
@@ -262,19 +296,13 @@ func (h *Handler) myJoinRequests(w http.ResponseWriter, r *http.Request) {
 	out := make([]myJoinRequestEntry, 0, len(rows))
 	for i := range rows {
 		jr := &rows[i]
-		e := myJoinRequestEntry{GroupID: jr.GroupID, RequestID: jr.RequestID, Status: jr.Status, Day: joinRequestDay(jr)}
+		e := myJoinRequestEntry{GroupID: jr.GroupID, GroupName: names[jr.GroupID], RequestID: jr.RequestID, Status: jr.Status, Day: joinRequestDay(jr)}
 		if jr.Status == models.JoinRequestDenied {
 			e.RetryAfter = retryAfterDay(jr)
 		}
-		name, nameErr := h.publicGroupName(r.Context(), jr.GroupID)
-		if nameErr != nil {
-			WriteInternalError(w, r, nameErr, "could not list join requests")
-			return
-		}
-		e.GroupName = name
 		out = append(out, e)
 	}
-	WriteJSON(w, http.StatusOK, map[string][]myJoinRequestEntry{"requests": out})
+	WriteJSON(w, http.StatusOK, myJoinRequestsResponse{Requests: out, NextCursor: next})
 }
 
 // withdrawJoinRequest implements DELETE /api/groups/{groupId}/join-requests/mine : the

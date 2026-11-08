@@ -943,6 +943,18 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 					Item:      admissionItem,
 				},
 			},
+			// A join request the invitee made before joining this way is now moot. Left in place it
+			// would show in the admin queue while they are a member and, once they leave, still be
+			// approvable, undoing a deliberate leave on the strength of something they asked before they
+			// joined (#72). CreateJoinRequest refuses a current member, so this is the only path by which
+			// a member could hold one. Unconditional: a no-op when there is no row, and a denied row can go
+			// too, since they are in.
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key:       joinRequestKey(in.GroupID, in.InvitedUserID),
+				},
+			},
 		},
 	})
 	if err != nil {

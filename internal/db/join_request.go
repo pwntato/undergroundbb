@@ -266,15 +266,27 @@ func lastKeySK(key map[string]types.AttributeValue) string {
 	return ""
 }
 
-// ListJoinRequestsByUser returns the requester's own live requests across groups
-// (pending and denied) from GSI1, so they can see what they asked for and what was
-// declined.
-func (c *Client) ListJoinRequestsByUser(ctx context.Context, requesterID string, now time.Time) ([]models.JoinRequest, error) {
-	var (
-		out   []models.JoinRequest
-		start map[string]types.AttributeValue
-	)
-	for {
+// ListJoinRequestsByUser returns up to limit of the requester's own live requests across groups
+// (pending and denied) from GSI1, oldest first, and a cursor for the next page ("" when there is
+// none), so they can see what they asked for and what was declined. A user can have one request per
+// public group, so the read is paged like the admin queue: expired rows are skipped in memory, a call
+// makes at most maxJoinRequestPasses passes, and the cursor names the last row read.
+func (c *Client) ListJoinRequestsByUser(ctx context.Context, requesterID string, now time.Time, limit int, cursor string) ([]models.JoinRequest, string, error) {
+	var start map[string]types.AttributeValue
+	if cursor != "" {
+		groupID, gsi1SK, ok := splitOwnRequestCursor(cursor)
+		if !ok {
+			return nil, "", fmt.Errorf("db: list own join requests: malformed cursor")
+		}
+		start = map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+			"SK":     &types.AttributeValueMemberS{Value: joinRequestPrefix + requesterID},
+			"GSI1PK": &types.AttributeValueMemberS{Value: "USER#" + requesterID},
+			"GSI1SK": &types.AttributeValueMemberS{Value: gsi1SK},
+		}
+	}
+	var found []models.JoinRequest
+	for pass := 0; pass < maxJoinRequestPasses; pass++ {
 		page, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
 			TableName:              aws.String(c.table),
 			IndexName:              aws.String("GSI1"),
@@ -284,25 +296,68 @@ func (c *Client) ListJoinRequestsByUser(ctx context.Context, requesterID string,
 				":sk": &types.AttributeValueMemberS{Value: joinRequestPrefix},
 			},
 			ExclusiveStartKey: start,
+			Limit:             aws.Int32(int32(limit)),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("db: list own join requests: %w", err)
+			return nil, "", fmt.Errorf("db: list own join requests: %w", err)
 		}
 		for _, it := range page.Items {
 			var jr models.JoinRequest
 			if err := attributevalue.UnmarshalMap(it, &jr); err != nil {
-				return nil, fmt.Errorf("db: unmarshal join request: %w", err)
+				return nil, "", fmt.Errorf("db: unmarshal join request: %w", err)
 			}
 			if jr.TTL != 0 && jr.TTL < now.Unix() {
 				continue
 			}
-			out = append(out, jr)
+			found = append(found, jr)
+			if len(found) == limit {
+				// Resume after this row, whether or not the page had more.
+				return found, ownRequestCursor(jr.GroupID, jr.GSI1SK), nil
+			}
 		}
 		if page.LastEvaluatedKey == nil {
-			return out, nil
+			return found, "", nil
 		}
 		start = page.LastEvaluatedKey
 	}
+	return found, ownRequestCursorFromKey(start), nil
+}
+
+// ownRequestCursor names a row of the requester's own list: the group it is in and its GSI1 sort key
+// (the requester's uuid is the caller's, so it is not part of the cursor).
+func ownRequestCursor(groupID, gsi1SK string) string { return groupID + "/" + gsi1SK }
+
+func ownRequestCursorFromKey(key map[string]types.AttributeValue) string {
+	pk, _ := key["PK"].(*types.AttributeValueMemberS)
+	sk, _ := key["GSI1SK"].(*types.AttributeValueMemberS)
+	if pk == nil || sk == nil {
+		return ""
+	}
+	return ownRequestCursor(strings.TrimPrefix(pk.Value, "GROUP#"), sk.Value)
+}
+
+func splitOwnRequestCursor(cursor string) (groupID, gsi1SK string, ok bool) {
+	groupID, gsi1SK, ok = strings.Cut(cursor, "/")
+	return groupID, gsi1SK, ok && groupID != "" && strings.HasPrefix(gsi1SK, joinRequestPrefix)
+}
+
+// PublicGroupNames returns the plaintext names of the public groups among groupIDs, keyed by id, in
+// batched reads. A private or missing group is left out.
+func (c *Client) PublicGroupNames(ctx context.Context, groupIDs []string) (map[string]string, error) {
+	if len(groupIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	metas, err := c.batchGetGroupMetas(ctx, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(metas))
+	for id, g := range metas {
+		if g.Visibility == models.VisibilityPublic {
+			out[id] = g.NamePlaintext
+		}
+	}
+	return out, nil
 }
 
 // WithdrawJoinRequest deletes the requester's own pending request. A denied one is

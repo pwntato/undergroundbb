@@ -411,9 +411,7 @@ func TestMyJoinRequestsAndWithdraw(t *testing.T) {
 	id := requestToJoin(t, f.h, f.requester, f.requesterCkE, f.groupID)
 
 	rec := doJSON(t, f.h, http.MethodGet, "/api/join-requests", f.requesterCkE, nil)
-	var mine struct {
-		Requests []myJoinRequestEntry `json:"requests"`
-	}
+	var mine myJoinRequestsResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &mine); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("my requests: %d %s", rec.Code, rec.Body.String())
 	}
@@ -763,5 +761,85 @@ func TestApproveJoinRequestIntoAnOpenGroupIsNotCapped(t *testing.T) {
 	rec := doJSON(t, h, http.MethodPost, joinPath(groupID, "/"+requester.userID+"/approve"), adminCookie, approveBodyFor(t, h, admin, groupID, id, requester))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approval into an Open group with a cap of 1: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// A user who asked to join and then joins by invite has a request that is moot, and must not be able to
+// be put back into the group by it after leaving.
+func TestJoiningByInviteClearsThePendingJoinRequest(t *testing.T) {
+	f := newJoinFixture(t)
+	requestToJoin(t, f.h, f.requester, f.requesterCkE, f.groupID)
+
+	inviteID := createTestInvite(t, f.h, f.admin, f.adminCookie, f.groupID, time.Now().Add(24*time.Hour))
+	if rec := doJSON(t, f.h, http.MethodPost, "/api/invites/"+inviteID+"/accept", f.requesterCkE, signedAcceptInviteRequest(t, f.requester, inviteID)); rec.Code != http.StatusOK {
+		t.Fatalf("accept: %d %s", rec.Code, rec.Body.String())
+	}
+	body := completeBody(signedAdmission(t, f.h, f.admin, f.groupID, inviteID, f.requester))
+	if rec := doJSON(t, f.h, http.MethodPost, "/api/invites/"+inviteID+"/complete", f.adminCookie, body); rec.Code != http.StatusOK {
+		t.Fatalf("complete: %d %s", rec.Code, rec.Body.String())
+	}
+
+	list := doJSON(t, f.h, http.MethodGet, joinPath(f.groupID, ""), f.adminCookie, nil)
+	if strings.Contains(list.Body.String(), f.requester.userID) {
+		t.Errorf("the queue still lists a member's request: %s", list.Body.String())
+	}
+	mine := doJSON(t, f.h, http.MethodGet, "/api/join-requests", f.requesterCkE, nil)
+	if !strings.Contains(mine.Body.String(), `"requests":[]`) {
+		t.Errorf("a member's own list still holds the request: %s", mine.Body.String())
+	}
+}
+
+func TestMyJoinRequestsPagesAndNamesEveryGroup(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	admin, adminCookie := loggedInUser(t, h)
+	requester, requesterCookie := loggedInUser(t, h)
+	want := map[string]bool{}
+	for i := 0; i < 5; i++ {
+		gid := createPublicGroup(t, h, admin, adminCookie)
+		requestToJoin(t, h, requester, requesterCookie, gid)
+		want[gid] = true
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	pages := 0
+	for ; pages < 10; pages++ {
+		path := "/api/join-requests?limit=2"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		rec := doJSON(t, h, http.MethodGet, path, requesterCookie, nil)
+		var resp myJoinRequestsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("page %d: %d %s", pages, rec.Code, rec.Body.String())
+		}
+		if len(resp.Requests) > 2 {
+			t.Fatalf("page %d has %d entries, limit 2", pages, len(resp.Requests))
+		}
+		for _, e := range resp.Requests {
+			if seen[e.GroupID] {
+				t.Fatalf("%s listed twice", e.GroupID)
+			}
+			seen[e.GroupID] = true
+			if e.GroupName != "Book Club" {
+				t.Errorf("group %s listed with name %q", e.GroupID, e.GroupName)
+			}
+		}
+		if resp.NextCursor == "" {
+			break
+		}
+		cursor = resp.NextCursor
+	}
+	if len(seen) != len(want) || pages < 2 {
+		t.Errorf("saw %d of %d requests over %d page(s)", len(seen), len(want), pages+1)
+	}
+	for gid := range want {
+		if !seen[gid] {
+			t.Errorf("request in %s never listed", gid)
+		}
+	}
+	for name, q := range map[string]string{"limit 0": "?limit=0", "limit too big": "?limit=101", "limit not a number": "?limit=x", "cursor not issued": "?cursor=abc", "cursor with a path in it": "?cursor=../x/REQ%232026-01-01%230123456789abcdef"} {
+		if rec := doJSON(t, h, http.MethodGet, "/api/join-requests"+q, requesterCookie, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, rec.Code)
+		}
 	}
 }
