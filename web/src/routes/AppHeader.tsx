@@ -12,7 +12,8 @@ import { getUnreadTotal, type UnreadTotal } from '@/lib/api/notifications'
 import { useSession } from '@/lib/session/useSession'
 import { headerShownOn } from './appHeaderPaths'
 import { marksSettled, onMarksSettled } from './markReadTracker'
-import { createUnreadCounter, type UnreadCounter } from './unreadCounter'
+import { refreshWhenShown, startHeaderCounting } from './headerCounting'
+import type { UnreadCounter } from './unreadCounter'
 import { unreadAriaLabel, unreadLabel } from './unreadLabel'
 
 export function AppHeaderLink({ total }: { readonly total?: UnreadTotal | null }) {
@@ -48,24 +49,23 @@ export function AppHeader() {
   // on a screen with no header still has to be counted).
   useEffect(() => {
     if (userId === null) return
-    const c = createUnreadCounter({
+    const started = startHeaderCounting({
       now: Date.now,
       settled: marksSettled,
       fetchTotal: getUnreadTotal,
+      onMarksSettled,
       apply: (total) => setCounted({ userId, total }),
     })
-    counter.current = c
-    const off = onMarksSettled(() => void c.refresh(true))
+    counter.current = started.counter
     return () => {
-      off()
-      c.dispose()
-      if (counter.current === c) counter.current = null
+      started.stop()
+      if (counter.current === started.counter) counter.current = null
     }
   }, [userId])
 
   // On appearing and on navigation; the counter skips it when an attempt is recent.
   useEffect(() => {
-    if (shown) void counter.current?.refresh(false)
+    refreshWhenShown(shown, counter.current)
   }, [shown, pathname, userId])
 
   if (!shown) return null

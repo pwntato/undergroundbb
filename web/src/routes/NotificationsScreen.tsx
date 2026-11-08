@@ -14,10 +14,9 @@ import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCa
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { groupLabel } from './groupLabel'
-import { trackMarkRead } from './markReadTracker'
 import { NotificationsPanel, type NotificationsLoad } from './NotificationsPanel'
 import { runListGroups } from './runListGroups'
-import { markFailedAfter, runMarkRead } from './runMarkRead'
+import { markFailedAfter, runTrackedMarkRead } from './runMarkRead'
 import { useUsernames } from './useUsernames'
 
 export function NotificationsScreen() {
@@ -80,7 +79,7 @@ export function NotificationsScreen() {
   }, [session.userId])
 
   const markRead = useCallback(async (ids: readonly string[], fresh: boolean) => {
-    const result = await trackMarkRead(runMarkRead(ids, markNotificationsRead))
+    const result = await runTrackedMarkRead(ids, markNotificationsRead)
     const done = new Set(result.marked)
     setLoad((prev) =>
       prev.status === 'ready'
