@@ -65,9 +65,9 @@ export function DirectoryPanel({
           {rows.map((row) => (
             <li key={row.entry.groupId} className="flex flex-col gap-1 rounded-md border px-3 py-2">
               <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                  {row.entry.name}
-                  <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  <span className="font-medium">{row.entry.name}</span>
+                  <span className="block font-mono text-xs text-muted-foreground">
                     #{row.shortId}
                   </span>
                 </span>
