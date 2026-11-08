@@ -356,6 +356,18 @@ describe('prepareJoinApproval', () => {
     })
   })
 
+  it('says to ask again when only the signing key, or only the wrapping key, differs from the signed ones', async () => {
+    const p = person()
+    const other = person()
+    for (const over of [{ signingPublicKey: other.edB64 }, { wrappingPublicKey: other.xB64 }]) {
+      const deps = approvalDeps(p, { served: served(p, over) })
+      expect(await prepareJoinApproval(deps, GROUP, entryFor(p))).toMatchObject({
+        ok: false,
+        kind: 'requesterKeysChanged',
+      })
+    }
+  })
+
   it('refuses a deleted account and a missing one', async () => {
     const p = person()
     expect(
