@@ -1562,6 +1562,18 @@ see none of its content.
 
 In both cases the **member list is visible to members only**. There is no setting that changes this.
 
+The directory is read with `GET /api/groups/public?q=&limit=&cursor=` (#71): one `Query` on the
+`PUBLIC#0` partition, `begins_with(GSI1SK, "NAME#" + q)`, name order, at most 50 per page, and the
+cursor is the last sort key returned (so it is only valid for the `q` it came from). A listing entry
+is the group's id, plaintext name and description and nothing else. It needs a session, like the rest
+of `/api`: that is not what keeps names private (an invite id already shows a public group's name,
+#290), it stops an anonymous crawler walking the whole directory. Search is a **case-sensitive prefix
+of the name as typed**, because that is the index key; a case-insensitive or substring search would need
+a second key and is not built. The index is eventually consistent, so a group created or renamed a
+moment ago can take a moment to show. The web screen (`/directory`) tells groups with one name apart
+by the start of their id and their description, and marks the ones the caller is already in or has
+asked to join.
+
 Public groups are joined by **request**, which is the invite handshake run in the opposite
 direction: the requester signs a request carrying their public keys, and an admin or ambassador
 approves it by wrapping the group key to the keys that were signed. **It does not carry the
