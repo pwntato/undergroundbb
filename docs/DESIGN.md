@@ -1580,9 +1580,11 @@ to be admitted *as* a real requester, who then never receives a key.
 
 `POST /api/groups/{id}/join-requests` writes one `REQ#<requester uuid>` row in the group's partition
 (`GROUP#<gid>`), so there is **one slot per user per group**. The requester signs
-`JoinRequestPayload(request_id, group_id, ed25519_pub, x25519_pub)` under `underground-bb:join-request:v1`
-with a fresh request id and their *current* keys; the keys are read from their profile, never from the
-request. The server checks the signature, that the group is public (a private group answers 404 exactly
+`JoinRequestPayload(request_id, group_id, requester_uuid, ed25519_pub, x25519_pub)` under
+`underground-bb:join-request:v1` with a fresh request id and their *current* keys; the keys are read from
+their profile, never from the request. The uuid is signed because it is the only identity claim a join
+request carries (an invite gets that binding from the link it was sent to): without it a request signed by
+one user would be a valid signature for the row the server files under another. The server checks the signature, that the group is public (a private group answers 404 exactly
 like a missing one), that the requester is not already a member, and that their account is live and
 still at the `KeyEpoch` the keys were read at, all in the transaction that writes the row.
 
@@ -1595,6 +1597,10 @@ still at the `KeyEpoch` the keys were read at, all in the transaction that write
   they wrapped under, the group existing, the requester not yet a member, and the requester's `KeyEpoch`
   unchanged. The approver's client verifies the requester's signature and checks the keys against its pins
   *before* wrapping; the server's own check of the same signature is not what protects the group.
+- **A Rotating group is held to its member cap (#60).** `createGroup` accepts a public group in either
+  mode, so approval counts members and writes under the same `JoinSeq` guard an invite's completion uses
+  (one shared implementation, so the two ways into a group cannot disagree). A full group answers 409
+  `group_full` and the request stays pending, since a departure may free a slot; an Open group has no cap.
 - **A changed key pair clears the request.** If the requester's current keys differ from the ones in the
   row (they rotated, #62), the wrap would be dormant on arrival: approval answers 409
   `requester_keys_changed` and deletes the request so they can ask again. The same happens for a requester
