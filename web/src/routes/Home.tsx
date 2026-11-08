@@ -21,6 +21,7 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { useSession } from '@/lib/session/useSession'
 import { GroupList, type LoadState } from './GroupList'
+import { LogoutButton } from './LogoutButton'
 import { readNewGroupState } from './newGroupNavigationState'
 import { runListGroups } from './runListGroups'
 import { ReauthenticateStep } from './ReauthenticateStep'
@@ -194,9 +195,7 @@ export function Home() {
         <Button asChild variant="outline">
           <Link to="/account/delete">Delete account</Link>
         </Button>
-        <Button variant="outline" disabled={loggingOut} onClick={() => void onLogout()}>
-          Log out
-        </Button>
+        <LogoutButton loggingOut={loggingOut} onLogout={onLogout} />
       </div>
       {logoutError !== null && <p className="text-sm text-destructive">{logoutError}</p>}
     </div>

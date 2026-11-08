@@ -75,7 +75,6 @@ describe('onLogoutClick', () => {
           answer = resolve
         }),
     )
-    await Promise.resolve()
     expect(events).toEqual(['error:null', 'busy:true', 'request'])
     answer()
     await run
