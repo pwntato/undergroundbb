@@ -60,7 +60,11 @@ func TestListPublicGroupsFiltersByPrefixInNameOrderWithDuplicates(t *testing.T) 
 			}
 		}
 	}
-	if len(ids) != 2 || ids[0] == ids[1] || !((ids[0] == b1 && ids[1] == b2) || (ids[0] == b2 && ids[1] == b1)) {
+	gotSet := map[string]bool{}
+	for _, id := range ids {
+		gotSet[id] = true
+	}
+	if len(ids) != 2 || !gotSet[b1] || !gotSet[b2] {
 		t.Errorf("duplicate-name ids = %v, want %s and %s", ids, b1, b2)
 	}
 
@@ -137,7 +141,7 @@ func TestValidDirectoryCursor(t *testing.T) {
 		{"NAME#A#B#" + gid, "A", true},    // a name may contain '#'
 		{"NAME#Book#not-a-uuid", "", false},
 		{"NAME#Book#" + strings.Repeat("x", 36), "", false}, // right width, not a uuid
-		{"NAME#Book" + gid, "", false}, // no separator before the gid
+		{"NAME#Book" + gid, "", false},                      // no separator before the gid
 		{"USER#x#" + gid, "", false},
 		{"", "", false},
 		{"NAME#" + gid, "", false},
