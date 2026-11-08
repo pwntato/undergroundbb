@@ -48,6 +48,7 @@ import {
   signWrapRecord as signWrapRecordPure,
   signVerification as signVerificationPure,
   signReadmission as signReadmissionPure,
+  signJoinRequest as signJoinRequestPure,
   signRoleGrant as signRoleGrantPure,
   signSuccessorClaim as signSuccessorClaimPure,
   signSuccessorDesignation as signSuccessorDesignationPure,
@@ -100,6 +101,7 @@ import type {
   SignWrapRecordRequest,
   SignVerificationRequest,
   SignReadmissionRequest,
+  SignJoinRequestRequest,
   SignRoleGrantRequest,
   SignSuccessorClaimRequest,
   SignSuccessorDesignationRequest,
@@ -232,6 +234,9 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'signReadmission':
       signReadmission(req)
+      return
+    case 'signJoinRequest':
+      signJoinRequest(req)
       return
     case 'startGroupRotation':
       await startGroupRotation(req)
@@ -513,6 +518,13 @@ function signReadmission(req: SignReadmissionRequest): void {
     req.generation,
   )
   post({ kind: 'signReadmissionDone', id: req.id, result })
+}
+
+/** Signs a request to join a public group -- #72. */
+function signJoinRequest(req: SignJoinRequestRequest): void {
+  const keys = requireLiveKeys(req.userId, 'ask to join a group')
+  const result = signJoinRequestPure(keys, req.requestId, req.groupId)
+  post({ kind: 'signJoinRequestDone', id: req.id, result })
 }
 
 /** Reports the caller's own current signing public key -- issue #63. */

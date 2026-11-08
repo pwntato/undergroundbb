@@ -31,6 +31,7 @@ import {
   signPin,
   signWrapRecord,
   signReadmission,
+  signJoinRequest,
   signRoleGrant,
   signSuccessorClaim,
   signSuccessorDesignation,
@@ -49,6 +50,7 @@ import {
   startSelfRekey,
 } from './credential-material.js'
 import { encodeComment } from './comment.js'
+import { joinRequestPayload } from './joinRequest.js'
 import { REACTIONS } from './reaction.js'
 import { checkCommentSignature } from './comment-check.js'
 import { checkPostSignature, postTimeSuspect } from './post-check.js'
@@ -2025,6 +2027,37 @@ describe('invite handshake round trip', () => {
         payloadFor(member.wrappingKey.publicKey, 3),
         sig,
       ),
+    ).toBe(false)
+  })
+
+  it('signs a join request that verifies over exactly the caller, the group, the request and the keys', async () => {
+    const requester = await realUserKeys(INVITEE_ID, 'requester-password')
+    const other = await realUserKeys(INVITER_ID, 'other-password')
+    const groupId = 'group-uuid-test-join'
+    const requestId = '55555555-5555-4555-8555-555555555555'
+
+    const { signature } = signJoinRequest(requester, requestId, groupId)
+    const sig = base64ToBytes(signature)
+    const payloadFor = (rid: string, gid: string, uid: string, wrap: Uint8Array) =>
+      joinRequestPayload(rid, gid, uid, requester.signingKey.publicKey, wrap)
+    const verifies = (
+      payload: Uint8Array,
+      ctx: ed25519.SigningContext = ed25519.SigningContext.JoinRequest,
+    ) => ed25519.verify(requester.signingKey.publicKey, ctx, payload, sig)
+
+    const wrap = requester.wrappingKey.publicKey
+    expect(verifies(payloadFor(requestId, groupId, INVITEE_ID, wrap))).toBe(true)
+    // Bound to the request id, the group, the requester's uuid, the keys and the context.
+    expect(
+      verifies(payloadFor('66666666-6666-4666-8666-666666666666', groupId, INVITEE_ID, wrap)),
+    ).toBe(false)
+    expect(verifies(payloadFor(requestId, 'group-uuid-other', INVITEE_ID, wrap))).toBe(false)
+    expect(verifies(payloadFor(requestId, groupId, INVITER_ID, wrap))).toBe(false)
+    expect(verifies(payloadFor(requestId, groupId, INVITEE_ID, other.wrappingKey.publicKey))).toBe(
+      false,
+    )
+    expect(
+      verifies(payloadFor(requestId, groupId, INVITEE_ID, wrap), ed25519.SigningContext.Invite),
     ).toBe(false)
   })
 

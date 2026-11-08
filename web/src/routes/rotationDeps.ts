@@ -21,6 +21,7 @@ import {
   rewrapMembers,
 } from '@/lib/api/groups'
 import { deleteHandoff } from '@/lib/api/keyRotation'
+import { approveJoinRequest, denyJoinRequest } from '@/lib/api/joinRequests'
 import { getUserDetail, getUsers } from '@/lib/api/users'
 import {
   getOwnSigningKey,
@@ -39,6 +40,7 @@ import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
 import type { AcceptKeyChangeDeps } from './runAcceptKeyChange'
 import type { ApproveDeps } from './runApprove'
+import type { JoinApprovalDeps } from './runJoinRequests'
 import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
 import type { SelfRekeyDeps } from './runSelfRekey'
@@ -128,5 +130,15 @@ export function makeAcceptDeps(userId: string): AcceptKeyChangeDeps {
     loadOwnKeyHistory: ownKeyHistory,
     ownKeyHistoryFailure: ownKeyHistory.failure,
     pinKeys: makePinKeys(userId),
+  }
+}
+
+/** The rotation wiring plus what approving or declining a request to join a public group needs (#72). */
+export function makeJoinApprovalDeps(userId: string): JoinApprovalDeps {
+  return {
+    ...makeRotationDeps(userId),
+    signReadmission,
+    approveJoinRequest,
+    denyJoinRequest,
   }
 }

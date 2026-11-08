@@ -42,6 +42,7 @@ import {
 } from './invite.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { pinPayload } from './pin.js'
+import { joinRequestPayload } from './joinRequest.js'
 import { decodeComment, encodeComment, type CommentContent } from './comment.js'
 import { decodeReaction, encodeReaction } from './reaction.js'
 import { decodePost, encodePost, type PostContent } from './post.js'
@@ -764,6 +765,27 @@ export async function completeInvite(
     generation: ownGeneration,
     admission: { inviterGrantRef, day, signature: bytesToBase64(admissionSignature) },
   }
+}
+
+/**
+ * #72: signs a request to join a public group with the caller's own signing key, over the caller's
+ * CURRENT keys. The server stores the keys from the caller's profile, not from the request, and
+ * checks this signature against them; an approver's client checks it again.
+ */
+export function signJoinRequest(
+  keys: LiveKeys,
+  requestId: string,
+  groupId: string,
+): { signature: string } {
+  const payload = joinRequestPayload(
+    requestId,
+    groupId,
+    keys.userId,
+    keys.signingKey.publicKey,
+    keys.wrappingKey.publicKey,
+  )
+  const signature = ed25519.sign(keys.signingKey, ed25519.SigningContext.JoinRequest, payload)
+  return { signature: bytesToBase64(signature) }
 }
 
 /**

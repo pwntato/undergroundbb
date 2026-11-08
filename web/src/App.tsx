@@ -14,6 +14,9 @@ import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { AppHeader } from '@/routes/AppHeader'
 import { InvitesScreen } from '@/routes/InvitesScreen'
+import { JoinGroupScreen } from '@/routes/JoinGroupScreen'
+import { MyJoinRequestsScreen } from '@/routes/MyJoinRequestsScreen'
+import { GroupJoinRequestsScreen } from '@/routes/GroupJoinRequestsScreen'
 import { NotificationsScreen } from '@/routes/NotificationsScreen'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
@@ -116,6 +119,30 @@ function App() {
               element={
                 <RequireAuth>
                   <CreateGroupScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/:groupId/join"
+              element={
+                <RequireAuth>
+                  <JoinGroupScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/groups/:groupId/requests"
+              element={
+                <RequireAuth>
+                  <GroupJoinRequestsScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/join-requests"
+              element={
+                <RequireAuth>
+                  <MyJoinRequestsScreen />
                 </RequireAuth>
               }
             />

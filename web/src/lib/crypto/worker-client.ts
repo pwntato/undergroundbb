@@ -86,6 +86,9 @@ import type {
   SignPinRequest,
   SignWrapRecordRequest,
   SignVerificationRequest,
+  SignJoinRequestRequest,
+  SignJoinRequestResponse,
+  SignJoinRequestResult,
   SignReadmissionRequest,
   SignReadmissionResponse,
   SignReadmissionResult,
@@ -610,6 +613,37 @@ export function signReadmission(
         return
       }
       reject(new Error(`worker: unexpected response kind ${msg.kind} for signReadmission`))
+    }
+    cleanup = attachFailureHandlers(w, onMessage, reject)
+    w.addEventListener('message', onMessage)
+    w.postMessage(fullReq)
+  })
+}
+
+/** Signs a request to join a public group -- #72. */
+export function signJoinRequest(
+  req: Omit<SignJoinRequestRequest, 'kind' | 'id'>,
+): Promise<SignJoinRequestResult> {
+  const id = nextRequestID()
+  const fullReq: SignJoinRequestRequest = { kind: 'signJoinRequest', id, ...req }
+  return new Promise((resolve, reject) => {
+    const w = getWorker()
+    let cleanup: () => void
+    const onMessage = (event: MessageEvent<WorkerResponse>): void => {
+      const msg = event.data
+      if (msg.id !== id) {
+        return
+      }
+      cleanup()
+      if (msg.kind === 'error') {
+        reject(reconstructWorkerError(msg))
+        return
+      }
+      if (msg.kind === 'signJoinRequestDone') {
+        resolve((msg as SignJoinRequestResponse).result)
+        return
+      }
+      reject(new Error(`worker: unexpected response kind ${msg.kind} for signJoinRequest`))
     }
     cleanup = attachFailureHandlers(w, onMessage, reject)
     w.addEventListener('message', onMessage)

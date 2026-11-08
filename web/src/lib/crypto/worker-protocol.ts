@@ -580,6 +580,26 @@ export interface SignReadmissionResponse {
   readonly result: SignReadmissionResult
 }
 
+/** #72: signs a request to join a public group with the worker's liveKeys. */
+export interface SignJoinRequestRequest {
+  readonly kind: 'signJoinRequest'
+  readonly id: string
+  readonly userId: string
+  readonly groupId: string
+  /** A fresh UUID, signed into the request. */
+  readonly requestId: string
+}
+
+export interface SignJoinRequestResult {
+  readonly signature: string
+}
+
+export interface SignJoinRequestResponse {
+  readonly kind: 'signJoinRequestDone'
+  readonly id: string
+  readonly result: SignJoinRequestResult
+}
+
 /**
  * #58: mints a Rotating-group removal's next group key. Carries only the
  * caller's own MEMBER# entry (the old key, wrapped to them); the new key is
@@ -1227,6 +1247,7 @@ export type WorkerRequest =
   | SignInviteAcceptanceRequest
   | CompleteInviteRequest
   | SignReadmissionRequest
+  | SignJoinRequestRequest
   | StartGroupRotationRequest
   | StartSelfRekeyRequest
   | SelfWrapFromHandoffRequest
@@ -1270,6 +1291,7 @@ export type WorkerResponse =
   | SignInviteAcceptanceResponse
   | CompleteInviteResponse
   | SignReadmissionResponse
+  | SignJoinRequestResponse
   | StartGroupRotationResponse
   | StartSelfRekeyResponse
   | SelfWrapFromHandoffResponse
