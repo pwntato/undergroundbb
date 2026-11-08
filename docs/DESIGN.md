@@ -1618,7 +1618,13 @@ still at the `KeyEpoch` the keys were read at, all in the transaction that write
   group's `REQ#` range with a status and expiry filter. Each pass examines at most 500 rows (DynamoDB's
   `Limit` counts rows examined, before the filter), so the cost of one pass does not depend on how many
   denied rows are cooling off, and a call makes at most 10 passes before handing back a cursor. A
-  requester lists their own across groups with `GET /api/join-requests`, from GSI1.
+  requester lists their own across groups with `GET /api/join-requests?limit=&cursor=`, from GSI1. One
+  request per public group bounds the count only by the number of public groups, so that list is paged
+  too (default 50, at most 100): expired rows are skipped and the group names for a page are read in one batch.
+- **Joining by invite clears the request.** `CompleteInvite` deletes the invitee's `REQ#` row in the same
+  transaction. `CreateJoinRequest` refuses a current member, so this is the only way a member could hold one;
+  left in place it would show in the admin queue while they are a member and, once they leave, still be
+  approvable, undoing a deliberate leave on the strength of something they asked before they joined.
 - **Account deletion removes a user's requests** (the GSI1 `REQ#` rows, in whichever group they sit), and
   deleting a group removes its partition, requests included.
 
