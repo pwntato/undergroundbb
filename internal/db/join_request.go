@@ -33,10 +33,15 @@ const (
 	joinRequestPrefix = "REQ#"
 )
 
-// maxJoinRequestPasses bounds a filtered read of one group's queue: each pass reads up
-// to a page (1 MB) of rows and keeps only the pending ones. A variable so a test can
-// lower it.
-var maxJoinRequestPasses = 10
+// A filtered read of one group's queue examines at most joinRequestPageRows rows per pass
+// (DynamoDB's Limit counts rows examined, before the filter) and keeps only the pending
+// ones, so the work of one pass is fixed however many denied rows are cooling off. It makes
+// at most maxJoinRequestPasses passes, then hands back a cursor. Variables so a test can
+// lower them.
+var (
+	joinRequestPageRows  int32 = 500
+	maxJoinRequestPasses       = 10
+)
 
 var (
 	// ErrJoinRequestPending means the requester already has a pending request in
@@ -203,7 +208,7 @@ func (c *Client) GetJoinRequest(ctx context.Context, groupID, requesterID string
 // a filtered Query over the group's REQ# range, so its cost is bounded by the pending
 // requests plus denied rows still cooling off, not by history; it keeps reading until
 // it has limit rows or has passed through the range, and gives up after
-// maxJoinRequestPasses pages with a cursor rather than reading for ever.
+// maxJoinRequestPasses passes with a cursor rather than reading for ever.
 func (c *Client) ListPendingJoinRequests(ctx context.Context, groupID string, now time.Time, limit int, cursor string) ([]models.JoinRequest, string, error) {
 	var start map[string]types.AttributeValue
 	if cursor != "" {
@@ -224,6 +229,7 @@ func (c *Client) ListPendingJoinRequests(ctx context.Context, groupID string, no
 			},
 			ExclusiveStartKey: start,
 			ConsistentRead:    aws.Bool(true),
+			Limit:             aws.Int32(joinRequestPageRows),
 		})
 		if err != nil {
 			return nil, "", fmt.Errorf("db: list join requests: %w", err)

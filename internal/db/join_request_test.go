@@ -328,58 +328,94 @@ func putManyDenied(t *testing.T, c *Client, gid string, n int) {
 	flush()
 }
 
-// A group whose denied requests fill more than one 1 MB page before the first pending one: the
-// queue read must keep going past the page boundary, not stop at an empty first page.
-func TestListPendingJoinRequestsReadsPastAMegabyteOfDeniedRows(t *testing.T) {
+func putPendingRow(t *testing.T, c *Client, gid, uid string) {
+	t.Helper()
+	putRaw(t, c, map[string]types.AttributeValue{
+		"PK": s("GROUP#" + gid), "SK": s("REQ#" + uid), "Type": s("JoinRequest"),
+		"GSI1PK": s("USER#" + uid), "GSI1SK": s("REQ#2026-11-07#" + uid),
+		"TTL":       &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)},
+		"RequestID": s(uid), "GroupID": s(gid), "RequesterUserID": s(uid), "Status": s(models.JoinRequestPending),
+	})
+}
+
+func pendingUID(n int) string { return fmt.Sprintf("p%07d-0000-4000-8000-000000000000", n) }
+
+// The queue is a filtered read: denied rows still cooling off are examined and dropped. A group with
+// more of them than one pass examines must still get its pending requests, and a cursor must resume
+// exactly where a read stopped, whether it stopped at a full page or at the pass bound.
+func TestListPendingJoinRequestsReadsPastThePageOfExaminedRows(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	gid := putPublicGroup(t, c)
-	putManyDenied(t, c, gid, 7000) // about 2.8 MB of rows ahead of the pending ones
-	var pending []string
-	for _, uid := range []string{"zzzzzzz1-0000-4000-8000-000000000000", "zzzzzzz2-0000-4000-8000-000000000000", "zzzzzzz3-0000-4000-8000-000000000000"} {
-		pending = append(pending, uid)
-		putRaw(t, c, map[string]types.AttributeValue{
-			"PK": s("GROUP#" + gid), "SK": s("REQ#" + uid), "Type": s("JoinRequest"),
-			"GSI1PK": s("USER#" + uid), "GSI1SK": s("REQ#2026-11-07#" + uid),
-			"TTL":       &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)},
-			"RequestID": s(uid), "GroupID": s(gid), "RequesterUserID": s(uid), "Status": s(models.JoinRequestPending),
-		})
+	// Sort order is by uuid: "0000..." denied rows first, then "p..." pending ones among later denied rows.
+	putManyDenied(t, c, gid, 1200) // three passes of 500 examined rows
+	// Two sort ahead of every denied row ("-" sorts before "0"), three behind them.
+	pending := []string{"0000000-early-1", "0000000-early-2", pendingUID(1), pendingUID(2), pendingUID(3)}
+	for _, uid := range pending {
+		putPendingRow(t, c, gid, uid)
 	}
 
-	rows, next, err := c.ListPendingJoinRequests(ctx, gid, time.Now(), 10, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 3 || next != "" {
-		t.Fatalf("got %d pending rows and cursor %q, want all 3 and no cursor (the denied rows ahead of them are more than one page)", len(rows), next)
-	}
-	for i, r := range rows {
-		if r.RequesterUserID != pending[i] {
-			t.Errorf("row %d = %s, want %s", i, r.RequesterUserID, pending[i])
-		}
-	}
-
-	// With the pass bound lowered the read gives up early and hands back a cursor that resumes.
-	old := maxJoinRequestPasses
-	maxJoinRequestPasses = 1
-	t.Cleanup(func() { maxJoinRequestPasses = old })
-	got, cursor := []string(nil), ""
-	for i := 0; i < 20; i++ {
-		page, next, err := c.ListPendingJoinRequests(ctx, gid, time.Now(), 10, cursor)
+	t.Run("one call walks past all the denied rows", func(t *testing.T) {
+		rows, next, err := c.ListPendingJoinRequests(ctx, gid, time.Now(), 10, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, r := range page {
-			got = append(got, r.RequesterUserID)
+		if len(rows) != len(pending) || next != "" {
+			t.Fatalf("got %d rows and cursor %q, want all %d pending and no cursor", len(rows), next, len(pending))
 		}
-		if next == "" {
-			break
+		for i, r := range rows {
+			if r.RequesterUserID != pending[i] {
+				t.Errorf("row %d = %s, want %s", i, r.RequesterUserID, pending[i])
+			}
 		}
-		cursor = next
+	})
+
+	collect := func(t *testing.T, limit int) (got []string, pages int) {
+		t.Helper()
+		cursor := ""
+		for pages = 0; pages < 50; pages++ {
+			page, next, err := c.ListPendingJoinRequests(ctx, gid, time.Now(), limit, cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page) > limit {
+				t.Fatalf("page of %d rows, limit %d", len(page), limit)
+			}
+			for _, r := range page {
+				got = append(got, r.RequesterUserID)
+			}
+			if next == "" {
+				return got, pages + 1
+			}
+			cursor = next
+		}
+		t.Fatal("the cursor never ended")
+		return nil, 0
 	}
-	if len(got) != 3 || got[0] != pending[0] || got[2] != pending[2] {
-		t.Errorf("resuming from cursors found %v, want the 3 pending requests in order", got)
+	assertAll := func(t *testing.T, got []string) {
+		t.Helper()
+		if fmt.Sprint(got) != fmt.Sprint(pending) {
+			t.Errorf("walking the cursors found %v, want %v exactly once each, in order", got, pending)
+		}
 	}
+
+	t.Run("a page of exactly limit with rows still to read hands back a cursor", func(t *testing.T) {
+		got, pages := collect(t, 2)
+		assertAll(t, got)
+		if pages < 3 {
+			t.Errorf("a limit of 2 over 5 pending rows took %d page(s), want at least 3", pages)
+		}
+	})
+	t.Run("hitting the pass bound hands back a cursor that resumes", func(t *testing.T) {
+		old := maxJoinRequestPasses
+		maxJoinRequestPasses = 1
+		t.Cleanup(func() { maxJoinRequestPasses = old })
+		got, pages := collect(t, 10)
+		assertAll(t, got)
+		if pages < 3 {
+			t.Errorf("one pass per call took %d call(s) over 1205 rows, want at least 3", pages)
+		}
+	})
 }
 
 func TestListJoinRequestsByUserReturnsEveryGroupsRequest(t *testing.T) {
@@ -486,5 +522,77 @@ func TestRemoveJoinRequestOnlyRemovesTheRequestItNames(t *testing.T) {
 	}
 	if err := c.RemoveJoinRequest(ctx, gid, user.UserID, id); err != nil {
 		t.Errorf("removing what is already gone: %v, want nil", err)
+	}
+}
+
+func setKeyEpoch(t *testing.T, c *Client, userID string, epoch int) {
+	t.Helper()
+	_, err := c.ddb.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(c.table), Key: map[string]types.AttributeValue{"PK": s("USER#" + userID), "SK": s("PROFILE")},
+		UpdateExpression:          aws.String("SET KeyEpoch = :e"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":e": &types.AttributeValueMemberN{Value: strconv.Itoa(epoch)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A decided request is not a request to approve: the decision is final until the cool-off ends, even
+// for a caller that holds the old request id.
+func TestApproveJoinRequestRefusesADeniedRequest(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid := putPublicGroup(t, c)
+	approver := requesterOf(t, c)
+	putTestMember(t, c, gid, approver.UserID, models.RoleAdmin)
+	user := requesterOf(t, c)
+	id := newUserID(t)
+	if err := createReq(c, gid, user, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DenyJoinRequest(ctx, gid, user.UserID, approver.UserID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	err := c.ApproveJoinRequest(ctx, ApproveJoinRequestInput{
+		GroupID: gid, RequesterUserID: user.UserID, RequestID: id, ApproverUserID: approver.UserID,
+		Role: models.RoleMember, Admission: models.Admission{InviteID: id},
+	})
+	if !errors.Is(err, ErrJoinRequestNotFound) {
+		t.Fatalf("approving a denied request: %v, want ErrJoinRequestNotFound", err)
+	}
+	if itemExists(t, c, "GROUP#"+gid, "MEMBER#"+user.UserID) {
+		t.Error("a denied request produced a membership")
+	}
+}
+
+// The membership records the epoch the requester's keys were at, so a later rotation shows the entry as behind.
+func TestApproveJoinRequestRecordsTheRequestersKeyEpoch(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid := putPublicGroup(t, c)
+	approver := requesterOf(t, c)
+	putTestMember(t, c, gid, approver.UserID, models.RoleAdmin)
+	user := requesterOf(t, c)
+	setKeyEpoch(t, c, user.UserID, 2)
+	id := newUserID(t)
+	if err := c.CreateJoinRequest(ctx, CreateJoinRequestInput{
+		GroupID: gid, RequesterUserID: user.UserID, RequestID: id,
+		Ed25519PublicKey: user.SigningPublicKey, X25519PublicKey: user.WrappingPublicKey,
+		Signature: make([]byte, 64), RequesterKeyEpoch: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApproveJoinRequest(ctx, ApproveJoinRequestInput{
+		GroupID: gid, RequesterUserID: user.UserID, RequestID: id, ApproverUserID: approver.UserID,
+		RequesterKeyEpoch: 2, Role: models.RoleMember, Admission: models.Admission{InviteID: id},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.GetMembership(ctx, gid, user.UserID)
+	if err != nil || m == nil {
+		t.Fatalf("membership: %v, %v", m, err)
+	}
+	if m.WrapEpoch != 2 {
+		t.Errorf("WrapEpoch = %d, want 2", m.WrapEpoch)
 	}
 }

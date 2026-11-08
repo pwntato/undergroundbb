@@ -640,3 +640,31 @@ func TestApproveJoinRequestRefusesAnApproverDemotedAfterTheRead(t *testing.T) {
 		t.Error("a demoted approver admitted someone")
 	}
 }
+
+// The epoch the requester's keys are at is read from their profile at request time and again at approval, and
+// the membership records it, so a rotation after admission shows the new member's entry as behind.
+func TestJoinRequestCarriesTheRequestersKeyEpochIntoTheMembership(t *testing.T) {
+	f := newJoinFixture(t)
+	_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(testTableName()),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "USER#" + f.requester.userID},
+			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+		},
+		UpdateExpression:          aws.String("SET KeyEpoch = :e"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":e": &types.AttributeValueMemberN{Value: "2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := requestToJoin(t, f.h, f.requester, f.requesterCkE, f.groupID)
+	rec := doJSON(t, f.h, http.MethodPost, joinPath(f.groupID, "/"+f.requester.userID+"/approve"), f.adminCookie,
+		approveBodyFor(t, f.h, f.admin, f.groupID, id, f.requester))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approve: %d %s", rec.Code, rec.Body.String())
+	}
+	m, _ := f.h.db.GetMembership(t.Context(), f.groupID, f.requester.userID)
+	if m == nil || m.WrapEpoch != 2 {
+		t.Errorf("membership = %+v, want WrapEpoch 2", m)
+	}
+}
