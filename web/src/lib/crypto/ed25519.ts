@@ -44,6 +44,7 @@ export const SigningContext = {
   Admission: 'underground-bb:admission:v1',
   WrapRecord: 'underground-bb:wrap-record:v1',
   KeyRotation: 'underground-bb:key-rotation:v1',
+  JoinRequest: 'underground-bb:join-request:v1',
 } as const
 
 export type SigningContext = (typeof SigningContext)[keyof typeof SigningContext]

@@ -42,6 +42,7 @@ import {
   inviteCreationPayload,
   verifyInviteMAC,
 } from './invite.js'
+import { joinRequestPayload } from './joinRequest.js'
 import { decodeKeyBundle, encodeKeyBundle } from './keybundle.js'
 import { signedPayload } from './payload.js'
 import { handoffWrapAAD, keyRotationPayload, rosterDigest, rosterEntryId } from './key-rotation.js'
@@ -371,6 +372,17 @@ interface VectorFile {
     invite_id: string
     invited_ed25519_pub_hex: string
     invited_x25519_pub_hex: string
+    payload_hex: string
+    signature_hex: string
+  }[]
+  join_request: {
+    name: string
+    private_key_hex: string
+    public_key_hex: string
+    request_id: string
+    group_id: string
+    requester_ed25519_pub_hex: string
+    requester_x25519_pub_hex: string
     payload_hex: string
     signature_hex: string
   }[]
@@ -947,6 +959,28 @@ describe('invite acceptance vectors', () => {
       expect(bytesToHex(payload)).toBe(tc.payload_hex)
 
       const signature = ed25519.sign(key, ed25519.SigningContext.Invite, payload)
+      expect(bytesToHex(signature)).toBe(tc.signature_hex)
+    })
+  }
+})
+
+// Pins joinRequestPayload's exact encoding -- issue #72, the payload a requester signs to ask to
+// join a public group. An approver's client verifies this signature before wrapping the group key.
+describe('join request vectors', () => {
+  for (const tc of vectors.join_request) {
+    it(tc.name, () => {
+      const key = ed25519.fromGoPrivateKeyBytes(hexToBytes(tc.private_key_hex))
+      expect(bytesToHex(key.publicKey)).toBe(tc.public_key_hex)
+
+      const payload = joinRequestPayload(
+        tc.request_id,
+        tc.group_id,
+        hexToBytes(tc.requester_ed25519_pub_hex),
+        hexToBytes(tc.requester_x25519_pub_hex),
+      )
+      expect(bytesToHex(payload)).toBe(tc.payload_hex)
+
+      const signature = ed25519.sign(key, ed25519.SigningContext.JoinRequest, payload)
       expect(bytesToHex(signature)).toBe(tc.signature_hex)
     })
   }

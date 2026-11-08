@@ -426,6 +426,21 @@ type inviteAcceptanceVector struct {
 	SignatureHex         string `json:"signature_hex"`
 }
 
+// joinRequestVector proves JoinRequestPayload's exact encoding (#72): the
+// payload a requester signs, under their own keys, to ask to join a public
+// group.
+type joinRequestVector struct {
+	Name                   string `json:"name"`
+	PrivateHex             string `json:"private_key_hex"`
+	PublicHex              string `json:"public_key_hex"`
+	RequestID              string `json:"request_id"`
+	GroupID                string `json:"group_id"`
+	RequesterEd25519PubHex string `json:"requester_ed25519_pub_hex"`
+	RequesterX25519PubHex  string `json:"requester_x25519_pub_hex"`
+	PayloadHex             string `json:"payload_hex"`
+	SignatureHex           string `json:"signature_hex"`
+}
+
 // inviteMACVector proves DeriveInviteMACKey/ComputeInviteMAC's exact
 // encoding (PR #146 round-1 review's blocking finding #1) -- the per-invite
 // MAC that closes the gap plain signature verification leaves open. See
@@ -470,6 +485,7 @@ type vectorFile struct {
 	PostAAD              []postAADVector              `json:"post_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
+	JoinRequest          []joinRequestVector          `json:"join_request"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
 }
 
@@ -1314,6 +1330,32 @@ func main() {
 			InvitedX25519PubHex:  hex.EncodeToString(invitedX25519Pub),
 			PayloadHex:           hex.EncodeToString(payload),
 			SignatureHex:         hex.EncodeToString(sig),
+		})
+	}
+
+	// --- Join request (#72) ---
+	{
+		pub, priv := fixedEd25519Key("join-request-key-1")
+		requesterX25519Priv := fixedX25519Key("join-request-x25519-1")
+		requesterX25519Pub := requesterX25519Priv.PublicKey().Bytes()
+		requestID := "request-uuid-1"
+		groupID := "group-uuid-1"
+
+		payload := crypto.JoinRequestPayload(requestID, groupID, pub, requesterX25519Pub)
+		sig, err := crypto.Sign(priv, crypto.ContextJoinRequest, payload)
+		if err != nil {
+			panic(err)
+		}
+		out.JoinRequest = append(out.JoinRequest, joinRequestVector{
+			Name:                   "basic",
+			PrivateHex:             hex.EncodeToString(priv),
+			PublicHex:              hex.EncodeToString(pub),
+			RequestID:              requestID,
+			GroupID:                groupID,
+			RequesterEd25519PubHex: hex.EncodeToString(pub),
+			RequesterX25519PubHex:  hex.EncodeToString(requesterX25519Pub),
+			PayloadHex:             hex.EncodeToString(payload),
+			SignatureHex:           hex.EncodeToString(sig),
 		})
 	}
 
