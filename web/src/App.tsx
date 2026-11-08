@@ -14,6 +14,7 @@ import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { AppHeader } from '@/routes/AppHeader'
 import { InvitesScreen } from '@/routes/InvitesScreen'
+import { DirectoryScreen } from '@/routes/DirectoryScreen'
 import { JoinGroupScreen } from '@/routes/JoinGroupScreen'
 import { MyJoinRequestsScreen } from '@/routes/MyJoinRequestsScreen'
 import { GroupJoinRequestsScreen } from '@/routes/GroupJoinRequestsScreen'
@@ -135,6 +136,14 @@ function App() {
               element={
                 <RequireAuth>
                   <GroupJoinRequestsScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/directory"
+              element={
+                <RequireAuth>
+                  <DirectoryScreen />
                 </RequireAuth>
               }
             />
