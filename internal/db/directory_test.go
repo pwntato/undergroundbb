@@ -136,6 +136,7 @@ func TestValidDirectoryCursor(t *testing.T) {
 		{"NAME#Book#" + gid, "Ch", false}, // outside the prefix's range
 		{"NAME#A#B#" + gid, "A", true},    // a name may contain '#'
 		{"NAME#Book#not-a-uuid", "", false},
+		{"NAME#Book#" + strings.Repeat("x", 36), "", false}, // right width, not a uuid
 		{"NAME#Book" + gid, "", false}, // no separator before the gid
 		{"USER#x#" + gid, "", false},
 		{"", "", false},
