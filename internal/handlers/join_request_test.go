@@ -471,10 +471,33 @@ func TestApproveJoinRequestAdmitsTheRequesterAndStoresTheAdmission(t *testing.T)
 	if jr, _ := f.h.db.GetJoinRequest(t.Context(), f.groupID, f.requester.userID, time.Now()); jr != nil {
 		t.Error("the request row survived its approval")
 	}
-	// The approver's signed record lists the requester, with the REQUEST id in the invite slot.
+	// The approver's signed record lists the requester, with the REQUEST id in the invite slot, and it is
+	// the record a rotating admin later verifies: rebuild the payload from the listed fields and check it.
 	lr := doJSON(t, f.h, http.MethodGet, "/api/groups/"+f.groupID+"/admissions", f.requesterCkE, nil)
-	if lr.Code != http.StatusOK || !strings.Contains(lr.Body.String(), f.requester.userID) || !strings.Contains(lr.Body.String(), id) {
-		t.Errorf("admissions = %d %s, want a record for the requester citing request %s", lr.Code, lr.Body.String(), id)
+	var list listAdmissionsResponse
+	if err := json.Unmarshal(lr.Body.Bytes(), &list); err != nil || lr.Code != http.StatusOK {
+		t.Fatalf("admissions: %d %s", lr.Code, lr.Body.String())
+	}
+	var rec2 *admissionEntry
+	for i := range list.Admissions {
+		if list.Admissions[i].InviteeUserID == f.requester.userID {
+			rec2 = &list.Admissions[i]
+		}
+	}
+	if rec2 == nil {
+		t.Fatalf("no admission record for the requester in %s", lr.Body.String())
+	}
+	if rec2.InviteID != id || rec2.InviterUserID != f.admin.userID {
+		t.Errorf("admission = invite id %q inviter %q, want request id %q and approver %q", rec2.InviteID, rec2.InviterUserID, id, f.admin.userID)
+	}
+	if rec2.InviteeEd25519PublicKey != base64.StdEncoding.EncodeToString(f.requester.signPub) || rec2.InviteeX25519PublicKey != base64.StdEncoding.EncodeToString(f.requester.wrapPub) {
+		t.Error("the admission names keys other than the ones the requester signed")
+	}
+	admSig, _ := base64.StdEncoding.DecodeString(rec2.Signature)
+	admPayload := crypto.AdmissionPayload(f.groupID, f.admin.userID, f.requester.userID, f.requester.signPub, f.requester.wrapPub,
+		rec2.InviteID, rec2.InviterGrantRef, rec2.Day, rec2.Generation)
+	if !crypto.Verify(f.admin.signPub, crypto.ContextAdmission, admPayload, admSig) {
+		t.Error("the stored admission does not verify under the approver's key from its own listed fields")
 	}
 	// The approved user is now in the group's own listing.
 	if rec := doJSON(t, f.h, http.MethodGet, "/api/groups/"+f.groupID, f.requesterCkE, nil); rec.Code != http.StatusOK {
@@ -579,34 +602,40 @@ func TestApproveJoinRequestRefusals(t *testing.T) {
 	})
 }
 
-func TestApproveJoinRequestWhenTheRequesterRotatedTheirKeysClearsTheRequest(t *testing.T) {
-	f := newJoinFixture(t)
-	id := requestToJoin(t, f.h, f.requester, f.requesterCkE, f.groupID)
-	// The requester's keys change after they asked (#62): the wrap would be dormant on arrival.
-	newPub := make([]byte, 32)
-	newPub[0] = 0x77
-	_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
-		TableName: aws.String(testTableName()),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "USER#" + f.requester.userID},
-			"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
-		},
-		UpdateExpression:          aws.String("SET WrappingPublicKey = :k"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{":k": &types.AttributeValueMemberB{Value: newPub}},
-	})
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	rec := doJSON(t, f.h, http.MethodPost, joinPath(f.groupID, "/"+f.requester.userID+"/approve"), f.adminCookie,
-		approveBodyFor(t, f.h, f.admin, f.groupID, id, f.requester))
-	if rec.Code != http.StatusConflict || errCode(t, rec) != "requester_keys_changed" {
-		t.Fatalf("%d %s, want 409 requester_keys_changed", rec.Code, rec.Body.String())
-	}
-	if m, _ := f.h.db.GetMembership(t.Context(), f.groupID, f.requester.userID); m != nil {
-		t.Error("the requester was admitted on keys they no longer hold")
-	}
-	if jr, _ := f.h.db.GetJoinRequest(t.Context(), f.groupID, f.requester.userID, time.Now()); jr != nil {
-		t.Error("the unusable request was left in the queue")
+func TestApproveJoinRequestWhenTheRequesterChangedEitherKeyClearsTheRequest(t *testing.T) {
+	// The requester's keys change after they asked (#62): the wrap would be dormant on arrival. Either
+	// half changing is enough, and neither moves the KeyEpoch here, so the handler's own comparison is
+	// what has to notice.
+	for _, attr := range []string{"WrappingPublicKey", "SigningPublicKey"} {
+		t.Run(attr, func(t *testing.T) {
+			f := newJoinFixture(t)
+			id := requestToJoin(t, f.h, f.requester, f.requesterCkE, f.groupID)
+			newKey := make([]byte, 32)
+			newKey[0] = 0x77
+			_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+				TableName: aws.String(testTableName()),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: "USER#" + f.requester.userID},
+					"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
+				},
+				UpdateExpression:          aws.String("SET " + attr + " = :k"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":k": &types.AttributeValueMemberB{Value: newKey}},
+			})
+			if err != nil {
+				t.Fatalf("rotate: %v", err)
+			}
+			rec := doJSON(t, f.h, http.MethodPost, joinPath(f.groupID, "/"+f.requester.userID+"/approve"), f.adminCookie,
+				approveBodyFor(t, f.h, f.admin, f.groupID, id, f.requester))
+			if rec.Code != http.StatusConflict || errCode(t, rec) != "requester_keys_changed" {
+				t.Fatalf("%d %s, want 409 requester_keys_changed", rec.Code, rec.Body.String())
+			}
+			if m, _ := f.h.db.GetMembership(t.Context(), f.groupID, f.requester.userID); m != nil {
+				t.Error("the requester was admitted on keys they no longer hold")
+			}
+			if jr, _ := f.h.db.GetJoinRequest(t.Context(), f.groupID, f.requester.userID, time.Now()); jr != nil {
+				t.Error("the unusable request was left in the queue")
+			}
+		})
 	}
 }
 
