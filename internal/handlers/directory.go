@@ -43,8 +43,8 @@ func (h *Handler) listPublicGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query().Get("q")
-	if len(q) > maxGroupNameLen || !utf8.ValidString(q) {
-		WriteError(w, http.StatusBadRequest, "q: must be valid text of at most "+strconv.Itoa(maxGroupNameLen)+" bytes")
+	if !utf8.ValidString(q) {
+		WriteError(w, http.StatusBadRequest, "q: must be valid text")
 		return
 	}
 	limit := defaultDirectoryPage
@@ -55,6 +55,13 @@ func (h *Handler) listPublicGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit = n
+	}
+	// No name is longer than maxGroupNameLen bytes, so a longer prefix matches nothing: answer with an
+	// empty page, not an error, so the screen can say "no group starts with that" (a client counting
+	// characters cannot always know the byte length).
+	if len(q) > maxGroupNameLen {
+		WriteJSON(w, http.StatusOK, directoryResponse{Groups: []directoryEntry{}})
+		return
 	}
 	cursor := r.URL.Query().Get("cursor")
 	if cursor != "" && !db.ValidDirectoryCursor(cursor, q) {

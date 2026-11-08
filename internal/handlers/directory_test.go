@@ -112,6 +112,27 @@ func TestDirectoryPagesAndSearchesByPrefix(t *testing.T) {
 	}
 }
 
+// A prefix longer than any name can be is not an error: nothing matches, and the screen says so. The
+// cursor is not looked at either, since no page of it could exist.
+func TestDirectoryOverLongQueryIsAnEmptyPage(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	_, cookie := loggedInUser(t, h)
+	gid, _ := idgen.UUID()
+	long := strings.Repeat("a", maxGroupNameLen+1)
+	for name, q := range map[string]url.Values{
+		"no cursor":   {"q": {long}},
+		"with cursor": {"q": {long}, "cursor": {"NAME#" + long + "#" + gid}},
+	} {
+		code, resp := directoryGet(t, h, cookie, q)
+		if code != http.StatusOK || len(resp.Groups) != 0 || resp.NextCursor != "" {
+			t.Errorf("%s: got %d %+v, want 200 and an empty page", name, code, resp)
+		}
+	}
+	if code, _ := directoryGet(t, h, cookie, url.Values{"q": {strings.Repeat("a", maxGroupNameLen)}}); code != http.StatusOK {
+		t.Errorf("exactly maxGroupNameLen bytes: status = %d, want 200", code)
+	}
+}
+
 func TestDirectoryRefusesBadInput(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	_, cookie := loggedInUser(t, h)
@@ -120,7 +141,6 @@ func TestDirectoryRefusesBadInput(t *testing.T) {
 		"limit zero":         {"limit": {"0"}},
 		"limit too big":      {"limit": {"51"}},
 		"limit not a number": {"limit": {"x"}},
-		"query too long":     {"q": {strings.Repeat("a", maxGroupNameLen+1)}},
 		"query not utf8":     {"q": {"\xff\xfe"}},
 		"cursor garbage":     {"cursor": {"garbage"}},
 		"cursor wrong range": {"q": {"Zed"}, "cursor": {"NAME#Abe#" + gid}},

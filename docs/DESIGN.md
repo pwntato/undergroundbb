@@ -1563,7 +1563,7 @@ see none of its content.
 In both cases the **member list is visible to members only**. There is no setting that changes this.
 
 The directory is read with `GET /api/groups/public?q=&limit=&cursor=` (#71): one `Query` on the
-`PUBLIC#0` partition, `begins_with(GSI1SK, "NAME#" + q)`, name order, at most 50 per page, and the
+`PUBLIC#0` partition, `begins_with(GSI1SK, "NAME#" + q)`, byte order of `name#gid` (a name that extends another with a character below `#`, such as a space or `!`, lists before the shorter one: "Book Club" before "Book"), at most 50 per page, and the
 cursor is the last sort key returned (so it is only valid for the `q` it came from). A listing entry
 is the group's id, plaintext name and description and nothing else. It needs a session, like the rest
 of `/api`: that is not what keeps names private (an invite id already shows a public group's name,

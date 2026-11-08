@@ -47,8 +47,10 @@ func ValidDirectoryCursor(cursor, prefix string) bool {
 
 // ListPublicGroups returns up to limit public groups whose name starts with prefix (the match is
 // case-sensitive and on the name exactly as its creator typed it, because that is the index key), in
-// name order, and the cursor for the next page ("" when there is none). Two groups may share a name:
-// the gid suffix on the key keeps both in the index, so a listing can hold duplicates.
+// byte order of "name#gid" (so a name that extends another with a character below '#', such as a
+// space or '!', lists before the shorter name: "Book Club" and "Book!" come before "Book"), and the
+// cursor for the next page ("" when there is none). Two groups may share a name: the gid suffix on
+// the key keeps both in the index, so a listing can hold duplicates.
 //
 // It reads limit+1 rows so that "there is a next page" is known, not guessed: the page never ends
 // with an empty follow-up. The index is eventually consistent, so a group created or renamed a moment
@@ -67,6 +69,8 @@ func (c *Client) ListPublicGroups(ctx context.Context, prefix string, limit int,
 			"GSI1SK": &types.AttributeValueMemberS{Value: cursor},
 		}
 	}
+	// LastEvaluatedKey is ignored on purpose: with no filter expression and at most 51 small META rows
+	// a page stays far under DynamoDB's 1 MB cut-off. If META ever gains large attributes, revisit.
 	out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
 		TableName:              aws.String(c.table),
 		IndexName:              aws.String("GSI1"),

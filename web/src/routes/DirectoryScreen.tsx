@@ -131,7 +131,7 @@ export function DirectoryScreen() {
           onLoadMore={onLoadMore}
         />
       )}
-      {error !== null && <NoticeAlert message={error} destructive />}
+      {error !== null && load.status === 'ready' && <NoticeAlert message={error} destructive />}
       <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
         Back to your groups
       </Link>
