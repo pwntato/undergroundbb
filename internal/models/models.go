@@ -877,6 +877,46 @@ type Admission struct {
 	Signature  []byte `dynamodbav:"Signature"`
 }
 
+// Join request statuses. A request is pending until an admin or ambassador
+// decides it: approval deletes the row (the membership and the admission record
+// replace it), denial keeps it as StatusDenied until its cool-off TTL ends.
+const (
+	JoinRequestPending = "pending"
+	JoinRequestDenied  = "denied"
+)
+
+// JoinRequest is the GROUP#<gid> / REQ#<requester uuid> item (#72, docs/DESIGN.md,
+// "Visibility -- private and public groups"): a request to join a public group.
+// The sort key is the requester's own uuid, so there is exactly one slot per user
+// per group; GSI1 (USER#<requester> / REQ#<day>#<rand>) serves the requester
+// listing their own requests, with the day-plus-random sort key every GSI1 entry
+// in a user's partition uses.
+//
+// The keys and signature are the requester's, signed under crypto.ContextJoinRequest
+// over crypto.JoinRequestPayload. The server checks that signature on the way in,
+// but it is not what protects the group: the approver's client verifies it again
+// and wraps the group key to the keys that were signed.
+//
+// TTL is the only expiry. A pending request lives joinRequestPendingTTL; a denied
+// one keeps its row with a short cool-off TTL, so the requester sees "declined"
+// rather than a request that vanished, the slot frees itself, and a single denial
+// is never a ban. Readers treat a row whose TTL has passed as absent, because
+// DynamoDB's own deletion can lag by about 48 hours.
+type JoinRequest struct {
+	Record
+
+	TTL int64 `dynamodbav:"TTL"`
+
+	RequestID       string `dynamodbav:"RequestID"`
+	GroupID         string `dynamodbav:"GroupID"`
+	RequesterUserID string `dynamodbav:"RequesterUserID"`
+	// Status is JoinRequestPending or JoinRequestDenied.
+	Status           string `dynamodbav:"Status"`
+	Ed25519PublicKey []byte `dynamodbav:"Ed25519PublicKey"`
+	X25519PublicKey  []byte `dynamodbav:"X25519PublicKey"`
+	Signature        []byte `dynamodbav:"Signature"`
+}
+
 // SuccessorDesignation is the GROUP#<gid> / DESIGNATION#<admin uuid>#<day>#<rand>
 // item (#161, docs/DESIGN.md, "Inactivity: the admin pre-signs a successor").
 // Append-only, like GRANT#: the newest by day wins, and one with an empty

@@ -1564,8 +1564,69 @@ In both cases the **member list is visible to members only**. There is no settin
 
 Public groups are joined by **request**, which is the invite handshake run in the opposite
 direction: the requester signs a request carrying their public keys, and an admin or ambassador
-approves it by wrapping the group key to the keys that were signed. The server can no more
-substitute a key here than it can during an invite — same machinery, same guarantee.
+approves it by wrapping the group key to the keys that were signed. **It does not carry the
+invite's guarantee against a server that substitutes keys.** That protection comes from `invite_mac`,
+whose secret travels in the link's fragment and which the server never sees; a stranger asking to join
+a public group has no link and shares no secret with the approver. A first request from someone the
+approver has never seen is therefore trust on first use, the same position as the first DM to a
+stranger, and the controls are the same: the approver's client pins the key from then on (a later
+change hard-blocks) and shows the fingerprint, and fingerprint verification out of band is the only
+thing that closes the first sighting. See [THREAT_MODEL.md](THREAT_MODEL.md), "Specific attack
+scenarios". What a swapped key buys the operator is bounded: anyone can already ask to join a public
+group, so the operator could register an account of its own; the substitution adds only the ability
+to be admitted *as* a real requester, who then never receives a key.
+
+#### Join requests (#72)
+
+`POST /api/groups/{id}/join-requests` writes one `REQ#<requester uuid>` row in the group's partition
+(`GROUP#<gid>`), so there is **one slot per user per group**. The requester signs
+`JoinRequestPayload(request_id, group_id, requester_uuid, ed25519_pub, x25519_pub)` under
+`underground-bb:join-request:v1` with a fresh request id and their *current* keys; the keys are read from
+their profile, never from the request. The uuid is signed because it is the only identity claim a join
+request carries (an invite gets that binding from the link it was sent to): without it a request signed by
+one user would be a valid signature for the row the server files under another. The server checks the signature, that the group is public (a private group answers 404 exactly
+like a missing one), that the requester is not already a member, and that their account is live and
+still at the `KeyEpoch` the keys were read at, all in the transaction that writes the row.
+
+- **Approving is one step, not two.** An invite's step 3 is separate because the inviter may be offline
+  when the invitee accepts. Here an admin or ambassador decides and wraps in the same action:
+  `POST .../join-requests/{uid}/approve` carries the wrapped group key, the generation, and the approver's
+  signed admission record (`AdmissionPayload`, with the **request id in the invite-id slot**). One transaction
+  writes the membership and the admission and deletes the request, and is conditional on the request still
+  being pending with the same request id, the approver still being an admin or ambassador at the generation
+  they wrapped under, the group existing, the requester not yet a member, and the requester's `KeyEpoch`
+  unchanged. The approver's client verifies the requester's signature and checks the keys against its pins
+  *before* wrapping; the server's own check of the same signature is not what protects the group.
+- **A Rotating group is held to its member cap (#60).** `createGroup` accepts a public group in either
+  mode, so approval counts members and writes under the same `JoinSeq` guard an invite's completion uses
+  (one shared implementation, so the two ways into a group cannot disagree). A full group answers 409
+  `group_full` and the request stays pending, since a departure may free a slot; an Open group has no cap.
+- **A changed key pair clears the request.** If the requester's current keys differ from the ones in the
+  row (they rotated, #62), the wrap would be dormant on arrival: approval answers 409
+  `requester_keys_changed` and deletes the request so they can ask again. The same happens for a requester
+  who is already a member or whose account was deleted.
+- **Denial is a status with a cool-off TTL**, `POST .../join-requests/{uid}/deny`. The row stays as
+  `denied` for 7 days (rounded up to the end of a UTC day, like every stored TTL), so the requester sees
+  "declined, ask again after <day>" and the slot frees itself. A denied request cannot be withdrawn, since
+  that would end the cool-off early, and cannot be approved.
+- **A pending request expires after 90 days.** Nothing else bounds it, and a request nobody answers should
+  not sit in the requester's partition for ever as a record of who they asked to join. A requester may
+  also withdraw a pending one (`DELETE .../join-requests/mine`). Readers treat a row whose TTL has passed
+  as absent, because DynamoDB's own deletion lags by up to about two days: a new request over an expired
+  row succeeds, and the queue never shows it.
+- **The queue is a filtered read.** `GET .../join-requests` (admin or ambassador) is a `Query` over the
+  group's `REQ#` range with a status and expiry filter. Each pass examines at most 500 rows (DynamoDB's
+  `Limit` counts rows examined, before the filter), so the cost of one pass does not depend on how many
+  denied rows are cooling off, and a call makes at most 10 passes before handing back a cursor. A
+  requester lists their own across groups with `GET /api/join-requests?limit=&cursor=`, from GSI1. One
+  request per public group bounds the count only by the number of public groups, so that list is paged
+  too (default 50, at most 100): expired rows are skipped and the group names for a page are read in one batch.
+- **Joining by invite clears the request.** `CompleteInvite` deletes the invitee's `REQ#` row in the same
+  transaction. `CreateJoinRequest` refuses a current member, so this is the only way a member could hold one;
+  left in place it would show in the admin queue while they are a member and, once they leave, still be
+  approvable, undoing a deliberate leave on the strength of something they asked before they joined.
+- **Account deletion removes a user's requests** (the GSI1 `REQ#` rows, in whichever group they sit), and
+  deleting a group removes its partition, requests included.
 
 ### Direct messages
 
@@ -2506,7 +2567,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Reaction | `POST#<pid>` | `RXN#<cmtpath>#<reactor>` | | | group policy |
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
-| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | never (pending) / cool-off (denied) |
+| Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | 90 days (pending) / 7 days (denied) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |
@@ -2840,9 +2901,11 @@ deadline — not a history of every approach the user has ever made.
 **Never expiring:** the rest. Each has a reason: `META` records the chain floor, `MEMBER#` is a
 member's entry point into it, `GENKEY#` is the chain, `ROTATION` would abandon a rotation in
 progress, `GRANT#` must stay verifiable back to the group creator, and `PIN#` is the signed record a
-key change is checked against. `REQ#` is durable **unlike an invite** because a join request carries
-no signed lifetime — it is resolved by an admin approving or denying it, and a request left pending
-stays visible to its requester rather than silently vanishing. **Denial is a status on the row with
+key change is checked against. `REQ#` has a longer life than an invite because a join request carries
+no signed lifetime: it is resolved by an admin approving or denying it, and a request left pending
+stays visible to its requester rather than silently vanishing. It is bounded all the same: a pending
+request expires after 90 days, so one nobody answers does not sit in the requester's partition for ever as a
+record of who they asked to join. **Denial is a status on the row with
 a cool-off TTL, not a delete and not a permanent slot.** The sort key is `REQ#<uuid>` on the
 requester's uuid, so there is exactly one slot per user per group, and the three obvious readings
 are all wrong: deleting the row makes the request vanish from the requester's list, which is what
@@ -2852,8 +2915,8 @@ decision into a permanent silent ban, a moderation power no role in the table gr
 with no expiry at all leaves denied rows in the group partition where the admin's pending-request
 `Query` must filter them, a filtered read whose cost grows with total denial history. A cool-off
 TTL — days, not forever — gets all three: the requester sees "declined" rather than a vanishing row,
-the admin queue keys on status, and the slot frees itself. **`REQ#` is the one item with a
-conditional TTL**, which is why its row above reads `never (pending) / cool-off (denied)`. The
+the admin queue keys on status, and the slot frees itself. **`REQ#` is the one item whose TTL depends on
+its status**, which is why its row above reads `90 days (pending) / 7 days (denied)`. The
 pending-request `Query` is a filtered read for as long as denied rows share the partition, bounded
 by the cool-off window rather than by history. `RECOVERY` never expires for the
 plainest reason of all: it is used precisely when a user has been away long enough to forget their
@@ -2867,9 +2930,8 @@ does not expire.
 so an admin loading a public group reads its pending requests with one `Query`, and GSI1 carries the
 reverse lookup — a requester listing their own outstanding requests. That is the same pair of access
 patterns the `Invite` item serves, keyed the other way round, because the approving party is the
-group rather than the individual. Public groups and join requests are M7; the row is here because
-this table describes the complete design, and an item missing from it is otherwise indistinguishable
-from an oversight.
+group rather than the individual. The endpoints and the approval transaction are in "Join requests
+(#72)" under "Visibility — private and public groups".
 
 **The rotation marker is the one item with a liveness requirement.** `ROTATION` records the
 in-progress generation, who started it, and when. It does not record how far the batched writes have

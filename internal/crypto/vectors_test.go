@@ -47,6 +47,7 @@ type vectorFile struct {
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
+	JoinRequest          []joinRequestVector          `json:"join_request"`
 }
 
 type kdfVector struct {
@@ -401,6 +402,19 @@ type inviteAcceptanceVector struct {
 	InvitedX25519PubHex  string `json:"invited_x25519_pub_hex"`
 	PayloadHex           string `json:"payload_hex"`
 	SignatureHex         string `json:"signature_hex"`
+}
+
+type joinRequestVector struct {
+	Name                   string `json:"name"`
+	PrivateHex             string `json:"private_key_hex"`
+	PublicHex              string `json:"public_key_hex"`
+	RequestID              string `json:"request_id"`
+	GroupID                string `json:"group_id"`
+	RequesterUserID        string `json:"requester_user_id"`
+	RequesterEd25519PubHex string `json:"requester_ed25519_pub_hex"`
+	RequesterX25519PubHex  string `json:"requester_x25519_pub_hex"`
+	PayloadHex             string `json:"payload_hex"`
+	SignatureHex           string `json:"signature_hex"`
 }
 
 // inviteMACVector proves DeriveInviteMACKey/ComputeInviteMAC's exact
@@ -1397,6 +1411,47 @@ func TestVectorInviteAcceptance(t *testing.T) {
 			}
 			if !Verify(pub, ContextInvite, wantPayload, wantSig) {
 				t.Fatal("Verify rejected the vector's own signature over InviteAcceptancePayload")
+			}
+		})
+	}
+}
+
+// TestVectorJoinRequest pins JoinRequestPayload's exact encoding -- issue #72,
+// the payload a requester signs to ask to join a public group. An approver's
+// client verifies this signature before it wraps the group key to the keys it
+// names, so the encoding must be byte-identical in Go and TypeScript.
+func TestVectorJoinRequest(t *testing.T) {
+	v := loadVectors(t)
+	if len(v.JoinRequest) == 0 {
+		t.Fatal("expected at least 1 join_request vector")
+	}
+	for _, tc := range v.JoinRequest {
+		t.Run(tc.Name, func(t *testing.T) {
+			pub := mustHex(t, tc.PublicHex)
+			priv := ed25519.PrivateKey(mustHex(t, tc.PrivateHex))
+			edPub := mustHex(t, tc.RequesterEd25519PubHex)
+			xPub := mustHex(t, tc.RequesterX25519PubHex)
+			wantPayload := mustHex(t, tc.PayloadHex)
+			wantSig := mustHex(t, tc.SignatureHex)
+
+			gotPayload := JoinRequestPayload(tc.RequestID, tc.GroupID, tc.RequesterUserID, edPub, xPub)
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("JoinRequestPayload = %x, want %x", gotPayload, wantPayload)
+			}
+			gotSig, err := Sign(priv, ContextJoinRequest, gotPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotSig, wantSig) {
+				t.Fatalf("Sign = %x, want %x", gotSig, wantSig)
+			}
+			if !Verify(pub, ContextJoinRequest, wantPayload, wantSig) {
+				t.Fatal("Verify rejected the vector's own signature over JoinRequestPayload")
+			}
+			// Its own context: the same bytes must not verify as an invite
+			// acceptance or an admission.
+			if Verify(pub, ContextInvite, wantPayload, wantSig) || Verify(pub, ContextAdmission, wantPayload, wantSig) {
+				t.Fatal("a join request signature verified under another context")
 			}
 		})
 	}

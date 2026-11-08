@@ -57,6 +57,11 @@ const (
 	// "accept key change" prompt (#280). Its own context so a wrap record can
 	// never be read as a re-key, an admission or a pin.
 	ContextWrapRecord SigningContext = "underground-bb:wrap-record:v1"
+	// ContextJoinRequest signs a request to join a public group (#72): the
+	// requester's own keys, bound to one request in one group. Its own context
+	// so a join request can never be read as an invite acceptance or an
+	// admission.
+	ContextJoinRequest SigningContext = "underground-bb:join-request:v1"
 )
 
 // GenerateSigningKey generates a new Ed25519 keypair.

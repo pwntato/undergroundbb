@@ -677,39 +677,91 @@ const maxJoinAttempts = 5
 // already checked it against the stored invite before ever calling this,
 // using the SAME data PendingInviteCompletions returned.
 func (c *Client) CompleteInvite(ctx context.Context, in CompleteInviteInput) error {
-	if in.MaxMembers <= 0 {
-		return c.completeInviteOnce(ctx, in, nil)
+	return c.withJoinCap(ctx, in.GroupID, in.InvitedUserID, in.MaxMembers, func(seenSeq *int64) error {
+		return c.completeInviteOnce(ctx, in, seenSeq)
+	})
+}
+
+// withJoinCap runs write, one attempt at adding memberID to groupID, under the member cap
+// (maxMembers; zero or less means none, and write runs once with a nil seenSeq). A capped group is
+// joined by count, then write, guarded by JoinSeq: read the group's join sequence, count its members,
+// refuse if full, and run write, which must bump JoinSeq in its transaction only if it still holds the
+// value passed in (joinMetaItem does exactly that). A join that committed in between moved JoinSeq, so
+// write fails with errJoinRaced and the loop recounts, which makes the cap exact rather than
+// approximate. Departures need no bump: they only lower the count, so a stale count can wrongly refuse
+// a join (a retry fixes it) but never wrongly allow one. Members who leave or are removed have their
+// MEMBER# row deleted, so the count tracks them with no counter to keep in step. Shared by invite
+// completion and join-request approval, so the two ways into a group cannot disagree about the cap.
+func (c *Client) withJoinCap(ctx context.Context, groupID, memberID string, maxMembers int, write func(seenSeq *int64) error) error {
+	if maxMembers <= 0 {
+		return write(nil)
 	}
-	// A capped group is joined by count, then write, guarded by JoinSeq: read
-	// the group's join sequence, count its members, refuse if full, and write
-	// the membership in a transaction that also bumps JoinSeq only if it is
-	// still the value read. A join that committed in between moved JoinSeq, so
-	// this write fails and the loop recounts, which makes the cap exact rather
-	// than approximate. Departures need no bump: they only lower the count, so
-	// a stale count can wrongly refuse a join (a retry fixes it) but never wrongly
-	// allow one. Members who leave or are removed have their MEMBER# row
-	// deleted, so the count tracks them with no counter to keep in step.
 	for attempt := 0; attempt < maxJoinAttempts; attempt++ {
-		seq, err := c.joinSeq(ctx, in.GroupID)
+		seq, err := c.joinSeq(ctx, groupID)
 		if err != nil {
 			return err
 		}
-		n, err := c.CountMembers(ctx, in.GroupID)
+		n, err := c.CountMembers(ctx, groupID)
 		if err != nil {
 			return err
 		}
-		if n >= in.MaxMembers {
-			// An invitee who is already in the group is not a new join: let the
-			// caller see ErrAlreadyMember and clean the invite up, not "full".
-			if m, mErr := c.GetMembership(ctx, in.GroupID, in.InvitedUserID); mErr == nil && m != nil {
+		if n >= maxMembers {
+			// Someone who is already in the group is not a new join: let the caller see
+			// ErrAlreadyMember and clean up, not "full".
+			if m, mErr := c.GetMembership(ctx, groupID, memberID); mErr == nil && m != nil {
 				return ErrAlreadyMember
 			}
 			return ErrGroupFull
 		}
-		err = c.completeInviteOnce(ctx, in, &seq)
+		err = write(&seq)
 		if !errors.Is(err, errJoinRaced) {
 			return err
 		}
+	}
+	return errJoinRaced
+}
+
+// joinMetaItem is the transaction item that proves the group still exists and, for a capped join
+// (seenSeq non-nil), bumps its JoinSeq iff it still holds the value that join counted under. An absent
+// attribute is 0. The last member leaving deletes the group (#66), and a membership written after that
+// would be an orphan.
+func (c *Client) joinMetaItem(groupID string, seenSeq *int64) types.TransactWriteItem {
+	metaKey := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID},
+		"SK": &types.AttributeValueMemberS{Value: "META"},
+	}
+	if seenSeq == nil {
+		return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+			TableName:           aws.String(c.table),
+			Key:                 metaKey,
+			ConditionExpression: aws.String("attribute_exists(PK)"),
+		}}
+	}
+	cond := "attribute_exists(PK) AND JoinSeq = :seen"
+	if *seenSeq == 0 {
+		cond = "attribute_exists(PK) AND (attribute_not_exists(JoinSeq) OR JoinSeq = :seen)"
+	}
+	return types.TransactWriteItem{Update: &types.Update{
+		TableName:           aws.String(c.table),
+		Key:                 metaKey,
+		UpdateExpression:    aws.String("SET JoinSeq = :next"),
+		ConditionExpression: aws.String(cond),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":seen": &types.AttributeValueMemberN{Value: strconv.FormatInt(*seenSeq, 10)},
+			":next": &types.AttributeValueMemberN{Value: strconv.FormatInt(*seenSeq+1, 10)},
+		},
+	}}
+}
+
+// joinMetaFailure turns a failed joinMetaItem into the error the caller returns: ErrGroupGone for an
+// uncapped join, and for a capped one either ErrGroupGone (the group is gone) or errJoinRaced (another
+// join moved JoinSeq).
+func (c *Client) joinMetaFailure(ctx context.Context, groupID string, seenSeq *int64) error {
+	if seenSeq == nil {
+		return ErrGroupGone
+	}
+	if _, seqErr := c.joinSeq(ctx, groupID); seqErr != nil {
+		return seqErr // ErrGroupGone, or a read failure
 	}
 	return errJoinRaced
 }
@@ -820,33 +872,8 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 		inviteeIndex        = 5
 	)
 
-	metaKey := map[string]types.AttributeValue{
-		"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID},
-		"SK": &types.AttributeValueMemberS{Value: "META"},
-	}
-	groupMetaItem := types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
-		TableName:           aws.String(c.table),
-		Key:                 metaKey,
-		ConditionExpression: aws.String("attribute_exists(PK)"),
-	}}
-	if seenSeq != nil {
-		// Capped group: bump JoinSeq iff it still holds the value this attempt
-		// counted under. An absent attribute is 0.
-		cond := "attribute_exists(PK) AND JoinSeq = :seen"
-		if *seenSeq == 0 {
-			cond = "attribute_exists(PK) AND (attribute_not_exists(JoinSeq) OR JoinSeq = :seen)"
-		}
-		groupMetaItem = types.TransactWriteItem{Update: &types.Update{
-			TableName:           aws.String(c.table),
-			Key:                 metaKey,
-			UpdateExpression:    aws.String("SET JoinSeq = :next"),
-			ConditionExpression: aws.String(cond),
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":seen": &types.AttributeValueMemberN{Value: strconv.FormatInt(*seenSeq, 10)},
-				":next": &types.AttributeValueMemberN{Value: strconv.FormatInt(*seenSeq+1, 10)},
-			},
-		}}
-	}
+	// The group must still exist (and, for a capped join, JoinSeq must still be the value counted).
+	groupMetaItem := c.joinMetaItem(in.GroupID, seenSeq)
 
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -916,6 +943,18 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 					Item:      admissionItem,
 				},
 			},
+			// A join request the invitee made before joining this way is now moot. Left in place it
+			// would show in the admin queue while they are a member and, once they leave, still be
+			// approvable, undoing a deliberate leave on the strength of something they asked before they
+			// joined (#72). CreateJoinRequest refuses a current member, so this is the only path by which
+			// a member could hold one. Unconditional: a no-op when there is no row, and a denied row can go
+			// too, since they are in.
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(c.table),
+					Key:       joinRequestKey(in.GroupID, in.InvitedUserID),
+				},
+			},
 		},
 	})
 	if err != nil {
@@ -933,14 +972,7 @@ func (c *Client) completeInviteOnce(ctx context.Context, in CompleteInviteInput,
 			return errJoinRaced
 		}
 		if isConditionalCheckFailure(err, groupMetaIndex) {
-			if seenSeq != nil {
-				// Either the group is gone or another join moved JoinSeq.
-				if _, seqErr := c.joinSeq(ctx, in.GroupID); seqErr != nil {
-					return seqErr // ErrGroupGone, or a read failure
-				}
-				return errJoinRaced
-			}
-			return ErrGroupGone
+			return c.joinMetaFailure(ctx, in.GroupID, seenSeq)
 		}
 		if isConditionalCheckFailure(err, inviterIndex) {
 			return ErrInviterNotEligible
