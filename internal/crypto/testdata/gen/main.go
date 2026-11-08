@@ -435,6 +435,7 @@ type joinRequestVector struct {
 	PublicHex              string `json:"public_key_hex"`
 	RequestID              string `json:"request_id"`
 	GroupID                string `json:"group_id"`
+	RequesterUserID        string `json:"requester_user_id"`
 	RequesterEd25519PubHex string `json:"requester_ed25519_pub_hex"`
 	RequesterX25519PubHex  string `json:"requester_x25519_pub_hex"`
 	PayloadHex             string `json:"payload_hex"`
@@ -1340,8 +1341,9 @@ func main() {
 		requesterX25519Pub := requesterX25519Priv.PublicKey().Bytes()
 		requestID := "request-uuid-1"
 		groupID := "group-uuid-1"
+		requesterUserID := "requester-uuid-1"
 
-		payload := crypto.JoinRequestPayload(requestID, groupID, pub, requesterX25519Pub)
+		payload := crypto.JoinRequestPayload(requestID, groupID, requesterUserID, pub, requesterX25519Pub)
 		sig, err := crypto.Sign(priv, crypto.ContextJoinRequest, payload)
 		if err != nil {
 			panic(err)
@@ -1352,6 +1354,7 @@ func main() {
 			PublicHex:              hex.EncodeToString(pub),
 			RequestID:              requestID,
 			GroupID:                groupID,
+			RequesterUserID:        requesterUserID,
 			RequesterEd25519PubHex: hex.EncodeToString(pub),
 			RequesterX25519PubHex:  hex.EncodeToString(requesterX25519Pub),
 			PayloadHex:             hex.EncodeToString(payload),

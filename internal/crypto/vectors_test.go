@@ -410,6 +410,7 @@ type joinRequestVector struct {
 	PublicHex              string `json:"public_key_hex"`
 	RequestID              string `json:"request_id"`
 	GroupID                string `json:"group_id"`
+	RequesterUserID        string `json:"requester_user_id"`
 	RequesterEd25519PubHex string `json:"requester_ed25519_pub_hex"`
 	RequesterX25519PubHex  string `json:"requester_x25519_pub_hex"`
 	PayloadHex             string `json:"payload_hex"`
@@ -1433,7 +1434,7 @@ func TestVectorJoinRequest(t *testing.T) {
 			wantPayload := mustHex(t, tc.PayloadHex)
 			wantSig := mustHex(t, tc.SignatureHex)
 
-			gotPayload := JoinRequestPayload(tc.RequestID, tc.GroupID, edPub, xPub)
+			gotPayload := JoinRequestPayload(tc.RequestID, tc.GroupID, tc.RequesterUserID, edPub, xPub)
 			if !bytes.Equal(gotPayload, wantPayload) {
 				t.Fatalf("JoinRequestPayload = %x, want %x", gotPayload, wantPayload)
 			}

@@ -32,7 +32,7 @@ type createJoinRequestRequest struct {
 	// RequestID is a fresh UUID the requester picks; it is signed into the request.
 	RequestID string `json:"requestId"`
 	// Signature is crypto.Sign(requesterPriv, ContextJoinRequest, crypto.JoinRequestPayload(
-	// requestId, groupId, ed25519Pub, x25519Pub)). The keys are NOT request fields: they are
+	// requestId, groupId, userId, ed25519Pub, x25519Pub)). The keys are NOT request fields: they are
 	// read from the caller's own PROFILE.
 	Signature string `json:"signature"`
 }
@@ -144,7 +144,7 @@ func (h *Handler) createJoinRequest(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	payload := crypto.JoinRequestPayload(req.RequestID, groupID, requester.SigningPublicKey, requester.WrappingPublicKey)
+	payload := crypto.JoinRequestPayload(req.RequestID, groupID, userID, requester.SigningPublicKey, requester.WrappingPublicKey)
 	if !crypto.Verify(requester.SigningPublicKey, crypto.ContextJoinRequest, payload, sig) {
 		WriteErrorWithCode(w, http.StatusBadRequest, "signature: does not verify against the caller's current keys", "bad_signature")
 		return
@@ -481,6 +481,7 @@ func (h *Handler) approveJoinRequest(w http.ResponseWriter, r *http.Request) {
 		Generation:        req.Generation,
 		WrappedGroupKey:   wrapped,
 		Role:              models.RoleMember,
+		MaxMembers:        h.memberCap(group),
 		Admission: models.Admission{
 			InviterUserID:           userID,
 			InviteID:                jr.RequestID,
@@ -504,6 +505,9 @@ func (h *Handler) approveJoinRequest(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "your role or generation changed; reload and try again", "grantor_changed")
 	case errors.Is(err, db.ErrGroupGone):
 		WriteErrorWithCode(w, http.StatusGone, "this group no longer exists", "group_gone")
+	case errors.Is(err, db.ErrGroupFull):
+		// The request stays pending: a member leaving frees a slot, and its own 90 days end it otherwise.
+		WriteErrorWithCode(w, http.StatusConflict, "this group is at its member limit: a Rotating group re-keys whenever a member is removed, and that is what bounds its size", "group_full")
 	case errors.Is(err, db.ErrWrapEpochStale):
 		h.clearJoinRequest(r.Context(), groupID, requesterID, jr.RequestID)
 		WriteErrorWithCode(w, http.StatusConflict, "the requester's keys changed since they asked; they need to ask again", "requester_keys_changed")

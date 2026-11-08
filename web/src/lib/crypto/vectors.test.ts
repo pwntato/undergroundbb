@@ -381,6 +381,7 @@ interface VectorFile {
     public_key_hex: string
     request_id: string
     group_id: string
+    requester_user_id: string
     requester_ed25519_pub_hex: string
     requester_x25519_pub_hex: string
     payload_hex: string
@@ -975,6 +976,7 @@ describe('join request vectors', () => {
       const payload = joinRequestPayload(
         tc.request_id,
         tc.group_id,
+        tc.requester_user_id,
         hexToBytes(tc.requester_ed25519_pub_hex),
         hexToBytes(tc.requester_x25519_pub_hex),
       )

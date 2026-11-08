@@ -596,3 +596,216 @@ func TestApproveJoinRequestRecordsTheRequestersKeyEpoch(t *testing.T) {
 		t.Errorf("WrapEpoch = %d, want 2", m.WrapEpoch)
 	}
 }
+
+// ---- the Rotating member cap (#60), shared with invite completion ----
+
+// capGroup is a public group with one admin and n users who have each asked to join.
+type capGroup struct {
+	gid      string
+	admin    RegisterInput
+	users    []RegisterInput
+	requests []string
+}
+
+func newCapGroup(t *testing.T, c *Client, requesters int) capGroup {
+	t.Helper()
+	g := capGroup{gid: putPublicGroup(t, c), admin: requesterOf(t, c)}
+	putTestMember(t, c, g.gid, g.admin.UserID, models.RoleAdmin)
+	for i := 0; i < requesters; i++ {
+		u := requesterOf(t, c)
+		id := newUserID(t)
+		if err := createReq(c, g.gid, u, id); err != nil {
+			t.Fatal(err)
+		}
+		g.users, g.requests = append(g.users, u), append(g.requests, id)
+	}
+	return g
+}
+
+func (g capGroup) approve(c *Client, i, maxMembers int) error {
+	return c.ApproveJoinRequest(context.Background(), ApproveJoinRequestInput{
+		GroupID: g.gid, RequesterUserID: g.users[i].UserID, RequestID: g.requests[i], ApproverUserID: g.admin.UserID,
+		Role: models.RoleMember, MaxMembers: maxMembers, Admission: models.Admission{InviteID: g.requests[i]},
+	})
+}
+
+func TestApproveJoinRequestStopsAtTheCapAndLeavesTheRequestPending(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 2)
+	if err := g.approve(c, 0, 2); err != nil { // the admin plus one: full
+		t.Fatalf("first approval: %v", err)
+	}
+	if err := g.approve(c, 1, 2); !errors.Is(err, ErrGroupFull) {
+		t.Fatalf("approval into a full group = %v, want ErrGroupFull", err)
+	}
+	if n := mustCount(t, c, g.gid); n != 2 {
+		t.Errorf("group has %d members, want 2", n)
+	}
+	if !itemExists(t, c, "GROUP#"+g.gid, "REQ#"+g.users[1].UserID) {
+		t.Error("the refused request was deleted; it should stay pending so a departure can free a slot")
+	}
+	// Room again (cap raised): the same request is approved.
+	if err := g.approve(c, 1, 3); err != nil {
+		t.Fatalf("approval after the cap allows: %v", err)
+	}
+}
+
+func TestApproveJoinRequestWithoutACapIgnoresTheCount(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 3)
+	for i := range g.users {
+		if err := g.approve(c, i, 0); err != nil {
+			t.Fatalf("approval %d: %v", i, err)
+		}
+	}
+	if n := mustCount(t, c, g.gid); n != 4 {
+		t.Errorf("group has %d members, want 4", n)
+	}
+}
+
+func TestApproveJoinRequestBumpsJoinSeqOnCappedApprovals(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 3)
+	for i := range g.users {
+		if err := g.approve(c, i, 10); err != nil {
+			t.Fatalf("approval %d: %v", i, err)
+		}
+		if seq, err := c.joinSeq(context.Background(), g.gid); err != nil || seq != int64(i+1) {
+			t.Fatalf("joinSeq after approval %d = %d, %v, want %d", i, seq, err, i+1)
+		}
+	}
+}
+
+func TestApproveJoinRequestFullGroupStillReportsAlreadyMember(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 1)
+	putTestMember(t, c, g.gid, g.users[0].UserID, models.RoleMember) // joined some other way; the group is full
+	if err := g.approve(c, 0, 2); !errors.Is(err, ErrAlreadyMember) {
+		t.Fatalf("full group, existing member = %v, want ErrAlreadyMember", err)
+	}
+}
+
+func TestApproveJoinRequestCappedGroupGone(t *testing.T) {
+	c := testClient(t)
+	g := newCapGroup(t, c, 1)
+	if _, err := c.ddb.DeleteItem(context.Background(), deleteItemInput(c.table, "GROUP#"+g.gid, "META")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.approve(c, 0, 5); !errors.Is(err, ErrGroupGone) {
+		t.Fatalf("capped approval into a deleted group = %v, want ErrGroupGone", err)
+	}
+}
+
+// Many approvals at once into a group with room for fewer of them. Without the JoinSeq guard each would
+// count the same number of members, find room, and all succeed.
+func TestApproveJoinRequestCapHoldsUnderConcurrentApprovals(t *testing.T) {
+	const (
+		rounds     = 4
+		contenders = 6
+		cap_       = 4 // the admin plus room for 3
+	)
+	c := testClient(t)
+	for round := 0; round < rounds; round++ {
+		g := newCapGroup(t, c, contenders)
+		var wg sync.WaitGroup
+		errs := make([]error, contenders)
+		start := make(chan struct{})
+		for i := 0; i < contenders; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				errs[i] = g.approve(c, i, cap_)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		ok, full := 0, 0
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrGroupFull):
+				full++
+			default:
+				t.Fatalf("round %d contender %d: unexpected error %v", round, i, err)
+			}
+		}
+		if n := mustCount(t, c, g.gid); n > cap_ || ok != cap_-1 || full != contenders-(cap_-1) {
+			t.Fatalf("round %d: %d members (cap %d), ok=%d full=%d, want ok=%d full=%d", round, n, cap_, ok, full, cap_-1, contenders-(cap_-1))
+		}
+	}
+}
+
+// An invite's completion and a request's approval are two ways into one group and share one guard: with
+// room for exactly one more, racing the two lets exactly one in.
+func TestInviteCompletionAndApprovalShareTheCap(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	for round := 0; round < 6; round++ {
+		g := newCapGroup(t, c, 1)
+		// An accepted invite into the same group, completed by the same admin.
+		inviteID, inviteeID := "test-invite-"+randomSuffix(t), "test-invitee-"+randomSuffix(t)
+		if err := c.CreateInvite(ctx, testCreateInviteInput(t, inviteID, g.gid, g.admin.UserID, time.Now().Add(7*24*time.Hour))); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.AcceptInvite(ctx, testAcceptInviteInput(inviteID, inviteeID)); err != nil {
+			t.Fatal(err)
+		}
+		const cap_ = 2 // the admin plus one
+		var wg sync.WaitGroup
+		var invErr, reqErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			in := testCompleteInviteInput(inviteID, g.gid, g.admin.UserID, inviteeID)
+			in.MaxMembers = cap_
+			invErr = c.CompleteInvite(ctx, in)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			reqErr = g.approve(c, 0, cap_)
+		}()
+		close(start)
+		wg.Wait()
+		okCount := 0
+		for _, err := range []error{invErr, reqErr} {
+			switch {
+			case err == nil:
+				okCount++
+			case errors.Is(err, ErrGroupFull):
+			default:
+				t.Fatalf("round %d: unexpected error %v", round, err)
+			}
+		}
+		if n := mustCount(t, c, g.gid); okCount != 1 || n != cap_ {
+			t.Fatalf("round %d: %d joined, group has %d members, want exactly one join and %d members (invite: %v, approval: %v)", round, okCount, n, cap_, invErr, reqErr)
+		}
+	}
+}
+
+func TestRemoveJoinRequestLeavesADeniedRequestToRunOutItsCoolOff(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	gid := putPublicGroup(t, c)
+	approver := requesterOf(t, c)
+	putTestMember(t, c, gid, approver.UserID, models.RoleAdmin)
+	user := requesterOf(t, c)
+	id := newUserID(t)
+	if err := createReq(c, gid, user, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DenyJoinRequest(ctx, gid, user.UserID, approver.UserID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveJoinRequest(ctx, gid, user.UserID, id); err != nil {
+		t.Fatalf("RemoveJoinRequest on a denied request: %v", err)
+	}
+	jr, err := c.GetJoinRequest(ctx, gid, user.UserID, time.Now())
+	if err != nil || jr == nil || jr.Status != models.JoinRequestDenied {
+		t.Errorf("the denied request after RemoveJoinRequest = %+v (%v), want it kept with status denied", jr, err)
+	}
+}

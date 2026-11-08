@@ -416,14 +416,25 @@ type ApproveJoinRequestInput struct {
 	Role              string
 	// Admission is the approver's signed record, with the request id in the invite slot.
 	Admission models.Admission
+	// MaxMembers, when positive, is the member cap of a Rotating group (#60): approval refuses with
+	// ErrGroupFull once the group already has this many members. Zero means no cap. It is the same cap
+	// an invite is held to; see withJoinCap.
+	MaxMembers int
 }
 
 // ApproveJoinRequest writes the membership and the admission record and deletes the
 // request, in one transaction. The request must still be live and unchanged, the
 // approver still an admin or ambassador at the generation they wrapped under, the
 // group still there, the requester not already a member and still at the epoch their
-// keys were read at.
+// keys were read at. A Rotating group is held to its member cap (ErrGroupFull), exactly as an
+// invite's completion is, and the request stays pending when it is refused.
 func (c *Client) ApproveJoinRequest(ctx context.Context, in ApproveJoinRequestInput) error {
+	return c.withJoinCap(ctx, in.GroupID, in.RequesterUserID, in.MaxMembers, func(seenSeq *int64) error {
+		return c.approveJoinRequestOnce(ctx, in, seenSeq)
+	})
+}
+
+func (c *Client) approveJoinRequestOnce(ctx context.Context, in ApproveJoinRequestInput, seenSeq *int64) error {
 	now := time.Now()
 	membership := models.Membership{
 		Record: models.Record{
@@ -479,11 +490,8 @@ func (c *Client) ApproveJoinRequest(ctx context.Context, in ApproveJoinRequestIn
 					":now":     unixAttr(now),
 				},
 			}},
-			{ConditionCheck: &types.ConditionCheck{
-				TableName:           aws.String(c.table),
-				Key:                 map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + in.GroupID}, "SK": &types.AttributeValueMemberS{Value: "META"}},
-				ConditionExpression: aws.String("attribute_exists(PK)"),
-			}},
+			// The group must still exist and, for a capped join, JoinSeq must still be the value counted.
+			c.joinMetaItem(in.GroupID, seenSeq),
 			approverCheck(c, in.GroupID, in.ApproverUserID, &in.Generation),
 			c.keyEpochCheck(in.RequesterUserID, in.RequesterKeyEpoch),
 			{Put: &types.Put{TableName: aws.String(c.table), Item: admissionItem}},
@@ -491,6 +499,9 @@ func (c *Client) ApproveJoinRequest(ctx context.Context, in ApproveJoinRequestIn
 	})
 	if err == nil {
 		return nil
+	}
+	if seenSeq != nil && isTransactionConflict(err) {
+		return errJoinRaced
 	}
 	if isConditionalCheckFailure(err, requesterIndex) {
 		deleted, whyErr := c.whyProfileCheckFailed(ctx, in.RequesterUserID)
@@ -506,7 +517,7 @@ func (c *Client) ApproveJoinRequest(ctx context.Context, in ApproveJoinRequestIn
 		return ErrApproverNotEligible
 	}
 	if isConditionalCheckFailure(err, groupIndex) {
-		return ErrGroupGone
+		return c.joinMetaFailure(ctx, in.GroupID, seenSeq)
 	}
 	if isConditionalCheckFailure(err, membershipIndex) {
 		return ErrAlreadyMember
@@ -518,15 +529,19 @@ func (c *Client) ApproveJoinRequest(ctx context.Context, in ApproveJoinRequestIn
 }
 
 // RemoveJoinRequest deletes a request that can never be approved (its requester's keys
-// changed, or they are already a member), only if it still carries requestID, so a newer
-// request in the same slot is left alone. Not finding it is not an error.
+// changed, or they are already a member), only if it is still pending and still carries
+// requestID: a newer request in the same slot is left alone, and so is a denied one, whose
+// cool-off must run its course (another approver may have denied it in the meantime). Not
+// finding it is not an error.
 func (c *Client) RemoveJoinRequest(ctx context.Context, groupID, requesterID, requestID string) error {
 	_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName:           aws.String(c.table),
-		Key:                 joinRequestKey(groupID, requesterID),
-		ConditionExpression: aws.String("RequestID = :rid"),
+		TableName:                aws.String(c.table),
+		Key:                      joinRequestKey(groupID, requesterID),
+		ConditionExpression:      aws.String("RequestID = :rid AND #st = :pending"),
+		ExpressionAttributeNames: map[string]string{"#st": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":rid": &types.AttributeValueMemberS{Value: requestID},
+			":rid":     &types.AttributeValueMemberS{Value: requestID},
+			":pending": &types.AttributeValueMemberS{Value: models.JoinRequestPending},
 		},
 	})
 	var ccf *types.ConditionalCheckFailedException

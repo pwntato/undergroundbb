@@ -26,7 +26,7 @@ import (
 
 func signedJoinRequest(t *testing.T, user registeredUser, groupID, requestID string) createJoinRequestRequest {
 	t.Helper()
-	payload := crypto.JoinRequestPayload(requestID, groupID, user.signPub, user.wrapPub)
+	payload := crypto.JoinRequestPayload(requestID, groupID, user.userID, user.signPub, user.wrapPub)
 	sig, err := crypto.Sign(user.signPriv, crypto.ContextJoinRequest, payload)
 	if err != nil {
 		t.Fatalf("sign join request: %v", err)
@@ -158,6 +158,15 @@ func TestCreateJoinRequestRefusals(t *testing.T) {
 			"other group":      signedJoinRequest(t, f.requester, newRequestID(t), id),
 			"other request id": {RequestID: id, Signature: signedJoinRequest(t, f.requester, f.groupID, newRequestID(t)).Signature},
 			"another user":     signedJoinRequest(t, other, f.groupID, id),
+			// The right keys and request, signed over someone else's uuid: a signature for a different account.
+			"another user's uuid": {RequestID: id, Signature: func() string {
+				payload := crypto.JoinRequestPayload(id, f.groupID, other.userID, f.requester.signPub, f.requester.wrapPub)
+				sig, err := crypto.Sign(f.requester.signPriv, crypto.ContextJoinRequest, payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return base64.StdEncoding.EncodeToString(sig)
+			}()},
 		}
 		for name, body := range bad {
 			rec := doJSON(t, f.h, http.MethodPost, joinPath(f.groupID, ""), f.requesterCkE, body)
@@ -332,7 +341,7 @@ func TestListJoinRequestsReturnsPendingRequestsWithTheirSignedKeys(t *testing.T)
 	}
 	// The approver's client verifies this itself.
 	sig, _ := base64.StdEncoding.DecodeString(e.Signature)
-	if !crypto.Verify(f.requester.signPub, crypto.ContextJoinRequest, crypto.JoinRequestPayload(e.RequestID, f.groupID, f.requester.signPub, f.requester.wrapPub), sig) {
+	if !crypto.Verify(f.requester.signPub, crypto.ContextJoinRequest, crypto.JoinRequestPayload(e.RequestID, f.groupID, f.requester.userID, f.requester.signPub, f.requester.wrapPub), sig) {
 		t.Error("the listed signature does not verify against the listed request id, group and keys")
 	}
 	if e.Day != time.Now().UTC().Format("2006-01-02") {
@@ -695,5 +704,64 @@ func TestJoinRequestCarriesTheRequestersKeyEpochIntoTheMembership(t *testing.T) 
 	m, _ := f.h.db.GetMembership(t.Context(), f.groupID, f.requester.userID)
 	if m == nil || m.WrapEpoch != 2 {
 		t.Errorf("membership = %+v, want WrapEpoch 2", m)
+	}
+}
+
+// ---- the Rotating member cap (#60) ----
+
+// createPublicRotatingGroup is a public group in Rotating mode, which createGroup accepts.
+func createPublicRotatingGroup(t *testing.T, h *Handler, user registeredUser, cookie *http.Cookie) string {
+	t.Helper()
+	req := signedCreateGroupRequest(t, user)
+	req.Visibility = "public"
+	req.NameCiphertext, req.DescriptionCiphertext = wrappedBlob{}, wrappedBlob{}
+	req.NamePlaintext, req.DescriptionPlaintext = "Rotating Club", "Re-keys on removal"
+	req.RevocationMode = "rotating"
+	if rec := doCreateGroup(t, h, cookie, req); rec.Code != http.StatusCreated {
+		t.Fatalf("create public rotating group: %d %s", rec.Code, rec.Body.String())
+	}
+	return req.GroupID
+}
+
+// A public Rotating group is held to the same cap as an invite would hold it to, the request stays pending
+// when the group is full, and the approval goes through once the cap allows.
+func TestApproveJoinRequestRefusedAtTheCapThenAcceptedWhenRaised(t *testing.T) {
+	roomy, full := capHandler(t, 2), capHandler(t, 1)
+	admin, adminCookie := loggedInUser(t, roomy)
+	groupID := createPublicRotatingGroup(t, roomy, admin, adminCookie)
+	requester, requesterCookie := loggedInUser(t, roomy)
+	id := requestToJoin(t, roomy, requester, requesterCookie, groupID)
+	path := joinPath(groupID, "/"+requester.userID+"/approve")
+
+	rec := doJSON(t, full, http.MethodPost, path, adminCookie, approveBodyFor(t, full, admin, groupID, id, requester))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "group_full" {
+		t.Fatalf("approval into a full group: %d %s, want 409 group_full", rec.Code, rec.Body.String())
+	}
+	if m, _ := full.db.GetMembership(t.Context(), groupID, requester.userID); m != nil {
+		t.Fatal("a refused approval produced a membership")
+	}
+	if jr, _ := full.db.GetJoinRequest(t.Context(), groupID, requester.userID, time.Now()); jr == nil || jr.Status != models.JoinRequestPending {
+		t.Fatalf("the refused request should stay pending, got %+v", jr)
+	}
+
+	rec = doJSON(t, roomy, http.MethodPost, path, adminCookie, approveBodyFor(t, roomy, admin, groupID, id, requester))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approval after the cap allows: %d %s", rec.Code, rec.Body.String())
+	}
+	if n, err := roomy.db.CountMembers(t.Context(), groupID); err != nil || n != 2 {
+		t.Errorf("members = %d, %v, want 2", n, err)
+	}
+}
+
+// An Open group has no cap, whatever the deployment's setting.
+func TestApproveJoinRequestIntoAnOpenGroupIsNotCapped(t *testing.T) {
+	h := capHandler(t, 1)
+	admin, adminCookie := loggedInUser(t, h)
+	groupID := createPublicGroup(t, h, admin, adminCookie)
+	requester, requesterCookie := loggedInUser(t, h)
+	id := requestToJoin(t, h, requester, requesterCookie, groupID)
+	rec := doJSON(t, h, http.MethodPost, joinPath(groupID, "/"+requester.userID+"/approve"), adminCookie, approveBodyFor(t, h, admin, groupID, id, requester))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approval into an Open group with a cap of 1: %d %s, want 200", rec.Code, rec.Body.String())
 	}
 }
