@@ -130,8 +130,8 @@ func (c *Client) tombstoneAccount(ctx context.Context, userID, usernameLower str
 }
 
 // sweepUserRows removes the user's own PIN#, VERIFIED#, HANDOFF#, SENT#, NOTIF#, CHALLENGE, ROTCOOLDOWN and HANDOFFSEQ rows, the
-// INVITE# row behind each SENT#, and the invites addressed to them (the GSI1
-// "INVITE#" reverse lookup). Invites others sent are removed because the
+// INVITE# row behind each SENT#, the invites addressed to them (the GSI1
+// "INVITE#" reverse lookup) and the join requests they made (the GSI1 "REQ#" one). Invites others sent are removed because the
 // invitee can no longer complete them. A SENT# copy held by another inviter
 // for an invite addressed to this user is left to its TTL.
 func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
@@ -180,29 +180,33 @@ func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
 		}
 		start = out.LastEvaluatedKey
 	}
-	start = nil
-	for {
-		out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
-			TableName:              aws.String(c.table),
-			IndexName:              aws.String("GSI1"),
-			KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
-			ProjectionExpression:   aws.String("PK, SK"),
-			ExpressionAttributeValues: map[string]types.AttributeValue{
-				":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
-				":sk": &types.AttributeValueMemberS{Value: "INVITE#"},
-			},
-			ExclusiveStartKey: start,
-		})
-		if err != nil {
-			return err
+	// The GSI1 rows other partitions hold about this user: invites addressed to
+	// them, and the join requests they made (#72), which live in the group's partition.
+	for _, prefix := range []string{"INVITE#", joinRequestPrefix} {
+		start = nil
+		for {
+			out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+				TableName:              aws.String(c.table),
+				IndexName:              aws.String("GSI1"),
+				KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
+				ProjectionExpression:   aws.String("PK, SK"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{
+					":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
+					":sk": &types.AttributeValueMemberS{Value: prefix},
+				},
+				ExclusiveStartKey: start,
+			})
+			if err != nil {
+				return err
+			}
+			for _, it := range out.Items {
+				keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+			}
+			if out.LastEvaluatedKey == nil {
+				break
+			}
+			start = out.LastEvaluatedKey
 		}
-		for _, it := range out.Items {
-			keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
-		}
-		if out.LastEvaluatedKey == nil {
-			break
-		}
-		start = out.LastEvaluatedKey
 	}
 	return c.batchDelete(ctx, dedupeKeys(keys))
 }
