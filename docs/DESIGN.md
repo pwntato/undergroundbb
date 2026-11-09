@@ -1377,6 +1377,33 @@ is an explicit verify affordance. Invite links additionally carry the inviter's 
 URL fragment, which the browser never transmits, so the invitee's client can check it against a
 value the server never saw.
 
+#### User profiles (#75)
+
+A profile is a page at `/users/:userId`, built from the users projection (`GET /api/users/{id}`) that any
+signed-in user can already read. It shows the **username**, **member since**, a **bio**, the **key
+fingerprint** and, for someone other than the viewer, the viewer's own **verification state** for them.
+
+- **Bio.** `PROFILE.Bio`, plaintext, at most 280 characters and 1,024 bytes, newlines allowed and no other
+  control characters, trimmed. It is written with `PUT /api/account/bio` (`{"bio": "..."}`; an empty bio clears
+  it) and served in the projection to **every signed-in user, including people who share no group with the
+  author**: it is public to the site like the username, and the editor says so. It is not signed, because
+  nothing trusts it and it carries no key material. Account deletion removes it, and a tombstoned account
+  cannot write one (404).
+- **Member since.** `PROFILE.CreatedDay`, the UTC registration day (`YYYY-MM-DD`), stamped by `Register`.
+  It is a day and not a time because `CreatedAt` is deliberately left unset on real users: a full-resolution
+  registration time is a timing leak beyond the threat model's day granularity (#147). **Accounts
+  registered before #75 have no value and show no member-since**; it is not backfilled. Account deletion
+  removes it too.
+- **Fingerprint and verification state.** Both are computed in the browser from the keys the server serves,
+  never taken from the server, exactly as on the roster (#65). On your own profile the fingerprint is the
+  one other members see for you. Recording a check stays on a group's Members screen; the profile shows the
+  result.
+- **No cross-group post feed.** A viewer holds keys only for the groups they belong to, so such a feed could not
+  be decrypted in one pass, and an author-to-content index would be the queryable map this design avoids.
+- **Reaching it.** Each member on the roster links to their profile. There is no user search (#76): a
+  server-side one would let any signed-in user enumerate usernames, and one limited to shared groups has no
+  index to use, so the members screen filters the roster it has already loaded instead.
+
 ## Groups
 
 ### Invites — the signed handshake
@@ -3259,7 +3286,8 @@ Both halves of that rendering need a mechanism, and neither is free:
   there is no generation to record and nothing to walk; a client rendering the notification just
   reads the attribute.
 - **The actor's username.** Usernames are read through `GET /api/users/:id`, a **projection over the
-user item exposing only the username and the public keys, current and superseded**. The full
+user item exposing only the username, the public keys (current and superseded), and the
+non-secret profile fields `bio` and `createdDay` (#75)**. The full
 `PROFILE` item also holds
   the Argon2id salt and the wrapped private keys, which is offline-cracking material, and no ordinary
   read path may hand those out — that blob is available only from `POST /api/auth/challenge`, which
