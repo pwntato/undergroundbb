@@ -1532,8 +1532,8 @@ A group is **private** or **public**, chosen at creation.
 non-members, and the only way in is an invite.
 
 **Public** groups are always `Open` (`createGroup` refuses the other mode, and the create
-form does not offer it). They keep name and description in plaintext so they can be listed in a directory and
-searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
+form does not offer it). They keep name and description in plaintext so they can be listed in a
+directory and searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
 as the partition, `NAME#<name>#<gid>` as the sort key, so browsing is a `Query` and prefix search is
 a `begins_with` on it.
 

@@ -16,15 +16,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { groupTextLengthError } from './groupTextLimits'
-import { buildGroupValues, revocationModeFor } from './groupFormValues'
+import { buildGroupValues, revocationModeFor, type GroupFormValues } from './groupFormValues'
 
-export interface GroupFormValues {
-  readonly visibility: 'private' | 'public'
-  readonly name: string
-  readonly description: string
-  readonly revocationMode: 'rotating' | 'open'
-  readonly expirationDays: number
-}
+export type { GroupFormValues }
 
 /**
  * initialValues seeds the form's fields when this component mounts fresh

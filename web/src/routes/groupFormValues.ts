@@ -1,6 +1,12 @@
 // What the create-group form hands up. Kept out of the component file so it can be tested directly.
 
-import type { GroupFormValues } from './CreateGroupFormStep'
+export interface GroupFormValues {
+  readonly visibility: 'private' | 'public'
+  readonly name: string
+  readonly description: string
+  readonly revocationMode: 'rotating' | 'open'
+  readonly expirationDays: number
+}
 
 export const DEFAULT_EXPIRATION_DAYS = 30
 
