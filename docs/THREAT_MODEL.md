@@ -82,6 +82,13 @@ same way, so a dump reveals who direct-messages whom as plainly as it reveals gr
 that is the pairwise case, the one with the smallest anonymity set and usually the most to give
 away. The pairwise case gets no special treatment, and nobody should assume it does.
 
+**A pending DM is visible before the recipient has done anything.** The recipient's own membership row is
+written only when they open the conversation, but they need some way to find the message, so the slot the
+sender writes carries a GSI1 entry on the recipient. A dump taken in that window shows "A sent B a DM" and cannot
+show whether B ever looked. It is a weaker edge than a membership (it is deleted on accept, decline or
+withdrawal, a sender may have at most 20 outstanding, and a decline keeps that sender out for 7 days),
+but it is a record a stranger can create about any user whose id they know. Declining is the remedy.
+
 **It also includes invitations still outstanding, which is intent rather than association.** The
 inviter's copy of an invite is stored under their own id, so a dump shows that a user invited
 someone to a group even though nobody joined — and the invitee may have no account at all.
