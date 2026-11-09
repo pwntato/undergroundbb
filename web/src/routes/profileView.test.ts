@@ -37,7 +37,7 @@ describe('profileView', () => {
   })
   it('shows nothing of a deleted account', () => {
     const v = profileView(
-      user({ username: '', deleted: true, bio: 'leftover', createdDay: '2026-11-08' }),
+      user({ username: 'ghost', deleted: true, bio: 'leftover', createdDay: '2026-11-08' }),
     )
     expect(v).toMatchObject({
       deleted: true,
