@@ -99,6 +99,9 @@ func (h *Handler) createPost(w http.ResponseWriter, r *http.Request) {
 		groupNotFound(w)
 		return
 	}
+	if !h.dmWritable(w, r, group) {
+		return
+	}
 
 	day, ok := idgen.ValidPostSortKey(req.SortKey)
 	if !ok {

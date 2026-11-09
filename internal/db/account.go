@@ -182,7 +182,7 @@ func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
 	}
 	// The GSI1 rows other partitions hold about this user: invites addressed to
 	// them, and the join requests they made (#72), which live in the group's partition.
-	for _, prefix := range []string{"INVITE#", joinRequestPrefix} {
+	for _, prefix := range []string{"INVITE#", joinRequestPrefix, dmRequestPrefix} {
 		start = nil
 		for {
 			out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{

@@ -88,6 +88,11 @@ type CreateGroupInput struct {
 	// grantorGrantRef) over the root grant -- see models.RoleGrant's own doc
 	// comment.
 	RootGrantSignature []byte
+
+	// DM, when set, makes this a direct message (#73): the group is stamped GroupType "dm" and the
+	// recipient's pending slot, the pair marker and the sender's outbound pointer are written in the
+	// same transaction. See CreateDMInput.
+	DM *CreateDMInput
 }
 
 // CreateGroup creates a group: the GROUP#<gid>/META item, the creator's own
@@ -187,6 +192,10 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 		Signature:               in.RootGrantSignature,
 	}
 
+	if in.DM != nil {
+		group.GroupType = "dm"
+		group.DMPairPK = DMPairPK(in.CreatorUserID, in.DM.RecipientUserID)
+	}
 	groupItem, err := attributevalue.MarshalMap(group)
 	if err != nil {
 		return "", err
@@ -208,28 +217,40 @@ func (c *Client) CreateGroup(ctx context.Context, in CreateGroupInput) (string, 
 		creatorGoneIndex = 3
 	)
 
-	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{
-				Put: &types.Put{
-					TableName:           aws.String(c.table),
-					Item:                groupItem,
-					ConditionExpression: aws.String("attribute_not_exists(PK)"),
-				},
+	txItems := []types.TransactWriteItem{
+		{
+			Put: &types.Put{
+				TableName:           aws.String(c.table),
+				Item:                groupItem,
+				ConditionExpression: aws.String("attribute_not_exists(PK)"),
 			},
-			{Put: &types.Put{TableName: aws.String(c.table), Item: membershipItem}},
-			{Put: &types.Put{TableName: aws.String(c.table), Item: grantItem}},
-			// The creator's account must not have been deleted (#77): a
-			// session cookie issued before deletion stays valid until it
-			// expires, and without this a stale cookie would make the
-			// tombstone the admin of a new group. CompleteInvite carries the
-			// same check; these are the only two writers of a MEMBER# row.
-			// The same item holds the KeyEpoch the membership's WrapEpoch was
-			// taken from (#62).
-			c.keyEpochCheck(in.CreatorUserID, in.CreatorKeyEpoch),
 		},
-	})
+		{Put: &types.Put{TableName: aws.String(c.table), Item: membershipItem}},
+		{Put: &types.Put{TableName: aws.String(c.table), Item: grantItem}},
+		// The creator's account must not have been deleted (#77): a
+		// session cookie issued before deletion stays valid until it
+		// expires, and without this a stale cookie would make the
+		// tombstone the admin of a new group. CompleteInvite carries the
+		// same check; these are the only two writers of a MEMBER# row.
+		// The same item holds the KeyEpoch the membership's WrapEpoch was
+		// taken from (#62).
+		c.keyEpochCheck(in.CreatorUserID, in.CreatorKeyEpoch),
+	}
+	const dmPairIndex = 4
+	if in.DM != nil {
+		dmItems, dmErr := c.dmCreateItems(in)
+		if dmErr != nil {
+			return "", dmErr
+		}
+		txItems = append(txItems, dmItems...)
+	}
+	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: txItems})
 	if err != nil {
+		if in.DM != nil && !isConditionalCheckFailure(err, groupItemIndex) {
+			if dmErr := c.dmCreateFailure(ctx, in, err, dmPairIndex); dmErr != nil {
+				return "", dmErr
+			}
+		}
 		if isConditionalCheckFailure(err, creatorGoneIndex) {
 			deleted, whyErr := c.whyProfileCheckFailed(ctx, in.CreatorUserID)
 			if whyErr != nil {

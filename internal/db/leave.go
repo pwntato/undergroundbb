@@ -187,6 +187,11 @@ type LeaveRotation struct {
 // wrap to them (#178). The only member leaving deletes the group and needs no
 // rotation.
 func (c *Client) LeaveGroup(ctx context.Context, groupID, userID string, demotion *LeaveDemotion, rot *LeaveRotation, rotating bool) (groupDeleted bool, err error) {
+	if g, gerr := c.GetGroup(ctx, groupID); gerr != nil {
+		return false, gerr
+	} else if g != nil && g.GroupType == "dm" {
+		return c.leaveDM(ctx, g, groupID, userID)
+	}
 	roles, err := c.memberRoles(ctx, groupID)
 	if err != nil {
 		return false, err

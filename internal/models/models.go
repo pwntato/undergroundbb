@@ -435,6 +435,56 @@ type Group struct {
 	// purely for readers and future writers of this struct, not a wire
 	// concern.
 	GroupType string `dynamodbav:"GroupType,omitempty"`
+
+	// DMPairPK is the DMPAIR#<lo>#<hi> key of the pair marker (#73), set only on a "dm" group so a
+	// leave can remove the marker without knowing who the other person was.
+	DMPairPK string `dynamodbav:"DMPairPK,omitempty"`
+}
+
+// DM pair statuses. A pair marker is pending until the recipient accepts, active after that, and
+// declined while the recipient's refusal cools off.
+const (
+	DMPairPending  = "pending"
+	DMPairActive   = "active"
+	DMPairDeclined = "declined"
+)
+
+// DMPair is the DMPAIR#<lower uuid>#<higher uuid> / PAIR item (#73, docs/DESIGN.md, "Direct
+// messages"): at most one per unordered pair of users, so a DM between two people is never
+// created twice, in either direction at once. Its conditional put is what makes that race-free.
+// TTL is set only while declined: the sender cannot start a new DM until it passes, and readers
+// treat a row whose TTL has passed as absent (DynamoDB's own deletion can lag).
+type DMPair struct {
+	Record
+
+	GroupID      string `dynamodbav:"GroupID"`
+	SenderUserID string `dynamodbav:"SenderUserID"`
+	Status       string `dynamodbav:"Status"`
+	DeclinedBy   string `dynamodbav:"DeclinedBy,omitempty"`
+	TTL          int64  `dynamodbav:"TTL,omitempty"`
+}
+
+// DMRequest is the GROUP#<gid> / DMREQ#<recipient uuid> item (#73): the sender's wrap of the group
+// key to the recipient, and the admission the sender signed for them, held until the recipient
+// opens the conversation. It lives in the group's partition, so the sender never writes into the
+// recipient's own partition; GSI1 (USER#<recipient> / DMREQ#<gid>) is how the recipient finds it.
+// No TTL: it ends by accept, decline or the sender withdrawing.
+type DMRequest struct {
+	Record
+
+	GroupID           string     `dynamodbav:"GroupID"`
+	SenderUserID      string     `dynamodbav:"SenderUserID"`
+	RecipientUserID   string     `dynamodbav:"RecipientUserID"`
+	RequestID         string     `dynamodbav:"RequestID"`
+	RecipientEd25519  []byte     `dynamodbav:"RecipientEd25519"`
+	RecipientX25519   []byte     `dynamodbav:"RecipientX25519"`
+	RecipientKeyEpoch uint64     `dynamodbav:"RecipientKeyEpoch"`
+	WrappedGroupKey   WrappedKey `dynamodbav:"WrappedGroupKey"`
+	// Admission is the sender's signed record (Signature, Day, InviterGrantRef, Generation); the
+	// invitee fields repeat the keys above.
+	AdmissionDay      string `dynamodbav:"AdmissionDay"`
+	AdmissionGrantRef string `dynamodbav:"AdmissionGrantRef"`
+	AdmissionSig      []byte `dynamodbav:"AdmissionSig"`
 }
 
 // HasNoRotation reports whether the group has no re-key to run, so a member's

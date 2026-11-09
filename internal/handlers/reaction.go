@@ -95,6 +95,9 @@ func (h *Handler) putReaction(w http.ResponseWriter, r *http.Request) {
 		postNotFound(w)
 		return
 	}
+	if !h.dmWritable(w, r, group) {
+		return
+	}
 	target, ok := reactionTarget(w, r)
 	if !ok {
 		return
