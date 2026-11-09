@@ -44,8 +44,10 @@ type Config struct {
 	// mechanism that works at any group size (see docs/DESIGN.md, "Message
 	// expiration"), so a deployment may choose to forbid it entirely.
 	AllowGroupExpirationOff bool
-	// DefaultExpirationDays is the expiration policy assigned to a group that
-	// does not choose one explicitly.
+	// DefaultExpirationDays is the number of days the web client starts a new
+	// group at (served by GET /api/config). The server does not apply it: a
+	// create request always states its own expirationDays, and an omitted one
+	// decodes to 0, which is "never expire" where that is allowed (#78).
 	DefaultExpirationDays int64
 	// MaxRotatingGroupMembers is the most members a Rotating group may have
 	// (#60). Open groups have no cap. docs/DESIGN.md sizes it against the write
@@ -313,8 +315,13 @@ func postBytesEnvOrDefault(key string, def, ceiling int) int {
 	return int(n)
 }
 
+// MaxExpirationDays bounds a group's expiration policy from above (about ten years). The handlers refuse
+// anything larger, so the default a deployment serves is held to the same bound.
+const MaxExpirationDays = 3650
+
 // expirationDaysEnvOrDefault reads DEFAULT_EXPIRATION_DAYS, falling back to
-// def when unset, unparseable, or non-positive. Zero and negatives are
+// def when unset, unparseable, or non-positive, and clamping to MaxExpirationDays
+// (a default the server would refuse on create is no default). Zero and negatives are
 // rejected rather than passed through: the value becomes a DynamoDB TTL that
 // comments and reactions copy from their parent (DESIGN.md, "Message
 // expiration"), so a non-positive policy expires content on write. "No
@@ -324,6 +331,10 @@ func expirationDaysEnvOrDefault(key string, def int64) int64 {
 	if n <= 0 {
 		log.Printf("warning: %s=%d is not positive, using default %d", key, n, def)
 		return def
+	}
+	if n > MaxExpirationDays {
+		log.Printf("warning: %s=%d exceeds the maximum of %d days, using the maximum", key, n, MaxExpirationDays)
+		return MaxExpirationDays
 	}
 	return n
 }

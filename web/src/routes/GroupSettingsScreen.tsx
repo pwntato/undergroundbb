@@ -16,6 +16,7 @@ import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { GroupSettingsPanel } from './GroupSettingsPanel'
 import { ReauthenticateStep } from './ReauthenticateStep'
+import { useExpiryPolicy } from './useExpiryPolicy'
 import {
   convertGroupToOpen,
   loadGroupSettings,
@@ -63,6 +64,7 @@ export function GroupSettingsScreen() {
   const session = useSession()
   const userId = session.userId
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
+  const policy = useExpiryPolicy()
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -216,6 +218,7 @@ export function GroupSettingsScreen() {
           }}
           onConvert={handleConvert}
           converting={converting}
+          policy={policy}
           convertError={convertError}
           saving={saving}
           message={message}

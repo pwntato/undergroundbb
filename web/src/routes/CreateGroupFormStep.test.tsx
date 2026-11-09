@@ -11,6 +11,8 @@ import { createElement } from 'react'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { buildGroupValues, revocationModeFor } from './groupFormValues'
 
+const ALLOW_NEVER = { known: true, allowNeverExpire: true, defaultDays: 30 } as const
+
 const VALUES: GroupFormValues = {
   visibility: 'public',
   name: 'Book Club',
@@ -27,6 +29,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
+        policy: ALLOW_NEVER,
         initialValues: VALUES,
       }),
     )
@@ -49,6 +52,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
+        policy: ALLOW_NEVER,
         initialValues: { ...VALUES, visibility: 'public', revocationMode: 'rotating' },
       }),
     )
@@ -71,6 +75,7 @@ describe('CreateGroupFormStep initialValues', () => {
       description: 'D',
       revocationMode: 'rotating',
       neverExpires: true,
+      policy: ALLOW_NEVER,
     } as const
     expect(buildGroupValues(f)).toEqual({
       visibility: 'public',
@@ -79,10 +84,66 @@ describe('CreateGroupFormStep initialValues', () => {
       revocationMode: 'open',
       expirationDays: 0,
     })
-    expect(buildGroupValues({ ...f, visibility: 'private', neverExpires: false })).toMatchObject({
+    expect(
+      buildGroupValues({ ...f, visibility: 'private', neverExpires: false, policy: ALLOW_NEVER }),
+    ).toMatchObject({
       revocationMode: 'rotating',
       expirationDays: 30,
     })
+  })
+
+  it('uses the deployment default days, and 0 only where never-expire is allowed', () => {
+    const f = {
+      visibility: 'private',
+      name: 'N',
+      description: '',
+      revocationMode: 'open',
+      neverExpires: true,
+    } as const
+    expect(
+      buildGroupValues({ ...f, policy: { known: true, allowNeverExpire: true, defaultDays: 14 } })
+        .expirationDays,
+    ).toBe(0)
+    expect(
+      buildGroupValues({ ...f, policy: { known: true, allowNeverExpire: false, defaultDays: 14 } })
+        .expirationDays,
+    ).toBe(14)
+    expect(
+      buildGroupValues({
+        ...f,
+        neverExpires: false,
+        policy: { known: true, allowNeverExpire: true, defaultDays: 14 },
+      }).expirationDays,
+    ).toBe(14)
+  })
+
+  it('does not offer never-expire where the deployment forbids it, and says how long messages last', () => {
+    const html = renderToStaticMarkup(
+      createElement(CreateGroupFormStep, {
+        onSubmit: () => {
+          /* not exercised by a static render */
+        },
+        error: null,
+        policy: { known: true, allowNeverExpire: false, defaultDays: 14 },
+      }),
+    )
+    expect(html).not.toContain('type="checkbox"')
+    expect(html).not.toContain('Never expire')
+    expect(html).toContain('Messages expire after 14 days.')
+  })
+
+  it('offers never-expire, naming the default days, where it is allowed', () => {
+    const html = renderToStaticMarkup(
+      createElement(CreateGroupFormStep, {
+        onSubmit: () => {
+          /* not exercised by a static render */
+        },
+        error: null,
+        policy: { known: true, allowNeverExpire: true, defaultDays: 14 },
+      }),
+    )
+    expect(html).toContain('type="checkbox"')
+    expect(html).toContain('Never expire messages (default: 14 days)')
   })
 
   it('leaves Rotating available for a private group', () => {
@@ -92,6 +153,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
+        policy: ALLOW_NEVER,
         initialValues: { ...VALUES, visibility: 'private', revocationMode: 'rotating' },
       }),
     )
@@ -107,6 +169,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
+        policy: ALLOW_NEVER,
       }),
     )
 

@@ -5,6 +5,10 @@
 import { ApiError } from './auth.js'
 
 export interface PublicConfig {
+  /** Whether a group may be set to never expire (#78). */
+  readonly allowGroupExpirationOff: boolean
+  /** The number of days a new group starts with. */
+  readonly defaultExpirationDays: number
   readonly maxPostTitleBytes: number
   readonly maxPostBodyBytes: number
   readonly maxCommentBytes: number

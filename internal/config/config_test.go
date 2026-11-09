@@ -152,6 +152,21 @@ func TestExpirationDaysEnvOrDefault(t *testing.T) {
 	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_NEGATIVE", 30); got != 30 {
 		t.Errorf("negative = %d, want fallback 30", got)
 	}
+
+	// The most a create would accept is served as is; one more is clamped to it, so the default the
+	// client is told to use is never one the server refuses (#78).
+	t.Setenv("UBB_TEST_DAYS_MAX", "3650")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_MAX", 30); got != 3650 {
+		t.Errorf("at the maximum = %d, want 3650", got)
+	}
+	t.Setenv("UBB_TEST_DAYS_OVER", "3651")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_OVER", 30); got != MaxExpirationDays {
+		t.Errorf("over the maximum = %d, want %d", got, MaxExpirationDays)
+	}
+	t.Setenv("UBB_TEST_DAYS_HUGE", "5000000000")
+	if got := expirationDaysEnvOrDefault("UBB_TEST_DAYS_HUGE", 30); got != MaxExpirationDays {
+		t.Errorf("huge = %d, want %d", got, MaxExpirationDays)
+	}
 }
 
 func TestSessionSecretFromEnv(t *testing.T) {

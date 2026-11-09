@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
@@ -99,8 +100,9 @@ type createGroupRequest struct {
 
 	// ExpirationDays is the group's message-expiration policy, or 0 to mean
 	// "never expire" -- see validateExpirationDays for how this is checked
-	// against the deployment's config.AllowGroupExpirationOff and
-	// config.DefaultExpirationDays.
+	// against the deployment's config.AllowGroupExpirationOff. The server does
+	// not apply config.DefaultExpirationDays: the web client sends it, and an
+	// omitted field decodes to 0.
 	ExpirationDays int64 `json:"expirationDays"`
 
 	// GroupKeyWrapped is the Generation 0 group key, ECIES-wrapped
@@ -628,7 +630,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 // days * 86400 seconds from now (PR #142 review): a huge, effectively
 // unbounded int64 here would risk overflowing that arithmetic once #34's
 // sibling issues actually consume ExpirationDays this way.
-const maxExpirationDays = 3650
+const maxExpirationDays = config.MaxExpirationDays
 
 // errExpirationOffNotAllowed and errExpirationDaysInvalid are
 // validateExpirationDays' failure modes.

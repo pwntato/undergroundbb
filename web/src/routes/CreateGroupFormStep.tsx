@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { groupTextLengthError } from './groupTextLimits'
 import { buildGroupValues, revocationModeFor, type GroupFormValues } from './groupFormValues'
+import type { ExpiryPolicy } from './expiryPolicy'
 
 export type { GroupFormValues }
 
@@ -37,10 +38,13 @@ export function CreateGroupFormStep({
   onSubmit,
   error,
   initialValues,
+  policy,
 }: {
   onSubmit: (values: GroupFormValues) => void
   error: string | null
   initialValues?: GroupFormValues
+  /** The deployment's expiration policy (#78): whether "never expire" is offered, and the default days. */
+  policy: ExpiryPolicy
 }) {
   const [visibility, setVisibility] = useState<'private' | 'public'>(
     initialValues?.visibility ?? 'private',
@@ -71,7 +75,9 @@ export function CreateGroupFormStep({
       return
     }
     setValidationError(null)
-    onSubmit(buildGroupValues({ visibility, name, description, revocationMode, neverExpires }))
+    onSubmit(
+      buildGroupValues({ visibility, name, description, revocationMode, neverExpires, policy }),
+    )
   }
 
   const shownError = validationError ?? error
@@ -163,16 +169,22 @@ export function CreateGroupFormStep({
           <p className="text-xs text-muted-foreground">A public group is always Open.</p>
         )}
       </fieldset>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={neverExpires}
-          onChange={(e) => {
-            setNeverExpires(e.target.checked)
-          }}
-        />
-        Never expire messages (default: 30 days)
-      </label>
+      {policy.allowNeverExpire ? (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={neverExpires}
+            onChange={(e) => {
+              setNeverExpires(e.target.checked)
+            }}
+          />
+          {`Never expire messages (default: ${String(policy.defaultDays)} days)`}
+        </label>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {`Messages expire after ${String(policy.defaultDays)} days.`}
+        </p>
+      )}
       <Button type="submit">Create group</Button>
     </form>
   )
