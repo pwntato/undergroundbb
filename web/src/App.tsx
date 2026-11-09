@@ -13,6 +13,7 @@ import { ThreadScreen } from '@/routes/ThreadScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { AppHeader } from '@/routes/AppHeader'
+import { UserProfileScreen } from '@/routes/UserProfileScreen'
 import { InvitesScreen } from '@/routes/InvitesScreen'
 import { DirectoryScreen } from '@/routes/DirectoryScreen'
 import { JoinGroupScreen } from '@/routes/JoinGroupScreen'
@@ -112,6 +113,14 @@ function App() {
               element={
                 <RequireAuth>
                   <DeleteAccountScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/users/:userId"
+              element={
+                <RequireAuth>
+                  <UserProfileScreen />
                 </RequireAuth>
               }
             />

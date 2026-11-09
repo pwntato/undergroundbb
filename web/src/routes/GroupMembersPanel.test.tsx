@@ -5,6 +5,7 @@ import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
 import { vi } from 'vitest'
 import type { MemberVerificationProps } from './MemberVerificationControls'
 import { elementsOf } from './elementTree.testkit'
@@ -47,43 +48,47 @@ function render(
   } = {},
 ): string {
   return renderToStaticMarkup(
-    createElement(GroupMembersPanel, {
-      view: {
-        groupId: 'g1',
-        members: [member(ME, 'admin'), member(BOB, 'member')],
-        myRole: 'admin',
-        myGrantSortKey: 'GRANT#x',
-        revocationMode: 'open',
-        myGeneration: 0,
-        ...view,
-      },
-      userId: ME,
-      busyUserId: extra.busyUserId ?? null,
-      onChangeRole: () => undefined,
-      locked: extra.locked ?? false,
-      confirmRemoveUserId: extra.confirmRemoveUserId ?? null,
-      onStartRemove: () => undefined,
-      onCancelRemove: () => undefined,
-      onConfirmRemove: () => undefined,
-      onStartReadmit: () => undefined,
-      onCancelReadmit: () => undefined,
-      onConfirmReadmit: () => undefined,
-      ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
-      ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
-      usernames: extra.usernames ?? new Map(),
-      ...(extra.verification !== undefined && { verification: extra.verification }),
-      ...(extra.query !== undefined && { query: extra.query }),
-      ...(extra.onQueryChange !== undefined && { onQueryChange: extra.onQueryChange }),
-      ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
-      onStartApprove: () => undefined,
-      onCancelApprove: () => undefined,
-      onConfirmApprove: () => undefined,
-      ...(extra.approvePrompt !== undefined && { approvePrompt: extra.approvePrompt }),
-      onStartAccept: () => undefined,
-      onCancelAccept: () => undefined,
-      onConfirmAccept: () => undefined,
-      ...(extra.acceptPrompt !== undefined && { acceptPrompt: extra.acceptPrompt }),
-    }),
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(GroupMembersPanel, {
+        view: {
+          groupId: 'g1',
+          members: [member(ME, 'admin'), member(BOB, 'member')],
+          myRole: 'admin',
+          myGrantSortKey: 'GRANT#x',
+          revocationMode: 'open',
+          myGeneration: 0,
+          ...view,
+        },
+        userId: ME,
+        busyUserId: extra.busyUserId ?? null,
+        onChangeRole: () => undefined,
+        locked: extra.locked ?? false,
+        confirmRemoveUserId: extra.confirmRemoveUserId ?? null,
+        onStartRemove: () => undefined,
+        onCancelRemove: () => undefined,
+        onConfirmRemove: () => undefined,
+        onStartReadmit: () => undefined,
+        onCancelReadmit: () => undefined,
+        onConfirmReadmit: () => undefined,
+        ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
+        ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
+        usernames: extra.usernames ?? new Map(),
+        ...(extra.verification !== undefined && { verification: extra.verification }),
+        ...(extra.query !== undefined && { query: extra.query }),
+        ...(extra.onQueryChange !== undefined && { onQueryChange: extra.onQueryChange }),
+        ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
+        onStartApprove: () => undefined,
+        onCancelApprove: () => undefined,
+        onConfirmApprove: () => undefined,
+        ...(extra.approvePrompt !== undefined && { approvePrompt: extra.approvePrompt }),
+        onStartAccept: () => undefined,
+        onCancelAccept: () => undefined,
+        onConfirmAccept: () => undefined,
+        ...(extra.acceptPrompt !== undefined && { acceptPrompt: extra.acceptPrompt }),
+      }),
+    ),
   )
 }
 
@@ -156,8 +161,8 @@ describe('GroupMembersPanel', () => {
     expect(memberLabel(BOB, usernames)).toBe('bob_the_member')
     expect(memberLabel(BOB)).toBe('bbbbbbbb')
     // Mono marks only the unresolved fallback.
-    expect(html).toMatch(/font-mono[^>]*>aaaaaaaa</)
-    expect(html).not.toMatch(/font-mono[^>]*>bob_the_member</)
+    expect(html).toMatch(/font-mono[^>]*>(<a[^>]*>)?aaaaaaaa</)
+    expect(html).not.toMatch(/font-mono[^>]*>(<a[^>]*>)?bob_the_member</)
   })
 
   it("offers an admin the roles a member doesn't already have, and none on their own row", () => {
@@ -229,25 +234,29 @@ describe('GroupMembersPanel grant check marks', () => {
   })
   const renderChecked = (check: import('./runGrantCheck').GrantCheck | null | undefined) =>
     renderToStaticMarkup(
-      createElement(GroupMembersPanel, {
-        view: {
-          groupId: 'g1',
-          members: [member(ME, 'admin'), member(BOB, 'member')],
-          myRole: 'admin',
-          myGrantSortKey: 'GRANT#x',
-          revocationMode: 'open',
-          myGeneration: 0,
-        },
-        userId: ME,
-        busyUserId: null,
-        onChangeRole: () => undefined,
-        confirmRemoveUserId: null,
-        onStartRemove: () => undefined,
-        onCancelRemove: () => undefined,
-        onConfirmRemove: () => undefined,
-        usernames: new Map(),
-        check,
-      }),
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(GroupMembersPanel, {
+          view: {
+            groupId: 'g1',
+            members: [member(ME, 'admin'), member(BOB, 'member')],
+            myRole: 'admin',
+            myGrantSortKey: 'GRANT#x',
+            revocationMode: 'open',
+            myGeneration: 0,
+          },
+          userId: ME,
+          busyUserId: null,
+          onChangeRole: () => undefined,
+          confirmRemoveUserId: null,
+          onStartRemove: () => undefined,
+          onCancelRemove: () => undefined,
+          onConfirmRemove: () => undefined,
+          usernames: new Map(),
+          check,
+        }),
+      ),
     )
 
   it('shows no marks and no footnote while the check is loading or unavailable', () => {
@@ -787,5 +796,35 @@ describe('GroupMembersPanel member search (#76)', () => {
     const html = render(view, { usernames, query: 'zed', onQueryChange: () => undefined })
     expect(html).toContain('No member&#x27;s username starts with that.')
     expect(html).not.toContain('>carol<')
+  })
+})
+
+describe('GroupMembersPanel profile links (#75)', () => {
+  it('links a member to their profile page', () => {
+    const html = render(
+      {},
+      {
+        usernames: new Map([
+          [ME, 'me'],
+          [BOB, 'bob'],
+        ]),
+      },
+    )
+    expect(html).toContain(`href="/users/${BOB}"`)
+    expect(html).toContain(`href="/users/${ME}"`)
+  })
+
+  it('does not link a deleted account, which has no profile to show', () => {
+    const html = render(
+      {},
+      {
+        usernames: new Map([
+          [ME, 'me'],
+          [BOB, ''],
+        ]),
+      },
+    )
+    expect(html).toContain('deleted user')
+    expect(html).not.toContain(`href="/users/${BOB}"`)
   })
 })
