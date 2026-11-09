@@ -397,6 +397,33 @@ type postAADVector struct {
 	CiphertextHex string `json:"ciphertext_hex"`
 }
 
+// commentAADVector proves CommentAAD's exact encoding (#44).
+type commentAADVector struct {
+	Name          string `json:"name"`
+	PostID        string `json:"post_id"`
+	Path          string `json:"path"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
+// reactionAADVector proves ReactionAAD's exact encoding (#46).
+type reactionAADVector struct {
+	Name          string `json:"name"`
+	PostID        string `json:"post_id"`
+	Target        string `json:"target"`
+	ReactorID     string `json:"reactor_id"`
+	Generation    uint64 `json:"generation"`
+	AADHex        string `json:"aad_hex"`
+	KeyHex        string `json:"key_hex"`
+	PlaintextHex  string `json:"plaintext_hex"`
+	NonceHex      string `json:"nonce_hex"`
+	CiphertextHex string `json:"ciphertext_hex"`
+}
+
 // inviteCreationVector proves InviteCreationPayload's exact encoding (#38)
 // -- the invite handshake's step-1 signed payload. Note there is no
 // ephemeral_pubkey field: docs/DESIGN.md's now-resolved open question
@@ -484,10 +511,12 @@ type vectorFile struct {
 	MemberWrap           []memberWrapVector           `json:"member_wrap_aad"`
 	GroupName            []groupNameVector            `json:"group_name_aad"`
 	PostAAD              []postAADVector              `json:"post_aad"`
+	CommentAAD           []commentAADVector           `json:"comment_aad"`
+	ReactionAAD          []reactionAADVector          `json:"reaction_aad"`
 	InviteCreation       []inviteCreationVector       `json:"invite_creation"`
 	InviteAcceptance     []inviteAcceptanceVector     `json:"invite_acceptance"`
-	JoinRequest          []joinRequestVector          `json:"join_request"`
 	InviteMAC            []inviteMACVector            `json:"invite_mac"`
+	JoinRequest          []joinRequestVector          `json:"join_request"`
 }
 
 func main() {
@@ -1275,6 +1304,77 @@ func main() {
 				Name:          tc.name,
 				GroupID:       groupID,
 				SortKey:       tc.sortKey,
+				Generation:    tc.generation,
+				AADHex:        hex.EncodeToString(aad),
+				KeyHex:        hex.EncodeToString(key),
+				PlaintextHex:  hex.EncodeToString(plaintext),
+				NonceHex:      hex.EncodeToString(nonce),
+				CiphertextHex: hex.EncodeToString(ciphertext),
+			})
+		}
+	}
+
+	// --- Comment and reaction AAD (#44, #46) ---
+	// These two were first written into vectors.json by hand (#303, #309), so their key and nonce are the
+	// literal sequences those files hold (0x40.. and 0x01..), not fixedSeed output: the generator must
+	// reproduce the committed file, and a changed input here would change every ciphertext below.
+	{
+		postID := "group-uuid-2#2026-10-28#00112233445566ff"
+		key := make([]byte, crypto.KeySize)
+		for i := range key {
+			key[i] = 0x40 + byte(i)
+		}
+		nonce := make([]byte, crypto.NonceSize)
+		for i := range nonce {
+			nonce[i] = 0x01 + byte(i)
+		}
+		for _, tc := range []struct {
+			name       string
+			path       string
+			generation uint64
+		}{
+			{"top_level_generation_0", "0001", 0},
+			{"nested_generation_3", "0003.0001.0002", 3},
+		} {
+			plaintext := []byte("a reply that says hello")
+			aad := crypto.CommentAAD(postID, tc.path, tc.generation)
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.CommentAAD = append(out.CommentAAD, commentAADVector{
+				Name:          tc.name,
+				PostID:        postID,
+				Path:          tc.path,
+				Generation:    tc.generation,
+				AADHex:        hex.EncodeToString(aad),
+				KeyHex:        hex.EncodeToString(key),
+				PlaintextHex:  hex.EncodeToString(plaintext),
+				NonceHex:      hex.EncodeToString(nonce),
+				CiphertextHex: hex.EncodeToString(ciphertext),
+			})
+		}
+		for _, tc := range []struct {
+			name       string
+			target     string
+			reactorID  string
+			generation uint64
+			plaintext  byte
+		}{
+			{"post_level_generation_0", "0000", "user-uuid-1", 0, 0x01},
+			{"nested_comment_generation_3", "0003.0001.0002", "user-uuid-2", 3, 0x07},
+		} {
+			plaintext := []byte{tc.plaintext}
+			aad := crypto.ReactionAAD(postID, tc.target, tc.reactorID, tc.generation)
+			ciphertext, err := crypto.EncryptWithNonce(key, nonce, plaintext, aad)
+			if err != nil {
+				panic(err)
+			}
+			out.ReactionAAD = append(out.ReactionAAD, reactionAADVector{
+				Name:          tc.name,
+				PostID:        postID,
+				Target:        tc.target,
+				ReactorID:     tc.reactorID,
 				Generation:    tc.generation,
 				AADHex:        hex.EncodeToString(aad),
 				KeyHex:        hex.EncodeToString(key),

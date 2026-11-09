@@ -125,7 +125,9 @@ why.
 ## Regenerating
 
 `go run ./internal/crypto/testdata/gen > internal/crypto/testdata/vectors.json`
-computes every non-arbitrary value fresh from this package's own code. This
+is the only way to change this file. `TestVectorsFileIsWhatTheGeneratorWrites` fails if the committed JSON
+differs from the generator's output by a single byte, so a category cannot live only in the JSON (#352).
+The generator computes every non-arbitrary value fresh from this package's own code. This
 is safe to do BEFORE any of these primitives have shipped data — it becomes
 unsafe (a silent lockout) the moment a value here has protected anything
 real. See the permanent-lockout warnings on `deriveWrappingKey` and
