@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
+import { buildGroupValues, revocationModeFor } from './groupFormValues'
 
 const VALUES: GroupFormValues = {
   visibility: 'public',
@@ -39,6 +40,64 @@ describe('CreateGroupFormStep initialValues', () => {
     expect(html).toMatch(/name="revocationMode"\/>Rotating[\s\S]*?checked=""\/>Open/)
     // expirationDays: 0 means "never expire" -- the checkbox should be checked.
     expect(html).toMatch(/type="checkbox" checked=""/)
+  })
+
+  it('offers only Open for a public group, even if the saved choice was Rotating', () => {
+    const html = renderToStaticMarkup(
+      createElement(CreateGroupFormStep, {
+        onSubmit: () => {
+          /* not exercised by a static render */
+        },
+        error: null,
+        initialValues: { ...VALUES, visibility: 'public', revocationMode: 'rotating' },
+      }),
+    )
+    expect(html).toMatch(/disabled="" name="revocationMode"\/>Rotating/)
+    expect(html).toMatch(/name="revocationMode" checked=""\/>Open/)
+    expect(html).toContain('A public group is always Open.')
+  })
+
+  it("submits Open for every public group and keeps a private group's choice", () => {
+    expect(revocationModeFor('public', 'rotating')).toBe('open')
+    expect(revocationModeFor('public', 'open')).toBe('open')
+    expect(revocationModeFor('private', 'rotating')).toBe('rotating')
+    expect(revocationModeFor('private', 'open')).toBe('open')
+  })
+
+  it('hands up Open for a public group whatever Rotating was picked, and the rest unchanged', () => {
+    const f = {
+      visibility: 'public',
+      name: 'N',
+      description: 'D',
+      revocationMode: 'rotating',
+      neverExpires: true,
+    } as const
+    expect(buildGroupValues(f)).toEqual({
+      visibility: 'public',
+      name: 'N',
+      description: 'D',
+      revocationMode: 'open',
+      expirationDays: 0,
+    })
+    expect(buildGroupValues({ ...f, visibility: 'private', neverExpires: false })).toMatchObject({
+      revocationMode: 'rotating',
+      expirationDays: 30,
+    })
+  })
+
+  it('leaves Rotating available for a private group', () => {
+    const html = renderToStaticMarkup(
+      createElement(CreateGroupFormStep, {
+        onSubmit: () => {
+          /* not exercised by a static render */
+        },
+        error: null,
+        initialValues: { ...VALUES, visibility: 'private', revocationMode: 'rotating' },
+      }),
+    )
+    expect(html).toMatch(/name="revocationMode" checked=""\/>Rotating/)
+    expect(html).not.toContain('disabled=""')
+    expect(html).not.toContain('A public group is always Open.')
   })
 
   it('falls back to the original defaults when initialValues is omitted', () => {

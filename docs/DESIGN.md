@@ -1531,8 +1531,9 @@ A group is **private** or **public**, chosen at creation.
 **Private** groups encrypt their name and description under the group key, so they are invisible to
 non-members, and the only way in is an invite.
 
-**Public** groups keep name and description in plaintext so they can be listed in a directory and
-searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
+**Public** groups are always `Open` (`createGroup` refuses the other mode, and the create
+form does not offer it). They keep name and description in plaintext so they can be listed in a
+directory and searched. **That directory is a sparse GSI1 entry written only on public groups**: `PUBLIC#<shard>`
 as the partition, `NAME#<name>#<gid>` as the sort key, so browsing is a `Query` and prefix search is
 a `begins_with` on it.
 
@@ -1609,8 +1610,9 @@ still at the `KeyEpoch` the keys were read at, all in the transaction that write
   they wrapped under, the group existing, the requester not yet a member, and the requester's `KeyEpoch`
   unchanged. The approver's client verifies the requester's signature and checks the keys against its pins
   *before* wrapping; the server's own check of the same signature is not what protects the group.
-- **A Rotating group is held to its member cap (#60).** `createGroup` accepts a public group in either
-  mode, so approval counts members and writes under the same `JoinSeq` guard an invite's completion uses
+- **A Rotating group is held to its member cap (#60).** `createGroup` refuses a public group that is not
+  `Open` (400, #351), so no new public group can be Rotating. Approval still counts members and writes under
+  the same `JoinSeq` guard an invite's completion uses, as defence in depth for a row written before that rule
   (one shared implementation, so the two ways into a group cannot disagree). A full group answers 409
   `group_full` and the request stays pending, since a departure may free a slot; an Open group has no cap.
 - **A changed key pair clears the request.** If the requester's current keys differ from the ones in the

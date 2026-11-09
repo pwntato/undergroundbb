@@ -188,6 +188,12 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "revocationMode: must be \"rotating\" or \"open\"")
 		return
 	}
+	// A public group is always Open (DESIGN.md): there is no re-key to run for a group that anyone can
+	// ask to join, and the self-wrap and the handoff already treat every public group as Open.
+	if req.Visibility == models.VisibilityPublic && req.RevocationMode != models.RevocationOpen {
+		WriteError(w, http.StatusBadRequest, "revocationMode: a public group must be \"open\"")
+		return
+	}
 
 	expirationDays, err := validateExpirationDays(req.ExpirationDays, h.cfg.AllowGroupExpirationOff)
 	if err != nil {
