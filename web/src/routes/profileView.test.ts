@@ -22,6 +22,8 @@ describe('formatMemberSince', () => {
     expect(formatMemberSince('')).toBeNull()
     expect(formatMemberSince('2026-13-01')).toBeNull()
     expect(formatMemberSince('2026-02-30')).toBeNull()
+    expect(formatMemberSince('2026-04-31')).toBeNull()
+    expect(formatMemberSince('2026-05-00')).toBeNull()
     expect(formatMemberSince('not a day')).toBeNull()
   })
 })

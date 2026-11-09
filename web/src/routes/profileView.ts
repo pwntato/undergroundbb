@@ -21,7 +21,11 @@ const MONTHS = [
   'December',
 ] as const
 
-/** "2026-11-08" as "8 November 2026"; null for anything that is not a real day. */
+/**
+ * "2026-11-08" as "8 November 2026"; null for anything that is not a real day.
+ * A day past the end of its month (Feb 30, day 00) rolls over into another
+ * month in `Date.UTC`, so comparing the month and year catches it.
+ */
 export function formatMemberSince(day: string | undefined): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day ?? '')
   if (m === null) return null
@@ -31,8 +35,7 @@ export function formatMemberSince(day: string | undefined): string | null {
   if (
     month === undefined ||
     date.getUTCFullYear() !== Number(y) ||
-    date.getUTCMonth() !== Number(mo) - 1 ||
-    date.getUTCDate() !== Number(d)
+    date.getUTCMonth() !== Number(mo) - 1
   ) {
     return null
   }

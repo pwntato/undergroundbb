@@ -97,6 +97,11 @@ describe('UserProfilePanel', () => {
     expect(html).toContain('12 / 280')
   })
 
+  it("never shows the editor on someone else's page, even if given edit props", () => {
+    const html = render({ view: view(), isSelf: false, verification: null, bioEdit: edit() })
+    expect(html).not.toContain('profile-bio')
+  })
+
   it('disables Save while saving or over the cap, and shows an error and a message', () => {
     const saveDisabled = (bioEdit: BioEditProps) => {
       const el = UserProfilePanel({ view: view(), isSelf: true, verification: null, bioEdit })
