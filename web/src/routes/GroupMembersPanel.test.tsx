@@ -5,6 +5,8 @@ import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { vi } from 'vitest'
+import { elementsOf } from './elementTree.testkit'
 import type { MemberEntry } from '@/lib/api/groups'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
 import type { Dormancy, DormantMember } from './dormancy'
@@ -697,6 +699,64 @@ describe('GroupMembersPanel member search (#76)', () => {
     expect(html).toContain('carol')
     expect(html).not.toContain('>bob<')
     expect(html).not.toContain('>me<')
+  })
+
+  it('says names are loading, not "no match", while a username is unresolved', () => {
+    const html = render(view, {
+      usernames: new Map([[ME, 'me']]),
+      query: 'zed',
+      onQueryChange: () => undefined,
+    })
+    expect(html).toContain('No match yet. Some names are still loading.')
+  })
+
+  it('keeps a row with an open remove prompt even when it does not match', () => {
+    const html = render(view, {
+      usernames,
+      query: 'ca',
+      confirmRemoveUserId: BOB,
+      onQueryChange: () => undefined,
+    })
+    expect(html).toContain('>bob<')
+    expect(html).toContain('>carol<')
+    expect(html).not.toContain('>me<')
+  })
+
+  it('keeps the row of a running action and of open prompts', () => {
+    const pinned = (extra: Record<string, unknown>) =>
+      render(view, { usernames, query: 'ca', onQueryChange: () => undefined, ...extra })
+    expect(pinned({ busyUserId: BOB })).toContain('>bob<')
+    expect(pinned({ readmitPrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
+    expect(pinned({ approvePrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
+    expect(pinned({})).not.toContain('>bob<')
+  })
+
+  it('passes what is typed in the box to onQueryChange', () => {
+    const onQueryChange = vi.fn()
+    const el = GroupMembersPanel({
+      view: {
+        groupId: 'g1',
+        members: view.members,
+        myRole: 'admin',
+        myGrantSortKey: 'GRANT#x',
+        revocationMode: 'open',
+        myGeneration: 0,
+      },
+      userId: ME,
+      busyUserId: null,
+      onChangeRole: () => undefined,
+      confirmRemoveUserId: null,
+      onStartRemove: () => undefined,
+      onCancelRemove: () => undefined,
+      onConfirmRemove: () => undefined,
+      usernames,
+      query: '',
+      onQueryChange,
+    })
+    const input = elementsOf(el).find((n) => n.props['aria-label'] === 'Search members by username')
+    const onChange = input?.props['onChange'] as (e: { target: { value: string } }) => void
+    onChange({ target: { value: 'ca' } })
+    expect(onQueryChange).toHaveBeenCalledExactlyOnceWith('ca')
   })
 
   it('says so when nothing matches', () => {

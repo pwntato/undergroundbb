@@ -132,7 +132,20 @@ export function GroupMembersPanel({
   const dormantEntry = new Map(
     dormancy?.state === 'ready' ? dormancy.dormant.map((d) => [d.userId, d.entry] as const) : [],
   )
-  const matching = filterMembersByQuery(view.members, usernames, query)
+  // A row with something open on it (a confirm prompt, a running action) stays
+  // listed whatever the search says, so typing never hides it mid-action.
+  const openIds = new Set(
+    [
+      confirmRemoveUserId,
+      busyUserId,
+      readmitPrompt?.userId,
+      approvePrompt?.userId,
+      acceptPrompt?.userId,
+      verification?.prompt?.userId,
+    ].filter((id): id is string => id != null),
+  )
+  const matching = filterMembersByQuery(view.members, usernames, query, openIds)
+  const namesLoading = view.members.some((m) => !usernames.has(m.userId))
   const rows = [
     ...matching.filter((m) => dormantIds.has(m.userId)),
     ...matching.filter((m) => !dormantIds.has(m.userId)),
@@ -197,7 +210,11 @@ export function GroupMembersPanel({
         />
       )}
       {rows.length === 0 && query.trim() !== '' && (
-        <p className="text-sm text-muted-foreground">No member&apos;s username starts with that.</p>
+        <p className="text-sm text-muted-foreground">
+          {namesLoading
+            ? 'No match yet. Some names are still loading.'
+            : "No member's username starts with that."}
+        </p>
       )}
       <ul className="flex flex-col gap-2">
         {rows.map((m) => {

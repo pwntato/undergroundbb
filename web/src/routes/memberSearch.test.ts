@@ -21,8 +21,19 @@ describe('filterMembersByQuery', () => {
   it('does not match in the middle of a name', () => {
     expect(filterMembersByQuery(members, usernames, 'ice')).toEqual([])
   })
-  it('never matches a deleted or unresolved member once a query is typed', () => {
-    expect(filterMembersByQuery([...members, { userId: 'e' }], usernames, 'e')).toEqual([])
-    expect(filterMembersByQuery(members, usernames, 'd')).toEqual([])
+  it('matches what the row shows for a deleted or unresolved member', () => {
+    const withUnresolved = [...members, { userId: 'e1234567-0000-4000-8000-000000000000' }]
+    expect(filterMembersByQuery(withUnresolved, usernames, 'deleted').map((m) => m.userId)).toEqual(
+      ['d'],
+    )
+    expect(filterMembersByQuery(withUnresolved, usernames, 'E1234').map((m) => m.userId)).toEqual([
+      'e1234567-0000-4000-8000-000000000000',
+    ])
+  })
+  it('keeps members with something open on their row, whatever they match', () => {
+    expect(
+      filterMembersByQuery(members, usernames, 'bo', new Set(['a'])).map((m) => m.userId),
+    ).toEqual(['a', 'c'])
+    expect(filterMembersByQuery(members, usernames, '', new Set(['a']))).toEqual(members)
   })
 })
