@@ -17,11 +17,12 @@ import { Label } from '@/components/ui/label'
 import {
   CONVERT_OPEN_WARNING,
   convertConfirmed,
-  FALLBACK_EXPIRATION_DAYS,
   MAX_EXPIRATION_DAYS,
   revocationText,
   validateSettingsForm,
 } from './groupSettingsForm'
+import type { ExpiryPolicy } from './expiryPolicy'
+import { settingsFormOf, startingDays } from './settingsFormValues'
 import type { SettingsForm, SettingsView } from './runGroupSettings'
 
 function nameNotice(status: SettingsView['nameStatus']): string | null {
@@ -45,7 +46,10 @@ export function GroupSettingsPanel({
   saving,
   message,
   error,
+  policy,
 }: {
+  /** The deployment's expiration policy (#78): "never expire" is offered only where it is allowed. */
+  readonly policy: ExpiryPolicy
   readonly view: SettingsView
   readonly onSave: (form: SettingsForm) => void
   /** Asks for the password so the worker's keys are warm again (the cold-keys notice's way out). */
@@ -65,22 +69,17 @@ export function GroupSettingsPanel({
   const [name, setName] = useState(view.name ?? '')
   const [description, setDescription] = useState(view.description ?? '')
   const [neverExpires, setNeverExpires] = useState(detail.expirationDays === 0)
-  const [days, setDays] = useState(
-    String(detail.expirationDays === 0 ? FALLBACK_EXPIRATION_DAYS : detail.expirationDays),
-  )
+  // What the admin typed, or null until they type: the field then shows the group's own number of days,
+  // or the deployment's default for a never-expire group (the policy may arrive after this mounts).
+  const [typedDays, setDays] = useState<string | null>(null)
+  const days = typedDays ?? startingDays(detail.expirationDays, policy)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [confirmingConvert, setConfirmingConvert] = useState(false)
   const [typedName, setTypedName] = useState('')
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    const form: SettingsForm = {
-      name,
-      description,
-      // 0 means "never expire" and comes only from the checkbox: an empty
-      // or zero days field must fail validation, not silently disable expiry.
-      expirationDays: neverExpires ? 0 : Number(days) >= 1 ? Number(days) : Number.NaN,
-    }
+    const form = settingsFormOf({ name, description, neverExpires, days, policy })
     const problem = validateSettingsForm(form)
     if (problem !== null) {
       setValidationError(problem)
@@ -261,21 +260,30 @@ export function GroupSettingsPanel({
               min={1}
               max={MAX_EXPIRATION_DAYS}
               value={days}
-              disabled={neverExpires}
+              disabled={neverExpires && policy.allowNeverExpire}
               onChange={(e) => {
                 setDays(e.target.value)
               }}
             />
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={neverExpires}
-                onChange={(e) => {
-                  setNeverExpires(e.target.checked)
-                }}
-              />
-              Never expire messages
-            </label>
+            {policy.allowNeverExpire ? (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={neverExpires}
+                  onChange={(e) => {
+                    setNeverExpires(e.target.checked)
+                  }}
+                />
+                Never expire messages
+              </label>
+            ) : (
+              detail.expirationDays === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  This deployment no longer allows messages that never expire. Choose a number of
+                  days to save.
+                </p>
+              )
+            )}
           </div>
           <Button type="submit" disabled={saving}>
             {saving ? 'Saving…' : 'Save changes'}

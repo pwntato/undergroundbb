@@ -12,6 +12,7 @@ import {
   revocationText,
   validateSettingsForm,
 } from './groupSettingsForm'
+import type { ExpiryPolicy } from './expiryPolicy'
 import type { SettingsView } from './runGroupSettings'
 
 function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
@@ -32,7 +33,9 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
   }
 }
 
-function render(view: SettingsView): string {
+const ALLOW_NEVER = { allowNeverExpire: true, defaultDays: 30 } as const
+
+function render(view: SettingsView, policy = ALLOW_NEVER as ExpiryPolicy): string {
   return renderToStaticMarkup(
     createElement(GroupSettingsPanel, {
       view,
@@ -44,6 +47,7 @@ function render(view: SettingsView): string {
       saving: false,
       message: null,
       error: null,
+      policy,
     }),
   )
 }
@@ -201,5 +205,27 @@ describe('converting to Open (#61)', () => {
     expect(convertConfirmed('', 'Book Club')).toBe(false)
     expect(convertConfirmed('', '')).toBe(false)
     expect(convertConfirmed('anything', null)).toBe(false)
+  })
+
+  it('offers the never-expire box to an admin where the deployment allows it', () => {
+    const html = render(publicView(detail({ role: 'admin' })))
+    expect(html).toContain('Never expire messages')
+    expect(html).not.toContain('no longer allows')
+  })
+
+  it('hides the box where it is forbidden, and tells an admin of a never-expire group to pick days', () => {
+    const forbid: ExpiryPolicy = { allowNeverExpire: false, defaultDays: 30 }
+    const html = render(publicView(detail({ role: 'admin', expirationDays: 0 })), forbid)
+    expect(html).not.toContain('Never expire messages')
+    expect(html).toContain('no longer allows messages that never expire')
+    // The days field is usable, not greyed out behind a box nobody can untick.
+    expect(html).not.toMatch(/id="settings-days"[^>]*disabled/)
+  })
+
+  it('says nothing about it for a group that already expires, where it is forbidden', () => {
+    const forbid: ExpiryPolicy = { allowNeverExpire: false, defaultDays: 30 }
+    const html = render(publicView(detail({ role: 'admin', expirationDays: 30 })), forbid)
+    expect(html).not.toContain('Never expire messages')
+    expect(html).not.toContain('no longer allows')
   })
 })

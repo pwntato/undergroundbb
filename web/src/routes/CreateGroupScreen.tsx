@@ -30,6 +30,7 @@ import { useSession } from '@/lib/session/useSession'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { useLiveKeys } from './useLiveKeys'
+import { useExpiryPolicy } from './useExpiryPolicy'
 import {
   AUTH_REQUIRED_ERROR,
   createGroupErrorText,
@@ -65,6 +66,7 @@ interface PendingAttempt {
 }
 
 export function CreateGroupScreen() {
+  const policy = useExpiryPolicy()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingAttempt | undefined>(undefined)
@@ -191,6 +193,7 @@ export function CreateGroupScreen() {
 
   return (
     <CreateGroupFormStep
+      policy={policy}
       onSubmit={handleSubmit}
       error={submitting ? null : error}
       {...(pending !== undefined && { initialValues: pending.values })}

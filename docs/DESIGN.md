@@ -2470,6 +2470,22 @@ future posts and costs `O(members)`, while expiration limits past exposure at `O
 mechanism switched off permanently, and the consequences below and in the threat model apply to it
 in full.
 
+**Expired items are filtered on read by the server, not the client (#78).** DynamoDB deletes an expired
+item up to about two days late, so every read path checks the post's TTL itself: the post list skips an
+expired post, and the post, its thread, comments, reactions, edits, deletes and notifications answer as if
+it were already gone (404, or the row dropped). The wire carries no expiry time, so there is nothing for a
+client to filter on; it never receives an expired item. A write that adds or changes text (a comment,
+a reaction, an edit) checks again inside its own write, so a post that expires between the read and the
+write is refused rather than revived.
+
+**Whether "never expire" is offered is deployment configuration** (`ALLOW_GROUP_EXPIRATION_OFF`, served as
+`allowGroupExpirationOff` by `GET /api/config`, along with `defaultExpirationDays`). The server refuses
+`expirationDays: 0` on create and on every settings save when it is off, including a save by an admin of a
+group that was created never-expire while it was allowed. The web client reads the same two settings: it
+shows no "never expire" box where it is off (an admin of such a group is told to pick a number of days),
+and starts a new group at the deployment's default number of days. Until the config arrives, or if it
+cannot be read, it offers no permanent archive and 30 days.
+
 It also lets the generation chain be truncated, but **only from the old end, and only contiguously**.
 Because generation *n* is reachable solely by unwrapping generation *n+1*, every generation is a
 load-bearing link regardless of whether any of its own posts survive: dropping an empty generation

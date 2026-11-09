@@ -6,7 +6,6 @@ import { groupTextLengthError } from './groupTextLimits'
 import type { SettingsForm } from './runGroupSettings'
 
 export const MAX_EXPIRATION_DAYS = 3650
-export const FALLBACK_EXPIRATION_DAYS = 30
 
 /**
  * What removing a member does in each mode. `memberCap` is the deployment's limit for this
