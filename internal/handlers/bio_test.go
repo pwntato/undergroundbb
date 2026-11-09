@@ -83,6 +83,27 @@ func TestPutBioRefusesBadText(t *testing.T) {
 	}
 }
 
+// A tab is easy to paste and renders fine, so it is allowed with newline.
+func TestPutBioAllowsTabsAndTrimsABOMLikeTheBrowser(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	if code := putBioReq(t, h, cookie, "col1\tcol2"); code != http.StatusOK {
+		t.Fatalf("tab = %d, want 200", code)
+	}
+	if got := readProjection(t, h, cookie, user.userID); got.Bio != "col1\tcol2" {
+		t.Errorf("bio = %q, want the tab kept", got.Bio)
+	}
+	// JS trim() strips U+FEFF, so the web counts this as 280 characters; the
+	// server must agree rather than count 281 and refuse it.
+	bom := "\uFEFF" + strings.Repeat("a", MaxBioRunes)
+	if code := putBioReq(t, h, cookie, bom); code != http.StatusOK {
+		t.Fatalf("BOM + %d characters = %d, want 200", MaxBioRunes, code)
+	}
+	if got := readProjection(t, h, cookie, user.userID); got.Bio != strings.Repeat("a", MaxBioRunes) {
+		t.Errorf("stored bio still has the BOM or lost characters: %d bytes", len(got.Bio))
+	}
+}
+
 func TestDeletedAccountLosesBioAndCannotWriteOne(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	user, cookie := loggedInUser(t, h)

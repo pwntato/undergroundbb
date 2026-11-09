@@ -3,7 +3,7 @@
 // server serves to any signed-in user, plus the fingerprint computed locally
 // from the served keys (never taken from the server).
 
-import { MAX_BIO_CHARS, type UserProjection } from '@/lib/api/users'
+import { MAX_BIO_BYTES, MAX_BIO_CHARS, type UserProjection } from '@/lib/api/users'
 import { servedFingerprint } from './runMemberVerification'
 
 const MONTHS = [
@@ -71,7 +71,15 @@ export function bioLength(text: string): number {
   return Array.from(text.trim()).length
 }
 
-/** Whether a bio draft can be saved: within the cap. An empty draft is allowed, it clears the bio. */
+/** UTF-8 bytes in the trimmed `text`, which is what the server's byte cap counts. */
+export function bioBytes(text: string): number {
+  return new TextEncoder().encode(text.trim()).length
+}
+
+/**
+ * Whether a bio draft can be saved: within both caps the server enforces, the
+ * character cap and the byte cap. An empty draft is allowed, it clears the bio.
+ */
 export function bioFits(text: string): boolean {
-  return bioLength(text) <= MAX_BIO_CHARS
+  return bioLength(text) <= MAX_BIO_CHARS && bioBytes(text) <= MAX_BIO_BYTES
 }

@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { MAX_BIO_CHARS } from '@/lib/api/users'
 import { FingerprintBlock } from './FingerprintBlock'
 import { MemberVerificationBadge } from './MemberVerificationControls'
-import { bioLength, type ProfileView } from './profileView'
+import { bioFits, bioLength, type ProfileView } from './profileView'
 import type { MemberVerifications } from './runMemberVerification'
 
 export interface BioEditProps {
@@ -83,7 +83,7 @@ export function UserProfilePanel({
             <Button
               type="button"
               size="sm"
-              disabled={bioEdit.saving || bioLength(bioEdit.draft) > MAX_BIO_CHARS}
+              disabled={bioEdit.saving || !bioFits(bioEdit.draft)}
               onClick={bioEdit.onSave}
             >
               {bioEdit.saving ? 'Saving…' : 'Save'}

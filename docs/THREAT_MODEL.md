@@ -56,8 +56,12 @@ the group creator. A server cannot fabricate a role.
 under a key only that user holds, so they do not become another identifying signal in a database
 dump. These are self-directed settings only — there is no display name, and users are named
 everywhere by their plaintext username. The rest of that item — username, public keys, salt, wrapped
-private keys — is necessarily readable, and the email is encrypted under a server key rather than a
-user one. Only the preferences blob is beyond the operator's reach.
+private keys, the optional **bio** (#75) and the registration **day** — is necessarily readable, and
+the email is encrypted under a server key rather than a user one. Only the preferences blob is beyond
+the operator's reach. The bio is free text the user chose to write, stored in plaintext and served to
+every signed-in user, including people who share no group with them, so it is identifying text in a
+dump and on the site; the profile editor says so. The registration day is day resolution, the same
+granularity as the timing the database-dump row already covers, so it adds no new class of leak.
 
 ## What is not protected
 

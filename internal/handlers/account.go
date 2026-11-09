@@ -65,15 +65,23 @@ type putBioRequest struct {
 	Bio string `json:"bio"`
 }
 
+// trimBio trims the ends of a bio the way the browser's String.trim does, so
+// the length the web counts is the length the server checks: Unicode spaces
+// plus U+FEFF (a byte-order mark, which pasted text sometimes starts with and
+// which Go's TrimSpace leaves alone).
+func trimBio(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' })
+}
+
 // validBio reports whether s is acceptable bio text: valid UTF-8, within both
-// caps, and free of control characters other than newline. s is already
-// trimmed by the caller.
+// caps, and free of control characters other than newline and tab. s is
+// already trimmed by the caller (trimBio).
 func validBio(s string) bool {
 	if !utf8.ValidString(s) || len(s) > MaxBioBytes || utf8.RuneCountInString(s) > MaxBioRunes {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) && r != '\n' {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
 			return false
 		}
 	}
@@ -97,9 +105,9 @@ func (h *Handler) putBio(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
-	bio := strings.TrimSpace(req.Bio)
+	bio := trimBio(req.Bio)
 	if !validBio(bio) {
-		WriteError(w, http.StatusBadRequest, "bio: at most "+strconv.Itoa(MaxBioRunes)+" characters, no control characters")
+		WriteError(w, http.StatusBadRequest, "bio: at most "+strconv.Itoa(MaxBioRunes)+" characters and "+strconv.Itoa(MaxBioBytes)+" bytes, no control characters other than newline and tab")
 		return
 	}
 	switch err := h.db.SetBio(r.Context(), userID, bio); {

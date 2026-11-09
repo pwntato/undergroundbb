@@ -14,8 +14,9 @@ export type SaveBioResult =
     }
 
 export const SAVE_BIO_ERRORS: Record<Exclude<SaveBioResult, { ok: true }>['kind'], string> = {
-  tooLong: `A bio is at most ${String(MAX_BIO_CHARS)} characters.`,
-  rejected: "That text can't be saved. Remove any unusual control characters.",
+  tooLong: `A bio is at most ${String(MAX_BIO_CHARS)} characters (fewer if you use a lot of emoji).`,
+  rejected:
+    "That text can't be saved. Remove any unusual control characters; newlines and tabs are fine.",
   authRequired: 'Your session has expired. Log in again and retry.',
   notFound: 'This account no longer exists.',
   failed: "Couldn't save your bio. Try again.",

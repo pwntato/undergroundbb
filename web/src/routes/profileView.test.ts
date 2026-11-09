@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UserProjection } from '@/lib/api/users'
-import { bioFits, bioLength, formatMemberSince, profileView } from './profileView'
+import { bioBytes, bioFits, bioLength, formatMemberSince, profileView } from './profileView'
 
 const user = (over: Partial<UserProjection> = {}): UserProjection => ({
   userId: 'u1',
@@ -59,7 +59,13 @@ describe('bio length', () => {
   it('fits at the cap and not above it', () => {
     expect(bioFits('a'.repeat(280))).toBe(true)
     expect(bioFits('a'.repeat(281))).toBe(false)
-    expect(bioFits('😀'.repeat(280))).toBe(true)
+    expect(bioFits('é'.repeat(280))).toBe(true)
     expect(bioFits('')).toBe(true)
+  })
+  it('also holds the bio to the 1,024-byte cap the server enforces', () => {
+    expect(bioFits('😀'.repeat(256))).toBe(true)
+    expect(bioFits('😀'.repeat(257))).toBe(false)
+    expect(bioFits('😀'.repeat(280))).toBe(false)
+    expect(bioBytes(' é ')).toBe(2)
   })
 })

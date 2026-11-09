@@ -112,6 +112,8 @@ describe('UserProfilePanel', () => {
     expect(saveDisabled(edit({ saving: true }))).toBe(true)
     expect(saveDisabled(edit({ draft: 'a'.repeat(281) }))).toBe(true)
     expect(saveDisabled(edit({ draft: 'a'.repeat(280) }))).toBe(false)
+    // 280 emoji is within the character cap but 1,120 bytes, which the server refuses.
+    expect(saveDisabled(edit({ draft: '😀'.repeat(280) }))).toBe(true)
 
     expect(
       render({ view: view(), isSelf: true, verification: null, bioEdit: edit({ saving: true }) }),

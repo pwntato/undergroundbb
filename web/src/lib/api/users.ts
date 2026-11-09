@@ -121,6 +121,8 @@ export async function getUsers(
 
 /** The longest bio, in characters; the server enforces it too (handlers.MaxBioRunes). */
 export const MAX_BIO_CHARS = 280
+/** The longest bio in UTF-8 bytes (handlers.MaxBioBytes): 280 emoji would be 1,120 bytes and is refused. */
+export const MAX_BIO_BYTES = 1024
 
 /** PUT /api/account/bio (#75). An empty or blank bio clears it; returns the bio as stored (trimmed). */
 export async function putBio(bio: string): Promise<string> {
