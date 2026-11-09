@@ -1717,7 +1717,7 @@ the sender's membership and root grant, and four DM-only rows:
 - **The pending slot**, `GROUP#<gid>` / `DMREQ#<recipient uuid>`, holds the wrap, the recipient's keys as the
   server supplied them, their key epoch and the sender's admission (day, grant ref, signature). It lives in
   the **group's** partition, so the sender never writes into the recipient's own; GSI1
-  (`USER#<recipient>` / `DMREQ#<gid>`) is how the recipient finds it, with `GET /api/dms/incoming`. It has no TTL: it ends by accept, decline or the sender withdrawing.
+  (`USER#<recipient>` / `DMREQ#<gid>`) is how the recipient finds it, with `GET /api/dms/incoming` (the first 100 by group id, with no cursor: the per-sender cap bounds how many one account can leave, not how many accounts can each leave one, so a recipient with more than 100 waiting senders sees the rest after declining some). It has no TTL: it ends by accept, decline or the sender withdrawing.
 - **The pair marker**, `DMPAIR#<lower uuid>#<higher uuid>` / `PAIR`, one per unordered pair of users, with a
   conditional put: it is what makes "one DM per pair" hold when both people start one at the same moment. A second
   attempt, in either direction, is refused `409 dm_exists` with the existing group's id. The group's `META` records the marker's key (`DMPairPK`), so a leave can find it
@@ -1739,7 +1739,7 @@ their messages, the slot) and turns the pair marker into `declined` with a **7-d
 deletes the group, the marker and the pointer (a pending DM's sender leaving is the withdrawal). The first
 person out of an active DM frees the pair marker, so either can start a new conversation, and leaves the other
 a **read-only** one: posts, comments and reactions to a DM with fewer than two members answer `409 dm_read_only`
-(the sender may still write while the recipient's slot is pending). Editing and deleting what you already wrote still work. Deleting an account still requires leaving every group first; it also clears the incoming slots addressed to that account.
+(the sender may still write while the recipient's slot is pending). Editing and deleting what you already wrote still work. A DM also takes **no invites**: `createInvite` answers 400 for one, and the join check in `CompleteInvite` and join-request approval refuses any group with a `GroupType`, so a third person cannot be added by any route. When both people leave at the same instant, each leave carries a condition that the other's row still exists; the loser is told `409 conflict_retry`, retries, finds one member and deletes the group, so a memberless group that nobody can delete never results. Deleting an account still requires leaving every group first; it also clears the incoming slots addressed to that account.
 
 **What a dump shows that it did not before.** While a DM is pending, the slot's GSI1 entry says "this sender
 sent this recipient a DM", written by the sender with no action by the recipient. That is the edge the
