@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api/auth'
-import { saveBio } from './runSaveBio'
+import { SAVE_BIO_ERRORS, saveBio } from './runSaveBio'
 
 describe('saveBio', () => {
   it('sends the draft and returns what the server stored', async () => {
@@ -23,5 +23,15 @@ describe('saveBio', () => {
       ok: false,
       kind: 'failed',
     })
+  })
+
+  it('says emoji count against the limit, and that tabs and newlines are fine', () => {
+    expect(SAVE_BIO_ERRORS.tooLong).toContain('emoji')
+    expect(SAVE_BIO_ERRORS.rejected).toContain('tabs')
+  })
+  it('refuses 280 emoji, which fit the character cap but not the byte cap', async () => {
+    const putBio = vi.fn()
+    expect(await saveBio({ putBio }, '😀'.repeat(280))).toEqual({ ok: false, kind: 'tooLong' })
+    expect(putBio).not.toHaveBeenCalled()
   })
 })
