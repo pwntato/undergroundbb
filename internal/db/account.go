@@ -189,7 +189,7 @@ func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
 				TableName:              aws.String(c.table),
 				IndexName:              aws.String("GSI1"),
 				KeyConditionExpression: aws.String("GSI1PK = :pk AND begins_with(GSI1SK, :sk)"),
-				ProjectionExpression:   aws.String("PK, SK"),
+				ProjectionExpression:   aws.String("PK, SK, SenderUserID, GroupID"),
 				ExpressionAttributeValues: map[string]types.AttributeValue{
 					":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
 					":sk": &types.AttributeValueMemberS{Value: prefix},
@@ -201,6 +201,15 @@ func (c *Client) sweepUserRows(ctx context.Context, userID string) error {
 			}
 			for _, it := range out.Items {
 				keys = append(keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+				// A DM slot also names the sender's pending pointer, which would otherwise keep
+				// counting against their cap until they left the dead conversation.
+				if prefix == dmRequestPrefix {
+					sender, _ := it["SenderUserID"].(*types.AttributeValueMemberS)
+					gid, _ := it["GroupID"].(*types.AttributeValueMemberS)
+					if sender != nil && gid != nil {
+						keys = append(keys, dmOutKey(sender.Value, gid.Value))
+					}
+				}
 			}
 			if out.LastEvaluatedKey == nil {
 				break

@@ -573,6 +573,9 @@ func TestDeletingTheRecipientsAccountClearsTheirIncomingDMs(t *testing.T) {
 	if rawItemExists(t, "GROUP#"+req.GroupID, "DMREQ#"+f.recipient.userID) {
 		t.Error("the slot to a deleted account survived")
 	}
+	if rawItemExists(t, "USER#"+f.sender.userID, "DMOUT#"+req.GroupID) {
+		t.Error("the sender's pending pointer survived (it would count against their cap)")
+	}
 	// The sender's one-member conversation can still be withdrawn.
 	if rec := doJSON(t, f.h, http.MethodPost, "/api/groups/"+req.GroupID+"/leave", f.senderCookie, nil); rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
 		t.Errorf("sender leave: %d %s", rec.Code, rec.Body.String())
@@ -718,5 +721,112 @@ func TestRecipientLeavingRemovesTheirAdmissionRecord(t *testing.T) {
 	}
 	if rec := f.post(t, f.senderCookie, req.GroupID, f.sender); rec.Code != http.StatusConflict {
 		t.Errorf("the sender writing to a DM the recipient left: %d", rec.Code)
+	}
+}
+
+// A DM is exactly two people: nobody can invite a third, by creating an invite or by completing
+// one that already existed.
+func TestNoInvitesIntoADM(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	if rec := f.accept(t, req); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	t.Run("the sender cannot create an invite", func(t *testing.T) {
+		inv := signedCreateInviteRequest(t, f.sender, req.GroupID, time.Now().Add(24*time.Hour))
+		rec := doJSON(t, f.h, http.MethodPost, "/api/groups/"+req.GroupID+"/invites", f.senderCookie, inv)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status %d %s", rec.Code, rec.Body.String())
+		}
+		if rawItemExists(t, "INVITE#"+inv.InviteID, "META") {
+			t.Error("a refused invite was stored")
+		}
+	})
+
+	t.Run("an invite that already existed cannot complete into a DM", func(t *testing.T) {
+		// An ordinary group with an accepted invite, then its META is turned into a DM's: the only
+		// way to reach CompleteInvite with a DM, since createInvite no longer allows one.
+		creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, f.h)
+		if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+			TableName:        aws.String(testTableName()),
+			Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID}, "SK": &types.AttributeValueMemberS{Value: "META"}},
+			UpdateExpression: aws.String("SET GroupType = :dm"), ExpressionAttributeValues: map[string]types.AttributeValue{":dm": &types.AttributeValueMemberS{Value: "dm"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		adm := signedAdmission(t, f.h, creator, groupID, inviteID, invitee)
+		rec := doJSON(t, f.h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+		if rec.Code == http.StatusOK {
+			t.Errorf("completing into a DM succeeded: %s", rec.Body.String())
+		}
+		if m, _ := f.h.db.GetMembership(t.Context(), groupID, invitee.userID); m != nil {
+			t.Error("a third member was written into a DM")
+		}
+	})
+}
+
+// Both people leaving at the same moment must end with the group deleted, never with a group that
+// has no members and so can never be deleted.
+func TestBothLeavingAtOnceDeletesTheDM(t *testing.T) {
+	for i := 0; i < 15; i++ {
+		other := newDMFixture(t) // fresh pair each round
+		req := other.send(t)
+		if rec := other.accept(t, req); rec.Code != http.StatusOK {
+			t.Fatal(rec.Body.String())
+		}
+		done := make(chan int, 2)
+		leave := func(c *http.Cookie) {
+			rec := doJSON(t, other.h, http.MethodPost, "/api/groups/"+req.GroupID+"/leave", c, nil)
+			done <- rec.Code
+		}
+		go leave(other.senderCookie)
+		go leave(other.recipientCookie)
+		codes := []int{<-done, <-done}
+		for _, c := range codes {
+			if c >= 500 {
+				t.Fatalf("round %d: a leave answered %d", i, c)
+			}
+		}
+		// A refused leave (409 conflict_retry) is retried, as the client does.
+		for _, c := range []*http.Cookie{other.senderCookie, other.recipientCookie} {
+			if g, _ := other.h.db.GetGroup(t.Context(), req.GroupID); g == nil {
+				break
+			}
+			doJSON(t, other.h, http.MethodPost, "/api/groups/"+req.GroupID+"/leave", c, nil)
+		}
+		if g, _ := other.h.db.GetGroup(t.Context(), req.GroupID); g != nil {
+			ids, _ := other.h.db.ListMemberGroupIDs(t.Context(), other.sender.userID)
+			t.Fatalf("round %d (codes %v): the group survived with sender in %v", i, codes, ids)
+		}
+	}
+}
+
+func TestWriteDMCreateErrorMapsTheRaceToARetryable409(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if !writeDMCreateError(rec, db.ErrDMRaced) {
+		t.Fatal("ErrDMRaced was not handled")
+	}
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "dm_conflict" {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A session cookie that outlived the recipient's account deletion gets the same 410 createGroup
+// gives, not a 500.
+func TestAcceptDMByADeletedAccountIsGone(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	// Tombstoned in place (keys and epoch intact) so the handler's key comparison passes and the
+	// transaction's own check is what refuses.
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:        aws.String(testTableName()),
+		Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "USER#" + f.recipient.userID}, "SK": &types.AttributeValueMemberS{Value: "PROFILE"}},
+		UpdateExpression: aws.String("SET DeletedAt = :d"), ExpressionAttributeValues: map[string]types.AttributeValue{":d": &types.AttributeValueMemberS{Value: "2026-11-08T00:00:00Z"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.accept(t, req)
+	if rec.Code != http.StatusGone || errCode(t, rec) != "account_deleted" {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
 }

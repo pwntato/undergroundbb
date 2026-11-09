@@ -734,12 +734,12 @@ func (c *Client) joinMetaItem(groupID string, seenSeq *int64) types.TransactWrit
 		return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
 			TableName:           aws.String(c.table),
 			Key:                 metaKey,
-			ConditionExpression: aws.String("attribute_exists(PK)"),
+			ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(GroupType)"),
 		}}
 	}
-	cond := "attribute_exists(PK) AND JoinSeq = :seen"
+	cond := "attribute_exists(PK) AND attribute_not_exists(GroupType) AND JoinSeq = :seen"
 	if *seenSeq == 0 {
-		cond = "attribute_exists(PK) AND (attribute_not_exists(JoinSeq) OR JoinSeq = :seen)"
+		cond = "attribute_exists(PK) AND attribute_not_exists(GroupType) AND (attribute_not_exists(JoinSeq) OR JoinSeq = :seen)"
 	}
 	return types.TransactWriteItem{Update: &types.Update{
 		TableName:           aws.String(c.table),
@@ -754,7 +754,7 @@ func (c *Client) joinMetaItem(groupID string, seenSeq *int64) types.TransactWrit
 }
 
 // joinMetaFailure turns a failed joinMetaItem into the error the caller returns: ErrGroupGone for an
-// uncapped join, and for a capped one either ErrGroupGone (the group is gone) or errJoinRaced (another
+// uncapped join (a direct message fails the same check, since only an ordinary group takes a joiner), and for a capped one either ErrGroupGone (the group is gone) or errJoinRaced (another
 // join moved JoinSeq).
 func (c *Client) joinMetaFailure(ctx context.Context, groupID string, seenSeq *int64) error {
 	if seenSeq == nil {

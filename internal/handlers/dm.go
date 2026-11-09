@@ -143,6 +143,8 @@ func writeDMCreateError(w http.ResponseWriter, err error) bool {
 		})
 	case errors.As(err, &cooling):
 		WriteErrorWithCode(w, http.StatusConflict, "this person declined; you can try again after "+cooling.Until.Format("2006-01-02"), "dm_cooling_off")
+	case errors.Is(err, db.ErrDMRaced):
+		WriteErrorWithCode(w, http.StatusConflict, "that changed while it was being sent; try again", "dm_conflict")
 	case errors.Is(err, db.ErrDMRecipientGone):
 		WriteErrorWithCode(w, http.StatusGone, "that account no longer exists", "recipient_deleted")
 	default:
@@ -257,6 +259,8 @@ func (h *Handler) acceptDM(w http.ResponseWriter, r *http.Request) {
 		WriteErrorWithCode(w, http.StatusConflict, "you are already in this conversation", "already_member")
 	case errors.Is(err, db.ErrWrapEpochStale):
 		WriteErrorWithCode(w, http.StatusConflict, "your keys changed while this was opened; reload and try again", "keys_changed")
+	case errors.Is(err, db.ErrInviteeDeleted):
+		WriteErrorWithCode(w, http.StatusGone, "this account was deleted", "account_deleted")
 	default:
 		WriteInternalError(w, r, err, "could not open the direct message")
 	}

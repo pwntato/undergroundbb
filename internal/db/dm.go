@@ -41,6 +41,9 @@ var (
 	ErrDMExists = errors.New("db: a direct message between these two users already exists")
 	// ErrDMCoolingOff means the recipient declined this sender's DM and the cool-off has not ended.
 	ErrDMCoolingOff = errors.New("db: the recipient declined; the cool-off has not ended")
+	// ErrDMRaced means the pair marker changed while the create was being refused; trying again
+	// gives a definite answer.
+	ErrDMRaced = errors.New("db: the direct message changed while it was being created")
 	// ErrDMRecipientGone means the recipient's account was deleted.
 	ErrDMRecipientGone = errors.New("db: the recipient no longer exists")
 	// ErrDMNotFound means there is no pending DM slot to act on (never existed, answered, withdrawn,
@@ -184,7 +187,7 @@ func (c *Client) dmCreateFailure(ctx context.Context, in CreateGroupInput, err e
 		}
 		var pair models.DMPair
 		if out.Item == nil || attributevalue.UnmarshalMap(out.Item, &pair) != nil {
-			return ErrDMCoolingOff // raced with a delete: have the caller retry
+			return ErrDMRaced // the marker went away between the two reads: the caller retries
 		}
 		if pair.Status == models.DMPairDeclined {
 			return &DMCoolingOffError{Until: time.Unix(pair.TTL, 0).UTC()}
@@ -241,8 +244,11 @@ func (c *Client) GetDMRequest(ctx context.Context, groupID, recipientID string) 
 	return &r, nil
 }
 
-// ListIncomingDMs returns the recipient's pending DMs (at most limit; the sender cap and the
-// decline remedy bound the list, so it has no cursor).
+// ListIncomingDMs returns the recipient's pending DMs, at most limit. There is no cursor, as a
+// decision: the per-sender cap bounds how many one account can leave, not how many accounts can
+// each leave one, so a recipient with more than limit senders sees the first limit (in group id
+// order) and the rest only once they decline some. Declining is cheap and the cool-off keeps each
+// decliner's sender out, so this is accepted rather than paged.
 func (c *Client) ListIncomingDMs(ctx context.Context, recipientID string, limit int32) ([]models.DMRequest, error) {
 	out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
 		TableName:              aws.String(c.table),
@@ -419,15 +425,27 @@ func (c *Client) leaveDM(ctx context.Context, g *models.Group, groupID, userID s
 		c.deleteDMMarkers(ctx, g, groupID)
 		return c.deleteGroup(ctx, groupID, userID)
 	}
+	other := ""
+	for id := range roles {
+		if id != userID {
+			other = id
+		}
+	}
+	// The other person's row must still be there. Two people leaving at once would otherwise both
+	// see two members and both succeed (the transactions touch different items), leaving a group
+	// with no one in it who could delete it. With this check one of them is refused, retries, sees
+	// one member and deletes the group.
+	const otherIndex = 2
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
 		{Delete: &types.Delete{TableName: aws.String(c.table), Key: memberKey(groupID, userID), ConditionExpression: aws.String("attribute_exists(PK)")}},
 		admissionDelete(c.table, groupID, userID),
+		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(c.table), Key: memberKey(groupID, other), ConditionExpression: aws.String("attribute_exists(PK)")}},
 	}})
 	if err != nil {
 		if isConditionalCheckFailure(err, 0) {
 			return false, ErrNotMember
 		}
-		if isTransactionConflict(err) {
+		if isConditionalCheckFailure(err, otherIndex) || isTransactionConflict(err) {
 			return false, ErrLeaveConflict
 		}
 		return false, err
