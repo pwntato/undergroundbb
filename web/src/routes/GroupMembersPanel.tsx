@@ -212,7 +212,7 @@ export function GroupMembersPanel({
       {rows.length === 0 && query.trim() !== '' && (
         <p className="text-sm text-muted-foreground">
           {namesLoading
-            ? 'No match yet. Some names are still loading.'
+            ? "No match. Some names couldn't be shown yet."
             : "No member's username starts with that."}
         </p>
       )}

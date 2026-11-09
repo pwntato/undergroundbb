@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { vi } from 'vitest'
+import type { MemberVerificationProps } from './MemberVerificationControls'
 import { elementsOf } from './elementTree.testkit'
 import type { MemberEntry } from '@/lib/api/groups'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
@@ -33,6 +34,7 @@ function render(
     readmittableIds?: ReadonlySet<string>
     readmitPrompt?: { userId: string; fingerprint: string } | null
     dormancy?: Dormancy | null
+    verification?: MemberVerificationProps
     query?: string
     onQueryChange?: (q: string) => void
     approvePrompt?: { userId: string; fingerprint: string } | null
@@ -69,6 +71,7 @@ function render(
       ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       usernames: extra.usernames ?? new Map(),
+      ...(extra.verification !== undefined && { verification: extra.verification }),
       ...(extra.query !== undefined && { query: extra.query }),
       ...(extra.onQueryChange !== undefined && { onQueryChange: extra.onQueryChange }),
       ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
@@ -680,6 +683,16 @@ describe('GroupMembersPanel dormant members (#62)', () => {
   })
 })
 
+const verifying = (userId: string): MemberVerificationProps => ({
+  state: null,
+  prompt: { userId, fingerprint: 'f' },
+  onStart: () => undefined,
+  onCancel: () => undefined,
+  onConfirm: () => undefined,
+  onRemove: () => undefined,
+  onReauthenticate: () => undefined,
+})
+
 describe('GroupMembersPanel member search (#76)', () => {
   const usernames = new Map([
     [ME, 'me'],
@@ -701,13 +714,13 @@ describe('GroupMembersPanel member search (#76)', () => {
     expect(html).not.toContain('>me<')
   })
 
-  it('says names are loading, not "no match", while a username is unresolved', () => {
+  it('says some names could not be shown, not plain "no match", while a username is unresolved', () => {
     const html = render(view, {
       usernames: new Map([[ME, 'me']]),
       query: 'zed',
       onQueryChange: () => undefined,
     })
-    expect(html).toContain('No match yet. Some names are still loading.')
+    expect(html).toContain('No match. Some names couldn&#x27;t be shown yet.')
   })
 
   it('keeps a row with an open remove prompt even when it does not match', () => {
@@ -728,6 +741,17 @@ describe('GroupMembersPanel member search (#76)', () => {
     expect(pinned({ busyUserId: BOB })).toContain('>bob<')
     expect(pinned({ readmitPrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
     expect(pinned({ approvePrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
+    expect(
+      pinned({
+        acceptPrompt: {
+          userId: BOB,
+          fingerprint: 'f',
+          evidence: 'no-link',
+          wrap: { kind: 'none' },
+        },
+      }),
+    ).toContain('>bob<')
+    expect(pinned({ verification: verifying(BOB) })).toContain('>bob<')
     expect(pinned({})).not.toContain('>bob<')
   })
 
