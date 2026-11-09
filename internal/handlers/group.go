@@ -100,8 +100,9 @@ type createGroupRequest struct {
 
 	// ExpirationDays is the group's message-expiration policy, or 0 to mean
 	// "never expire" -- see validateExpirationDays for how this is checked
-	// against the deployment's config.AllowGroupExpirationOff and
-	// config.DefaultExpirationDays.
+	// against the deployment's config.AllowGroupExpirationOff. The server does
+	// not apply config.DefaultExpirationDays: the web client sends it, and an
+	// omitted field decodes to 0.
 	ExpirationDays int64 `json:"expirationDays"`
 
 	// GroupKeyWrapped is the Generation 0 group key, ECIES-wrapped
