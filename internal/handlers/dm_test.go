@@ -700,3 +700,23 @@ func TestReadOnlyDMRefusesCommentsAndReactionsToo(t *testing.T) {
 		t.Errorf("reaction on a read-only DM: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRecipientLeavingRemovesTheirAdmissionRecord(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	if rec := f.accept(t, req); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	if !rawItemExists(t, "GROUP#"+req.GroupID, "ADMISSION#"+f.recipient.userID) {
+		t.Fatal("setup: no admission record")
+	}
+	if rec := doJSON(t, f.h, http.MethodPost, "/api/groups/"+req.GroupID+"/leave", f.recipientCookie, nil); rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("leave: %d", rec.Code)
+	}
+	if rawItemExists(t, "GROUP#"+req.GroupID, "ADMISSION#"+f.recipient.userID) {
+		t.Error("the leaver's admission record survived")
+	}
+	if rec := f.post(t, f.senderCookie, req.GroupID, f.sender); rec.Code != http.StatusConflict {
+		t.Errorf("the sender writing to a DM the recipient left: %d", rec.Code)
+	}
+}
