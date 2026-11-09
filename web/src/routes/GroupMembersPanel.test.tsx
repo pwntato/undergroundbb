@@ -31,6 +31,8 @@ function render(
     readmittableIds?: ReadonlySet<string>
     readmitPrompt?: { userId: string; fingerprint: string } | null
     dormancy?: Dormancy | null
+    query?: string
+    onQueryChange?: (q: string) => void
     approvePrompt?: { userId: string; fingerprint: string } | null
     acceptPrompt?: {
       userId: string
@@ -65,6 +67,8 @@ function render(
       ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       usernames: extra.usernames ?? new Map(),
+      ...(extra.query !== undefined && { query: extra.query }),
+      ...(extra.onQueryChange !== undefined && { onQueryChange: extra.onQueryChange }),
       ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
       onStartApprove: () => undefined,
       onCancelApprove: () => undefined,
@@ -671,5 +675,33 @@ describe('GroupMembersPanel dormant members (#62)', () => {
       )
       expect(html).toContain('wrapped by carol.')
     })
+  })
+})
+
+describe('GroupMembersPanel member search (#76)', () => {
+  const usernames = new Map([
+    [ME, 'me'],
+    [BOB, 'bob'],
+    [CAROL, 'carol'],
+  ])
+  const view = { members: [member(ME, 'admin'), member(BOB, 'member'), member(CAROL, 'member')] }
+
+  it('shows no search box unless the screen supplies a handler', () => {
+    expect(render(view, { usernames })).not.toContain('Search members')
+  })
+
+  it('shows the box and narrows the list to usernames starting with the query', () => {
+    const html = render(view, { usernames, query: 'CA', onQueryChange: () => undefined })
+    expect(html).toContain('aria-label="Search members by username"')
+    expect(html).toContain('value="CA"')
+    expect(html).toContain('carol')
+    expect(html).not.toContain('>bob<')
+    expect(html).not.toContain('>me<')
+  })
+
+  it('says so when nothing matches', () => {
+    const html = render(view, { usernames, query: 'zed', onQueryChange: () => undefined })
+    expect(html).toContain('No member&#x27;s username starts with that.')
+    expect(html).not.toContain('>carol<')
   })
 })

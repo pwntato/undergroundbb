@@ -122,6 +122,7 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
   const userId = session.userId
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [busyUserId, setBusyUserId] = useState<string | null>(null)
+  const [memberQuery, setMemberQuery] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // An action found the worker's keys cold (reload, new tab, deploy). /login
@@ -938,6 +939,8 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
           check={checkForView(grantCheck, load.view)}
           dormancy={dormancyFor?.view === load.view ? dormancyFor.dormancy : null}
           usernames={usernames}
+          query={memberQuery}
+          onQueryChange={setMemberQuery}
           verification={{
             state: memberVerifications,
             prompt: verifyPrompt,
