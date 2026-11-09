@@ -16,8 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { groupTextLengthError } from './groupTextLimits'
-
-const DEFAULT_EXPIRATION_DAYS = 30
+import { buildGroupValues, revocationModeFor } from './groupFormValues'
 
 export interface GroupFormValues {
   readonly visibility: 'private' | 'public'
@@ -57,6 +56,8 @@ export function CreateGroupFormStep({
   const [revocationMode, setRevocationMode] = useState<'rotating' | 'open'>(
     initialValues?.revocationMode ?? 'rotating',
   )
+  // A public group is always Open (the server refuses anything else), so the choice is not offered.
+  const effectiveMode = revocationModeFor(visibility, revocationMode)
   const [neverExpires, setNeverExpires] = useState(initialValues?.expirationDays === 0)
   const [validationError, setValidationError] = useState<string | null>(null)
 
@@ -76,13 +77,7 @@ export function CreateGroupFormStep({
       return
     }
     setValidationError(null)
-    onSubmit({
-      visibility,
-      name,
-      description,
-      revocationMode,
-      expirationDays: neverExpires ? 0 : DEFAULT_EXPIRATION_DAYS,
-    })
+    onSubmit(buildGroupValues({ visibility, name, description, revocationMode, neverExpires }))
   }
 
   const shownError = validationError ?? error
@@ -151,7 +146,8 @@ export function CreateGroupFormStep({
           <input
             type="radio"
             name="revocationMode"
-            checked={revocationMode === 'rotating'}
+            checked={effectiveMode === 'rotating'}
+            disabled={visibility === 'public'}
             onChange={() => {
               setRevocationMode('rotating')
             }}
@@ -162,13 +158,16 @@ export function CreateGroupFormStep({
           <input
             type="radio"
             name="revocationMode"
-            checked={revocationMode === 'open'}
+            checked={effectiveMode === 'open'}
             onChange={() => {
               setRevocationMode('open')
             }}
           />
           Open — removal is access control only, no cap on members
         </label>
+        {visibility === 'public' && (
+          <p className="text-xs text-muted-foreground">A public group is always Open.</p>
+        )}
       </fieldset>
       <label className="flex items-center gap-2 text-sm">
         <input

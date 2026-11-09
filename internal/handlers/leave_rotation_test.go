@@ -229,21 +229,13 @@ func TestLeaveRotatingGroupAsAdminSendsDemotionAndRotation(t *testing.T) {
 }
 
 // A public group holds no group key (its text is plaintext), so there is
-// nothing to re-key even when its revocation mode says Rotating: leaving must
+// nothing to re-key even when its revocation mode says Rotating (only a row older than #351 can): leaving must
 // not demand a rotation nobody could build, and must not accept one.
 func TestLeavePublicRotatingGroupNeedsNoRotation(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	owner, ownerCookie := loggedInUser(t, h)
-	// createPublicGroup makes an Open one; a public group may be set to Rotating.
-	req := signedCreateGroupRequest(t, owner)
-	req.Visibility = "public"
-	req.NameCiphertext, req.DescriptionCiphertext = wrappedBlob{}, wrappedBlob{}
-	req.NamePlaintext, req.DescriptionPlaintext = "Book Club", "We read books"
-	req.RevocationMode = "rotating"
-	if rec := doCreateGroup(t, h, ownerCookie, req); rec.Code != http.StatusCreated {
-		t.Fatalf("create public rotating group: %d %s", rec.Code, rec.Body.String())
-	}
-	gid := req.GroupID
+	// createGroup refuses a public Rotating group now (#351); a row written before that rule can still exist.
+	gid := createPublicRotatingGroup(t, h, owner, ownerCookie)
 	bob, bobCookie := loggedInUser(t, h)
 	carol, carolCookie := loggedInUser(t, h)
 	addMember(t, gid, bob, "member")

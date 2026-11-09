@@ -319,6 +319,35 @@ func TestCreateGroupRejectsInvalidVisibility(t *testing.T) {
 	}
 }
 
+// A public group is always Open; the other three combinations are fine.
+func TestCreateGroupPublicMustBeOpen(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	for _, c := range []struct {
+		visibility, mode string
+		want             int
+	}{
+		{"public", "rotating", http.StatusBadRequest},
+		{"public", "open", http.StatusCreated},
+		{"private", "rotating", http.StatusCreated},
+		{"private", "open", http.StatusCreated},
+	} {
+		req := signedCreateGroupRequest(t, user)
+		req.Visibility, req.RevocationMode = c.visibility, c.mode
+		if c.visibility == "public" {
+			req.NameCiphertext, req.DescriptionCiphertext = wrappedBlob{}, wrappedBlob{}
+			req.NamePlaintext, req.DescriptionPlaintext = "Open Only Club", "x"
+		}
+		rec := doCreateGroup(t, h, cookie, req)
+		if rec.Code != c.want {
+			t.Errorf("%s/%s: status = %d, want %d: %s", c.visibility, c.mode, rec.Code, c.want, rec.Body.String())
+		}
+		if c.want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "revocationMode") {
+			t.Errorf("%s/%s: refused for another reason: %s", c.visibility, c.mode, rec.Body.String())
+		}
+	}
+}
+
 func TestCreateGroupRejectsInvalidRevocationMode(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	user, cookie := loggedInUser(t, h)
@@ -453,7 +482,7 @@ func TestCreateGroupPublicRejectsWhitespaceOnlyName(t *testing.T) {
 		GroupID:              groupID,
 		Visibility:           "public",
 		NamePlaintext:        "   ", // whitespace only -- must be rejected like empty
-		RevocationMode:       "rotating",
+		RevocationMode:       "open",
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
@@ -512,7 +541,7 @@ func TestCreateGroupPublicRejectsCiphertextFields(t *testing.T) {
 		Visibility:           "public",
 		NamePlaintext:        "Book Club",
 		NameCiphertext:       wrappedBlob{Nonce: b64(12), Ciphertext: b64(32)}, // should not be here
-		RevocationMode:       "rotating",
+		RevocationMode:       "open",
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
@@ -551,7 +580,7 @@ func TestCreateGroupPublicRequiresName(t *testing.T) {
 		GroupID:              groupID,
 		Visibility:           "public",
 		NamePlaintext:        "", // missing -- required for a public group
-		RevocationMode:       "rotating",
+		RevocationMode:       "open",
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),
@@ -682,7 +711,7 @@ func TestListGroupsReturnsPublicAndPrivate(t *testing.T) {
 		Visibility:           "public",
 		NamePlaintext:        "Book Club",
 		DescriptionPlaintext: "We read books",
-		RevocationMode:       "rotating",
+		RevocationMode:       "open",
 		ExpirationDays:       30,
 		GroupKeyWrapped:      wrappedKey{EphemeralPub: b64(32), Nonce: b64(12), Ciphertext: b64(48)},
 		TrustAnchorSignature: base64.StdEncoding.EncodeToString(anchorSig),

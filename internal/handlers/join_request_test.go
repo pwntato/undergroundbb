@@ -707,18 +707,21 @@ func TestJoinRequestCarriesTheRequestersKeyEpochIntoTheMembership(t *testing.T) 
 
 // ---- the Rotating member cap (#60) ----
 
-// createPublicRotatingGroup is a public group in Rotating mode, which createGroup accepts.
+// createPublicRotatingGroup is a public group in Rotating mode. createGroup now refuses one (#351), so
+// the group is made Open and its META row flipped: approval still checks the cap as defence in depth, for
+// a group written before the rule or by anything else.
 func createPublicRotatingGroup(t *testing.T, h *Handler, user registeredUser, cookie *http.Cookie) string {
 	t.Helper()
-	req := signedCreateGroupRequest(t, user)
-	req.Visibility = "public"
-	req.NameCiphertext, req.DescriptionCiphertext = wrappedBlob{}, wrappedBlob{}
-	req.NamePlaintext, req.DescriptionPlaintext = "Rotating Club", "Re-keys on removal"
-	req.RevocationMode = "rotating"
-	if rec := doCreateGroup(t, h, cookie, req); rec.Code != http.StatusCreated {
-		t.Fatalf("create public rotating group: %d %s", rec.Code, rec.Body.String())
+	gid := createPublicGroup(t, h, user, cookie)
+	if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(testTableName()),
+		Key:                       map[string]types.AttributeValue{"PK": s("GROUP#" + gid), "SK": s("META")},
+		UpdateExpression:          aws.String("SET RevocationMode = :m"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{":m": s("rotating")},
+	}); err != nil {
+		t.Fatal(err)
 	}
-	return req.GroupID
+	return gid
 }
 
 // A public Rotating group is held to the same cap as an invite would hold it to, the request stays pending
