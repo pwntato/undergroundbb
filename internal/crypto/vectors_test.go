@@ -6,7 +6,9 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"testing"
 
 	"golang.org/x/crypto/argon2"
@@ -429,6 +431,33 @@ type inviteMACVector struct {
 	MACKeyHex            string `json:"mac_key_hex"`
 	PayloadHex           string `json:"payload_hex"`
 	MACHex               string `json:"mac_hex"`
+}
+
+// TestVectorsFileIsWhatTheGeneratorWrites keeps testdata/gen honest (#352): two categories were once
+// spliced into vectors.json by hand, so regenerating the file silently dropped them. The generator's
+// output must equal the committed file byte for byte. Edit the generator and regenerate; do not edit the
+// JSON.
+func TestVectorsFileIsWhatTheGeneratorWrites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the generator with go run")
+	}
+	out, err := exec.Command("go", "run", "./testdata/gen").Output()
+	if err != nil {
+		// Output keeps stdout pure JSON, so a crash's stderr (a panic, a compile error) is on the error.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("go run ./testdata/gen: %v\n%s", err, ee.Stderr)
+		}
+		t.Fatalf("go run ./testdata/gen: %v", err)
+	}
+	want, err := os.ReadFile("testdata/vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out, want) {
+		t.Fatal("vectors.json differs from what testdata/gen writes: change the generator, then " +
+			"`go run ./internal/crypto/testdata/gen > internal/crypto/testdata/vectors.json`")
+	}
 }
 
 func loadVectors(t *testing.T) vectorFile {
