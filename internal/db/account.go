@@ -89,7 +89,7 @@ func (c *Client) tombstoneAccount(ctx context.Context, userID, usernameLower str
 					"SK": &types.AttributeValueMemberS{Value: "PROFILE"},
 				},
 				UpdateExpression: aws.String("SET DeletedAt = :now, Username = :empty " +
-					"REMOVE Salt, Argon2Params, WrappedPrivateKeys, PreferencesBlob, FailedVerifyCount, LockUntil, LastLoginDay"),
+					"REMOVE Salt, Argon2Params, WrappedPrivateKeys, PreferencesBlob, FailedVerifyCount, LockUntil, LastLoginDay, Bio, CreatedDay"),
 				ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(DeletedAt)"),
 				ExpressionAttributeValues: map[string]types.AttributeValue{
 					":now":   &types.AttributeValueMemberS{Value: now},

@@ -38,6 +38,12 @@ type userProjection struct {
 	// Deleted marks a tombstoned account (#77): the username is empty and the
 	// keys are served only so signatures the user made still verify.
 	Deleted bool `json:"deleted,omitempty"`
+	// Bio is the user's self-description (#75), plaintext and public to every
+	// signed-in user; absent when none is set.
+	Bio string `json:"bio,omitempty"`
+	// CreatedDay is the UTC day they registered ("member since", #75); absent
+	// for accounts older than the field.
+	CreatedDay string `json:"createdDay,omitempty"`
 }
 
 // keyChangeEntry is one KEYCHANGE# row as served (#62): the payload both keys
@@ -133,6 +139,8 @@ func projectUser(id string, user *models.User) userProjection {
 		SupersededSigningKeys: superseded,
 		KeyEpoch:              user.KeyEpoch,
 		Deleted:               user.DeletedAt != "",
+		Bio:                   user.Bio,
+		CreatedDay:            user.CreatedDay,
 	}
 }
 

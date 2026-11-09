@@ -71,6 +71,16 @@ type User struct {
 	// preferences to encrypt yet.
 	PreferencesBlob *WrappedBlob `dynamodbav:"PreferencesBlob,omitempty"`
 
+	// Bio is the user's self-description (#75): plaintext, readable by every
+	// signed-in user through the users projection, capped by the handler.
+	// Absent until the user writes one; removed with the account.
+	Bio string `dynamodbav:"Bio,omitempty"`
+	// CreatedDay is the UTC day the account was registered ("2006-01-02"),
+	// served as "member since" (#75). Day resolution on purpose: CreatedAt is
+	// left unset on real users because a full-resolution time is a timing leak
+	// (#147). Absent on accounts registered before #75.
+	CreatedDay string `dynamodbav:"CreatedDay,omitempty"`
+
 	// CredentialVersion is bumped by every credential re-wrap (password
 	// change or recovery reset) and gates that rewrite's transaction
 	// condition -- see docs/DESIGN.md, "the fourth [contested write] is the

@@ -58,6 +58,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/account/rotation-handoff", h.requireSession(h.listHandoffs))
 	mux.HandleFunc("PUT /api/account/rotation-handoff/{groupId}", h.requireSession(h.putHandoff))
 	mux.HandleFunc("DELETE /api/account/rotation-handoff/{groupId}", h.requireSession(h.deleteHandoff))
+	mux.HandleFunc("PUT /api/account/bio", h.requireSession(h.putBio))
 	mux.HandleFunc("DELETE /api/account", h.requireSession(h.deleteAccount))
 	mux.HandleFunc("POST /api/account/recovery-code/release", h.recoveryCodeRelease)
 	mux.HandleFunc("PUT /api/account/recovery-code", h.recoveryCodeReset)
