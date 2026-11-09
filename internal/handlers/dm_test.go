@@ -743,26 +743,30 @@ func TestNoInvitesIntoADM(t *testing.T) {
 		}
 	})
 
-	t.Run("an invite that already existed cannot complete into a DM", func(t *testing.T) {
-		// An ordinary group with an accepted invite, then its META is turned into a DM's: the only
-		// way to reach CompleteInvite with a DM, since createInvite no longer allows one.
-		creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, f.h)
-		if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
-			TableName:        aws.String(testTableName()),
-			Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID}, "SK": &types.AttributeValueMemberS{Value: "META"}},
-			UpdateExpression: aws.String("SET GroupType = :dm"), ExpressionAttributeValues: map[string]types.AttributeValue{":dm": &types.AttributeValueMemberS{Value: "dm"}},
-		}); err != nil {
-			t.Fatal(err)
-		}
-		adm := signedAdmission(t, f.h, creator, groupID, inviteID, invitee)
-		rec := doJSON(t, f.h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
-		if rec.Code == http.StatusOK {
-			t.Errorf("completing into a DM succeeded: %s", rec.Body.String())
-		}
-		if m, _ := f.h.db.GetMembership(t.Context(), groupID, invitee.userID); m != nil {
-			t.Error("a third member was written into a DM")
-		}
-	})
+	// Capped (Rotating) and uncapped (Open) groups take different branches of the join check.
+	for _, mode := range []string{"rotating", "open"} {
+		t.Run("an invite that already existed cannot complete into a DM ("+mode+")", func(t *testing.T) {
+			// An ordinary group with an accepted invite, then its META is turned into a DM's: the only
+			// way to reach CompleteInvite with a DM, since createInvite no longer allows one.
+			creator, creatorCookie, invitee, groupID, inviteID := acceptedInviteFixture(t, f.h)
+			if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+				TableName:                 aws.String(testTableName()),
+				Key:                       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + groupID}, "SK": &types.AttributeValueMemberS{Value: "META"}},
+				UpdateExpression:          aws.String("SET GroupType = :dm, RevocationMode = :m"),
+				ExpressionAttributeValues: map[string]types.AttributeValue{":dm": &types.AttributeValueMemberS{Value: "dm"}, ":m": &types.AttributeValueMemberS{Value: mode}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			adm := signedAdmission(t, f.h, creator, groupID, inviteID, invitee)
+			rec := doJSON(t, f.h, http.MethodPost, "/api/invites/"+inviteID+"/complete", creatorCookie, completeBody(adm))
+			if rec.Code == http.StatusOK {
+				t.Errorf("completing into a DM succeeded: %s", rec.Body.String())
+			}
+			if m, _ := f.h.db.GetMembership(t.Context(), groupID, invitee.userID); m != nil {
+				t.Error("a third member was written into a DM")
+			}
+		})
+	}
 }
 
 // Both people leaving at the same moment must end with the group deleted, never with a group that
