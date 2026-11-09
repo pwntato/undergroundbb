@@ -5,6 +5,9 @@ import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { vi } from 'vitest'
+import type { MemberVerificationProps } from './MemberVerificationControls'
+import { elementsOf } from './elementTree.testkit'
 import type { MemberEntry } from '@/lib/api/groups'
 import { GroupMembersPanel, MembersFeedback, RotationBanner } from './GroupMembersPanel'
 import type { Dormancy, DormantMember } from './dormancy'
@@ -31,6 +34,9 @@ function render(
     readmittableIds?: ReadonlySet<string>
     readmitPrompt?: { userId: string; fingerprint: string } | null
     dormancy?: Dormancy | null
+    verification?: MemberVerificationProps
+    query?: string
+    onQueryChange?: (q: string) => void
     approvePrompt?: { userId: string; fingerprint: string } | null
     acceptPrompt?: {
       userId: string
@@ -65,6 +71,9 @@ function render(
       ...(extra.readmittableIds !== undefined && { readmittableIds: extra.readmittableIds }),
       ...(extra.readmitPrompt !== undefined && { readmitPrompt: extra.readmitPrompt }),
       usernames: extra.usernames ?? new Map(),
+      ...(extra.verification !== undefined && { verification: extra.verification }),
+      ...(extra.query !== undefined && { query: extra.query }),
+      ...(extra.onQueryChange !== undefined && { onQueryChange: extra.onQueryChange }),
       ...(extra.dormancy !== undefined && { dormancy: extra.dormancy }),
       onStartApprove: () => undefined,
       onCancelApprove: () => undefined,
@@ -671,5 +680,112 @@ describe('GroupMembersPanel dormant members (#62)', () => {
       )
       expect(html).toContain('wrapped by carol.')
     })
+  })
+})
+
+const verifying = (userId: string): MemberVerificationProps => ({
+  state: null,
+  prompt: { userId, fingerprint: 'f' },
+  onStart: () => undefined,
+  onCancel: () => undefined,
+  onConfirm: () => undefined,
+  onRemove: () => undefined,
+  onReauthenticate: () => undefined,
+})
+
+describe('GroupMembersPanel member search (#76)', () => {
+  const usernames = new Map([
+    [ME, 'me'],
+    [BOB, 'bob'],
+    [CAROL, 'carol'],
+  ])
+  const view = { members: [member(ME, 'admin'), member(BOB, 'member'), member(CAROL, 'member')] }
+
+  it('shows no search box unless the screen supplies a handler', () => {
+    expect(render(view, { usernames })).not.toContain('Search members')
+  })
+
+  it('shows the box and narrows the list to usernames starting with the query', () => {
+    const html = render(view, { usernames, query: 'CA', onQueryChange: () => undefined })
+    expect(html).toContain('aria-label="Search members by username"')
+    expect(html).toContain('value="CA"')
+    expect(html).toContain('carol')
+    expect(html).not.toContain('>bob<')
+    expect(html).not.toContain('>me<')
+  })
+
+  it('says some names could not be shown, not plain "no match", while a username is unresolved', () => {
+    const html = render(view, {
+      usernames: new Map([[ME, 'me']]),
+      query: 'zed',
+      onQueryChange: () => undefined,
+    })
+    expect(html).toContain('No match. Some names couldn&#x27;t be shown yet.')
+  })
+
+  it('keeps a row with an open remove prompt even when it does not match', () => {
+    const html = render(view, {
+      usernames,
+      query: 'ca',
+      confirmRemoveUserId: BOB,
+      onQueryChange: () => undefined,
+    })
+    expect(html).toContain('>bob<')
+    expect(html).toContain('>carol<')
+    expect(html).not.toContain('>me<')
+  })
+
+  it('keeps the row of a running action and of open prompts', () => {
+    const pinned = (extra: Record<string, unknown>) =>
+      render(view, { usernames, query: 'ca', onQueryChange: () => undefined, ...extra })
+    expect(pinned({ busyUserId: BOB })).toContain('>bob<')
+    expect(pinned({ readmitPrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
+    expect(pinned({ approvePrompt: { userId: BOB, fingerprint: 'f' } })).toContain('>bob<')
+    expect(
+      pinned({
+        acceptPrompt: {
+          userId: BOB,
+          fingerprint: 'f',
+          evidence: 'no-link',
+          wrap: { kind: 'none' },
+        },
+      }),
+    ).toContain('>bob<')
+    expect(pinned({ verification: verifying(BOB) })).toContain('>bob<')
+    expect(pinned({})).not.toContain('>bob<')
+  })
+
+  it('passes what is typed in the box to onQueryChange', () => {
+    const onQueryChange = vi.fn()
+    const el = GroupMembersPanel({
+      view: {
+        groupId: 'g1',
+        members: view.members,
+        myRole: 'admin',
+        myGrantSortKey: 'GRANT#x',
+        revocationMode: 'open',
+        myGeneration: 0,
+      },
+      userId: ME,
+      busyUserId: null,
+      onChangeRole: () => undefined,
+      confirmRemoveUserId: null,
+      onStartRemove: () => undefined,
+      onCancelRemove: () => undefined,
+      onConfirmRemove: () => undefined,
+      usernames,
+      query: '',
+      onQueryChange,
+    })
+    const input = elementsOf(el).find((n) => n.props['aria-label'] === 'Search members by username')
+    const onChange = input?.props['onChange'] as (e: { target: { value: string } }) => void
+    onChange({ target: { value: 'ca' } })
+    expect(onQueryChange).toHaveBeenCalledExactlyOnceWith('ca')
+  })
+
+  it('says so when nothing matches', () => {
+    const html = render(view, { usernames, query: 'zed', onQueryChange: () => undefined })
+    expect(html).toContain('No member&#x27;s username starts with that.')
+    expect(html).not.toContain('>carol<')
   })
 })

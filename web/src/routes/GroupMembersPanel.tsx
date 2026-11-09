@@ -17,6 +17,8 @@ import type { RoleStatus } from '@/lib/crypto/grant-chain'
 import type { KeyChangeEvidence } from '@/lib/crypto/key-change-evidence'
 import type { WrapEvidence } from '@/lib/crypto/wrap-record'
 import { isDeletedUser, memberLabel, unresolvedClass } from './memberLabel'
+import { filterMembersByQuery } from './memberSearch'
+import { Input } from '@/components/ui/input'
 import {
   MemberVerificationBadge,
   MemberVerificationControls,
@@ -64,6 +66,8 @@ export function GroupMembersPanel({
   check,
   verification,
   dormancy = null,
+  query = '',
+  onQueryChange,
 }: {
   readonly view: MembersView
   /** The signed-in user's own id. */
@@ -115,6 +119,10 @@ export function GroupMembersPanel({
   readonly verification?: MemberVerificationProps | undefined
   /** Members who changed their keys and await approval (#62); null while loading. */
   readonly dormancy?: Dormancy | null
+  /** The search box's text (#76); the list is narrowed to usernames starting with it. */
+  readonly query?: string
+  /** Absent hides the search box. */
+  readonly onQueryChange?: ((query: string) => void) | undefined
 }) {
   const checked = check?.state === 'checked' ? check : null
   // Dormant members are listed first: they are the ones waiting on someone.
@@ -124,9 +132,23 @@ export function GroupMembersPanel({
   const dormantEntry = new Map(
     dormancy?.state === 'ready' ? dormancy.dormant.map((d) => [d.userId, d.entry] as const) : [],
   )
+  // A row with something open on it (a confirm prompt, a running action) stays
+  // listed whatever the search says, so typing never hides it mid-action.
+  const openIds = new Set(
+    [
+      confirmRemoveUserId,
+      busyUserId,
+      readmitPrompt?.userId,
+      approvePrompt?.userId,
+      acceptPrompt?.userId,
+      verification?.prompt?.userId,
+    ].filter((id): id is string => id != null),
+  )
+  const matching = filterMembersByQuery(view.members, usernames, query, openIds)
+  const namesLoading = view.members.some((m) => !usernames.has(m.userId))
   const rows = [
-    ...view.members.filter((m) => dormantIds.has(m.userId)),
-    ...view.members.filter((m) => !dormantIds.has(m.userId)),
+    ...matching.filter((m) => dormantIds.has(m.userId)),
+    ...matching.filter((m) => !dormantIds.has(m.userId)),
   ]
   const isAdmin = view.myRole === 'admin'
   // Without our own grant on record a change can't be signed, so the buttons
@@ -175,6 +197,24 @@ export function GroupMembersPanel({
       {/* Only an admin or ambassador can approve, so a member keeps just the row badge. */}
       {(isAdmin || view.myRole === 'ambassador') && (
         <DormantMembersNotice dormancy={dormancy} usernames={usernames} />
+      )}
+      {onQueryChange !== undefined && (
+        <Input
+          type="search"
+          aria-label="Search members by username"
+          placeholder="Search members"
+          value={query}
+          onChange={(e) => {
+            onQueryChange(e.target.value)
+          }}
+        />
+      )}
+      {rows.length === 0 && query.trim() !== '' && (
+        <p className="text-sm text-muted-foreground">
+          {namesLoading
+            ? "No match. Some names couldn't be shown yet."
+            : "No member's username starts with that."}
+        </p>
       )}
       <ul className="flex flex-col gap-2">
         {rows.map((m) => {
