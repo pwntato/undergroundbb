@@ -121,14 +121,41 @@ why.
   field — proving the two encode to genuinely different AAD rather than
   colliding, the same shape `credential_wrap` proves for `PROFILE` vs.
   `RECOVERY`.
+- `post_aad`: `(group id, sort key, generation) -> AAD`, plus the AES-256-GCM
+  ciphertext that AAD produces under a fixed key/nonce/plaintext — pinning
+  `PostAAD` (#42), the AAD a post's sealed title/body is bound to. Two
+  generations of the same post.
+- `comment_aad`: `(post id, path, generation) -> AAD`, plus the ciphertext
+  under a fixed key/nonce/plaintext — pinning `CommentAAD` (#44). A
+  top-level comment at generation 0 and a nested one at generation 3; the Go
+  test also checks the ciphertext does not open under another generation,
+  path or post, or read as a post.
+- `reaction_aad`: `(post id, target, reactor id, generation) -> AAD`, plus
+  the one-byte sealed reaction — pinning `ReactionAAD` (#46). A reaction on
+  the post and one on a nested comment, by different reactors.
+- `invite_creation`: `(invite id, group id, inviter ed25519 key, expires at)
+  -> payload`, plus the inviter's Ed25519 signature — pinning
+  `InviteCreationPayload` (#38).
+- `invite_acceptance`: `(invite id, invitee ed25519 key, invitee x25519 key)
+  -> payload`, plus the invitee's signature under their own keys — pinning
+  `InviteAcceptancePayload` (#39), step 2 of the invite handshake.
+- `invite_mac`: `(inviter seed, invite id) -> MAC key`, and `(invite id, invitee ed25519
+  key, invitee x25519 key) -> payload` with its HMAC — pinning
+  `DeriveInviteMACKey` and `ComputeInviteMAC`, which close the gap plain
+  signature verification leaves open (PR #146).
+- `join_request`: `(request id, group id, requester uuid, requester ed25519
+  key, requester x25519 key) -> payload`, plus the requester's signature
+  under their own keys — pinning `JoinRequestPayload` (#72). It has no MAC:
+  a stranger has no invite secret, so a first request is trust on first use.
 
 ## Regenerating
 
 `go run ./internal/crypto/testdata/gen > internal/crypto/testdata/vectors.json`
-is the only way to change this file. `TestVectorsFileIsWhatTheGeneratorWrites` fails if the committed JSON
-differs from the generator's output by a single byte, so a category cannot live only in the JSON (#352).
-The generator computes every non-arbitrary value fresh from this package's own code. This
-is safe to do BEFORE any of these primitives have shipped data — it becomes
-unsafe (a silent lockout) the moment a value here has protected anything
-real. See the permanent-lockout warnings on `deriveWrappingKey` and
-`SignedPayload` in the package itself.
+is the only way to change this file.
+`TestVectorsFileIsWhatTheGeneratorWrites` fails if the committed JSON differs
+from the generator's output by a single byte, so a category cannot live only
+in the JSON (#352). The generator computes every non-arbitrary value fresh
+from this package's own code. This is safe to do BEFORE any of these
+primitives have shipped data — it becomes unsafe (a silent lockout) the
+moment a value here has protected anything real. See the permanent-lockout
+warnings on `deriveWrappingKey` and `SignedPayload` in the package itself.

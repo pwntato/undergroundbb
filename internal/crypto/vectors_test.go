@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"testing"
@@ -442,6 +443,11 @@ func TestVectorsFileIsWhatTheGeneratorWrites(t *testing.T) {
 	}
 	out, err := exec.Command("go", "run", "./testdata/gen").Output()
 	if err != nil {
+		// Output keeps stdout pure JSON, so a crash's stderr (a panic, a compile error) is on the error.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			t.Fatalf("go run ./testdata/gen: %v\n%s", err, ee.Stderr)
+		}
 		t.Fatalf("go run ./testdata/gen: %v", err)
 	}
 	want, err := os.ReadFile("testdata/vectors.json")
