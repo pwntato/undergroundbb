@@ -44,6 +44,10 @@ func registerAccount(t *testing.T, c *Client, test bool) RegisterInput {
 	if err := c.Register(context.Background(), in); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	// A bio, so the tombstone checks can see that the purge removes it (#75).
+	if err := c.SetBio(context.Background(), in.UserID, "a bio"); err != nil {
+		t.Fatalf("SetBio: %v", err)
+	}
 	t.Cleanup(func() { removePartitions(t, c, "USER#"+in.UserID) })
 	t.Cleanup(func() {
 		_, _ = c.ddb.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
@@ -112,6 +116,9 @@ func requireFinishedTombstone(t *testing.T, c *Client, in RegisterInput) {
 	u := profileOf(t, c, in.UserID)
 	if u.DeletedAt == "" || u.Username != "" || len(u.Salt) != 0 || len(u.WrappedPrivateKeys.Ciphertext) != 0 {
 		t.Errorf("PROFILE is not a clean tombstone: %+v", u)
+	}
+	if u.Bio != "" || u.CreatedDay != "" {
+		t.Errorf("tombstone kept profile text: bio %q, createdDay %q", u.Bio, u.CreatedDay)
 	}
 	if string(u.SigningPublicKey) != string(in.SigningPublicKey) {
 		t.Error("tombstone must keep the public signing key so grants it signed still verify")
