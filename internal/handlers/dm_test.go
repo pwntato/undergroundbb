@@ -190,7 +190,7 @@ func TestCreateDMRefusals(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"to yourself", func(r *createGroupRequest) { r.DM.RecipientUserID = f.sender.userID }, 400, ""},
+		{"to yourself", func(r *createGroupRequest) { *r = dmRequestFor(t, f.sender, f.sender) }, 400, ""},
 		{"to nobody", func(r *createGroupRequest) { r.DM.RecipientUserID = newRequestID(t) }, 404, "recipient_not_found"},
 		{"public", func(r *createGroupRequest) { r.Visibility = "public" }, 400, ""},
 		{"rotating", func(r *createGroupRequest) { r.RevocationMode = "rotating" }, 400, ""},
@@ -626,5 +626,77 @@ func setPairTTL(t *testing.T, a, b string, ttl int64) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAcceptDMWhenTheRecipientsKeysWereReplacedWithoutAnEpochBump(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	// The server now holds different public keys for the recipient than the ones the sender signed
+	// and wrapped to. The epoch is untouched, so only the key comparison can catch it.
+	for _, attr := range []string{"SigningPublicKey", "WrappingPublicKey"} {
+		other := make([]byte, 32)
+		_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+			TableName:        aws.String(testTableName()),
+			Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "USER#" + f.recipient.userID}, "SK": &types.AttributeValueMemberS{Value: "PROFILE"}},
+			UpdateExpression: aws.String("SET " + attr + " = :k"), ExpressionAttributeValues: map[string]types.AttributeValue{":k": &types.AttributeValueMemberB{Value: other}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := f.accept(t, req)
+		if rec.Code != http.StatusConflict || errCode(t, rec) != "keys_changed" {
+			t.Errorf("%s replaced: %d %s", attr, rec.Code, rec.Body.String())
+		}
+		// Put the real key back for the next round.
+		orig := f.recipient.signPub
+		if attr == "WrappingPublicKey" {
+			orig = f.recipient.wrapPub
+		}
+		if _, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+			TableName:        aws.String(testTableName()),
+			Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "USER#" + f.recipient.userID}, "SK": &types.AttributeValueMemberS{Value: "PROFILE"}},
+			UpdateExpression: aws.String("SET " + attr + " = :k"), ExpressionAttributeValues: map[string]types.AttributeValue{":k": &types.AttributeValueMemberB{Value: orig}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m, _ := f.h.db.GetMembership(t.Context(), req.GroupID, f.recipient.userID); m != nil {
+		t.Error("a membership was written for replaced keys")
+	}
+	if rec := f.accept(t, req); rec.Code != http.StatusOK {
+		t.Errorf("with the real keys back: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A DM the other person has left takes no new content of any kind: post, comment or reaction.
+func TestReadOnlyDMRefusesCommentsAndReactionsToo(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	postBody, _ := signedPost(t, req.GroupID, f.sender, postOpts{})
+	if rec := doPost(t, f.h, f.senderCookie, req.GroupID, postBody); rec.Code != http.StatusCreated {
+		t.Fatalf("post: %d %s", rec.Code, rec.Body.String())
+	}
+	pid := pidOf(req.GroupID, postBody.SortKey)
+	if rec := f.accept(t, req); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	// While both are in, the recipient can comment and react.
+	if rec := doComment(t, f.h, f.recipientCookie, pid, signedComment(t, req.GroupID, f.recipient, copts{})); rec.Code != http.StatusCreated {
+		t.Fatalf("comment while both are in: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReaction(t, f.h, http.MethodPut, f.recipientCookie, pid, "0000", sealedReaction(t, 0)); rec.Code != http.StatusNoContent {
+		t.Fatalf("reaction while both are in: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, f.h, http.MethodPost, "/api/groups/"+req.GroupID+"/leave", f.senderCookie, nil); rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("leave: %d", rec.Code)
+	}
+	rec := doComment(t, f.h, f.recipientCookie, pid, signedComment(t, req.GroupID, f.recipient, copts{path: "0002"}))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "dm_read_only" {
+		t.Errorf("comment on a read-only DM: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doReaction(t, f.h, http.MethodPut, f.recipientCookie, pid, "0000", sealedReaction(t, 0))
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "dm_read_only" {
+		t.Errorf("reaction on a read-only DM: %d %s", rec.Code, rec.Body.String())
 	}
 }
