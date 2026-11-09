@@ -10,6 +10,7 @@
 // keeps a group from ending up with no admin. Removing a member (#58) is a
 // two-step button (Remove, then Confirm) on the same rows.
 
+import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import type { MemberRole } from '@/lib/api/groups'
@@ -229,7 +230,13 @@ export function GroupMembersPanel({
                   className={`${unresolvedClass(m.userId, usernames)} text-sm`}
                   title={m.userId}
                 >
-                  {memberLabel(m.userId, usernames)}
+                  {isDeletedUser(m.userId, usernames) ? (
+                    memberLabel(m.userId, usernames)
+                  ) : (
+                    <Link to={`/users/${m.userId}`} className="underline-offset-4 hover:underline">
+                      {memberLabel(m.userId, usernames)}
+                    </Link>
+                  )}
                 </span>
                 {isSelf && <span className="text-xs text-muted-foreground">you</span>}
                 <span className="text-xs text-muted-foreground">{ROLE_LABEL[m.role]}</span>

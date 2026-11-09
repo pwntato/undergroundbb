@@ -22,6 +22,10 @@ export interface UserProjection {
   readonly keyEpoch: number
   /** A tombstoned account (#77): `username` is empty and the keys are served only so old signatures verify. */
   readonly deleted?: boolean
+  /** The user's self-description (#75), plaintext and visible to every signed-in user; absent if none. */
+  readonly bio?: string
+  /** The UTC day they registered, "YYYY-MM-DD" (#75); absent for accounts older than the field. */
+  readonly createdDay?: string
 }
 
 async function readJSON(res: Response): Promise<unknown> {
@@ -113,4 +117,21 @@ export async function getUsers(
     }
   }
   return found
+}
+
+/** The longest bio, in characters; the server enforces it too (handlers.MaxBioRunes). */
+export const MAX_BIO_CHARS = 280
+/** The longest bio in UTF-8 bytes (handlers.MaxBioBytes): 280 emoji would be 1,120 bytes and is refused. */
+export const MAX_BIO_BYTES = 1024
+
+/** PUT /api/account/bio (#75). An empty or blank bio clears it; returns the bio as stored (trimmed). */
+export async function putBio(bio: string): Promise<string> {
+  const res = await fetch('/api/account/bio', {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bio }),
+  })
+  const data = (await readJSON(res)) as { bio?: unknown }
+  return typeof data.bio === 'string' ? data.bio : ''
 }

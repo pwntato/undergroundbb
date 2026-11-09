@@ -104,6 +104,7 @@ func (c *Client) Register(ctx context.Context, in RegisterInput) error {
 		WrappedPrivateKeys: in.WrappedPrivateKeys,
 		CredentialVersion:  1,
 		TestAccount:        in.TestAccount,
+		CreatedDay:         time.Now().UTC().Format("2006-01-02"),
 	}
 	if in.TestAccount {
 		user.CreatedAt = now

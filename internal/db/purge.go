@@ -452,7 +452,7 @@ func (c *Client) executePurge(ctx context.Context, plan purgePlan, now time.Time
 	values := map[string]types.AttributeValue{}
 	if !plan.wasDeleted {
 		sets = append(sets, "DeletedAt = :now", "Username = :empty")
-		removes = append(removes, "Salt", "Argon2Params", "WrappedPrivateKeys", "PreferencesBlob", "FailedVerifyCount", "LockUntil", "LastLoginDay")
+		removes = append(removes, "Salt", "Argon2Params", "WrappedPrivateKeys", "PreferencesBlob", "FailedVerifyCount", "LockUntil", "LastLoginDay", "Bio", "CreatedDay")
 		values[":now"] = &types.AttributeValueMemberS{Value: now.UTC().Format(time.RFC3339)}
 		values[":empty"] = &types.AttributeValueMemberS{Value: ""}
 	}

@@ -3,6 +3,7 @@
 
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import type { MemberEntry } from '@/lib/api/groups'
 import { FingerprintBlock } from './FingerprintBlock'
@@ -155,18 +156,22 @@ describe('GroupMembersPanel verification wiring', () => {
     usernames = new Map<string, string>(),
   ): string {
     return renderToStaticMarkup(
-      createElement(GroupMembersPanel, {
-        view,
-        userId: ME,
-        busyUserId: null,
-        onChangeRole: () => undefined,
-        confirmRemoveUserId: null,
-        onStartRemove: () => undefined,
-        onCancelRemove: () => undefined,
-        onConfirmRemove: () => undefined,
-        usernames,
-        ...(verification !== undefined && { verification }),
-      }),
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(GroupMembersPanel, {
+          view,
+          userId: ME,
+          busyUserId: null,
+          onChangeRole: () => undefined,
+          confirmRemoveUserId: null,
+          onStartRemove: () => undefined,
+          onCancelRemove: () => undefined,
+          onConfirmRemove: () => undefined,
+          usernames,
+          ...(verification !== undefined && { verification }),
+        }),
+      ),
     )
   }
 

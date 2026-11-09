@@ -1,8 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/pwntato/undergroundbb/internal/db"
 )
@@ -46,4 +51,71 @@ func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	clearSessionCookie(w)
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// MaxBioRunes is the longest bio, in characters; MaxBioBytes bounds the same
+// text in bytes so a bio of four-byte characters cannot be four times the size.
+const (
+	MaxBioRunes = 280
+	MaxBioBytes = 1024
+	maxBioBody  = 4 * 1024
+)
+
+type putBioRequest struct {
+	Bio string `json:"bio"`
+}
+
+// trimBio trims the ends of a bio the way the browser's String.trim does, so
+// the length the web counts is the length the server checks: Unicode spaces
+// plus U+FEFF (a byte-order mark, which pasted text sometimes starts with and
+// which Go's TrimSpace leaves alone).
+func trimBio(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' })
+}
+
+// validBio reports whether s is acceptable bio text: valid UTF-8, within both
+// caps, and free of control characters other than newline and tab. s is
+// already trimmed by the caller (trimBio).
+func validBio(s string) bool {
+	if !utf8.ValidString(s) || len(s) > MaxBioBytes || utf8.RuneCountInString(s) > MaxBioRunes {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+// putBio implements PUT /api/account/bio -- issue #75. The bio is plaintext,
+// stored on PROFILE and served to every signed-in user by GET /api/users/{id}
+// (the users projection), so it is public to the site like the username. It
+// is deliberately not signed: nothing trusts it, and it carries no key
+// material. An empty bio clears it.
+func (h *Handler) putBio(w http.ResponseWriter, r *http.Request) {
+	userID, ok := sessionUserID(r)
+	if !ok {
+		WriteError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBioBody)
+	var req putBioRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	bio := trimBio(req.Bio)
+	if !validBio(bio) {
+		WriteError(w, http.StatusBadRequest, "bio: at most "+strconv.Itoa(MaxBioRunes)+" characters and "+strconv.Itoa(MaxBioBytes)+" bytes, no control characters other than newline and tab")
+		return
+	}
+	switch err := h.db.SetBio(r.Context(), userID, bio); {
+	case err == nil:
+		WriteJSON(w, http.StatusOK, map[string]string{"bio": bio})
+	case errors.Is(err, db.ErrUserNotFound):
+		WriteError(w, http.StatusNotFound, "account not found")
+	default:
+		WriteInternalError(w, r, err, "could not save bio")
+	}
 }
