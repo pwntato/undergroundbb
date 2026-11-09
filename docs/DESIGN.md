@@ -1701,12 +1701,50 @@ partition, which is the shape the single-slot challenge argument rejects one sec
 Deferring the row costs nothing structurally: the group and the sender's own row exist immediately,
 the message is stored, and delivery works — it is the same membership item written at a different
 moment, so the one-codepath property is untouched. Until then the recipient sees the conversation
-through their notifications rather than their group list. Note this matters more than blocking does,
+in a list of waiting DMs (`GET /api/dms/incoming`) rather than their group list. Note this matters more than blocking does,
 because blocking is a UI state with no key consequence: a blocked correspondent's membership row and
 its GSI1 entry would persist, so the graph edge would outlive the remedy.
 
 This is deliberate. A separate one-to-one message path would be a second implementation of the same
 cryptography, and the second implementation is where the bug lives. There is one codepath.
+
+**How a DM is made and opened (#73).** The sender creates it through `POST /api/groups`, the same
+route as any group, with a `dm` object (`recipientUserId`, a fresh `requestId`, the group key wrapped to the
+recipient's X25519 key, and the sender's signed admission of the recipient). A DM is private, `Open` and
+nameless; the server refuses a name, a description, `rotating` or `public`. One transaction writes the group,
+the sender's membership and root grant, and four DM-only rows:
+
+- **The pending slot**, `GROUP#<gid>` / `DMREQ#<recipient uuid>`, holds the wrap, the recipient's keys as the
+  server supplied them, their key epoch and the sender's admission (day, grant ref, signature). It lives in
+  the **group's** partition, so the sender never writes into the recipient's own; GSI1
+  (`USER#<recipient>` / `DMREQ#<gid>`) is how the recipient finds it, with `GET /api/dms/incoming` (the first 100 by group id, with no cursor: the per-sender cap bounds how many one account can leave, not how many accounts can each leave one, so a recipient with more than 100 waiting senders sees the rest after declining some). It has no TTL: it ends by accept, decline or the sender withdrawing.
+- **The pair marker**, `DMPAIR#<lower uuid>#<higher uuid>` / `PAIR`, one per unordered pair of users, with a
+  conditional put: it is what makes "one DM per pair" hold when both people start one at the same moment. A second
+  attempt, in either direction, is refused `409 dm_exists` with the existing group's id. The group's `META` records the marker's key (`DMPairPK`), so a leave can find it
+  without knowing who the other person was. The pair id is **not** the group id: a deterministic group id would let anyone test whether two named users have a DM.
+- **The sender's pointer**, `USER#<sender>` / `DMOUT#<gid>`, in the sender's own partition. It is counted against a cap of 20 unanswered DMs per account (`429 too_many_pending_dms`); the count is read before the transaction, so two simultaneous creates can overshoot it by a few, which is acceptable for a spam bound.
+- The admission is signed at creation over the recipient's keys with the sender's **root grant** as its grant ref and generation 0, so it needs no second round trip.
+
+**Opening it.** The recipient's client shows the sender's name and the fingerprint of the keys, verifies the
+admission signature and the keys against its pins, then calls `POST /api/dms/{gid}/accept?requestId=`. One
+transaction writes their `MEMBER#` row (role member, generation 0, the sender's wrap) and the admission record, deletes the slot and the sender's
+pointer, and marks the pair `active`. It is refused if the recipient's keys are no longer the ones the sender signed (`409 keys_changed`) or their key epoch moved (the wrap would be dormant on arrival). Either way the way forward is for the recipient to decline and start a DM themselves (a decline only keeps the *sender* out), or for the sender to withdraw the pending one and send it again; the sender cannot resend while the pending one exists, and the message tells the recipient so. Nothing of the conversation is readable before accept: a non-member has no membership to read or post through.
+
+**Declining.** `POST /api/dms/{gid}/decline?requestId=` deletes the conversation (the sender's membership,
+their messages, the slot) and turns the pair marker into `declined` with a **7-day** TTL (the join-request cool-off). During it the sender gets
+`409 dm_cooling_off` with the day it ends. A decline is not a ban: after the TTL the sender may try again, and **the person who declined may start the conversation themselves at any time**, which replaces the marker.
+
+**Withdrawing, leaving and read-only.** A DM has no roles and no re-key, so leaving is just removing your own row
+(and your admission record); the sender, who is the group's only admin, can always leave. The last person out
+deletes the group, the marker and the pointer (a pending DM's sender leaving is the withdrawal). The first
+person out of an active DM frees the pair marker, so either can start a new conversation, and leaves the other
+a **read-only** one: posts, comments and reactions to a DM with fewer than two members answer `409 dm_read_only`
+(the sender may still write while the recipient's slot is pending). Editing and deleting what you already wrote still work. A DM also takes **no invites**: `createInvite` answers 400 for one, and the join check in `CompleteInvite` and join-request approval refuses any group with a `GroupType`, so a third person cannot be added by any route. When both people leave at the same instant, each leave carries a condition that the other's row still exists; the loser is told `409 conflict_retry`, retries, finds one member and deletes the group, so a memberless group that nobody can delete never results. Deleting an account still requires leaving every group first; it also clears the incoming slots addressed to that account.
+
+**What a dump shows that it did not before.** While a DM is pending, the slot's GSI1 entry says "this sender
+sent this recipient a DM", written by the sender with no action by the recipient. That is the edge the
+recipient-row rule above avoided, in a weaker form: it is not a membership, it is gone the moment the recipient declines or the sender withdraws, and the cap and the cool-off bound how many a stranger can leave. It cannot be removed without
+removing the recipient's way of discovering the message at all. THREAT_MODEL.md says so.
 
 Three group-level settings still need answers, because "identical" would otherwise answer them by
 omission:
@@ -2629,6 +2667,9 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 | Invite | `INVITE#<iid>` | `META` | `USER#<invitee>` | `INVITE#<YYYY-MM-DD, UTC>#<rand>` | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
 | Invite (inviter's copy) | `USER#<inviter>` | `SENT#<iid>` | | | signed `expires_at`; once accepted, completion deadline plus a one-week grace window |
 | Join request | `GROUP#<gid>` | `REQ#<uuid>` | `USER#<requester>` | `REQ#<YYYY-MM-DD, UTC>#<rand>` | 90 days (pending) / 7 days (denied) |
+| DM pair marker | `DMPAIR#<lower uuid>#<higher uuid>` | `PAIR` | | | none (pending / active); 7 days once declined |
+| DM pending slot | `GROUP#<gid>` | `DMREQ#<recipient uuid>` | `USER#<recipient>` | `DMREQ#<gid>` | never (deleted on accept, decline or withdrawal) |
+| DM outbound pointer | `USER#<sender>` | `DMOUT#<gid>` | | | never (deleted with the slot) |
 | Key pin | `USER#<uuid>` | `PIN#<other-uuid>` | | | never |
 | Verification record | `USER#<uuid>` | `VERIFIED#<other-uuid>` | | | never |
 | Key change | `USER#<uuid>` | `KEYCHANGE#<epoch>` | | | never |

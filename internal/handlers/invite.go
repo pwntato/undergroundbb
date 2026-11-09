@@ -122,10 +122,18 @@ func (h *Handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	// Refuse early, with the same code completion uses, when the group is
 	// already full: otherwise the invitee accepts and then never joins. This is a
 	// courtesy read; CompleteInvite is what enforces the cap.
-	if group, gErr := h.db.GetGroup(r.Context(), groupID); gErr != nil {
+	group, gErr := h.db.GetGroup(r.Context(), groupID)
+	if gErr != nil {
 		WriteInternalError(w, r, gErr, "could not create invite")
 		return
-	} else if capN := h.memberCap(group); capN > 0 {
+	}
+	// A direct message is exactly two people (#73): there is no one to invite. CompleteInvite
+	// refuses a DM too, so an invite cannot complete into one by any route.
+	if group != nil && group.GroupType == "dm" {
+		WriteError(w, http.StatusBadRequest, "a direct message has no invites")
+		return
+	}
+	if capN := h.memberCap(group); capN > 0 {
 		n, cErr := h.db.CountMembers(r.Context(), groupID)
 		if cErr != nil {
 			WriteInternalError(w, r, cErr, "could not create invite")

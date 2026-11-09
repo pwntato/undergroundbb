@@ -131,6 +131,9 @@ type createGroupRequest struct {
 	// RootGrantSignature is crypto.Sign(creatorPriv, ContextRoleGrant,
 	// crypto.RoleGrantPayload(gid, creatorUUID, "admin", rootGrantSortKey, "")).
 	RootGrantSignature string `json:"rootGrantSignature"`
+
+	// DM, when present, makes this a direct message (#73): see dmRequestBody.
+	DM *dmRequestBody `json:"dm,omitempty"`
 }
 
 // createGroupResponse confirms the group was created and echoes back the
@@ -205,7 +208,9 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 
 	var namePlaintext, descriptionPlaintext string
 	var nameCiphertext, descriptionCiphertext *models.WrappedBlob
-	if req.Visibility == models.VisibilityPublic {
+	// A direct message has no name or description; dmCreateInput rejects any, once the creator's
+	// signing key is known.
+	if req.DM == nil && req.Visibility == models.VisibilityPublic {
 		if !wrappedBlobEmpty(req.NameCiphertext) || !wrappedBlobEmpty(req.DescriptionCiphertext) {
 			WriteError(w, http.StatusBadRequest, "nameCiphertext/descriptionCiphertext: must not be set for a public group")
 			return
@@ -220,7 +225,7 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-	} else {
+	} else if req.DM == nil {
 		if req.NamePlaintext != "" || req.DescriptionPlaintext != "" {
 			WriteError(w, http.StatusBadRequest, "namePlaintext/descriptionPlaintext: must not be set for a private group")
 			return
@@ -306,8 +311,18 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var dmInput *db.CreateDMInput
+	if req.DM != nil {
+		var dmOK bool
+		dmInput, dmOK = h.dmCreateInput(w, r, &req, userID, creator.SigningPublicKey)
+		if !dmOK {
+			return
+		}
+	}
+
 	in := db.CreateGroupInput{
 		GroupID: groupID,
+		DM:      dmInput,
 
 		CreatorUserID:           userID,
 		CreatorSigningPublicKey: creator.SigningPublicKey,
@@ -337,7 +352,22 @@ func (h *Handler) createGroup(w http.ResponseWriter, r *http.Request) {
 	// back rootGrantSortKey here on a retry would hand out an address
 	// nothing was ever written under (PR #142 round 2 review).
 	storedRootGrantSortKey, err := h.db.CreateGroup(r.Context(), in)
+	if err != nil && in.DM != nil {
+		// A pair marker can outlive its group if a cleanup failed; clear one that names a group
+		// that is gone and try once more.
+		var exists *db.DMExistsError
+		if errors.As(err, &exists) {
+			if g, gerr := h.db.GetGroup(r.Context(), exists.GroupID); gerr == nil && g == nil {
+				if clearErr := h.db.ClearStaleDMPair(r.Context(), db.DMPairPK(userID, in.DM.RecipientUserID), exists.GroupID); clearErr == nil {
+					storedRootGrantSortKey, err = h.db.CreateGroup(r.Context(), in)
+				}
+			}
+		}
+	}
 	if err != nil {
+		if writeDMCreateError(w, err) {
+			return
+		}
 		if errors.Is(err, db.ErrCreatorDeleted) {
 			WriteErrorWithCode(w, http.StatusGone, "this account was deleted", "account_deleted")
 			return

@@ -118,6 +118,9 @@ func (h *Handler) createComment(w http.ResponseWriter, r *http.Request) {
 		postNotFound(w)
 		return
 	}
+	if !h.dmWritable(w, r, group) {
+		return
+	}
 
 	if _, ok := idgen.ValidCommentPath(req.Path); !ok {
 		WriteError(w, http.StatusBadRequest, "path: must be one to "+strconv.Itoa(idgen.MaxCommentDepth)+" segments of four digits from 0001, joined by dots")
