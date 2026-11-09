@@ -12,7 +12,7 @@ import {
   revocationText,
   validateSettingsForm,
 } from './groupSettingsForm'
-import type { ExpiryPolicy } from './expiryPolicy'
+import { SAFE_EXPIRY_POLICY, type ExpiryPolicy } from './expiryPolicy'
 import type { SettingsView } from './runGroupSettings'
 
 function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
@@ -33,7 +33,7 @@ function detail(overrides: Partial<GroupDetail> = {}): GroupDetail {
   }
 }
 
-const ALLOW_NEVER = { allowNeverExpire: true, defaultDays: 30 } as const
+const ALLOW_NEVER = { known: true, allowNeverExpire: true, defaultDays: 30 } as const
 
 function render(view: SettingsView, policy = ALLOW_NEVER as ExpiryPolicy): string {
   return renderToStaticMarkup(
@@ -214,7 +214,7 @@ describe('converting to Open (#61)', () => {
   })
 
   it('hides the box where it is forbidden, and tells an admin of a never-expire group to pick days', () => {
-    const forbid: ExpiryPolicy = { allowNeverExpire: false, defaultDays: 30 }
+    const forbid: ExpiryPolicy = { known: true, allowNeverExpire: false, defaultDays: 30 }
     const html = render(publicView(detail({ role: 'admin', expirationDays: 0 })), forbid)
     expect(html).not.toContain('Never expire messages')
     expect(html).toContain('no longer allows messages that never expire')
@@ -223,8 +223,27 @@ describe('converting to Open (#61)', () => {
   })
 
   it('says nothing about it for a group that already expires, where it is forbidden', () => {
-    const forbid: ExpiryPolicy = { allowNeverExpire: false, defaultDays: 30 }
+    const forbid: ExpiryPolicy = { known: true, allowNeverExpire: false, defaultDays: 30 }
     const html = render(publicView(detail({ role: 'admin', expirationDays: 30 })), forbid)
+    expect(html).not.toContain('Never expire messages')
+    expect(html).not.toContain('no longer allows')
+  })
+
+  it('keeps the box, and shows no notice, for a never-expire group while the policy is unknown', () => {
+    const html = render(
+      publicView(detail({ role: 'admin', expirationDays: 0 })),
+      SAFE_EXPIRY_POLICY,
+    )
+    expect(html).toContain('Never expire messages')
+    expect(html).toMatch(/type="checkbox" checked=""/)
+    expect(html).not.toContain('no longer allows')
+  })
+
+  it('offers no box to a group that expires while the policy is unknown', () => {
+    const html = render(
+      publicView(detail({ role: 'admin', expirationDays: 30 })),
+      SAFE_EXPIRY_POLICY,
+    )
     expect(html).not.toContain('Never expire messages')
     expect(html).not.toContain('no longer allows')
   })

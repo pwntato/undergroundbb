@@ -21,7 +21,7 @@ import {
   revocationText,
   validateSettingsForm,
 } from './groupSettingsForm'
-import type { ExpiryPolicy } from './expiryPolicy'
+import { effectivePolicy, type ExpiryPolicy } from './expiryPolicy'
 import { settingsFormOf, startingDays } from './settingsFormValues'
 import type { SettingsForm, SettingsView } from './runGroupSettings'
 
@@ -72,14 +72,24 @@ export function GroupSettingsPanel({
   // What the admin typed, or null until they type: the field then shows the group's own number of days,
   // or the deployment's default for a never-expire group (the policy may arrive after this mounts).
   const [typedDays, setDays] = useState<string | null>(null)
-  const days = typedDays ?? startingDays(detail.expirationDays, policy)
+  // While the policy is unknown a never-expire group keeps its setting (see neverExpireAllowed).
+  const effective = effectivePolicy(policy, detail.expirationDays)
+  const allowNever = effective.allowNeverExpire
+  const days = typedDays ?? startingDays(detail.expirationDays, effective)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [confirmingConvert, setConfirmingConvert] = useState(false)
   const [typedName, setTypedName] = useState('')
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    const form = settingsFormOf({ name, description, neverExpires, days, policy })
+    const form = settingsFormOf({
+      name,
+      description,
+      neverExpires,
+      days,
+      policy,
+      currentDays: detail.expirationDays,
+    })
     const problem = validateSettingsForm(form)
     if (problem !== null) {
       setValidationError(problem)
@@ -260,12 +270,12 @@ export function GroupSettingsPanel({
               min={1}
               max={MAX_EXPIRATION_DAYS}
               value={days}
-              disabled={neverExpires && policy.allowNeverExpire}
+              disabled={neverExpires && allowNever}
               onChange={(e) => {
                 setDays(e.target.value)
               }}
             />
-            {policy.allowNeverExpire ? (
+            {allowNever ? (
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"

@@ -2484,7 +2484,11 @@ write is refused rather than revived.
 group that was created never-expire while it was allowed. The web client reads the same two settings: it
 shows no "never expire" box where it is off (an admin of such a group is told to pick a number of days),
 and starts a new group at the deployment's default number of days. Until the config arrives, or if it
-cannot be read, it offers no permanent archive and 30 days.
+cannot be read, the create form offers no permanent archive and 30 days, and the settings screen leaves a
+group that is already never-expire as it is (a rename must not quietly start its messages expiring); if the
+deployment really forbids it the server refuses the save. `DEFAULT_EXPIRATION_DAYS` is held to the same
+3650-day ceiling the server enforces on a group's setting. The server does not apply the default itself: a
+create always states its own `expirationDays`.
 
 It also lets the generation chain be truncated, but **only from the old end, and only contiguously**.
 Because generation *n* is reachable solely by unwrapping generation *n+1*, every generation is a

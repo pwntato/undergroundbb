@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pwntato/undergroundbb/internal/config"
 	"github.com/pwntato/undergroundbb/internal/crypto"
 	"github.com/pwntato/undergroundbb/internal/db"
 	"github.com/pwntato/undergroundbb/internal/idgen"
@@ -628,7 +629,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 // days * 86400 seconds from now (PR #142 review): a huge, effectively
 // unbounded int64 here would risk overflowing that arithmetic once #34's
 // sibling issues actually consume ExpirationDays this way.
-const maxExpirationDays = 3650
+const maxExpirationDays = config.MaxExpirationDays
 
 // errExpirationOffNotAllowed and errExpirationDaysInvalid are
 // validateExpirationDays' failure modes.

@@ -1,4 +1,4 @@
-import { chosenExpirationDays, type ExpiryPolicy } from './expiryPolicy'
+import { chosenExpirationDays, effectivePolicy, type ExpiryPolicy } from './expiryPolicy'
 import type { SettingsForm } from './runGroupSettings'
 
 /**
@@ -12,13 +12,15 @@ export function settingsFormOf(f: {
   readonly neverExpires: boolean
   readonly days: string
   readonly policy: ExpiryPolicy
+  /** The group's stored expirationDays (0 = never): while the policy is unknown a never-expire group keeps it. */
+  readonly currentDays: number
 }): SettingsForm {
   return {
     name: f.name,
     description: f.description,
     expirationDays: chosenExpirationDays({
       neverExpires: f.neverExpires,
-      policy: f.policy,
+      policy: effectivePolicy(f.policy, f.currentDays),
       days: Number(f.days) >= 1 ? Number(f.days) : Number.NaN,
     }),
   }

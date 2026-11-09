@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { SAFE_EXPIRY_POLICY } from './expiryPolicy'
 import { settingsFormOf, startingDays } from './settingsFormValues'
 
-const allow = { allowNeverExpire: true, defaultDays: 30 }
-const forbid = { allowNeverExpire: false, defaultDays: 30 }
-const base = { name: 'A', description: 'B', neverExpires: false, days: '14' }
+const allow = { known: true, allowNeverExpire: true, defaultDays: 30 }
+const forbid = { known: true, allowNeverExpire: false, defaultDays: 30 }
+const base = { name: 'A', description: 'B', neverExpires: false, days: '14', currentDays: 14 }
 
 describe('settingsFormOf', () => {
   it('carries the name and description through and parses the days', () => {
@@ -35,8 +36,48 @@ describe('settingsFormOf', () => {
 
 describe('startingDays', () => {
   it("is the group's own days, or the deployment's default for a never-expire group", () => {
-    expect(startingDays(45, { allowNeverExpire: true, defaultDays: 14 })).toBe('45')
-    expect(startingDays(0, { allowNeverExpire: true, defaultDays: 14 })).toBe('14')
-    expect(startingDays(0, { allowNeverExpire: false, defaultDays: 90 })).toBe('90')
+    expect(startingDays(45, { known: true, allowNeverExpire: true, defaultDays: 14 })).toBe('45')
+    expect(startingDays(0, { known: true, allowNeverExpire: true, defaultDays: 14 })).toBe('14')
+    expect(startingDays(0, { known: true, allowNeverExpire: false, defaultDays: 90 })).toBe('90')
+  })
+})
+
+describe('saving a never-expire group before the policy is known (review of #357)', () => {
+  it('keeps 0, so a rename made before /api/config answers does not switch the group to expiring', () => {
+    const form = settingsFormOf({
+      name: 'Renamed',
+      description: '',
+      neverExpires: true,
+      days: startingDays(0, SAFE_EXPIRY_POLICY),
+      policy: SAFE_EXPIRY_POLICY,
+      currentDays: 0,
+    })
+    expect(form.expirationDays).toBe(0)
+  })
+
+  it('still sends days for a group that expires', () => {
+    const form = settingsFormOf({
+      name: 'A',
+      description: '',
+      neverExpires: false,
+      days: '45',
+      policy: SAFE_EXPIRY_POLICY,
+      currentDays: 45,
+    })
+    expect(form.expirationDays).toBe(45)
+  })
+})
+
+describe('a stale tick on a group that expires, before the policy is known', () => {
+  it('does not become never-expire', () => {
+    const form = settingsFormOf({
+      name: 'A',
+      description: '',
+      neverExpires: true,
+      days: '45',
+      policy: SAFE_EXPIRY_POLICY,
+      currentDays: 45,
+    })
+    expect(form.expirationDays).toBe(45)
   })
 })

@@ -11,7 +11,7 @@ import { createElement } from 'react'
 import { CreateGroupFormStep, type GroupFormValues } from './CreateGroupFormStep'
 import { buildGroupValues, revocationModeFor } from './groupFormValues'
 
-const ALLOW_NEVER = { allowNeverExpire: true, defaultDays: 30 } as const
+const ALLOW_NEVER = { known: true, allowNeverExpire: true, defaultDays: 30 } as const
 
 const VALUES: GroupFormValues = {
   visibility: 'public',
@@ -101,18 +101,18 @@ describe('CreateGroupFormStep initialValues', () => {
       neverExpires: true,
     } as const
     expect(
-      buildGroupValues({ ...f, policy: { allowNeverExpire: true, defaultDays: 14 } })
+      buildGroupValues({ ...f, policy: { known: true, allowNeverExpire: true, defaultDays: 14 } })
         .expirationDays,
     ).toBe(0)
     expect(
-      buildGroupValues({ ...f, policy: { allowNeverExpire: false, defaultDays: 14 } })
+      buildGroupValues({ ...f, policy: { known: true, allowNeverExpire: false, defaultDays: 14 } })
         .expirationDays,
     ).toBe(14)
     expect(
       buildGroupValues({
         ...f,
         neverExpires: false,
-        policy: { allowNeverExpire: true, defaultDays: 14 },
+        policy: { known: true, allowNeverExpire: true, defaultDays: 14 },
       }).expirationDays,
     ).toBe(14)
   })
@@ -124,7 +124,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
-        policy: { allowNeverExpire: false, defaultDays: 14 },
+        policy: { known: true, allowNeverExpire: false, defaultDays: 14 },
       }),
     )
     expect(html).not.toContain('type="checkbox"')
@@ -139,7 +139,7 @@ describe('CreateGroupFormStep initialValues', () => {
           /* not exercised by a static render */
         },
         error: null,
-        policy: { allowNeverExpire: true, defaultDays: 14 },
+        policy: { known: true, allowNeverExpire: true, defaultDays: 14 },
       }),
     )
     expect(html).toContain('type="checkbox"')
