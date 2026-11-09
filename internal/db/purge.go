@@ -369,7 +369,7 @@ func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[str
 			TableName:              aws.String(c.table),
 			IndexName:              aws.String("GSI1"),
 			KeyConditionExpression: aws.String("GSI1PK = :pk"),
-			ProjectionExpression:   aws.String("PK, SK"),
+			ProjectionExpression:   aws.String("PK, SK, SenderUserID, GroupID"),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
 			},
@@ -390,6 +390,15 @@ func (c *Client) planPurge(ctx context.Context, userID string, purgeable map[str
 				continue
 			}
 			plan.keys = append(plan.keys, map[string]types.AttributeValue{"PK": it["PK"], "SK": it["SK"]})
+			// A DM slot addressed to this account also names the sender's pending pointer, which
+			// would otherwise keep counting against their cap (the same as in sweepUserRows).
+			if strings.HasPrefix(sk.Value, dmRequestPrefix) {
+				sender, _ := it["SenderUserID"].(*types.AttributeValueMemberS)
+				gid, _ := it["GroupID"].(*types.AttributeValueMemberS)
+				if sender != nil && gid != nil {
+					plan.keys = append(plan.keys, dmOutKey(sender.Value, gid.Value))
+				}
+			}
 		}
 		if out.LastEvaluatedKey == nil {
 			break

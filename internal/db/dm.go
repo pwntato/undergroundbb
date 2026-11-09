@@ -41,6 +41,9 @@ var (
 	ErrDMExists = errors.New("db: a direct message between these two users already exists")
 	// ErrDMCoolingOff means the recipient declined this sender's DM and the cool-off has not ended.
 	ErrDMCoolingOff = errors.New("db: the recipient declined; the cool-off has not ended")
+	// ErrDMCleanupIncomplete accompanies a decline that committed but could not remove the
+	// sender's side of the conversation.
+	ErrDMCleanupIncomplete = errors.New("db: declined, but the sender's side could not be removed")
 	// ErrDMRaced means the pair marker changed while the create was being refused; trying again
 	// gives a definite answer.
 	ErrDMRaced = errors.New("db: the direct message changed while it was being created")
@@ -401,8 +404,12 @@ func (c *Client) DeclineDM(ctx context.Context, req *models.DMRequest, pairPK st
 		}
 		return err
 	}
+	// The decline has committed: the slot is gone and the cool-off is running. Whatever goes wrong
+	// removing the sender's side now (a failed sweep, or the sender withdrawing at the same
+	// moment) leaves at worst a one-member conversation that goes when they leave it, so it is
+	// reported separately and the caller still answers success.
 	if _, err := c.deleteGroup(ctx, req.GroupID, req.SenderUserID); err != nil && !errors.Is(err, ErrNotMember) {
-		return err
+		return fmt.Errorf("%w: %v", ErrDMCleanupIncomplete, err)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -831,6 +832,49 @@ func TestAcceptDMByADeletedAccountIsGone(t *testing.T) {
 	}
 	rec := f.accept(t, req)
 	if rec.Code != http.StatusGone || errCode(t, rec) != "account_deleted" {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A decline that committed but could not remove the sender's side still answers success, and the
+// cool-off holds.
+func TestDeclineDMSucceedsWhenTheSendersSideCannotBeRemoved(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	// Remove the group's META, so removing the sender's side fails after the decline commits.
+	if _, err := rawDDB(t).DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(testTableName()),
+		Key:       map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "GROUP#" + req.GroupID}, "SK": &types.AttributeValueMemberS{Value: "META"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.decline(t, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decline: %d %s", rec.Code, rec.Body.String())
+	}
+	if p := getPair(t, f.sender.userID, f.recipient.userID); p == nil || p.Status != models.DMPairDeclined {
+		t.Errorf("the decline did not commit: %+v", p)
+	}
+	if rec := f.accept(t, req); rec.Code != http.StatusNotFound {
+		t.Errorf("accept after the decline: %d", rec.Code)
+	}
+}
+
+func TestAcceptDMKeysChangedMessageSaysWhatTheRecipientCanDo(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+	_, err := rawDDB(t).UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName:        aws.String(testTableName()),
+		Key:              map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: "USER#" + f.recipient.userID}, "SK": &types.AttributeValueMemberS{Value: "PROFILE"}},
+		UpdateExpression: aws.String("SET SigningPublicKey = :k"), ExpressionAttributeValues: map[string]types.AttributeValue{":k": &types.AttributeValueMemberB{Value: make([]byte, 32)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := f.accept(t, req)
+	var m map[string]string
+	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	if rec.Code != http.StatusConflict || m["code"] != "keys_changed" || !strings.Contains(m["error"], "decline it and message them yourself") {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
 }

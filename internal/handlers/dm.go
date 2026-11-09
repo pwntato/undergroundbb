@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -247,7 +248,7 @@ func (h *Handler) acceptDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if string(self.SigningPublicKey) != string(req.RecipientEd25519) || string(self.WrappingPublicKey) != string(req.RecipientX25519) {
-		WriteErrorWithCode(w, http.StatusConflict, "your keys changed since this message was sent; ask them to send it again", "keys_changed")
+		WriteErrorWithCode(w, http.StatusConflict, "your keys changed since this message was sent; decline it and message them yourself (they can also withdraw it and send it again)", "keys_changed")
 		return
 	}
 	switch err := h.db.AcceptDM(r.Context(), req, pairPK); {
@@ -283,6 +284,10 @@ func (h *Handler) declineDM(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "declined"})
 	case errors.Is(err, db.ErrDMNotFound):
 		WriteError(w, http.StatusNotFound, "no such pending direct message")
+	case errors.Is(err, db.ErrDMCleanupIncomplete):
+		// The decline itself committed; see DeclineDM.
+		log.Printf("decline DM %s: %v", req.GroupID, err)
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "declined"})
 	default:
 		WriteInternalError(w, r, err, "could not decline the direct message")
 	}

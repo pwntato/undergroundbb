@@ -736,3 +736,29 @@ func TestEveryPartitionKindIsKnownToThePurge(t *testing.T) {
 		t.Errorf("partition kinds the purge does not know about: %s\nteach internal/db/purge.go to delete them (or to leave them on purpose) and add them to purgeKnownPartitions", strings.Join(unknown, ", "))
 	}
 }
+
+// A real user's pending DM to a test account: purging the account removes the slot, and the
+// sender's pending pointer with it, or it would count against their cap until they left.
+func TestPurgeRemovesTheSendersPendingPointerForADMToATestAccount(t *testing.T) {
+	c := testClient(t)
+	sender, recipient := registerAccount(t, c, false), registerAccount(t, c, true)
+	gid := putGroup(t, c, sender.UserID)
+	putRaw(t, c, map[string]types.AttributeValue{
+		"PK": s("GROUP#" + gid), "SK": s("DMREQ#" + recipient.UserID), "GroupID": s(gid), "SenderUserID": s(sender.UserID),
+		"GSI1PK": s("USER#" + recipient.UserID), "GSI1SK": s("DMREQ#" + gid),
+	})
+	putRaw(t, c, map[string]types.AttributeValue{"PK": s("USER#" + sender.UserID), "SK": s("DMOUT#" + gid), "GroupID": s(gid)})
+
+	if _, err := c.PurgeTestAccounts(context.Background(), purgeOnly(recipient.UserID)); err != nil {
+		t.Fatalf("PurgeTestAccounts: %v", err)
+	}
+	if itemExists(t, c, "GROUP#"+gid, "DMREQ#"+recipient.UserID) {
+		t.Error("the slot addressed to the purged account survived")
+	}
+	if itemExists(t, c, "USER#"+sender.UserID, "DMOUT#"+gid) {
+		t.Error("the sender's pending pointer survived (it would count against their cap)")
+	}
+	if !itemExists(t, c, "GROUP#"+gid, "META") {
+		t.Error("the real sender's group was removed")
+	}
+}

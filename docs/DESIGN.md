@@ -1728,7 +1728,7 @@ the sender's membership and root grant, and four DM-only rows:
 **Opening it.** The recipient's client shows the sender's name and the fingerprint of the keys, verifies the
 admission signature and the keys against its pins, then calls `POST /api/dms/{gid}/accept?requestId=`. One
 transaction writes their `MEMBER#` row (role member, generation 0, the sender's wrap) and the admission record, deletes the slot and the sender's
-pointer, and marks the pair `active`. It is refused if the recipient's keys are no longer the ones the sender signed (`409 keys_changed`) or their key epoch moved (the wrap would be dormant on arrival); the sender then starts again. Nothing of the conversation is readable before accept: a non-member has no membership to read or post through.
+pointer, and marks the pair `active`. It is refused if the recipient's keys are no longer the ones the sender signed (`409 keys_changed`) or their key epoch moved (the wrap would be dormant on arrival). Either way the way forward is for the recipient to decline and start a DM themselves (a decline only keeps the *sender* out), or for the sender to withdraw the pending one and send it again; the sender cannot resend while the pending one exists, and the message tells the recipient so. Nothing of the conversation is readable before accept: a non-member has no membership to read or post through.
 
 **Declining.** `POST /api/dms/{gid}/decline?requestId=` deletes the conversation (the sender's membership,
 their messages, the slot) and turns the pair marker into `declined` with a **7-day** TTL (the join-request cool-off). During it the sender gets
