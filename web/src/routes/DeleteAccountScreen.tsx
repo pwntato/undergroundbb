@@ -215,7 +215,7 @@ export function DeleteAccountScreen() {
 
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-4">
-      <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">Delete account</h1>
+      <h1 className="text-2xl font-bold text-primary">Delete account</h1>
       {error !== null && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>

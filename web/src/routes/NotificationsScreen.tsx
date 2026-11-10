@@ -119,7 +119,7 @@ export function NotificationsScreen() {
 
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-4 text-center">
-      <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">Notifications</h1>
+      <h1 className="text-2xl font-bold text-primary">Notifications</h1>
       <NotificationsPanel
         load={load}
         usernames={usernames}

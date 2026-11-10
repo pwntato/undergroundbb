@@ -52,21 +52,40 @@ describe('the token vocabulary', () => {
 })
 
 describe('headingPairProblem', () => {
-  it('refuses uppercase headings with no letter-spacing', () => {
-    expect(headingPairProblem({ 'case-heading': 'uppercase' })).not.toBeNull()
-    expect(
-      headingPairProblem({ 'case-heading': 'uppercase', 'tracking-heading': '0em' }),
-    ).not.toBeNull()
-    expect(
-      headingPairProblem({ 'case-heading': 'uppercase', 'tracking-heading': '0px' }),
-    ).not.toBeNull()
+  const upper = (tracking?: string) =>
+    headingPairProblem({
+      'case-heading': 'uppercase',
+      ...(tracking === undefined ? {} : { 'tracking-heading': tracking }),
+    })
+
+  it('refuses uppercase headings whose spacing is missing, zero or not above zero', () => {
+    for (const t of [
+      undefined,
+      '',
+      '0',
+      '0em',
+      '0px',
+      '0.0em',
+      '0rem',
+      '0%',
+      'normal',
+      '-0.02em',
+      '-1px',
+    ]) {
+      expect(upper(t), String(t)).not.toBeNull()
+    }
   })
 
-  it('accepts uppercase with spacing, and any spacing without uppercase', () => {
-    expect(
-      headingPairProblem({ 'case-heading': 'uppercase', 'tracking-heading': '0.08em' }),
-    ).toBeNull()
+  it('refuses spacing that is not a plain length', () => {
+    for (const t of ['0.08', 'calc(1em)', 'var(--x)', '1e-3em', '5%', '.em', 'em']) {
+      expect(upper(t), t).not.toBeNull()
+    }
+  })
+
+  it('accepts uppercase with positive spacing, and any spacing without uppercase', () => {
+    for (const t of ['0.08em', '.05em', '1px', '0.1rem']) expect(upper(t), t).toBeNull()
     expect(headingPairProblem({ 'case-heading': 'none' })).toBeNull()
+    expect(headingPairProblem({ 'case-heading': 'none', 'tracking-heading': '-0.02em' })).toBeNull()
     expect(headingPairProblem({})).toBeNull()
   })
 

@@ -82,9 +82,13 @@ export const TOKEN_NAMES: readonly string[] = TOKENS.map((t) => t.name)
 /** The values `--ubb-case-heading` may take. Anything else is refused by the validator. */
 export const CASE_VALUES = ['none', 'uppercase', 'lowercase', 'capitalize'] as const
 
+/** A plain length: digits, an optional fraction, and a unit. No sign, calc(), percentage or keyword. */
+const PLAIN_LENGTH = /^(\d*\.)?\d+(em|rem|px)$/
+
 /**
  * Uppercase text with no letter-spacing is hard to read, so a theme that uppercases its headings has
- * to open them up too. Returns the problem, or null when the pair is fine.
+ * to open them up too: a plain length strictly above zero (negative spacing is tighter than none,
+ * which makes it worse). Returns the problem, or null when the pair is fine.
  */
 export function headingPairProblem(values: {
   'case-heading'?: string
@@ -92,8 +96,8 @@ export function headingPairProblem(values: {
 }): string | null {
   if (values['case-heading'] !== 'uppercase') return null
   const tracking = (values['tracking-heading'] ?? '0').trim()
-  if (tracking === '0' || tracking === '0em' || tracking === '0px' || tracking === '') {
-    return 'Uppercase headings need letter-spacing above zero.'
+  if (!PLAIN_LENGTH.test(tracking) || !(parseFloat(tracking) > 0)) {
+    return 'Uppercase headings need a letter-spacing above zero, written as a length such as 0.08em.'
   }
   return null
 }

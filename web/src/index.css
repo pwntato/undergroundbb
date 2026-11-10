@@ -105,7 +105,7 @@
   --ubb-border-width: 1px;
   --ubb-border-width-strong: 1px;
 
-  --ubb-shadow-xs: 0 1px 1px 0 oklch(0 0 0 / 0.05);
+  --ubb-shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.05);
   --ubb-shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.3);
   --ubb-shadow-md: 0 4px 6px -1px oklch(0 0 0 / 0.4);
   --ubb-shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.5);

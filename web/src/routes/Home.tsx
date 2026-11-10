@@ -134,7 +134,7 @@ export function Home() {
   if (!session.userId) {
     return (
       <div className="flex flex-col items-center gap-4 text-center">
-        <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">UndergroundBB</h1>
+        <h1 className="text-2xl font-bold text-primary">UndergroundBB</h1>
         <p className="text-sm text-muted-foreground">Frontend scaffold. Nothing to see yet.</p>
         <div className="flex gap-2">
           <Button asChild>
@@ -177,7 +177,7 @@ export function Home() {
 
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-4 text-center">
-      <h1 className="font-mono text-2xl font-bold tracking-tight text-primary">UndergroundBB</h1>
+      <h1 className="text-2xl font-bold text-primary">UndergroundBB</h1>
 
       <GroupList
         load={load}
