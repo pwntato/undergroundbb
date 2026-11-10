@@ -26,6 +26,7 @@ import type { UserProjection } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import * as ed25519 from '@/lib/crypto/ed25519'
 import { fingerprint } from '@/lib/crypto/fingerprint'
+import { keysOnDay } from '@/lib/crypto/grant-chain'
 import { admissionPayload } from '@/lib/crypto/group'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type {
@@ -475,13 +476,23 @@ async function verifyIncoming(deps: AcceptDMDeps, dm: IncomingDM): Promise<Verif
     dm.admissionDay,
     0,
   )
-  // Any key the sender has held: the admission was signed when they sent it, and they may have
-  // rotated since. The whole set was just checked against the pin.
-  const signedByTheSender = found.signingKeys.some((key) =>
+  // The key the sender held on the day the admission is dated, not any key they have ever held:
+  // a retired key (leaked, which is usually why people rotate) must not be able to write. The
+  // history is the served one, already checked against the pins above.
+  const day = admissionDayStart(dm.admissionDay)
+  if (day === null) return { ok: false, kind: 'badAdmission' }
+  const signedByTheSender = keysOnDay(found.served, day).some((key) =>
     ed25519.verify(key, ed25519.SigningContext.Admission, payload, signature),
   )
   if (!signedByTheSender) return { ok: false, kind: 'badAdmission' }
   return { ok: true, found }
+}
+
+/** Midnight UTC of a YYYY-MM-DD day in ms, or null if it is not a real date (as admission.ts does). */
+function admissionDayStart(day: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null
+  const ms = Date.parse(`${day}T00:00:00.000Z`)
+  return Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== day ? null : ms
 }
 
 /**
@@ -608,4 +619,24 @@ export function shouldReloadAfterAccept(outcome: AcceptDMResult): boolean {
     outcome.kind === 'alreadyMember' ||
     outcome.kind === 'ambiguous'
   )
+}
+
+/**
+ * Where to send someone whose "start a conversation" found one already there (`dm_exists`). The pair
+ * marker is the same in both directions, so it may be a DM the OTHER person sent that they have not
+ * opened yet: they are not a member of it, its page is a 404 to them, and it is waiting under Direct
+ * messages. If the list cannot be read, the page of the group is the answer for the common case (a
+ * conversation they started themselves).
+ */
+export async function existingDMPath(
+  listIncoming: () => Promise<readonly { readonly groupId: string }[]>,
+  groupId: string,
+): Promise<string> {
+  try {
+    const waiting = await listIncoming()
+    if (waiting.some((dm) => dm.groupId === groupId)) return '/dms'
+  } catch {
+    // Fall through to the group.
+  }
+  return `/groups/${groupId}/posts`
 }

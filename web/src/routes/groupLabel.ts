@@ -21,7 +21,9 @@ export function groupLabel(group: DisplayGroup, usernames?: ReadonlyMap<string, 
     case 'dm':
       // A DM has no name (#73): it is called by the other person's username, or a plain word
       // where that has not been read (or the entry came without it).
-      return group.dmWith === undefined ? 'Direct message' : memberLabel(group.dmWith, usernames)
+      return group.dmWith === undefined || usernames === undefined
+        ? 'Direct message'
+        : memberLabel(group.dmWith, usernames)
     case 'plaintext':
     case 'decrypted':
       return group.displayName ?? '(unnamed group)'

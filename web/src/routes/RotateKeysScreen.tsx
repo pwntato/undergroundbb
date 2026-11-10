@@ -31,7 +31,7 @@ import { useSession } from '@/lib/session/useSession'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { groupLabel } from './groupLabel'
+import { groupLabelsOf } from './groupLabels'
 import { RecoveryCodeStep } from './RecoveryCodeStep'
 import { failureMessage, pendingRekeyText, selfRekeyText, stepText } from './rotateKeysCopy'
 import { RotateKeysRetry } from './RotateKeysRetry'
@@ -150,8 +150,9 @@ export function RotateKeysScreen() {
           setCachedGroupName,
           userId: pre.userId,
         })
+        const groupLabels = await groupLabelsOf(groups)
         if (!cancelled) {
-          setLabels(new Map(groups.map((g) => [g.groupId, groupLabel(g)])))
+          setLabels(groupLabels)
           setStep({ name: 'review', pre })
         }
       } catch (err) {

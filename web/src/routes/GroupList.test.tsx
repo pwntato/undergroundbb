@@ -222,7 +222,7 @@ describe('GroupList direct messages', () => {
   it('labels a DM by the other person, the deleted marker, or a plain word', () => {
     expect(groupLabel(dm, names)).toBe('rex')
     expect(groupLabel(dm, new Map([['user-9', '']]))).toBe('deleted user')
-    expect(groupLabel(dm)).toBe('user')
+    expect(groupLabel(dm)).toBe('Direct message')
     const unnamed = displayGroup({
       groupId: 'dm-2',
       visibility: 'private',

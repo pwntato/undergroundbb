@@ -9,6 +9,7 @@ import { listIncomingDMs, type IncomingDM } from '@/lib/api/dms'
 import { useSession } from '@/lib/session/useSession'
 import { IncomingDMsPanel, type DMReviewPrompt } from './DMPanels'
 import { NoticeAlert } from './JoinRequestPanels'
+import { ReauthenticateStep } from './ReauthenticateStep'
 import { makeAcceptDMDeps } from './rotationDeps'
 import {
   acceptDMFailureMessage,
@@ -17,6 +18,7 @@ import {
   runDeclineDM,
   shouldReloadAfterAccept,
 } from './runDMs'
+import { useLiveKeys } from './useLiveKeys'
 import { useUsernames } from './useUsernames'
 
 type LoadState =
@@ -28,6 +30,9 @@ export function DirectMessagesScreen() {
   const session = useSession()
   const userId = session.userId
   const navigate = useNavigate()
+  // Review needs this tab's keys (it compares the DM with this device's own fingerprint), and a reload
+  // or a new tab drops them: ask for the password in place, as the other signing screens do.
+  const liveKeys = useLiveKeys(userId)
   const deps = useMemo(() => (userId === null ? null : makeAcceptDMDeps(userId)), [userId])
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [review, setReview] = useState<DMReviewPrompt | null>(null)
@@ -71,7 +76,8 @@ export function DirectMessagesScreen() {
         setReview({ groupId, fingerprint: prepared.fingerprint, firstSight: prepared.firstSight })
       } else {
         setReview(null)
-        setError(acceptDMFailureMessage(prepared))
+        if (prepared.kind === 'coldKeys') liveKeys.markCold()
+        else setError(acceptDMFailureMessage(prepared))
       }
       setBusyGroupId(null)
     })()
@@ -91,8 +97,9 @@ export function DirectMessagesScreen() {
         void navigate(`/groups/${outcome.groupId}/posts`)
         return
       }
-      setError(acceptDMFailureMessage(outcome))
       setReview(null)
+      if (outcome.kind === 'coldKeys') liveKeys.markCold()
+      else setError(acceptDMFailureMessage(outcome))
       if (shouldReloadAfterAccept(outcome)) await reload(() => false)
       setBusyGroupId(null)
     })()
@@ -112,6 +119,18 @@ export function DirectMessagesScreen() {
       await reload(() => false)
       setBusyGroupId(null)
     })()
+  }
+
+  if (userId !== null && liveKeys.status === 'checking') return null
+  if (userId !== null && liveKeys.status === 'cold') {
+    // Cancelling carries on to the list: Review then asks again if the keys are still cold.
+    return (
+      <ReauthenticateStep
+        sessionUserId={userId}
+        onDone={liveKeys.markWarm}
+        onCancel={liveKeys.markWarm}
+      />
+    )
   }
 
   return (

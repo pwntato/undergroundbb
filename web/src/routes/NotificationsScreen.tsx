@@ -13,7 +13,7 @@ import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
-import { groupLabel } from './groupLabel'
+import { groupLabelsOf } from './groupLabels'
 import { NotificationsPanel, type NotificationsLoad } from './NotificationsPanel'
 import { runListGroups } from './runListGroups'
 import { markFailedAfter, runTrackedMarkRead } from './runMarkRead'
@@ -68,7 +68,8 @@ export function NotificationsScreen() {
           setCachedGroupName,
           userId: session.userId as string,
         })
-        if (!cancelled) setGroupLabels(new Map(groups.map((g) => [g.groupId, groupLabel(g)])))
+        const labels = await groupLabelsOf(groups)
+        if (!cancelled) setGroupLabels(labels)
       } catch {
         // Names are best effort; the sentences say "a group".
       }

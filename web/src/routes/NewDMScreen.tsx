@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
+import { listIncomingDMs } from '@/lib/api/dms'
 import { getUser } from '@/lib/api/users'
 import { bytesToBase64 } from '@/lib/crypto/base64'
 import { generateUUID } from '@/lib/crypto/uuid'
@@ -14,7 +15,13 @@ import { NewDMPanel, type NewDMState } from './DMPanels'
 import { NoticeAlert } from './JoinRequestPanels'
 import { ReauthenticateStep } from './ReauthenticateStep'
 import { makeStartDMDeps } from './rotationDeps'
-import { prepareStartDM, runStartDM, startDMFailureMessage, type DMMaterial } from './runDMs'
+import {
+  existingDMPath,
+  prepareStartDM,
+  runStartDM,
+  startDMFailureMessage,
+  type DMMaterial,
+} from './runDMs'
 import { useExpiryPolicy } from './useExpiryPolicy'
 import { useLiveKeys } from './useLiveKeys'
 
@@ -80,7 +87,8 @@ function NewDM({ recipientId }: { readonly recipientId: string | undefined }) {
         return
       }
       if (outcome.kind === 'exists') {
-        void navigate(`/groups/${outcome.groupId}/posts`, { replace: true })
+        // It may be one THEY sent and you have not opened: that lives under Direct messages.
+        void navigate(await existingDMPath(listIncomingDMs, outcome.groupId), { replace: true })
         return
       }
       // Nothing was written for any of these, so the next attempt starts over with fresh ids.

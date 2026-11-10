@@ -12,6 +12,7 @@ import { CLOCK_SKEW_MESSAGE } from './replyState'
 import {
   acceptDMFailureMessage,
   prepareAcceptDM,
+  existingDMPath,
   prepareStartDM,
   runAcceptDM,
   runDeclineDM,
@@ -639,15 +640,61 @@ describe('prepareAcceptDM', () => {
     expect(deps.acceptDM).not.toHaveBeenCalled()
   })
 
-  it('accepts an admission signed with a key the sender has since replaced', async () => {
-    const old = person()
-    const current = person()
-    const projection = served(current, OTHER, {
-      keyEpoch: 1,
-      supersededSigningKeys: [{ publicKey: old.edB64, from: '2026-01-01', until: '2026-11-01' }],
+  describe('which of the sender’s keys may sign, by the day the admission is dated', () => {
+    const rotated = () => {
+      const old = person()
+      const current = person()
+      const projection = served(current, OTHER, {
+        keyEpoch: 1,
+        supersededSigningKeys: [{ publicKey: old.edB64, from: '2026-01-01', until: '2026-11-01' }],
+      })
+      return { old, current, projection }
+    }
+
+    it('accepts a key the sender has since replaced when it was current on the admission day', async () => {
+      const { old, current, projection } = rotated()
+      const dm = incoming(old, { admissionDay: '2026-10-20' })
+      const out = await prepareAcceptDM(acceptDeps(current, { served: projection }), dm)
+      expect(out).toMatchObject({ ok: true, fingerprint: prints(current) })
     })
-    const out = await prepareAcceptDM(acceptDeps(current, { served: projection }), incoming(old))
-    expect(out).toMatchObject({ ok: true, fingerprint: prints(current) })
+
+    it('refuses a retired key signing an admission dated after it was retired', async () => {
+      const { old, current, projection } = rotated()
+      const deps = acceptDeps(current, { served: projection })
+      const dm = incoming(old, { admissionDay: '2026-11-09' })
+      expect(await prepareAcceptDM(deps, dm)).toEqual({ ok: false, kind: 'badAdmission' })
+      expect(await runAcceptDM(deps, dm, prints(current))).toEqual({
+        ok: false,
+        kind: 'badAdmission',
+      })
+      expect(deps.acceptDM).not.toHaveBeenCalled()
+    })
+
+    it('refuses the current key on a day before it was current', async () => {
+      const { current, projection } = rotated()
+      const deps = acceptDeps(current, { served: projection })
+      const dm = incoming(current, { admissionDay: '2026-10-20' })
+      expect(await runAcceptDM(deps, dm, prints(current))).toEqual({
+        ok: false,
+        kind: 'badAdmission',
+      })
+      expect(deps.acceptDM).not.toHaveBeenCalled()
+    })
+
+    it.each(['garbage', '2026-13-45', '2026-11-9', '', '2026-02-30'])(
+      'refuses an admission dated %j even when the signature verifies',
+      async (day) => {
+        const sender = person()
+        const deps = acceptDeps(sender)
+        const dm = incoming(sender, { admissionDay: day })
+        expect(await prepareAcceptDM(deps, dm)).toEqual({ ok: false, kind: 'badAdmission' })
+        expect(await runAcceptDM(deps, dm, prints(sender))).toEqual({
+          ok: false,
+          kind: 'badAdmission',
+        })
+        expect(deps.acceptDM).not.toHaveBeenCalled()
+      },
+    )
   })
 
   it('reports a sender who is gone or deleted', async () => {
@@ -846,5 +893,28 @@ describe('runDeclineDM', () => {
     expect(await run(new ApiError(401, 'no'))).toMatchObject({ ok: false, message: /log in/i })
     expect(await run(new ApiError(400, 'bad'))).toEqual({ ok: false, message: 'bad' })
     expect(await run(new TypeError('network'))).toMatchObject({ ok: false, message: /try again/i })
+  })
+})
+
+describe('existingDMPath', () => {
+  it('sends you to Direct messages when the conversation is one they sent that you have not opened', async () => {
+    expect(await existingDMPath(async () => [{ groupId: GROUP }], GROUP)).toBe('/dms')
+  })
+
+  it('sends you to the conversation when it is one you started', async () => {
+    expect(await existingDMPath(async () => [], GROUP)).toBe(`/groups/${GROUP}/posts`)
+    expect(
+      await existingDMPath(
+        async () => [{ groupId: '99999999-9999-4999-8999-999999999999' }],
+        GROUP,
+      ),
+    ).toBe(`/groups/${GROUP}/posts`)
+  })
+
+  it('falls back to the conversation when the waiting list cannot be read', async () => {
+    const failing = async (): Promise<never> => {
+      throw new Error('offline')
+    }
+    expect(await existingDMPath(failing, GROUP)).toBe(`/groups/${GROUP}/posts`)
   })
 })
