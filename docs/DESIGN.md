@@ -3475,6 +3475,17 @@ The token vocabulary was designed against Zine first, deliberately — it is the
 (hard offset shadows, zero radius, thick borders, uppercase headings), and a vocabulary that can
 express it can express the others trivially.
 
+**The vocabulary (#48)** is listed in `web/src/theme/tokens.ts` and defaulted in `web/src/index.css`;
+`tokens.test.ts` fails if the two drift. It is 19 colors (including `card`), three fonts (`sans`,
+`mono`, `heading`), four radii, two border widths (`border-width` for every border, `border-width-strong`
+for cards and alerts), four shadows, one spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and
+three text values: `case-heading`, `tracking-heading` and `tracking-body`. Each is a `--ubb-*` property
+that Tailwind's theme reads, so components use ordinary utilities and a theme only changes values.
+`case-heading` and `tracking-heading` travel together: uppercase headings with no letter-spacing are
+hard to read, and `headingPairProblem` is the check the custom-theme validator will apply. The
+vendored components' `dark:` classes still key off `data-theme="dark"`, so a light theme has to
+account for them (#49 to #52).
+
 Users may write custom themes. A theme is a **JSON object of token values, never a stylesheet**.
 Every value is validated against an allowlist and applied through the CSSOM. No user-supplied string
 ever reaches the page as CSS syntax — see the threat model for why this matters more here than in an

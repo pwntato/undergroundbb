@@ -30,6 +30,8 @@
   --color-muted-foreground: var(--ubb-muted-foreground);
   --color-surface: var(--ubb-surface);
   --color-surface-foreground: var(--ubb-surface-foreground);
+  --color-card: var(--ubb-card);
+  --color-card-foreground: var(--ubb-card-foreground);
   --color-border: var(--ubb-border);
   --color-input: var(--ubb-input);
   --color-ring: var(--ubb-ring);
@@ -45,20 +47,30 @@
   /* Fonts */
   --font-sans: var(--ubb-font-sans);
   --font-mono: var(--ubb-font-mono);
+  --font-heading: var(--ubb-font-heading);
 
   /* Radii */
   --radius-sm: var(--ubb-radius-sm);
   --radius-md: var(--ubb-radius-md);
   --radius-lg: var(--ubb-radius-lg);
+  --radius-xl: var(--ubb-radius-xl);
 
   /* Shadows */
+  --shadow-xs: var(--ubb-shadow-xs);
   --shadow-sm: var(--ubb-shadow-sm);
   --shadow-md: var(--ubb-shadow-md);
   --shadow-lg: var(--ubb-shadow-lg);
+
+  /* Spacing: every p-*, m-*, gap-*, size-* multiplies this. */
+  --spacing: var(--ubb-spacing);
+
+  /* Tailwind's plain `border` utility reads this. */
+  --default-border-width: var(--ubb-border-width);
 }
 
 /*
  * Default theme values. M5 overrides these under [data-theme="..."].
+ * The vocabulary itself is listed in src/theme/tokens.ts, and tokens.test.ts fails if the two drift.
  */
 :root {
   --ubb-background: oklch(0.16 0.01 260);
@@ -67,6 +79,8 @@
   --ubb-muted-foreground: oklch(0.68 0.01 260);
   --ubb-surface: oklch(0.21 0.01 260);
   --ubb-surface-foreground: oklch(0.93 0.01 260);
+  --ubb-card: oklch(0.21 0.01 260);
+  --ubb-card-foreground: oklch(0.93 0.01 260);
   --ubb-border: oklch(0.3 0.01 260);
   --ubb-input: oklch(0.3 0.01 260);
   --ubb-ring: oklch(0.7 0.13 165);
@@ -81,20 +95,61 @@
 
   --ubb-font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --ubb-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --ubb-font-heading: var(--ubb-font-sans);
 
   --ubb-radius-sm: 0.125rem;
   --ubb-radius-md: 0.25rem;
   --ubb-radius-lg: 0.5rem;
+  --ubb-radius-xl: 0.75rem;
 
+  --ubb-border-width: 1px;
+  --ubb-border-width-strong: 1px;
+
+  --ubb-shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.05);
   --ubb-shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.3);
   --ubb-shadow-md: 0 4px 6px -1px oklch(0 0 0 / 0.4);
   --ubb-shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.5);
+
+  --ubb-spacing: 0.25rem;
+
+  --ubb-case-heading: none;
+  --ubb-tracking-heading: 0em;
+  --ubb-tracking-body: 0em;
+}
+
+/*
+ * `border-strong` is the heavier border cards and alerts use, so a theme can thicken the panels
+ * without thickening every input and divider.
+ */
+@utility border-strong {
+  border-style: var(--tw-border-style);
+  border-width: var(--ubb-border-width-strong);
 }
 
 @layer base {
+  /* Preflight leaves border colour as currentcolor; the border token is what borders should use. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    letter-spacing: var(--ubb-tracking-body);
+  }
+
+  /* Headings: the card and alert titles are divs, so they are named by data-slot. */
+  h1,
+  h2,
+  h3,
+  h4,
+  [data-slot='card-title'],
+  [data-slot='alert-title'] {
+    font-family: var(--font-heading);
+    text-transform: var(--ubb-case-heading);
+    letter-spacing: var(--ubb-tracking-heading);
   }
 }
