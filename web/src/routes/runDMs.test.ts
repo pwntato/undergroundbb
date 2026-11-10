@@ -194,7 +194,7 @@ describe('runStartDM', () => {
   it('wraps to and signs over exactly the keys whose fingerprint was confirmed, then sends', async () => {
     const other = person()
     const deps = startDeps(other)
-    const out = await runStartDM(deps, OTHER, prints(other), MATERIAL, 30)
+    const out = await runStartDM(deps, OTHER, prints(other), MATERIAL, 45)
     expect(out).toEqual({ ok: true, groupId: GROUP })
 
     expect(deps.signGroupCreation).toHaveBeenCalledWith({
@@ -224,7 +224,7 @@ describe('runStartDM', () => {
       groupId: GROUP,
       visibility: 'private',
       revocationMode: 'open',
-      expirationDays: 30,
+      expirationDays: 45,
       groupKeyWrapped: SIGNED.groupKeyWrapped,
       trustAnchorSignature: 'anchor-sig',
       rootGrantSortKey: GRANT_REF,
