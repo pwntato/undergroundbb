@@ -14,12 +14,5 @@ export async function groupLabelsOf(
     g.groupType === 'dm' && g.dmWith !== undefined ? [g.dmWith] : [],
   )
   const names = others.length === 0 ? new Map<string, string>() : await resolve(others)
-  return new Map(
-    groups.map((g) => [
-      g.groupId,
-      g.groupType === 'dm' && g.dmWith !== undefined && !names.has(g.dmWith)
-        ? 'Direct message'
-        : groupLabel(g, names),
-    ]),
-  )
+  return new Map(groups.map((g) => [g.groupId, groupLabel(g, names)]))
 }

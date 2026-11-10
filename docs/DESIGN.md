@@ -1771,7 +1771,10 @@ recipient's keys, checks them against its pins (only `match` and `first-sight` p
 fingerprint, and only after the sender confirms it re-reads the keys and wraps the group key and
 signs the admission if they still give that fingerprint. The recipient's client, before calling
 accept, checks that the admission names the keys this device holds, verifies the sender's signature
-over the admission under any key the sender has held, checks the sender's keys against its pins, and
+over the admission under the sender's CURRENT served key only (the day on an admission is the signer's
+own claim and the served key intervals are not signed, so a leaked retired key could otherwise
+backdate a DM into its old interval; a DM sent before the sender rotated cannot be opened and is
+sent again), checks the sender's keys against its pins, and
 shows the sender's fingerprint; accept is called only if a fresh check still gives the confirmed
 fingerprint. A DM is listed under the other person's username (`dmWith` in the group list, derived
 from the pair marker on `META`, so it still names them after they leave). The new-message screen is

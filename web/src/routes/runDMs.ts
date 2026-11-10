@@ -26,7 +26,6 @@ import type { UserProjection } from '@/lib/api/users'
 import { base64ToBytes, bytesToBase64 } from '@/lib/crypto/base64'
 import * as ed25519 from '@/lib/crypto/ed25519'
 import { fingerprint } from '@/lib/crypto/fingerprint'
-import { keysOnDay } from '@/lib/crypto/grant-chain'
 import { admissionPayload } from '@/lib/crypto/group'
 import { evaluatePin, servedSigningKeySet } from '@/lib/crypto/pin'
 import type {
@@ -406,6 +405,8 @@ export type AcceptDMFailure =
   | PersonFailure
   /** The sender's signature does not verify over what it claims: nothing was accepted. */
   | { readonly kind: 'badAdmission' }
+  /** It was signed with a key the sender has since replaced: only their current key counts. */
+  | { readonly kind: 'senderKeysChanged' }
   /** The admission names keys that are not this device's: not made for you. */
   | { readonly kind: 'notYourKeys' }
   /** Your keys changed since it was sent (the server's keys_changed): decline it, they can resend. */
@@ -476,15 +477,20 @@ async function verifyIncoming(deps: AcceptDMDeps, dm: IncomingDM): Promise<Verif
     dm.admissionDay,
     0,
   )
-  // The key the sender held on the day the admission is dated, not any key they have ever held:
-  // a retired key (leaked, which is usually why people rotate) must not be able to write. The
-  // history is the served one, already checked against the pins above.
-  const day = admissionDayStart(dm.admissionDay)
-  if (day === null) return { ok: false, kind: 'badAdmission' }
-  const signedByTheSender = keysOnDay(found.served, day).some((key) =>
-    ed25519.verify(key, ed25519.SigningContext.Admission, payload, signature),
-  )
-  if (!signedByTheSender) return { ok: false, kind: 'badAdmission' }
+  // Only the sender's CURRENT served key may have signed it. The day on an admission is the signer's
+  // own claim and the served key intervals are not signed, so someone holding a retired key (leaked,
+  // which is usually why people rotate) and able to write to the table could backdate a DM into that
+  // key's old interval, or widen the interval. They do not hold the current key. The cost: a DM sent
+  // before the sender rotated cannot be opened; the sender sends it again.
+  if (admissionDayStart(dm.admissionDay) === null) return { ok: false, kind: 'badAdmission' }
+  const verifies = (key: Uint8Array): boolean =>
+    ed25519.verify(key, ed25519.SigningContext.Admission, payload, signature)
+  if (!verifies(base64ToBytes(found.served.signingPublicKey))) {
+    // Signed by a key they have since replaced: say so, rather than calling it a forgery.
+    return found.signingKeys.some(verifies)
+      ? { ok: false, kind: 'senderKeysChanged' }
+      : { ok: false, kind: 'badAdmission' }
+  }
   return { ok: true, found }
 }
 
@@ -587,6 +593,8 @@ const ACCEPT_MESSAGES: Record<
   self: 'You cannot open your own message.',
   badAdmission:
     "This message's signature does not verify over what it claims, so nothing was opened. Decline it.",
+  senderKeysChanged:
+    'They changed their keys after sending this, so nothing was opened. Decline it and ask them to send it again.',
   notYourKeys:
     "This message was made for keys that aren't the ones this device holds, so nothing was opened. Decline it; the sender can send it again.",
   myKeysChanged:

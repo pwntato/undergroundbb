@@ -223,6 +223,9 @@ describe('GroupList direct messages', () => {
     expect(groupLabel(dm, names)).toBe('rex')
     expect(groupLabel(dm, new Map([['user-9', '']]))).toBe('deleted user')
     expect(groupLabel(dm)).toBe('Direct message')
+    // A map that does not (yet) hold this person: still the plain word, not an id fragment.
+    expect(groupLabel(dm, new Map())).toBe('Direct message')
+    expect(groupLabel(dm, new Map([['someone-else', 'sam']]))).toBe('Direct message')
     const unnamed = displayGroup({
       groupId: 'dm-2',
       visibility: 'private',

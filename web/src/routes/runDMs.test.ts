@@ -640,45 +640,48 @@ describe('prepareAcceptDM', () => {
     expect(deps.acceptDM).not.toHaveBeenCalled()
   })
 
-  describe('which of the sender’s keys may sign, by the day the admission is dated', () => {
-    const rotated = () => {
+  describe('only the sender’s current key may have signed it', () => {
+    const rotated = (until = '2026-11-01') => {
       const old = person()
       const current = person()
       const projection = served(current, OTHER, {
         keyEpoch: 1,
-        supersededSigningKeys: [{ publicKey: old.edB64, from: '2026-01-01', until: '2026-11-01' }],
+        supersededSigningKeys: [{ publicKey: old.edB64, from: '2026-01-01', until }],
       })
       return { old, current, projection }
     }
 
-    it('accepts a key the sender has since replaced when it was current on the admission day', async () => {
-      const { old, current, projection } = rotated()
-      const dm = incoming(old, { admissionDay: '2026-10-20' })
-      const out = await prepareAcceptDM(acceptDeps(current, { served: projection }), dm)
+    it('accepts an admission signed with the key the server serves as current', async () => {
+      const { current, projection } = rotated()
+      const out = await prepareAcceptDM(
+        acceptDeps(current, { served: projection }),
+        incoming(current),
+      )
       expect(out).toMatchObject({ ok: true, fingerprint: prints(current) })
     })
 
-    it('refuses a retired key signing an admission dated after it was retired', async () => {
-      const { old, current, projection } = rotated()
+    it.each([
+      ['dated inside the old key’s interval (backdated)', '2026-10-20', '2026-11-01'],
+      ['dated after the old key was retired', '2026-11-09', '2026-11-01'],
+      ['dated today with the served interval widened to cover today', '2026-11-09', '2026-12-31'],
+    ])('refuses a retired key signing an admission %s', async (_name, day, until) => {
+      const { old, current, projection } = rotated(until)
       const deps = acceptDeps(current, { served: projection })
-      const dm = incoming(old, { admissionDay: '2026-11-09' })
-      expect(await prepareAcceptDM(deps, dm)).toEqual({ ok: false, kind: 'badAdmission' })
-      expect(await runAcceptDM(deps, dm, prints(current))).toEqual({
-        ok: false,
-        kind: 'badAdmission',
-      })
+      const dm = incoming(old, { admissionDay: day })
+      const expected = { ok: false, kind: 'senderKeysChanged' }
+      expect(await prepareAcceptDM(deps, dm)).toEqual(expected)
+      expect(await runAcceptDM(deps, dm, prints(current))).toEqual(expected)
       expect(deps.acceptDM).not.toHaveBeenCalled()
+      expect(deps.pinKeys).not.toHaveBeenCalled()
     })
 
-    it('refuses the current key on a day before it was current', async () => {
+    it('still calls a signature from no key of theirs a forgery, not a rotation', async () => {
       const { current, projection } = rotated()
-      const deps = acceptDeps(current, { served: projection })
-      const dm = incoming(current, { admissionDay: '2026-10-20' })
-      expect(await runAcceptDM(deps, dm, prints(current))).toEqual({
+      const dm = incoming(person(), { admissionDay: '2026-10-20' })
+      expect(await prepareAcceptDM(acceptDeps(current, { served: projection }), dm)).toEqual({
         ok: false,
         kind: 'badAdmission',
       })
-      expect(deps.acceptDM).not.toHaveBeenCalled()
     })
 
     it.each(['garbage', '2026-13-45', '2026-11-9', '', '2026-02-30'])(
@@ -827,6 +830,7 @@ describe('runAcceptDM', () => {
     for (const kind of [
       'pinMismatch',
       'badAdmission',
+      'senderKeysChanged',
       'notYourKeys',
       'myKeysChanged',
       'keysChanged',
