@@ -11,6 +11,7 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Data } from '@/components/ui/data'
 import { CreatePostPanel } from './CreatePostPanel'
 import { COPY_ADVISORY } from './editCopy'
 import type { PostControlMode } from './postControls'
@@ -219,7 +220,7 @@ export function PostContent({ post }: { readonly post: PostView }) {
         <h2 className="break-words text-base font-semibold">{post.content.title}</h2>
       )}
       <p className="text-xs text-muted-foreground">
-        {authorLabel(post)} · {postTimeLabel(post)}
+        <Data>{authorLabel(post)}</Data> · <Data>{postTimeLabel(post)}</Data>
         {edited !== null && (
           <>
             {' · '}

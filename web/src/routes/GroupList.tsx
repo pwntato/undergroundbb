@@ -23,7 +23,7 @@ function UnreadBadge({ group }: { readonly group: DisplayGroup }) {
   return (
     <Link
       to="/notifications"
-      className="ml-2 inline-block rounded-full bg-primary px-2 py-0.5 text-xs font-normal text-primary-foreground"
+      className="ml-2 inline-block rounded-full bg-primary px-2 py-0.5 font-mono text-xs font-normal text-primary-foreground tabular-nums"
       aria-label={unreadAriaLabel(label)}
     >
       {label}

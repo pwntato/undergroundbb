@@ -124,7 +124,9 @@ function render(
 describe('ThreadPanel', () => {
   it('shows the author, time and text of a comment, with no status line when all is well', () => {
     const html = render([comment()])
-    expect(html).toContain('alice · 2026-10-29 14:03 UTC')
+    expect(html).toContain(
+      '<span data-slot="data" class="font-mono tabular-nums">alice</span> · <span data-slot="data" class="font-mono tabular-nums">2026-10-29 14:03 UTC</span>',
+    )
     expect(html).toContain('First line\nSecond line')
     expect(html).toContain('whitespace-pre-wrap')
     expect(commentNotes(comment())).toEqual([])
@@ -492,7 +494,7 @@ describe('ThreadPanel edited and deleted comments (#45)', () => {
   it('marks an edited comment, with the exact edit time in the tooltip', () => {
     const html = render([comment({ signedDay: '2026-10-31', content: editedContent(false) })])
     expect(html).toContain(
-      'alice · 2026-10-29 14:03 UTC · <span title="Edited 2026-10-31 08:15 UTC">edited</span>',
+      '<span data-slot="data" class="font-mono tabular-nums">alice</span> · <span data-slot="data" class="font-mono tabular-nums">2026-10-29 14:03 UTC</span> · <span title="Edited 2026-10-31 08:15 UTC">edited</span>',
     )
   })
 

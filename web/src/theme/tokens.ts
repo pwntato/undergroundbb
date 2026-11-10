@@ -77,6 +77,9 @@ export const TOKENS: readonly TokenSpec[] = [
   token('tracking-body', 'tracking'),
 ]
 
+/** A theme: a value for every token, keyed by token name. Plain strings, so it is JSON. */
+export type Theme = Readonly<Record<string, string>>
+
 export const TOKEN_NAMES: readonly string[] = TOKENS.map((t) => t.name)
 
 /** The values `--ubb-case-heading` may take. Anything else is refused by the validator. */
