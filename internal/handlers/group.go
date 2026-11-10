@@ -536,6 +536,10 @@ type groupListEntry struct {
 	// rotation exists the two diverge, and the name's AAD must be built
 	// from this value.
 	NameGeneration int64 `json:"nameGeneration"`
+	// GroupType is "dm" for a direct message (#73) and absent for an ordinary group. DMWith is the
+	// OTHER person's user id; a DM has no name, so a client shows that person's username instead.
+	GroupType string `json:"groupType,omitempty"`
+	DMWith    string `json:"dmWith,omitempty"`
 
 	NamePlaintext        string `json:"namePlaintext,omitempty"`
 	DescriptionPlaintext string `json:"descriptionPlaintext,omitempty"`
@@ -559,6 +563,25 @@ type groupListItem struct {
 // listGroupsResponse is the wire shape of GET /api/groups.
 type listGroupsResponse struct {
 	Groups []groupListItem `json:"groups"`
+}
+
+// setDMFields marks a direct message and names the other person. The pair marker key on the
+// group's META is "DMPAIR#<lo>#<hi>" and is never rewritten, so it names the other person even
+// after they have left.
+func setDMFields(entry *groupListEntry, g *models.Group, callerID string) {
+	if g.GroupType != "dm" {
+		return
+	}
+	entry.GroupType = "dm"
+	parts := strings.Split(g.DMPairPK, "#")
+	if len(parts) != 3 {
+		return
+	}
+	for _, id := range parts[1:] {
+		if id != callerID {
+			entry.DMWith = id
+		}
+	}
 }
 
 // listGroups implements GET /api/groups -- issue #35. Authenticated by
@@ -624,6 +647,7 @@ func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 			NoRotation:     g.HasNoRotation(),
 			NameGeneration: g.NameGeneration,
 		}
+		setDMFields(&entry, &g, userID)
 		if g.Visibility == models.VisibilityPublic {
 			entry.NamePlaintext = g.NamePlaintext
 			entry.DescriptionPlaintext = g.DescriptionPlaintext
@@ -788,6 +812,7 @@ func (h *Handler) getGroup(w http.ResponseWriter, r *http.Request) {
 		Visibility:     g.Visibility,
 		NameGeneration: g.NameGeneration,
 	}
+	setDMFields(&entry, g, userID)
 	if m != nil {
 		entry.Role = m.Role
 		entry.Generation = m.Generation

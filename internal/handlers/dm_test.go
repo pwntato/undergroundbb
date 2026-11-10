@@ -878,3 +878,61 @@ func TestAcceptDMKeysChangedMessageSaysWhatTheRecipientCanDo(t *testing.T) {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// A DM has no name, so the list and the detail name the other person instead (#73 web).
+func TestGroupListAndDetailNameTheOtherPersonOfADM(t *testing.T) {
+	f := newDMFixture(t)
+	req := f.send(t)
+
+	type entry struct {
+		GroupID   string `json:"groupId"`
+		GroupType string `json:"groupType"`
+		DMWith    string `json:"dmWith"`
+	}
+	listFor := func(cookie *http.Cookie) *entry {
+		rec := doJSON(t, f.h, http.MethodGet, "/api/groups", cookie, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			Groups []entry `json:"groups"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		for i := range out.Groups {
+			if out.Groups[i].GroupID == req.GroupID {
+				return &out.Groups[i]
+			}
+		}
+		return nil
+	}
+	e := listFor(f.senderCookie)
+	if e == nil || e.GroupType != "dm" || e.DMWith != f.recipient.userID {
+		t.Fatalf("sender's list entry = %+v, want a dm with the recipient", e)
+	}
+	if rec := f.accept(t, req); rec.Code != http.StatusOK {
+		t.Fatalf("accept: %d %s", rec.Code, rec.Body.String())
+	}
+	e = listFor(f.recipientCookie)
+	if e == nil || e.GroupType != "dm" || e.DMWith != f.sender.userID {
+		t.Fatalf("recipient's list entry = %+v, want a dm with the sender", e)
+	}
+	rec := doJSON(t, f.h, http.MethodGet, "/api/groups/"+req.GroupID, f.recipientCookie, nil)
+	var detail entry
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.GroupType != "dm" || detail.DMWith != f.sender.userID {
+		t.Errorf("detail = %+v", detail)
+	}
+	// An ordinary group carries neither field.
+	plain := signedCreateGroupRequest(t, f.sender)
+	if rec := doCreateGroup(t, f.h, f.senderCookie, plain); rec.Code != http.StatusCreated {
+		t.Fatalf("create ordinary group: %d %s", rec.Code, rec.Body.String())
+	}
+	body := doJSON(t, f.h, http.MethodGet, "/api/groups/"+plain.GroupID, f.senderCookie, nil).Body.String()
+	if strings.Contains(body, "dmWith") || strings.Contains(body, "groupType") {
+		t.Errorf("an ordinary group's detail has DM fields: %s", body)
+	}
+}
