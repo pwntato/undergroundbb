@@ -26,7 +26,9 @@ function sourceFiles(dir: string): string[] {
 function headingTags(source: string): string[] {
   const tags = source.match(/<h[1-4]\b[^>]*>/g) ?? []
   const slots = source.match(/data-slot="(?:card|alert)-title"[\s\S]{0,240}?\{\.\.\.props\}/g) ?? []
-  return [...tags, ...slots]
+  // A caller's className reaches these through cn() as a utility, so it beats the base rule too.
+  const callers = source.match(/<(?:CardTitle|AlertTitle)\b[^>]*>/g) ?? []
+  return [...tags, ...slots, ...callers]
 }
 
 describe('headings leave font, case and letter-spacing to the theme', () => {
@@ -37,6 +39,7 @@ describe('headings leave font, case and letter-spacing to the theme', () => {
     expect(all.length).toBeGreaterThan(40)
     expect(all.some((t) => t.includes('alert-title'))).toBe(true)
     expect(all.some((t) => t.includes('card-title'))).toBe(true)
+    expect(all.some((t) => t.startsWith('<CardTitle'))).toBe(true)
   })
 
   it('has no tracking, font-family or case utility on any heading', () => {
