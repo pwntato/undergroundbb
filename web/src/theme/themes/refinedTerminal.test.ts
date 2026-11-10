@@ -1,14 +1,17 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { contrastRatio } from '../contrast'
+import { contrastRatio, translucentContrast } from '../contrast'
 import { TOKEN_NAMES, headingPairProblem } from '../tokens'
 import { refinedTerminal } from './refinedTerminal'
 
 const css = readFileSync(join(__dirname, '..', '..', 'index.css'), 'utf8')
 const rootBlock = /:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? ''
 const declared = new Map(
-  [...rootBlock.matchAll(/--ubb-([a-z-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2]?.trim()]),
+  [...rootBlock.matchAll(/--ubb-([a-z-]+)\s*:\s*([^;]+);/g)].map((m) => [
+    m[1],
+    m[2]?.replace(/\s+/g, ' ').trim(),
+  ]),
 )
 
 describe('Refined Terminal', () => {
@@ -56,10 +59,28 @@ describe('Refined Terminal', () => {
     }
   })
 
-  it('keeps borders and the focus ring visible against the ground (3:1)', () => {
+  it('keeps the focus ring visible at full strength and as the 50% halo components draw (3:1)', () => {
     const t = refinedTerminal
-    expect(contrastRatio(t['ring'] ?? '', t['background'] ?? '')).toBeGreaterThanOrEqual(3)
+    const ring = t['ring'] ?? ''
+    for (const ground of ['background', 'card']) {
+      const g = t[ground] ?? ''
+      expect(contrastRatio(ring, g), `ring on ${ground}`).toBeGreaterThanOrEqual(3)
+      expect(translucentContrast(ring, g, 0.5), `ring/50 on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('keeps borders visible against the ground (1.3:1; control edges are for #54)', () => {
+    const t = refinedTerminal
     expect(contrastRatio(t['border'] ?? '', t['background'] ?? '')).toBeGreaterThanOrEqual(1.3)
+  })
+})
+
+describe('translucentContrast', () => {
+  it('is the plain ratio at full strength and 1 at no strength', () => {
+    const a = 'oklch(0.8 0.09 195)'
+    const b = 'oklch(0.17 0.014 255)'
+    expect(translucentContrast(a, b, 1)).toBeCloseTo(contrastRatio(a, b), 5)
+    expect(translucentContrast(a, b, 0)).toBeCloseTo(1, 5)
   })
 })
 

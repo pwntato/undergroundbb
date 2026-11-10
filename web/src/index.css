@@ -19,8 +19,7 @@
  * these properties on a [data-theme] selector — no component markup changes,
  * no rebuild.
  *
- * The palette below is a neutral placeholder so the shell renders sensibly.
- * The real design system replaces these values.
+ * The values below are the default theme, Refined Terminal (src/theme/themes/refinedTerminal.ts).
  */
 @theme {
   /* Colors */
@@ -83,7 +82,7 @@
   --ubb-card-foreground: oklch(0.93 0.008 255);
   --ubb-border: oklch(0.34 0.016 255);
   --ubb-input: oklch(0.34 0.016 255);
-  --ubb-ring: oklch(0.74 0.09 195);
+  --ubb-ring: oklch(0.78 0.09 195);
   --ubb-primary: oklch(0.74 0.09 195);
   --ubb-primary-foreground: oklch(0.17 0.014 255);
   --ubb-accent: oklch(0.29 0.022 215);
@@ -94,7 +93,8 @@
   --ubb-destructive-foreground: oklch(0.17 0.014 255);
 
   --ubb-font-sans:
-    Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', source-sans-pro, sans-serif;
+    Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', 'Source Sans 3', 'Source Sans Pro',
+    sans-serif;
   --ubb-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
   --ubb-font-heading: var(--ubb-font-sans);
 

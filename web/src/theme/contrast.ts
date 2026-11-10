@@ -23,11 +23,39 @@ function toLinearSrgb({ l, c, h }: { l: number; c: number; h: number }): [number
   return [clamp(r), clamp(g), clamp(bl)]
 }
 
-function luminance(value: string): number {
+function luminanceOf([r, g, b]: [number, number, number]): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function rgbOf(value: string): [number, number, number] {
   const parsed = parseOklch(value)
   if (parsed === null) throw new Error(`not a plain oklch() color: ${value}`)
-  const [r, g, b] = toLinearSrgb(parsed)
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return toLinearSrgb(parsed)
+}
+
+function luminance(value: string): number {
+  return luminanceOf(rgbOf(value))
+}
+
+const encode = (x: number) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055)
+const decode = (x: number) => (x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4)
+
+/**
+ * The contrast of `fg` drawn at `alpha` over `bg`, against that same `bg`: what a translucent
+ * ring or halo (`ring-ring/50`) actually shows. Browsers composite in gamma-encoded sRGB, so the
+ * mix is done there.
+ */
+export function translucentContrast(fg: string, bg: string, alpha: number): number {
+  const f = rgbOf(fg).map(encode)
+  const b = rgbOf(bg).map(encode)
+  const mixed = f.map((c, i) => decode(alpha * c + (1 - alpha) * (b[i] ?? 0))) as [
+    number,
+    number,
+    number,
+  ]
+  const lm = luminanceOf(mixed)
+  const lb = luminance(bg)
+  return (Math.max(lm, lb) + 0.05) / (Math.min(lm, lb) + 0.05)
 }
 
 /** The WCAG 2 contrast ratio between two colors, 1 to 21. */

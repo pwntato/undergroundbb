@@ -23,7 +23,8 @@ export const refinedTerminal: Theme = {
   'card-foreground': 'oklch(0.93 0.008 255)',
   border: 'oklch(0.34 0.016 255)',
   input: 'oklch(0.34 0.016 255)',
-  ring: 'oklch(0.74 0.09 195)',
+  // A touch lighter than primary: the focus halo is drawn at 50%, and needs 3:1 at that strength.
+  ring: 'oklch(0.78 0.09 195)',
   primary: 'oklch(0.74 0.09 195)',
   'primary-foreground': 'oklch(0.17 0.014 255)',
   accent: 'oklch(0.29 0.022 215)',
@@ -34,7 +35,7 @@ export const refinedTerminal: Theme = {
   'destructive-foreground': 'oklch(0.17 0.014 255)',
 
   'font-sans':
-    "Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', source-sans-pro, sans-serif",
+    "Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', 'Source Sans 3', 'Source Sans Pro', sans-serif",
   'font-mono': "ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace",
   'font-heading': 'var(--ubb-font-sans)',
 
