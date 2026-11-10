@@ -156,6 +156,30 @@ describe('prepareStartDM', () => {
     expect(out).toEqual({ ok: false, kind: 'pinMismatch' })
   })
 
+  it.each([
+    ['a rollback of their key epoch', (p: Person) => ({ pin: pinOf(p, OTHER, 2), epoch: 1 })],
+    [
+      'a saved copy whose signature does not verify',
+      (p: Person) => ({
+        pin: { ...pinOf(p, OTHER), signature: bytesToBase64(new Uint8Array(64)) },
+        epoch: 0,
+      }),
+    ],
+  ])('blocks %s, not only a plain key change', async (_name, make) => {
+    const other = person()
+    const { pin, epoch } = make(other)
+    const deps = startDeps(other, {
+      served: served(other, OTHER, { keyEpoch: epoch }),
+      pins: [pin],
+    })
+    expect(await prepareStartDM(deps, OTHER)).toEqual({ ok: false, kind: 'pinMismatch' })
+    expect(await runStartDM(deps, OTHER, prints(other), MATERIAL, 30)).toEqual({
+      ok: false,
+      kind: 'pinMismatch',
+    })
+    expect(deps.createDM).not.toHaveBeenCalled()
+  })
+
   it('refuses to message yourself, without asking the server', async () => {
     const deps = startDeps(person())
     expect(await prepareStartDM(deps, ME)).toEqual({ ok: false, kind: 'self' })
@@ -586,6 +610,33 @@ describe('prepareAcceptDM', () => {
       incoming(now),
     )
     expect(out).toEqual({ ok: false, kind: 'pinMismatch' })
+  })
+
+  it.each([
+    ['a rollback of their key epoch', (p: Person) => ({ pin: pinOf(p, OTHER, 2), epoch: 1 })],
+    [
+      'a saved copy whose signature does not verify',
+      (p: Person) => ({
+        pin: { ...pinOf(p, OTHER), signature: bytesToBase64(new Uint8Array(64)) },
+        epoch: 0,
+      }),
+    ],
+  ])('blocks a sender with %s, not only a plain key change', async (_name, make) => {
+    const sender = person()
+    const { pin, epoch } = make(sender)
+    const deps = acceptDeps(sender, {
+      served: served(sender, OTHER, { keyEpoch: epoch }),
+      pins: [pin],
+    })
+    expect(await prepareAcceptDM(deps, incoming(sender))).toEqual({
+      ok: false,
+      kind: 'pinMismatch',
+    })
+    expect(await runAcceptDM(deps, incoming(sender), prints(sender))).toEqual({
+      ok: false,
+      kind: 'pinMismatch',
+    })
+    expect(deps.acceptDM).not.toHaveBeenCalled()
   })
 
   it('accepts an admission signed with a key the sender has since replaced', async () => {
