@@ -1765,6 +1765,18 @@ omission:
   threat model's attack table marks **Possible**, and fingerprint verification is the only thing that
   closes it.
 
+**What the clients do about it (#73).** Both clients show the other person's fingerprint before
+anything irreversible, and neither relies on the server's own checks. The sender's client reads the
+recipient's keys, checks them against its pins (only `match` and `first-sight` proceed), shows the
+fingerprint, and only after the sender confirms it re-reads the keys and wraps the group key and
+signs the admission if they still give that fingerprint. The recipient's client, before calling
+accept, checks that the admission names the keys this device holds, verifies the sender's signature
+over the admission under any key the sender has held, checks the sender's keys against its pins, and
+shows the sender's fingerprint; accept is called only if a fresh check still gives the confirmed
+fingerprint. A DM is listed under the other person's username (`dmWith` in the group list, derived
+from the pair marker on `META`, so it still names them after they leave). The new-message screen is
+reached from a profile page; there is deliberately no username search (see #76).
+
 ### Roles and the chain of trust
 
 | Role | Can invite | Can remove / change roles |
