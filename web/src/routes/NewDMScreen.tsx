@@ -118,6 +118,7 @@ function NewDM({ recipientId }: { readonly recipientId: string | undefined }) {
     return (
       <ReauthenticateStep
         sessionUserId={selfId}
+        action="send a message"
         onDone={liveKeys.markWarm}
         onCancel={liveKeys.markWarm}
       />

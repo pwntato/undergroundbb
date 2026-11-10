@@ -127,6 +127,7 @@ export function DirectMessagesScreen() {
     return (
       <ReauthenticateStep
         sessionUserId={userId}
+        action="open messages"
         onDone={liveKeys.markWarm}
         onCancel={liveKeys.markWarm}
       />
