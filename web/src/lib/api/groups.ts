@@ -6,6 +6,7 @@
 import type { AdmissionRecord } from '@/lib/crypto/admission'
 import type { DesignationRecord, GrantAnchor, GrantRecord } from '@/lib/crypto/grant-chain'
 import { ApiError } from './auth.js'
+import type { CreateDMBody } from './dms.js'
 import { noteServerDate } from './serverClock.js'
 
 export interface WireArgon2Params {
@@ -87,6 +88,8 @@ export interface CreateGroupRequest {
   /** The sort key rootGrantSignature is signed for -- see SignGroupCreationResult's own doc comment. */
   readonly rootGrantSortKey: string
   readonly rootGrantSignature: string
+  /** Makes the group a direct message (#73); see lib/api/dms.ts. A DM has no name or description. */
+  readonly dm?: CreateDMBody
 }
 
 export interface CreateGroupResponse {
@@ -120,6 +123,10 @@ export interface GroupListEntry {
    * rotation exists (rotation does not re-encrypt the name).
    */
   readonly nameGeneration: number
+  /** "dm" for a direct message (#73); absent for an ordinary group. */
+  readonly groupType?: 'dm'
+  /** A DM's other person (it has no name): their user id. */
+  readonly dmWith?: string
 
   readonly namePlaintext?: string
   readonly descriptionPlaintext?: string

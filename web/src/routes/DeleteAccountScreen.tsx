@@ -19,7 +19,7 @@ import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCa
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { useSession } from '@/lib/session/useSession'
 import { DeleteAccountPanel, type DeletePanelState } from './DeleteAccountPanel'
-import { groupLabel } from './groupLabel'
+import { groupLabelsOf } from './groupLabels'
 import {
   deleteFailureMessage,
   blockerReason,
@@ -66,7 +66,7 @@ async function loadPlan(
       ok: true,
       loaded: {
         entries: plan.entries,
-        labels: new Map(groups.map((g) => [g.groupId, groupLabel(g)])),
+        labels: await groupLabelsOf(groups),
       },
     }
   } catch (err) {

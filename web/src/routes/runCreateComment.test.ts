@@ -238,6 +238,17 @@ describe('submitComment', () => {
     expect(await submitComment(d, input('0001'))).toEqual({ ok: false, kind })
   })
 
+  it('shows the server wording when a DM has gone read-only', async () => {
+    const d = deps()
+    const words = 'the other person has left this conversation; it is read-only'
+    d.createComment.mockRejectedValue(new ApiError(409, words, 'dm_read_only'))
+    expect(await submitComment(d, input('0001'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: words,
+    })
+  })
+
   it('maps 401, 404 and other 4xx', async () => {
     const cases: [ApiError, string][] = [
       [new ApiError(401, 'x'), 'authRequired'],

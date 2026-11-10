@@ -662,6 +662,7 @@ describe('toggleReaction', () => {
     [404, undefined, REACTION_ERRORS.notFound],
     [409, 'member_behind', REACTION_ERRORS.behind],
     [409, 'member_dormant', REACTION_ERRORS.dormant],
+    [409, 'dm_read_only', REACTION_ERRORS.readOnly],
     [500, undefined, REACTION_ERRORS.failed],
     [502, undefined, REACTION_ERRORS.failed],
   ])(
@@ -914,6 +915,7 @@ describe('classifyReactionError', () => {
     [new ApiError(409, 'x', 'key_epoch_stale'), 'reseal'],
     [new ApiError(409, 'x', 'member_behind'), 'behind'],
     [new ApiError(409, 'x', 'member_dormant'), 'dormant'],
+    [new ApiError(409, 'x', 'dm_read_only'), 'readOnly'],
     [new ApiError(409, 'x', 'parent_gone'), 'parentGone'],
     [new ApiError(409, 'x', 'something_new'), 'rejected'],
     [new ApiError(409, 'x'), 'rejected'],

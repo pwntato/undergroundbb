@@ -16,6 +16,8 @@ import { AppHeader } from '@/routes/AppHeader'
 import { UserProfileScreen } from '@/routes/UserProfileScreen'
 import { InvitesScreen } from '@/routes/InvitesScreen'
 import { DirectoryScreen } from '@/routes/DirectoryScreen'
+import { DirectMessagesScreen } from '@/routes/DirectMessagesScreen'
+import { NewDMScreen } from '@/routes/NewDMScreen'
 import { JoinGroupScreen } from '@/routes/JoinGroupScreen'
 import { MyJoinRequestsScreen } from '@/routes/MyJoinRequestsScreen'
 import { GroupJoinRequestsScreen } from '@/routes/GroupJoinRequestsScreen'
@@ -225,6 +227,22 @@ function App() {
               element={
                 <RequireAuth>
                   <InvitesScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/dms"
+              element={
+                <RequireAuth>
+                  <DirectMessagesScreen />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/dms/new/:userId"
+              element={
+                <RequireAuth>
+                  <NewDMScreen />
                 </RequireAuth>
               }
             />

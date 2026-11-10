@@ -175,3 +175,64 @@ describe('GroupList', () => {
     expect(html).not.toContain('0 unread')
   })
 })
+
+describe('GroupList direct messages', () => {
+  const dm = displayGroup({
+    groupId: 'dm-1',
+    visibility: 'private',
+    role: 'admin',
+    groupType: 'dm',
+    dmWith: 'user-9',
+    displayName: null,
+    nameStatus: 'dm',
+  })
+  const names = new Map([['user-9', 'rex']])
+
+  it('lists a DM under the other person’s username, with no settings or invite', () => {
+    const named = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(GroupList, {
+          load: { status: 'ready', groups: [dm] },
+          usernames: names,
+          onReauthenticate: () => {},
+        }),
+      ),
+    )
+    expect(named).toContain('rex')
+    expect(named).toContain('/groups/dm-1/posts')
+    expect(named).toContain('/groups/dm-1/members')
+    expect(named).not.toContain('/settings')
+    expect(named).not.toContain('/invite')
+    expect(named).toContain('direct message')
+    expect(named).not.toContain('>admin<')
+  })
+
+  it('does not ask for a password for a DM, which has no name to decrypt', () => {
+    expect(render({ status: 'ready', groups: [dm] })).not.toContain('Enter your password')
+  })
+
+  it('still gives an ordinary group its settings and invite', () => {
+    const out = render({ status: 'ready', groups: [displayGroup({ role: 'admin' })] })
+    expect(out).toContain('/settings')
+    expect(out).toContain('/invite')
+  })
+
+  it('labels a DM by the other person, the deleted marker, or a plain word', () => {
+    expect(groupLabel(dm, names)).toBe('rex')
+    expect(groupLabel(dm, new Map([['user-9', '']]))).toBe('deleted user')
+    expect(groupLabel(dm)).toBe('Direct message')
+    // A map that does not (yet) hold this person: still the plain word, not an id fragment.
+    expect(groupLabel(dm, new Map())).toBe('Direct message')
+    expect(groupLabel(dm, new Map([['someone-else', 'sam']]))).toBe('Direct message')
+    const unnamed = displayGroup({
+      groupId: 'dm-2',
+      visibility: 'private',
+      groupType: 'dm',
+      displayName: null,
+      nameStatus: 'dm',
+    })
+    expect(groupLabel(unnamed)).toBe('Direct message')
+  })
+})

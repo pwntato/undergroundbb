@@ -63,6 +63,16 @@ export function UserProfilePanel({
         <p className="text-sm text-muted-foreground">No bio.</p>
       )}
 
+      {!isSelf && (
+        // #73: the new-message screen shows their fingerprint before anything is sent.
+        <Link
+          to={`/dms/new/${view.userId}`}
+          className="text-sm text-primary underline underline-offset-4"
+        >
+          Send a message
+        </Link>
+      )}
+
       {isSelf && bioEdit !== undefined && (
         <div className="flex flex-col gap-2">
           <Label htmlFor="profile-bio">Your bio</Label>

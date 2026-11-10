@@ -41,6 +41,18 @@ describe('UserProfilePanel', () => {
     expect(html).not.toContain('>Save<')
   })
 
+  it('offers to send a message to someone else, not to yourself or a deleted account', () => {
+    const other = render({ view: view({ userId: 'u7' }), isSelf: false, verification: null })
+    expect(other).toContain('Send a message')
+    expect(other).toContain('href="/dms/new/u7"')
+    expect(
+      render({ view: view(), isSelf: true, verification: null, bioEdit: edit() }),
+    ).not.toContain('Send a message')
+    expect(
+      render({ view: view({ deleted: true }), isSelf: false, verification: null }),
+    ).not.toContain('Send a message')
+  })
+
   it('omits member-since for an account that predates the field, and says when there is no bio', () => {
     const html = render({
       view: view({ memberSince: null, bio: '' }),

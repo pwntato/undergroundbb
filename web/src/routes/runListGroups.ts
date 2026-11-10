@@ -26,6 +26,8 @@ import { groupLabel } from './groupLabel'
  *   (stale cache from before a rotation this client hasn't caught up on,
  *   or genuinely corrupt data) -- see DecryptGroupNamesResponse's own doc
  *   comment on the protocol side.
+ * - 'dm': a direct message (#73). It has no name to read; the list shows the other person's
+ *   username instead (groupLabel / GroupList), and nothing is decrypted.
  * - 'coldKeys': liveKeys were not live at all (e.g. this tab was reloaded
  *   since login) -- every private group in the list gets this status
  *   together, distinct from 'unreadable' (which is per-group) because a
@@ -35,7 +37,7 @@ import { groupLabel } from './groupLabel'
 export type DisplayGroup = ListedGroup & {
   readonly displayName: string | null
   readonly displayDescription: string | null
-  readonly nameStatus: 'plaintext' | 'decrypted' | 'unreadable' | 'coldKeys'
+  readonly nameStatus: 'plaintext' | 'decrypted' | 'unreadable' | 'coldKeys' | 'dm'
 }
 
 export interface ListGroupsDeps {
@@ -189,6 +191,10 @@ export async function runListGroups(deps: ListGroupsDeps): Promise<DisplayGroup[
   const chainFetches: Promise<void>[] = []
 
   for (const group of groups) {
+    if (group.groupType === 'dm') {
+      results.push({ ...group, displayName: null, displayDescription: null, nameStatus: 'dm' })
+      continue
+    }
     if (group.visibility === 'public') {
       results.push({
         ...group,
