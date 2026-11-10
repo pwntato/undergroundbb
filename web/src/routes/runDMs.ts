@@ -131,7 +131,13 @@ async function inspectPerson(deps: PersonDeps, userId: string): Promise<Inspecte
   } catch {
     return { ok: false, kind: 'unchecked', reason: 'the keys served for them are malformed' }
   }
-  return { ok: true, served, signingKeys, firstSight: verdict === 'first-sight', fingerprint: print }
+  return {
+    ok: true,
+    served,
+    signingKeys,
+    firstSight: verdict === 'first-sight',
+    fingerprint: print,
+  }
 }
 
 /** Saves what was just confirmed, so a later swap is caught. Returns a failure to report, or null. */
@@ -218,9 +224,7 @@ export async function prepareStartDM(
     : found
 }
 
-export type StartDMResult =
-  | { readonly ok: true; readonly groupId: string }
-  | StartFail
+export type StartDMResult = { readonly ok: true; readonly groupId: string } | StartFail
 
 /**
  * Starts a DM with `recipientUserId`. Everything is re-read and re-checked, so a screen the sender
@@ -349,7 +353,11 @@ function startFailureOf(err: unknown, ownGroupId: string): StartDMResult {
       case 'clock_skew':
         return { ok: false, kind: 'rejected', message: CLOCK_SKEW_MESSAGE }
       case 'key_epoch_stale':
-        return { ok: false, kind: 'rejected', message: 'Your keys changed while this was sent. Reload and try again.' }
+        return {
+          ok: false,
+          kind: 'rejected',
+          message: 'Your keys changed while this was sent. Reload and try again.',
+        }
     }
     if (err.status === 401) return { ok: false, kind: 'authRequired' }
     if (err.status < 500) return { ok: false, kind: 'rejected', message: err.message }
@@ -423,9 +431,7 @@ export interface AcceptDMDeps extends PersonDeps {
 export type PrepareAcceptResult =
   { readonly ok: true; readonly fingerprint: string; readonly firstSight: boolean } | AcceptFail
 
-type Verified =
-  | { readonly ok: true; readonly found: Extract<Inspected, { ok: true }> }
-  | AcceptFail
+type Verified = { readonly ok: true; readonly found: Extract<Inspected, { ok: true }> } | AcceptFail
 
 /**
  * Everything that decides whether this DM may be opened, read fresh. Nothing is written. The order
@@ -536,8 +542,7 @@ function acceptFailureOf(err: unknown): AcceptFail {
 }
 
 export type DeclineDMResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly message: string; readonly gone?: true }
+  { readonly ok: true } | { readonly ok: false; readonly message: string; readonly gone?: true }
 
 /** Declines a DM. The sender is kept out for a few days; you can still message them yourself. */
 export async function runDeclineDM(deps: AcceptDMDeps, dm: IncomingDM): Promise<DeclineDMResult> {
@@ -546,7 +551,8 @@ export async function runDeclineDM(deps: AcceptDMDeps, dm: IncomingDM): Promise<
     return { ok: true }
   } catch (err) {
     if (err instanceof ApiError) {
-      if (err.status === 401) return { ok: false, message: 'Your session has expired. Log in again.' }
+      if (err.status === 401)
+        return { ok: false, message: 'Your session has expired. Log in again.' }
       if (err.code === 'request_changed') {
         return { ok: false, message: ACCEPT_MESSAGES.requestChanged, gone: true }
       }

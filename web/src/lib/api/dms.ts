@@ -95,13 +95,19 @@ const dmPath = (groupId: string, action: 'accept' | 'decline', requestId: string
 /** POST /api/dms/{gid}/accept?requestId=. 409: keys_changed, already_member, request_changed; 410 account_deleted. */
 export async function acceptDM(groupId: string, requestId: string): Promise<void> {
   await handleJSON<unknown>(
-    await fetch(dmPath(groupId, 'accept', requestId), { method: 'POST', credentials: 'same-origin' }),
+    await fetch(dmPath(groupId, 'accept', requestId), {
+      method: 'POST',
+      credentials: 'same-origin',
+    }),
   )
 }
 
 /** POST /api/dms/{gid}/decline?requestId=. */
 export async function declineDM(groupId: string, requestId: string): Promise<void> {
   await handleJSON<unknown>(
-    await fetch(dmPath(groupId, 'decline', requestId), { method: 'POST', credentials: 'same-origin' }),
+    await fetch(dmPath(groupId, 'decline', requestId), {
+      method: 'POST',
+      credentials: 'same-origin',
+    }),
   )
 }

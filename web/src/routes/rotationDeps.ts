@@ -21,11 +21,14 @@ import {
   rewrapMembers,
 } from '@/lib/api/groups'
 import { deleteHandoff } from '@/lib/api/keyRotation'
+import { acceptDM, createDM, declineDM } from '@/lib/api/dms'
 import { approveJoinRequest, denyJoinRequest } from '@/lib/api/joinRequests'
 import { getUserDetail, getUsers } from '@/lib/api/users'
 import {
+  getOwnFingerprint,
   getOwnSigningKey,
   rewrapGroupKey,
+  signGroupCreation,
   signPin,
   signReadmission,
   signWrapRecord,
@@ -40,6 +43,7 @@ import { ownSigningKeyWithFallback } from '@/lib/session/ownSigningKey'
 import { listAllMembers } from './runGroupMembers'
 import type { AcceptKeyChangeDeps } from './runAcceptKeyChange'
 import type { ApproveDeps } from './runApprove'
+import type { AcceptDMDeps, StartDMDeps } from './runDMs'
 import type { JoinApprovalDeps } from './runJoinRequests'
 import type { ReadmitDeps } from './runReadmit'
 import type { RotationDeps } from './runRotation'
@@ -140,5 +144,25 @@ export function makeJoinApprovalDeps(userId: string): JoinApprovalDeps {
     signReadmission,
     approveJoinRequest,
     denyJoinRequest,
+  }
+}
+
+/** The rotation wiring plus what starting a direct message needs (#73): pins, wrap, admission, create. */
+export function makeStartDMDeps(userId: string): StartDMDeps {
+  return {
+    ...makeRotationDeps(userId),
+    signGroupCreation,
+    signReadmission,
+    createDM,
+  }
+}
+
+/** The rotation wiring plus what opening or declining a direct message needs (#73). */
+export function makeAcceptDMDeps(userId: string): AcceptDMDeps {
+  return {
+    ...makeRotationDeps(userId),
+    acceptDM,
+    declineDM,
+    ownFingerprint: () => getOwnFingerprint(userId),
   }
 }

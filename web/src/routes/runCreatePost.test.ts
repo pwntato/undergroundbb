@@ -209,6 +209,15 @@ describe('sendPost', () => {
     })
   })
 
+  it('shows the server wording when a DM has gone read-only', async () => {
+    const words = 'the other person has left this conversation; it is read-only'
+    expect(await send(new ApiError(409, words, 'dm_read_only'))).toEqual({
+      ok: false,
+      kind: 'rejected',
+      message: words,
+    })
+  })
+
   it('maps session and membership loss', async () => {
     expect(await send(new ApiError(401, 'x'))).toEqual({ ok: false, kind: 'authRequired' })
     expect(await send(new ApiError(404, 'x'))).toEqual({ ok: false, kind: 'notFound' })

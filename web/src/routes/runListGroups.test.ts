@@ -98,6 +98,37 @@ function makeDeps(overrides: Partial<ListGroupsDeps> = {}): ListGroupsDeps {
   }
 }
 
+describe('runListGroups direct messages', () => {
+  // A DM carries neither name field, and no wrap is needed to read it.
+  const { nameCiphertext: _n, descriptionCiphertext: _d, ...unnamed } = privateGroup()
+  const dmEntry: GroupListEntry = { ...unnamed, groupId: 'dm-1', groupType: 'dm', dmWith: 'user-9' }
+
+  it('lists a DM without decrypting anything or reading the name cache', async () => {
+    const deps = makeDeps({ listGroups: vi.fn().mockResolvedValue({ groups: [dmEntry] }) })
+    const out = await runListGroups(deps)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({
+      groupId: 'dm-1',
+      nameStatus: 'dm',
+      displayName: null,
+      dmWith: 'user-9',
+    })
+    expect(deps.decryptGroupNames).not.toHaveBeenCalled()
+    expect(deps.getCachedGroupName).not.toHaveBeenCalled()
+  })
+
+  it('does not let a DM blank or disturb the ordinary groups beside it', async () => {
+    const deps = makeDeps({
+      listGroups: vi.fn().mockResolvedValue({ groups: [dmEntry, publicGroup()] }),
+    })
+    const out = await runListGroups(deps)
+    expect(out.map((g) => [g.groupId, g.nameStatus]).sort()).toEqual([
+      ['dm-1', 'dm'],
+      ['pub-1', 'plaintext'],
+    ])
+  })
+})
+
 describe('isLiveKeysError', () => {
   it('matches both of worker.ts decryptGroupNames own error messages', () => {
     expect(isLiveKeysError(new Error('worker: no live keys cached -- log in again'))).toBe(true)

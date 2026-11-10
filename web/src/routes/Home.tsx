@@ -20,6 +20,7 @@ import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import { useSession } from '@/lib/session/useSession'
+import { useUsernames } from './useUsernames'
 import { GroupList, type LoadState } from './GroupList'
 import { LogoutButton } from './LogoutButton'
 import { readNewGroupState } from './newGroupNavigationState'
@@ -38,6 +39,12 @@ export function Home() {
   // Private group names need the worker's keys, which a reload drops (#221).
   const [reauthenticating, setReauthenticating] = useState(false)
   const [reloadTick, setReloadTick] = useState(0)
+  // A direct message has no name; it is listed under the other person's username (#73).
+  const usernames = useUsernames(
+    load.status === 'ready'
+      ? load.groups.flatMap((g) => (g.dmWith === undefined ? [] : [g.dmWith]))
+      : [],
+  )
 
   useEffect(() => {
     if (!session.userId) {
@@ -174,6 +181,7 @@ export function Home() {
 
       <GroupList
         load={load}
+        usernames={usernames}
         onReauthenticate={() => {
           setReauthenticating(true)
         }}
@@ -188,6 +196,9 @@ export function Home() {
         </Button>
         <Button asChild variant="outline">
           <Link to="/directory">Find groups</Link>
+        </Button>
+        <Button asChild variant="outline">
+          <Link to="/dms">Direct messages</Link>
         </Button>
         <Button asChild variant="outline">
           <Link to="/join-requests">Join requests</Link>

@@ -75,7 +75,15 @@ function pinOf(p: Person, userId: string, keyEpoch = 0): PinRecord {
   const sig = ed25519.sign(
     me.signing,
     ed25519.SigningContext.Pin,
-    pinPayload(ME, userId, me.signing.publicKey, p.xRaw, [p.signing.publicKey], keyEpoch, signedDay),
+    pinPayload(
+      ME,
+      userId,
+      me.signing.publicKey,
+      p.xRaw,
+      [p.signing.publicKey],
+      keyEpoch,
+      signedDay,
+    ),
   )
   return {
     pinnedUserId: userId,
@@ -144,10 +152,7 @@ describe('prepareStartDM', () => {
 
   it('blocks keys that differ from the saved copy', async () => {
     const saved = person()
-    const out = await prepareStartDM(
-      startDeps(person(), { pins: [pinOf(saved, OTHER)] }),
-      OTHER,
-    )
+    const out = await prepareStartDM(startDeps(person(), { pins: [pinOf(saved, OTHER)] }), OTHER)
     expect(out).toEqual({ ok: false, kind: 'pinMismatch' })
   })
 
@@ -164,7 +169,10 @@ describe('prepareStartDM', () => {
     })
     const other = person()
     expect(
-      await prepareStartDM(startDeps(other, { served: served(other, OTHER, { deleted: true }) }), OTHER),
+      await prepareStartDM(
+        startDeps(other, { served: served(other, OTHER, { deleted: true }) }),
+        OTHER,
+      ),
     ).toEqual({ ok: false, kind: 'deleted' })
   })
 
@@ -355,7 +363,11 @@ describe('runStartDM', () => {
 
     it('keeps the server wording of a cool-off, which names the day', async () => {
       const out = await sendWith(
-        new ApiError(409, 'this person declined; you can try again after 2026-11-16', 'dm_cooling_off'),
+        new ApiError(
+          409,
+          'this person declined; you can try again after 2026-11-16',
+          'dm_cooling_off',
+        ),
       )
       expect(out).toMatchObject({ ok: false })
       if (!out.ok) {
@@ -583,16 +595,15 @@ describe('prepareAcceptDM', () => {
       keyEpoch: 1,
       supersededSigningKeys: [{ publicKey: old.edB64, from: '2026-01-01', until: '2026-11-01' }],
     })
-    const out = await prepareAcceptDM(
-      acceptDeps(current, { served: projection }),
-      incoming(old),
-    )
+    const out = await prepareAcceptDM(acceptDeps(current, { served: projection }), incoming(old))
     expect(out).toMatchObject({ ok: true, fingerprint: prints(current) })
   })
 
   it('reports a sender who is gone or deleted', async () => {
     const sender = person()
-    expect(await prepareAcceptDM(acceptDeps(sender, { served: undefined }), incoming(sender))).toEqual({
+    expect(
+      await prepareAcceptDM(acceptDeps(sender, { served: undefined }), incoming(sender)),
+    ).toEqual({
       ok: false,
       kind: 'gone',
     })
@@ -686,7 +697,10 @@ describe('runAcceptDM', () => {
       [409, 'request_changed', 'requestChanged'],
       [410, 'account_deleted', 'accountDeleted'],
     ] as const)('maps %s %s to %s', async (status, code, kind) => {
-      expect(await acceptWith(new ApiError(status, 'words', code))).toMatchObject({ ok: false, kind })
+      expect(await acceptWith(new ApiError(status, 'words', code))).toMatchObject({
+        ok: false,
+        kind,
+      })
     })
 
     it('maps 404, 401, other 4xx and unknown failures', async () => {
@@ -712,7 +726,13 @@ describe('runAcceptDM', () => {
     for (const kind of ['requestChanged', 'goneRequest', 'alreadyMember', 'ambiguous'] as const) {
       expect(shouldReloadAfterAccept({ ok: false, kind })).toBe(true)
     }
-    for (const kind of ['pinMismatch', 'badAdmission', 'notYourKeys', 'myKeysChanged', 'keysChanged'] as const) {
+    for (const kind of [
+      'pinMismatch',
+      'badAdmission',
+      'notYourKeys',
+      'myKeysChanged',
+      'keysChanged',
+    ] as const) {
       expect(shouldReloadAfterAccept({ ok: false, kind })).toBe(false)
     }
   })

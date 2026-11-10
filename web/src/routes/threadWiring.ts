@@ -202,6 +202,7 @@ export const REACTION_ERRORS = {
   notFound: SEND_ERRORS.notFound,
   behind: SEND_ERRORS.behind,
   dormant: SEND_ERRORS.dormant,
+  readOnly: 'The other person has left this conversation, so it is read-only.',
   coldKeys: 'This tab needs your password again to react.',
   unreadable:
     "Couldn't open this group's key, so the reaction was not saved. Reload the page and try again.",
@@ -239,6 +240,8 @@ export function classifyReactionError(err: unknown): ReactionFailure | 'retry' |
         return 'behind'
       case 'member_dormant':
         return 'dormant'
+      case 'dm_read_only':
+        return 'readOnly'
       case 'parent_gone':
         return 'parentGone'
     }
