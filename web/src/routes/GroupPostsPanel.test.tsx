@@ -83,7 +83,9 @@ describe('GroupPostsPanel', () => {
   it('shows the title, author, time and body of an opened post, with no status line when all is well', () => {
     const html = render([post()])
     expect(html).toContain('Hello')
-    expect(html).toContain('alice · 2026-10-28 14:03 UTC')
+    expect(html).toContain(
+      '<span data-slot="data" class="font-mono tabular-nums">alice</span> · <span data-slot="data" class="font-mono tabular-nums">2026-10-28 14:03 UTC</span>',
+    )
     expect(html).toContain('First line\nSecond line')
     expect(html).toContain('whitespace-pre-wrap')
     expect(postNotes(post())).toEqual([])
@@ -223,7 +225,7 @@ describe('GroupPostsPanel edited and deleted posts (#45)', () => {
   it('marks an edited post, with the exact edit time in the tooltip', () => {
     const html = render([post({ signedDay: '2026-10-30', content: editedContent(false) })])
     expect(html).toContain(
-      'alice · 2026-10-28 14:03 UTC · <span title="Edited 2026-10-30 09:12 UTC">edited</span>',
+      '<span data-slot="data" class="font-mono tabular-nums">alice</span> · <span data-slot="data" class="font-mono tabular-nums">2026-10-28 14:03 UTC</span> · <span title="Edited 2026-10-30 09:12 UTC">edited</span>',
     )
   })
 

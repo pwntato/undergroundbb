@@ -13,6 +13,7 @@
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Data } from '@/components/ui/data'
 import type { ControlMode } from './commentControls'
 import { COPY_ADVISORY } from './editCopy'
 import { ReactionBar } from './ReactionBar'
@@ -358,7 +359,8 @@ export function ThreadPanel({
               className="flex flex-col gap-1.5 rounded-md border px-3 py-2"
             >
               <p className="text-xs text-muted-foreground">
-                {commentAuthorLabel(comment)} · {commentTimeLabel(comment)}
+                <Data>{commentAuthorLabel(comment)}</Data> ·{' '}
+                <Data>{commentTimeLabel(comment)}</Data>
                 {comment.content.kind === 'opened' && <EditedMark content={comment.content} />}
               </p>
               {comment.content.kind === 'opened' && (

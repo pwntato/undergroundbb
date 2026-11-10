@@ -73,32 +73,33 @@
  * The vocabulary itself is listed in src/theme/tokens.ts, and tokens.test.ts fails if the two drift.
  */
 :root {
-  --ubb-background: oklch(0.16 0.01 260);
-  --ubb-foreground: oklch(0.93 0.01 260);
-  --ubb-muted: oklch(0.24 0.01 260);
-  --ubb-muted-foreground: oklch(0.68 0.01 260);
-  --ubb-surface: oklch(0.21 0.01 260);
-  --ubb-surface-foreground: oklch(0.93 0.01 260);
-  --ubb-card: oklch(0.21 0.01 260);
-  --ubb-card-foreground: oklch(0.93 0.01 260);
-  --ubb-border: oklch(0.3 0.01 260);
-  --ubb-input: oklch(0.3 0.01 260);
-  --ubb-ring: oklch(0.7 0.13 165);
-  --ubb-primary: oklch(0.75 0.15 165);
-  --ubb-primary-foreground: oklch(0.16 0.01 260);
-  --ubb-accent: oklch(0.72 0.16 320);
-  --ubb-accent-foreground: oklch(0.16 0.01 260);
-  --ubb-secondary: oklch(0.24 0.01 260);
-  --ubb-secondary-foreground: oklch(0.93 0.01 260);
-  --ubb-destructive: oklch(0.62 0.2 25);
-  --ubb-destructive-foreground: oklch(0.98 0 0);
+  --ubb-background: oklch(0.17 0.014 255);
+  --ubb-foreground: oklch(0.93 0.008 255);
+  --ubb-muted: oklch(0.25 0.014 255);
+  --ubb-muted-foreground: oklch(0.72 0.016 255);
+  --ubb-surface: oklch(0.21 0.015 255);
+  --ubb-surface-foreground: oklch(0.93 0.008 255);
+  --ubb-card: oklch(0.21 0.015 255);
+  --ubb-card-foreground: oklch(0.93 0.008 255);
+  --ubb-border: oklch(0.34 0.016 255);
+  --ubb-input: oklch(0.34 0.016 255);
+  --ubb-ring: oklch(0.74 0.09 195);
+  --ubb-primary: oklch(0.74 0.09 195);
+  --ubb-primary-foreground: oklch(0.17 0.014 255);
+  --ubb-accent: oklch(0.29 0.022 215);
+  --ubb-accent-foreground: oklch(0.95 0.008 255);
+  --ubb-secondary: oklch(0.27 0.016 255);
+  --ubb-secondary-foreground: oklch(0.93 0.008 255);
+  --ubb-destructive: oklch(0.68 0.17 25);
+  --ubb-destructive-foreground: oklch(0.17 0.014 255);
 
-  --ubb-font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --ubb-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --ubb-font-sans:
+    Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'DejaVu Sans', source-sans-pro, sans-serif;
+  --ubb-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
   --ubb-font-heading: var(--ubb-font-sans);
 
-  --ubb-radius-sm: 0.125rem;
-  --ubb-radius-md: 0.25rem;
+  --ubb-radius-sm: 0.25rem;
+  --ubb-radius-md: 0.375rem;
   --ubb-radius-lg: 0.5rem;
   --ubb-radius-xl: 0.75rem;
 
