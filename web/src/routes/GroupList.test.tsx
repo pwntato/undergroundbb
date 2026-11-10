@@ -174,6 +174,13 @@ describe('GroupList', () => {
     expect(html).toContain('aria-label="1 unread notification"')
     expect(html).not.toContain('0 unread')
   })
+
+  it('sets the unread count as data: monospace with aligned figures', () => {
+    const html = render({ status: 'ready', groups: [displayGroup({ groupId: 'a', unread: 3 })] })
+    const badge = /<a[^>]*aria-label="3 unread[^>]*>/.exec(html)?.[0] ?? ''
+    expect(badge).toContain('font-mono')
+    expect(badge).toContain('tabular-nums')
+  })
 })
 
 describe('GroupList direct messages', () => {
