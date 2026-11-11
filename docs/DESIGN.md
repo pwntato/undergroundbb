@@ -3501,7 +3501,14 @@ reload. The id of the choice is kept in `localStorage` under `ubb.theme`; an unk
 unreadable value means the default theme, and blocked storage does not stop the switch. `main.tsx` applies
 the saved theme before the first render. The CSP forbids an inline script, so the page shows the default
 for the moments before the bundle runs. Not built yet: keeping the choice in the encrypted preferences blob
-so it follows the user across devices (#366), and the picker (#53).
+so it follows the user across devices (#366).
+
+**The picker (#53)** is `routes/ThemePicker.tsx`: one card per built-in theme with a sample drawn from that
+theme's own token values (`themePreview.ts`, inline styles: a wrapper that overrode `--ubb-*` would not
+work, because the Tailwind theme variables resolve at `:root`). Pressing a card calls `switchTheme`, so the
+whole page changes at once. It is at `/appearance` (linked from Home, no session needed) and is also the
+signup finish step. The page itself says which theme is showing (`data-theme-id` beside `data-theme`), and
+the picker reads that, so the "Selected" mark is right even when storage is blocked.
 
 Users may write custom themes. A theme is a **JSON object of token values, never a stylesheet**.
 Every value is validated against an allowlist and applied through the CSSOM. No user-supplied string

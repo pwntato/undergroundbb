@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest'
 import {
   THEME_STORAGE_KEY,
   applyStoredTheme,
+  appliedThemeId,
   applyTheme,
+  pickTheme,
+  THEME_ID_ATTRIBUTE,
   saveThemeId,
   storedTheme,
   switchTheme,
@@ -16,7 +19,11 @@ import { themeProblems } from './themeChecks'
 import { BUILT_IN_THEMES, DEFAULT_THEME, findTheme } from './themes'
 import { TOKEN_NAMES } from './tokens'
 
-function fakeRoot(): ThemeTarget & { props: Map<string, string>; attrs: Map<string, string> } {
+function fakeRoot(): ThemeTarget & {
+  props: Map<string, string>
+  attrs: Map<string, string>
+  getAttribute(n: string): string | null
+} {
   const props = new Map<string, string>()
   const attrs = new Map<string, string>()
   return {
@@ -24,6 +31,7 @@ function fakeRoot(): ThemeTarget & { props: Map<string, string>; attrs: Map<stri
     attrs,
     style: { setProperty: (n, v) => void props.set(n, v) },
     setAttribute: (n, v) => void attrs.set(n, v),
+    getAttribute: (n: string) => attrs.get(n) ?? null,
   }
 }
 
@@ -165,5 +173,45 @@ describe('applyStoredTheme (what runs at startup)', () => {
       expect(applyStoredTheme(root, store).id).toBe(DEFAULT_THEME.id)
       expect(root.props.get('--ubb-background')).toBe(DEFAULT_THEME.tokens['background'])
     }
+  })
+})
+
+describe('appliedThemeId', () => {
+  it('reads the theme on the page, whatever storage says', () => {
+    const root = fakeRoot()
+    switchTheme('zine', root, throwing)
+    expect(root.attrs.get(THEME_ID_ATTRIBUTE)).toBe('zine')
+    expect(appliedThemeId(root)).toBe('zine')
+    switchTheme('bbs-revival', root, null)
+    expect(appliedThemeId(root)).toBe('bbs-revival')
+  })
+
+  it('is the default before anything is applied, or when the attribute is not a built-in id', () => {
+    const root = fakeRoot()
+    expect(appliedThemeId(root)).toBe(DEFAULT_THEME.id)
+    root.setAttribute(THEME_ID_ATTRIBUTE, '__proto__')
+    expect(appliedThemeId(root)).toBe(DEFAULT_THEME.id)
+  })
+})
+
+describe('pickTheme', () => {
+  it('switches, saves, and returns the new current id', () => {
+    const root = fakeRoot()
+    const store = fakeStore()
+    expect(pickTheme('zine', 'refined-terminal', root, store)).toBe('zine')
+    expect(root.attrs.get('data-theme')).toBe('light')
+    expect(store.data.get(THEME_STORAGE_KEY)).toBe('zine')
+  })
+
+  it('leaves the page, the store and the current id alone for an unknown id', () => {
+    const root = fakeRoot()
+    const store = fakeStore()
+    expect(pickTheme('nope', 'bbs-revival', root, store)).toBe('bbs-revival')
+    expect(root.attrs.size).toBe(0)
+    expect(store.data.size).toBe(0)
+  })
+
+  it('returns the new id even when storage is blocked, because the page did switch', () => {
+    expect(pickTheme('zine', 'refined-terminal', fakeRoot(), throwing)).toBe('zine')
   })
 })

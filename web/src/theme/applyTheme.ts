@@ -12,6 +12,9 @@ export interface ThemeStore {
   setItem(key: string, value: string): void
 }
 
+/** The attribute on `<html>` that says which theme is on the page now, beside `data-theme` (its mode). */
+export const THEME_ID_ATTRIBUTE = 'data-theme-id'
+
 /** Where the chosen theme is kept in this browser (before login there is no profile to read). */
 export const THEME_STORAGE_KEY = 'ubb.theme'
 
@@ -26,6 +29,29 @@ export function applyTheme(theme: BuiltInTheme, target: ThemeTarget): void {
     target.style.setProperty(`--ubb-${name}`, value)
   }
   target.setAttribute('data-theme', theme.mode)
+  target.setAttribute(THEME_ID_ATTRIBUTE, theme.id)
+}
+
+/**
+ * The id of the theme on the page now, read from the page itself and not from storage: with storage
+ * blocked a switch still works but is not remembered, and a picker must still mark what is showing.
+ * Before anything has been applied (the markup alone) the page is the default theme.
+ */
+export function appliedThemeId(root: { getAttribute(name: string): string | null }): string {
+  return findTheme(root.getAttribute(THEME_ID_ATTRIBUTE))?.id ?? DEFAULT_THEME.id
+}
+
+/**
+ * What a picker does when a card is pressed: switch to it and return the new current id, or leave
+ * everything alone and return the old one if the id is not a built-in theme.
+ */
+export function pickTheme(
+  id: string,
+  currentId: string,
+  target: ThemeTarget,
+  store: ThemeStore | null,
+): string {
+  return switchTheme(id, target, store) ? id : currentId
 }
 
 /** The theme saved in this browser, or the default if there is none, it is unknown, or storage fails. */

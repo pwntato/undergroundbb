@@ -22,6 +22,7 @@ import { JoinGroupScreen } from '@/routes/JoinGroupScreen'
 import { MyJoinRequestsScreen } from '@/routes/MyJoinRequestsScreen'
 import { GroupJoinRequestsScreen } from '@/routes/GroupJoinRequestsScreen'
 import { NotificationsScreen } from '@/routes/NotificationsScreen'
+import { AppearanceScreen } from '@/routes/AppearanceScreen'
 import { LoginScreen } from '@/routes/LoginScreen'
 import { RecoveryScreen } from '@/routes/RecoveryScreen'
 import { SignupScreen } from '@/routes/SignupScreen'
@@ -150,6 +151,7 @@ function App() {
                 </RequireAuth>
               }
             />
+            <Route path="/appearance" element={<AppearanceScreen />} />
             <Route
               path="/directory"
               element={
