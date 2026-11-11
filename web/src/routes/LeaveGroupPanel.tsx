@@ -79,6 +79,9 @@ export function LeaveGroupPanel({
                 <span className={`${unresolvedClass(id, usernames)} text-sm`} title={id}>
                   {memberLabel(id, usernames)}
                 </span>
+                {/* Deliberately `outline`, not the solid `destructive` of the other confirm: there is one
+                    of these per candidate, and a column of solid red buttons would be loud. It still
+                    leaves the group; the line above says so. */}
                 <Button
                   type="button"
                   variant="outline"

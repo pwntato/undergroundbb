@@ -33,5 +33,8 @@ describe('destructive actions: trigger outlined, confirm solid', () => {
   it('the confirm buttons stay solid destructive', () => {
     expect(variantOf('DeleteAccountPanel.tsx', 'Yes, delete my account')).toBe('destructive')
     expect(variantOf('GroupSettingsPanel.tsx', 'Convert this group to Open')).toBe('destructive')
+    expect(variantOf('GroupMembersPanel.tsx', 'Confirm remove')).toBe('destructive')
+    // The trigger and the first confirm label share "Leave group"; 'Delete group' is the confirm's own.
+    expect(variantOf('LeaveGroupPanel.tsx', 'Delete group')).toBe('destructive')
   })
 })
