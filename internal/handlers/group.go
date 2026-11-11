@@ -599,8 +599,9 @@ func setDMFields(entry *groupListEntry, g *models.Group, callerID string) {
 // caller's own WrappedGroupKey and nothing more.
 //
 // With ?unread=1 each entry also carries the caller's unread notification count for that group
-// (#145): see unreadCounts for what it reads and what it costs. Only Home asks, because the same
-// call serves login, Invites and Rotate keys, which never show it. The count is decoration: if it
+// (#145): see unreadCounts for what it reads and what it costs. Only the web app shell asks (on page
+// changes and after a mark-read), because the same call serves login, Invites and Rotate keys,
+// which never show it. The count is decoration: if it
 // fails the groups are returned without counts rather than failing the list.
 func (h *Handler) listGroups(w http.ResponseWriter, r *http.Request) {
 	userID, ok := sessionUserID(r)

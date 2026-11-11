@@ -34,7 +34,10 @@ function SignedInShell({
   // rather than reset in an effect.
   const [openOn, setOpenOn] = useState<string | null>(null)
   const open = openOn === pathname
-  const [reauthenticating, setReauthenticating] = useState(false)
+  // The password step belongs to the page it was opened on; going elsewhere closes it (derived,
+  // like the phone menu).
+  const [reauthOn, setReauthOn] = useState<string | null>(null)
+  const reauthenticating = reauthOn === pathname
   const [loggingOut, setLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState<string | null>(null)
   const usernames = useUsernames(
@@ -43,7 +46,7 @@ function SignedInShell({
       : [],
   )
 
-  const requestReauth = () => setReauthenticating(true)
+  const requestReauth = () => setReauthOn(pathname)
   const onLogout = () =>
     onLogoutClick({
       logoutRequest,
@@ -76,10 +79,10 @@ function SignedInShell({
               sessionUserId={userId}
               action="show private group names"
               onDone={() => {
-                setReauthenticating(false)
+                setReauthOn(null)
                 reload()
               }}
-              onCancel={() => setReauthenticating(false)}
+              onCancel={() => setReauthOn(null)}
             />
           </main>
         ) : (

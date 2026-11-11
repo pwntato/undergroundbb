@@ -5,15 +5,15 @@
 //
 // A failed refetch of an already-shown list keeps the old list; the first load failing is 'error'.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
-import { getKeychain, listGroups } from '@/lib/api/groups'
+import { getKeychain, listGroups, type GroupListEntry } from '@/lib/api/groups'
 import { decryptGroupNames } from '@/lib/crypto/worker-client'
 import { fetchNameChain } from '@/lib/groups/nameChain'
 import { getCachedGroupName, setCachedGroupName } from '@/lib/groups/groupNameCache'
 import type { LoadState } from './GroupList'
 import { listGroupsWithUnread } from './listGroupsWithUnread'
-import { marksSettled } from './markReadTracker'
+import { marksSettled, onMarksSettled } from './markReadTracker'
 import { readNewGroupState } from './newGroupNavigationState'
 import { runListGroups } from './runListGroups'
 
@@ -27,6 +27,26 @@ export function failedFrom(previous: LoadState): LoadState {
   return previous.status === 'ready' ? previous : { status: 'error' }
 }
 
+/**
+ * What a navigation refetches on: moving between pages of one group (its posts, a thread, its
+ * members) keeps the same key, so it does not refetch the list; any other change of page does (including /join, which can end in membership).
+ * Reading and marking inside a group is covered by onMarksSettled in the hook.
+ */
+export function refetchKey(pathname: string): string {
+  const m = /^\/groups\/([^/]+)\/(posts|members|settings|invite|requests|successor)(\/|$)/.exec(
+    pathname,
+  )
+  return m !== null ? `/groups/${m[1]}` : pathname
+}
+
+/** A just-created group stays pending until a fetched list includes it (GSI1 lags), then it is dropped. */
+export function stillPending(
+  pending: GroupListEntry | null,
+  fetched: readonly { readonly groupId: string }[],
+): GroupListEntry | null {
+  return pending !== null && fetched.some((g) => g.groupId === pending.groupId) ? null : pending
+}
+
 export function useGroupsLoad(userId: string | null): {
   readonly load: LoadState
   readonly reload: () => void
@@ -37,16 +57,25 @@ export function useGroupsLoad(userId: string | null): {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [reloadTick, setReloadTick] = useState(0)
 
+  // The group CreateGroupScreen just created. Consuming it replaces the history entry (so a
+  // reload cannot resurrect it), which changes locationState and re-runs the fetch below, so the
+  // group is held here and every fetch carries it until a fetched list includes it (#370 review).
+  const pendingNew = useRef<GroupListEntry | null>(null)
+  useEffect(() => {
+    const fresh = readNewGroupState(locationState)
+    if (fresh !== undefined) {
+      pendingNew.current = fresh
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [locationState, location.pathname, navigate])
+
+  // A finished mark-read changes the counts: refetch, as the header does.
+  useEffect(() => onMarksSettled(() => setReloadTick((n) => n + 1)), [])
+
+  const scope = refetchKey(location.pathname)
   useEffect(() => {
     if (userId === null) {
       return
-    }
-    // A just-created group arrives in history state; consume it once (see git history of Home.tsx,
-    // PR #144 round 2: react-router state survives reloads, so a stale one would resurrect a group
-    // the user later left).
-    const newGroup = readNewGroupState(locationState)
-    if (newGroup !== undefined) {
-      navigate(location.pathname, { replace: true, state: null })
     }
     let cancelled = false
     void (async () => {
@@ -54,6 +83,7 @@ export function useGroupsLoad(userId: string | null): {
         setLoad(loadingFrom)
       }
       try {
+        const newGroup = pendingNew.current
         const groups = await runListGroups({
           listGroups: () => listGroupsWithUnread({ settled: marksSettled, listGroups }),
           decryptGroupNames,
@@ -61,9 +91,10 @@ export function useGroupsLoad(userId: string | null): {
           getCachedGroupName,
           setCachedGroupName,
           userId,
-          ...(newGroup !== undefined && { newGroup }),
+          ...(newGroup !== null && { newGroup }),
         })
         if (!cancelled) {
+          pendingNew.current = stillPending(pendingNew.current, groups)
           setLoad({ status: 'ready', groups })
         }
       } catch {
@@ -75,7 +106,7 @@ export function useGroupsLoad(userId: string | null): {
     return () => {
       cancelled = true
     }
-  }, [userId, locationState, location.pathname, navigate, reloadTick])
+  }, [userId, locationState, scope, reloadTick])
 
   return { load, reload: () => setReloadTick((n) => n + 1) }
 }
