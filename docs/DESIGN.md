@@ -3478,8 +3478,8 @@ express it can express the others trivially.
 **The vocabulary (#48)** is listed in `web/src/theme/tokens.ts` and defaulted in `web/src/index.css`;
 `tokens.test.ts` fails if the two drift. It is 19 colors (including `card`), three fonts (`sans`,
 `mono`, `heading`), four radii, two border widths (`border-width` for every border, `border-width-strong`
-for cards and alerts), a `border-style` (`solid`, `dashed`, `dotted` or `double`), four shadows, one spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and
-three text values: `case-heading`, `tracking-heading` and `tracking-body`. Each is a `--ubb-*` property
+for cards and alerts), a `border-style` (`solid`, `dashed`, `dotted` or `double`), four shadows, one
+spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and three text values: `case-heading`, `tracking-heading` and `tracking-body`. Each is a `--ubb-*` property
 that Tailwind's theme reads, so components use ordinary utilities and a theme only changes values.
 `case-heading` and `tracking-heading` travel together: uppercase headings with no letter-spacing are
 hard to read, and `headingPairProblem` is the check the custom-theme validator will apply. The

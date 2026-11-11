@@ -3,7 +3,8 @@
  *
  * It was drawn up against Zine first because Zine is the hardest theme to express: hard offset
  * shadows, zero radius, thick borders, uppercase headings at display scale. A vocabulary that holds
- * Zine holds Refined Terminal and BBS Revival without needing anything extra.
+ * Zine holds Refined Terminal trivially. BBS Revival then needed one addition, `border-style`, for its
+ * box-drawing rules: a vocabulary drawn up against one theme is checked by the next, not finished by it.
  *
  * A theme is a JSON object of these values and never a stylesheet (see THREAT_MODEL.md, "Why custom
  * themes are JSON, not CSS"). This list is the allowlist the custom-theme validator (#74) checks
