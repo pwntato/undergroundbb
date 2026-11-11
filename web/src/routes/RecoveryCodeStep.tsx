@@ -63,7 +63,7 @@ export function RecoveryCodeStep({
           <Button type="button" variant="outline" onClick={handleCopy}>
             {copied ? 'Copied' : 'Copy code'}
           </Button>
-          <label className="flex items-start gap-2 text-sm">
+          <label className="min-h-[1.5rem] flex items-start gap-2 text-sm">
             <input
               type="checkbox"
               className="mt-1"

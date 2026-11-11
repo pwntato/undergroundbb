@@ -174,7 +174,7 @@ export function RotateKeysReview({
           required
         />
       </div>
-      <label className="flex items-start gap-2 text-sm">
+      <label className="min-h-[1.5rem] flex items-start gap-2 text-sm">
         <input
           type="checkbox"
           checked={understood}

@@ -233,7 +233,10 @@ export function GroupMembersPanel({
                   {isDeletedUser(m.userId, usernames) ? (
                     memberLabel(m.userId, usernames)
                   ) : (
-                    <Link to={`/users/${m.userId}`} className="underline-offset-4 hover:underline">
+                    <Link
+                      to={`/users/${m.userId}`}
+                      className="inline-flex min-h-[1.5rem] items-center underline-offset-4 hover:underline"
+                    >
                       {memberLabel(m.userId, usernames)}
                     </Link>
                   )}

@@ -117,7 +117,7 @@ export function CreateGroupFormStep({
       </div>
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">Visibility</legend>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="min-h-[1.5rem] flex items-center gap-2 text-sm">
           <input
             type="radio"
             name="visibility"
@@ -128,7 +128,7 @@ export function CreateGroupFormStep({
           />
           Private — only discoverable by invite
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="min-h-[1.5rem] flex items-center gap-2 text-sm">
           <input
             type="radio"
             name="visibility"
@@ -142,7 +142,7 @@ export function CreateGroupFormStep({
       </fieldset>
       <fieldset className="flex flex-col gap-2">
         <legend className="text-sm font-medium">Removing a member</legend>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="min-h-[1.5rem] flex items-center gap-2 text-sm">
           <input
             type="radio"
             name="revocationMode"
@@ -154,7 +154,7 @@ export function CreateGroupFormStep({
           />
           Rotating — removal re-keys the group (up to 1,000 members)
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="min-h-[1.5rem] flex items-center gap-2 text-sm">
           <input
             type="radio"
             name="revocationMode"
@@ -170,7 +170,7 @@ export function CreateGroupFormStep({
         )}
       </fieldset>
       {policy.allowNeverExpire ? (
-        <label className="flex items-center gap-2 text-sm">
+        <label className="min-h-[1.5rem] flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={neverExpires}

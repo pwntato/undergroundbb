@@ -92,7 +92,8 @@ export function DirectoryPanel({
 }
 
 function RowAction({ row }: { readonly row: DirectoryRow }) {
-  const linkClass = 'text-xs text-primary underline-offset-4 hover:underline'
+  const linkClass =
+    'inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline'
   switch (row.status.kind) {
     case 'member':
       return <span className="text-xs text-muted-foreground">You are a member</span>
