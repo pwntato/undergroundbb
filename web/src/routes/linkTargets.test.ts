@@ -23,7 +23,7 @@ describe('standalone link tap targets', () => {
     const bad: string[] = []
     for (const f of files) {
       const src = readFileSync(join(DIR, f), 'utf8')
-      for (const tag of src.match(/<Link\b[^>]*>/g) ?? []) {
+      for (const tag of src.match(/<Link\b[\s\S]*?[^=]>/g) ?? []) {
         const cls = /className="([^"]*)"/.exec(tag)?.[1] ?? ''
         if (!/\btext-(sm|xs)\b/.test(cls) || !/underline/.test(cls)) continue
         if (
