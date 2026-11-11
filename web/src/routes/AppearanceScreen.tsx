@@ -1,20 +1,35 @@
 // #53: Settings > Appearance at /appearance. Choosing a theme switches the page at once and keeps the
 // choice in this browser (switchTheme). Needs no session: a theme is a local look, and the picker works
-// before login too. Syncing the choice across devices is #366. The view has no hooks (a test calls it);
-// the screen below it only holds the current id, read from the page so it is right even when storage is
-// blocked.
+// before login too. Syncing the choice across devices is #366. Custom themes (#74) are imported here as
+// JSON (CustomThemesPanel). The view has no hooks (a test calls it); the screen below it only holds the
+// state that appearanceState.ts changes, read from the page so it is right even when storage is blocked.
 
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { appliedThemeId, browserStore, pickTheme } from '@/theme/applyTheme'
+import { browserStore } from '@/theme/applyTheme'
+import {
+  initialAppearance,
+  runExport,
+  runImport,
+  runRemove,
+  runSelect,
+  typeImport,
+  type AppearanceEnv,
+  type AppearanceState,
+} from './appearanceState'
+import { CustomThemesPanel } from './CustomThemesPanel'
 import { ThemePicker } from './ThemePicker'
 
 export interface AppearanceViewProps {
-  readonly currentId: string
+  readonly state: AppearanceState
   readonly onSelect: (id: string) => void
+  readonly onImportText: (text: string) => void
+  readonly onImport: () => void
+  readonly onRemove: (id: string) => void
+  readonly onExport: () => void
 }
 
-export function AppearanceView({ currentId, onSelect }: AppearanceViewProps) {
+export function AppearanceView({ state, onSelect, ...custom }: AppearanceViewProps) {
   return (
     <div className="flex w-full max-w-md flex-col gap-4">
       <div className="flex flex-col gap-1 text-center">
@@ -23,7 +38,14 @@ export function AppearanceView({ currentId, onSelect }: AppearanceViewProps) {
           Pick a look. It changes right away and is kept in this browser.
         </p>
       </div>
-      <ThemePicker currentId={currentId} onSelect={onSelect} />
+      <ThemePicker currentId={state.currentId} onSelect={onSelect} customThemes={state.customs} />
+      <CustomThemesPanel
+        customs={state.customs}
+        importText={state.importText}
+        errors={state.errors}
+        exportText={state.exportText}
+        {...custom}
+      />
       <Link
         to="/"
         className="inline-flex min-h-[1.5rem] items-center justify-center text-center text-sm text-primary underline-offset-4 hover:underline"
@@ -34,13 +56,29 @@ export function AppearanceView({ currentId, onSelect }: AppearanceViewProps) {
   )
 }
 
+function pageEnv(): AppearanceEnv {
+  return { target: document.documentElement, store: browserStore() }
+}
+
 export function AppearanceScreen() {
-  const [currentId, setCurrentId] = useState(() => appliedThemeId(document.documentElement))
+  const [state, setState] = useState(() => initialAppearance(pageEnv()))
   return (
     <AppearanceView
-      currentId={currentId}
+      state={state}
       onSelect={(id) => {
-        setCurrentId(pickTheme(id, currentId, document.documentElement, browserStore()))
+        setState((s) => runSelect(s, id, pageEnv()))
+      }}
+      onImportText={(text) => {
+        setState((s) => typeImport(s, text))
+      }}
+      onImport={() => {
+        setState((s) => runImport(s, pageEnv()))
+      }}
+      onRemove={(id) => {
+        setState((s) => runRemove(s, id, pageEnv()))
+      }}
+      onExport={() => {
+        setState((s) => runExport(s))
       }}
     />
   )

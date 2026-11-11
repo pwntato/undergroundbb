@@ -45,6 +45,21 @@ const continueButton = (el: ReturnType<typeof ThemePickerStepView>) =>
     (n) => (n.type as { name?: string }).name === 'Button' && n.props['onClick'] !== undefined,
   )
 
+const blankState = {
+  currentId: 'refined-terminal',
+  customs: [],
+  importText: '',
+  errors: [],
+  exportText: null,
+}
+const noop = {
+  onSelect: () => undefined,
+  onImportText: () => undefined,
+  onImport: () => undefined,
+  onRemove: () => undefined,
+  onExport: () => undefined,
+}
+
 describe('ThemePickerStepView (the signup finish step)', () => {
   it('moves on when Continue is pressed, through its real onClick', () => {
     const onDone = vi.fn()
@@ -97,7 +112,10 @@ describe('AppearanceView', () => {
       createElement(
         MemoryRouter,
         null,
-        createElement(AppearanceView, { currentId: 'bbs-revival', onSelect: () => undefined }),
+        createElement(AppearanceView, {
+          ...noop,
+          state: { ...blankState, currentId: 'bbs-revival' },
+        }),
       ),
     )
     expect(out).toContain('Appearance')
@@ -107,7 +125,11 @@ describe('AppearanceView', () => {
 
   it('pressing a card switches the page and saves it', () => {
     const h = harness()
-    const el = AppearanceView({ currentId: h.current.id, onSelect: h.onSelect })
+    const el = AppearanceView({
+      ...noop,
+      state: { ...blankState, currentId: h.current.id },
+      onSelect: h.onSelect,
+    })
     press(card(el, 'bbs-revival'))
     expect(h.attrs.get('data-theme')).toBe('dark')
     expect(h.attrs.get('data-theme-id')).toBe('bbs-revival')

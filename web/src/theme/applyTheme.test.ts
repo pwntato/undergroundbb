@@ -11,10 +11,13 @@ import {
   saveThemeId,
   storedTheme,
   switchTheme,
+  forgetCustomTheme,
   type ThemeStore,
   type ThemeTarget,
 } from './applyTheme'
 import { contrastRatio } from './contrast'
+import { validateCustomTheme } from './customTheme'
+import { CUSTOM_THEMES_KEY, addCustomTheme, loadCustomThemes } from './customThemes'
 import { themeProblems } from './themeChecks'
 import { BUILT_IN_THEMES, DEFAULT_THEME, findTheme } from './themes'
 import { TOKEN_NAMES } from './tokens'
@@ -213,5 +216,84 @@ describe('pickTheme', () => {
 
   it('returns the new id even when storage is blocked, because the page did switch', () => {
     expect(pickTheme('zine', 'refined-terminal', fakeRoot(), throwing)).toBe('zine')
+  })
+})
+
+describe('custom themes at startup and in the store (#74)', () => {
+  const custom = () => {
+    const r = validateCustomTheme(
+      JSON.stringify({ name: 'Mine', mode: 'light', tokens: { primary: 'oklch(0.4 0.15 150)' } }),
+    )
+    if (!r.ok) throw new Error('bad fixture')
+    return r.theme
+  }
+  const withCustom = () => {
+    const data = new Map<string, string>()
+    const store: ThemeStore = {
+      getItem: (k) => data.get(k) ?? null,
+      setItem: (k, v) => void data.set(k, v),
+    }
+    const t = custom()
+    addCustomTheme(t, store)
+    return { data, store, t }
+  }
+
+  it('a saved custom theme id is applied at startup, with its mode', () => {
+    const { store, t } = withCustom()
+    store.setItem(THEME_STORAGE_KEY, t.id)
+    const attrs = new Map<string, string>()
+    const props = new Map<string, string>()
+    const applied = applyStoredTheme(
+      {
+        style: { setProperty: (n, v) => void props.set(n, v) },
+        setAttribute: (n, v) => void attrs.set(n, v),
+      },
+      store,
+    )
+    expect(applied.id).toBe(t.id)
+    expect(attrs.get('data-theme')).toBe('light')
+    expect(props.get('--ubb-primary')).toBe('oklch(0.4 0.15 150)')
+  })
+
+  it('a custom id whose theme is gone, or was damaged in storage, falls back to the default', () => {
+    const { store, data, t } = withCustom()
+    store.setItem(THEME_STORAGE_KEY, t.id)
+    data.set(
+      CUSTOM_THEMES_KEY,
+      JSON.stringify([{ name: 'Mine', mode: 'light', tokens: { primary: 'url(//x)' } }]),
+    )
+    expect(storedTheme(store).id).toBe('refined-terminal')
+    data.delete(CUSTOM_THEMES_KEY)
+    expect(storedTheme(store).id).toBe('refined-terminal')
+  })
+
+  it('a custom id is only remembered or switched to if the theme exists', () => {
+    const { store, t } = withCustom()
+    expect(saveThemeId(t.id, store)).toBe(true)
+    expect(saveThemeId('custom-nope-1', store)).toBe(false)
+    const target = { style: { setProperty: () => undefined }, setAttribute: () => undefined }
+    expect(switchTheme(t.id, target, store)).toBe(true)
+    expect(switchTheme('custom-nope-1', target, store)).toBe(false)
+  })
+
+  it('appliedThemeId knows a custom theme only when it is told about it', () => {
+    const t = custom()
+    const root = { getAttribute: () => t.id }
+    expect(appliedThemeId(root)).toBe('refined-terminal')
+    expect(appliedThemeId(root, [t])).toBe(t.id)
+  })
+
+  it('forgetting the showing theme switches back to the default; another leaves it', () => {
+    const { store, t } = withCustom()
+    const attrs = new Map<string, string>()
+    const target = {
+      style: { setProperty: () => undefined },
+      setAttribute: (n: string, v: string) => void attrs.set(n, v),
+    }
+    expect(forgetCustomTheme(t.id, 'zine', target, store)).toBe('zine')
+    addCustomTheme(t, store)
+    expect(forgetCustomTheme(t.id, t.id, target, store)).toBe('refined-terminal')
+    expect(attrs.get('data-theme-id')).toBe('refined-terminal')
+    expect(loadCustomThemes(store)).toEqual([])
   })
 })

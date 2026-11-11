@@ -2,7 +2,7 @@
 // chosen one marked. Choosing applies it at once (the caller's onSelect). No hooks, so a test can call
 // it as a function and press the real buttons. Used by the Appearance screen and the signup finish step.
 
-import { BUILT_IN_THEMES } from '@/theme/themes'
+import { BUILT_IN_THEMES, type BuiltInTheme } from '@/theme/themes'
 import { cn } from '@/lib/utils'
 import { themePreviewStyles } from './themePreview'
 
@@ -10,12 +10,14 @@ export interface ThemePickerProps {
   /** The id of the theme on the page now. */
   readonly currentId: string
   readonly onSelect: (id: string) => void
+  /** Themes the person imported (#74), listed after the built-ins. */
+  readonly customThemes?: readonly BuiltInTheme[]
 }
 
-export function ThemePicker({ currentId, onSelect }: ThemePickerProps) {
+export function ThemePicker({ currentId, onSelect, customThemes = [] }: ThemePickerProps) {
   return (
     <div role="group" aria-label="Theme" className="flex w-full flex-col gap-3">
-      {BUILT_IN_THEMES.map((theme) => {
+      {[...BUILT_IN_THEMES, ...customThemes].map((theme) => {
         const selected = theme.id === currentId
         const sample = themePreviewStyles(theme)
         return (
@@ -34,7 +36,9 @@ export function ThemePicker({ currentId, onSelect }: ThemePickerProps) {
           >
             <span className="flex items-center justify-between text-sm font-medium">
               {theme.name}
-              <span className="text-xs text-muted-foreground">{selected ? 'Selected' : 'Use'}</span>
+              <span className="text-xs text-muted-foreground">
+                {selected ? 'Selected' : theme.custom === true ? 'Custom' : 'Use'}
+              </span>
             </span>
             <span aria-hidden="true" style={sample.frame}>
               <span style={sample.heading}>Sample heading</span>
