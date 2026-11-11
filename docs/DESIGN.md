@@ -3524,6 +3524,25 @@ Every value is validated against an allowlist and applied through the CSSOM. No 
 ever reaches the page as CSS syntax — see the threat model for why this matters more here than in an
 ordinary app.
 
+**Custom themes (#74)** are `web/src/theme/customTheme.ts` (the validator) and `customThemes.ts` (the saved
+list), imported on the Appearance screen by pasting JSON. The document is `{ "name", "mode", "tokens" }`;
+unknown fields and unknown tokens are refused. Each value is parsed into its parts and the string handed to
+the CSSOM is **rebuilt from those parts**, so what is applied is never the author's text: colors are
+`oklch(L C H)` with L 0..1, C 0..0.5, H 0..360; lengths are a number with `px`, `rem` or `em` inside a
+per-token range (radius 0..32px, borders 0..4px and 0..12px, spacing 0.15..0.375rem, letter-spacing 0..0.3em);
+shadows are up to three `x y blur [spread] color` terms in px with an `oklch()` (optionally with alpha) or
+`transparent`, no `inset`; fonts are up to ten names of locally installed fonts (each is quoted by the
+rebuild) or the generic families, plus the one fixed `var(--ubb-font-sans)` on the heading font only; keyword
+tokens take only the listed values. No `url()`, `calc()`, other `var()`, quote, `;`, brace or comment can
+survive the grammar. A token left out comes from the built-in of the same mode (Refined Terminal for `dark`,
+Zine for `light`), and the merged theme must pass the same `themeProblems` the built-ins pass: a theme that
+makes text, the input edge or the focus ring unreadable is refused, because unreadable text could also hide a
+warning or a key fingerprint. Up to five are kept, in `localStorage` under `ubb.customThemes`, and the list is
+**re-validated every time it is read**, so a damaged or hand-edited value cannot put anything on the page an
+import could not; an invalid entry is dropped and a missing one falls back to the default theme. The same
+name replaces the saved theme; the id is the name's slug plus a hash. "Show this theme as JSON" prints the
+theme on the page (a built-in as a copy) to start from. Syncing custom themes across devices stays with #366.
+
 ## Infrastructure
 
 ```

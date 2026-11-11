@@ -94,6 +94,9 @@ describe('colors', () => {
     'oklch(0.5 0.2 400)',
     'oklch(0.5 0.2 27); background: url(x)',
     'oklch(0.5 0.2 27)/**/',
+    'red; oklch(0.5 0.2 27)',
+    'x oklch(0.5 0.2 27)',
+    `oklch(${' '.repeat(80)}0.5 0.2 27)`,
     'oklch(0.5 0.2 var(--x))',
     'oklch(1e1 0 0)',
     'oklch(-1 0 0)',
@@ -125,6 +128,7 @@ describe('lengths', () => {
     ['radius-md', '50%'],
     ['radius-md', 'calc(1px + 1px)'],
     ['radius-md', '1'],
+    ['radius-md', '0.0000000000000000000001rem'],
     ['radius-md', 'var(--x)'],
     ['radius-md', '1px 2px'],
     ['border-width', '5px'],
@@ -147,6 +151,9 @@ describe('shadows', () => {
     )
     expect(tokenValue('shadow-md', '0 4px 6px -1px oklch(0 0 0 / 0.4)')).toBe(
       '0 4px 6px -1px oklch(0 0 0 / 0.4)',
+    )
+    expect(tokenValue('shadow-md', '1.0px  1px 2px 0 oklch(0.50 0 0 / 0.50)')).toBe(
+      '1px 1px 2px 0 oklch(0.5 0 0 / 0.5)',
     )
     expect(tokenValue('shadow-md', '1px 1px 2px oklch(0 0 0), 0 0 0 0 transparent')).toBe(
       '1px 1px 2px oklch(0 0 0), 0 0 0 0 transparent',
