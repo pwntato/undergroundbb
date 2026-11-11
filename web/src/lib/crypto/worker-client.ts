@@ -14,6 +14,10 @@ import { DecryptionFailedError } from './aesgcm.js'
 import CryptoWorker from './worker.ts?worker&inline'
 import { InviteMACError, type WireWrapped } from './credential-material.js'
 import type {
+  OpenPreferencesRequest,
+  OpenPreferencesResponse,
+  SealPreferencesRequest,
+  SealPreferencesResponse,
   BeginKeyRotationRequest,
   BeginKeyRotationResponse,
   CommitKeyRotationRequest,
@@ -1365,4 +1369,27 @@ export async function commitKeyRotation(userId: string): Promise<void> {
 export async function discardKeyRotation(): Promise<void> {
   const req: DiscardKeyRotationRequest = { kind: 'discardKeyRotation', id: nextRequestID() }
   await rotationCall(req, 'discardKeyRotationDone')
+}
+
+/** Seals the preferences text under this account's live keys (#366); rejects if they are not live. */
+export async function sealPreferencesText(
+  userId: string,
+  text: string,
+): Promise<{ nonce: string; ciphertext: string }> {
+  const req: SealPreferencesRequest = { kind: 'sealPreferences', id: nextRequestID(), userId, text }
+  return (await rotationCall<SealPreferencesResponse>(req, 'sealPreferencesDone')).blob
+}
+
+/** Opens the preferences blob; null if it does not open under this account's key. Rejects if keys are not live. */
+export async function openPreferencesBlob(
+  userId: string,
+  blob: { nonce: string; ciphertext: string },
+): Promise<string | null> {
+  const req: OpenPreferencesRequest = {
+    kind: 'openPreferences',
+    id: nextRequestID(),
+    userId,
+    blob,
+  }
+  return (await rotationCall<OpenPreferencesResponse>(req, 'openPreferencesDone')).text
 }

@@ -11,6 +11,8 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
   return {
     ...actual,
+    // The screen subscribes to login syncs in an effect (#366); there is no render here to run it.
+    useEffect: () => undefined,
     useState: (init: unknown) => [
       typeof init === 'function' ? (init as () => unknown)() : init,
       setState,

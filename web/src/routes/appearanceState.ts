@@ -41,6 +41,8 @@ export interface AppearanceState {
 export interface AppearanceEnv {
   readonly target: ThemeTarget & { getAttribute(name: string): string | null }
   readonly store: ThemeStore | null
+  /** Called after an action changed the page's theme or the saved custom themes (#366: sends them on). */
+  readonly onChange?: () => void
 }
 
 export function initialAppearance(env: AppearanceEnv): AppearanceState {
@@ -67,6 +69,7 @@ export function runImport(state: AppearanceState, env: AppearanceEnv): Appearanc
   const added = addCustomTheme(result.theme, env.store)
   if (!added.ok) return { ...state, errors: [added.error] }
   switchTheme(result.theme.id, env.target, env.store)
+  env.onChange?.()
   return {
     ...state,
     customs: added.themes,
@@ -82,6 +85,7 @@ export function runImport(state: AppearanceState, env: AppearanceEnv): Appearanc
 export function runRemove(state: AppearanceState, id: string, env: AppearanceEnv): AppearanceState {
   const currentId = forgetCustomTheme(id, state.currentId, env.target, env.store)
   const saved = readSavedThemes(env.store)
+  env.onChange?.()
   return {
     ...state,
     currentId,
@@ -113,5 +117,6 @@ export function runExport(state: AppearanceState): AppearanceState {
 /** A card was pressed. */
 export function runSelect(state: AppearanceState, id: string, env: AppearanceEnv): AppearanceState {
   if (!switchTheme(id, env.target, env.store)) return state
+  env.onChange?.()
   return { ...state, currentId: id, exportText: null }
 }

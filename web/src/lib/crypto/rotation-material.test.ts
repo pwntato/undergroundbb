@@ -13,6 +13,7 @@ import {
   signKeyRotation,
   wrapHandoff,
 } from './rotation-material.js'
+import { openPreferences, sealPreferences } from './preferences.js'
 import { generateWrappingKey, unwrap, wrap } from './x25519.js'
 
 const USER = '11111111-2222-4333-8444-555555555555'
@@ -137,6 +138,29 @@ describe('signKeyRotation', () => {
     rosterEntryId(`PIN#${GROUP}`, new Uint8Array(64).fill(1)),
     rosterEntryId(`VERIFIED#${GROUP}`, new Uint8Array(64).fill(2)),
   ].map(bytesToBase64)
+
+  it('re-seals the preferences blob so only the NEW keys open it, and adds none when there was none (#366)', async () => {
+    const keys = liveKeys()
+    const { pending } = beginKeyRotation(keys)
+    const current = await sealPreferences(keys, '{"v":1,"theme":"zine"}')
+    const out = await signKeyRotation(
+      keys,
+      pending,
+      { newPassword: 'pw', expectedKeyEpoch: 0, roster, preferencesBlob: current },
+      () => {},
+    )
+    expect(out.preferencesBlob).toBeDefined()
+    const asNew = commitKeyRotation(pending)
+    expect(await openPreferences(asNew, out.preferencesBlob!)).toBe('{"v":1,"theme":"zine"}')
+    expect(await openPreferences(keys, out.preferencesBlob!)).toBeNull()
+    const none = await signKeyRotation(
+      keys,
+      pending,
+      { newPassword: 'pw', expectedKeyEpoch: 0, roster },
+      () => {},
+    )
+    expect(none.preferencesBlob).toBeUndefined()
+  })
 
   it('signs one payload under both keys and wraps the NEW keys under the new password', async () => {
     const keys = liveKeys()

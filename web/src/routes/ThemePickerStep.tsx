@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { notifyThemeChanged } from '@/lib/session/themeSyncSession'
 import { appliedThemeId, browserStore, pickTheme } from '@/theme/applyTheme'
 import { loadCustomThemes } from '@/theme/customThemes'
 import type { BuiltInTheme } from '@/theme/themes'
@@ -47,7 +48,9 @@ export function ThemePickerStep({ onDone }: { onDone: () => void }) {
       currentId={currentId}
       customThemes={customThemes}
       onSelect={(id) => {
-        setCurrentId(pickTheme(id, currentId, document.documentElement, browserStore()))
+        const picked = pickTheme(id, currentId, document.documentElement, browserStore())
+        if (picked !== currentId) notifyThemeChanged()
+        setCurrentId(picked)
       }}
       onDone={onDone}
     />

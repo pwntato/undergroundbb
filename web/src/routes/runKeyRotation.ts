@@ -104,8 +104,18 @@ export interface KeyRotationDeps extends PendingHandoffDeps {
     generation: number
   }) => Promise<HandoffWrap>
   readonly putHandoff: (groupId: string, req: PutHandoffRequest) => Promise<void>
+  /** The account's sealed preferences, to re-seal under the new key (#366). */
+  readonly getPreferences: () => Promise<{
+    preferencesBlob?: { nonce: string; ciphertext: string }
+  }>
   readonly signKeyRotation: (
-    req: { userId: string; newPassword: string; expectedKeyEpoch: number; roster: string[] },
+    req: {
+      userId: string
+      newPassword: string
+      expectedKeyEpoch: number
+      roster: string[]
+      preferencesBlob?: { nonce: string; ciphertext: string }
+    },
     onProgress: (event: SignupProgressEvent) => void,
   ) => Promise<SignedKeyRotation>
   readonly rotateKeys: (req: RotateKeysRequest) => Promise<RotateKeysResponse>
@@ -507,13 +517,18 @@ async function prepare(
 
   // Sign, once per attempt.
   hooks.onStep({ name: 'signing' })
-  const [pins, verifications] = await Promise.all([deps.listAllPins(), deps.listAllVerifications()])
+  const [pins, verifications, prefs] = await Promise.all([
+    deps.listAllPins(),
+    deps.listAllVerifications(),
+    deps.getPreferences(),
+  ])
   const signed = await deps.signKeyRotation(
     {
       userId,
       newPassword,
       expectedKeyEpoch: pre.keyEpoch,
       roster: rosterOf(pins, verifications),
+      ...(prefs.preferencesBlob === undefined ? {} : { preferencesBlob: prefs.preferencesBlob }),
     },
     hooks.onProgress,
   )
@@ -527,6 +542,7 @@ async function prepare(
     roster: signed.roster,
     oldSignature: signed.oldSignature,
     newSignature: signed.newSignature,
+    ...(signed.preferencesBlob === undefined ? {} : { preferencesBlob: signed.preferencesBlob }),
     salt: signed.credentials.salt,
     argon2Params: signed.credentials.argon2Params,
     wrappedPrivateKeys: signed.credentials.wrappedPrivateKeys,

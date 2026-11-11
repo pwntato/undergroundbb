@@ -157,7 +157,7 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	var prefs *models.WrappedBlob
 	if req.PreferencesBlob != nil {
-		blob, err := decodeWrappedBlob(*req.PreferencesBlob)
+		blob, err := decodePreferencesBlob(*req.PreferencesBlob)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, "preferencesBlob: "+err.Error())
 			return

@@ -25,6 +25,7 @@ import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
 import { installSessionLossWatcher } from './sessionLoss'
+import { startThemeSync, stopThemeSync } from './themeSyncSession'
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionState['status']>('loading')
@@ -75,6 +76,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           (k) => cacheOwnSigningKey(id, k),
           () => undefined,
         )
+        // #366: settle the theme between the encrypted preferences blob and this browser. After
+        // the worker's keys are live (both callers), so it can open the blob; best effort.
+        void startThemeSync(id)
         setUserId(id)
       },
       logout: () => {
@@ -84,6 +88,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // for both the expired-session redirects and the user-initiated
         // logout (#222, runLogout.ts), for the same reason.
         clearLiveKeys()
+        stopThemeSync()
         // Issue #35: also clears this tab's cached decrypted group names --
         // same reasoning as clearLiveKeys, a reused worker instance/tab must
         // never show a previous account's group names, and userId is still

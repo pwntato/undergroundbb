@@ -60,11 +60,17 @@ import {
   wrapHandoff as wrapHandoffPure,
   RotationState,
 } from './rotation-material.js'
+import {
+  openPreferences as openPreferencesPure,
+  sealPreferences as sealPreferencesPure,
+} from './preferences.js'
 import { base64ToBytes, base64UrlToBytes, bytesToBase64 } from './base64.js'
 import type {
   BeginKeyRotationRequest,
   ChangePasswordMaterial,
   ClearLiveKeysRequest,
+  OpenPreferencesRequest,
+  SealPreferencesRequest,
   CommitKeyRotationRequest,
   DiscardKeyRotationRequest,
   SignKeyRotationRequest,
@@ -270,6 +276,12 @@ async function handle(req: WorkerRequest): Promise<void> {
       return
     case 'discardKeyRotation':
       discardKeyRotation(req)
+      return
+    case 'sealPreferences':
+      await sealPreferences(req)
+      return
+    case 'openPreferences':
+      await openPreferences(req)
       return
     case 'clearLiveKeys':
       clearLiveKeys(req)
@@ -726,6 +738,23 @@ async function rewrapGroupKey(req: RewrapGroupKeyRequest): Promise<void> {
     })),
   )
   post({ kind: 'rewrapGroupKeyDone', id: req.id, result: { wraps } })
+}
+
+/** Seals the preferences text for this account (#366). Refuses mid-rotation: the key is about to change. */
+async function sealPreferences(req: SealPreferencesRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'save your preferences')
+  rotation.assertIdle('save your preferences')
+  post({ kind: 'sealPreferencesDone', id: req.id, blob: await sealPreferencesPure(keys, req.text) })
+}
+
+/** Opens this account's preferences blob (#366); null when it does not authenticate. */
+async function openPreferences(req: OpenPreferencesRequest): Promise<void> {
+  const keys = requireLiveKeys(req.userId, 'read your preferences')
+  post({
+    kind: 'openPreferencesDone',
+    id: req.id,
+    text: await openPreferencesPure(keys, req.blob),
+  })
 }
 
 function clearLiveKeys(_req: ClearLiveKeysRequest): void {

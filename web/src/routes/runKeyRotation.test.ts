@@ -86,6 +86,7 @@ function makeDeps(over: Partial<KeyRotationDeps> = {}, groups: GroupListEntry[] 
     ),
     putHandoff: vi.fn().mockResolvedValue(undefined),
     listHandoffs: vi.fn().mockResolvedValue([]),
+    getPreferences: vi.fn().mockResolvedValue({}),
     signKeyRotation: vi.fn().mockResolvedValue(SIGNED),
     rotateKeys: vi.fn().mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
     wait: vi.fn().mockResolvedValue(undefined),
@@ -242,6 +243,26 @@ describe('preflightKeyRotation and handoff rows', () => {
 })
 
 describe('runKeyRotation', () => {
+  it('re-seals the account preferences under the new key and sends them with the rotation (#366)', async () => {
+    const current = { nonce: 'b2xkbm9uY2U=', ciphertext: 'b2xkY2lwaGVy' }
+    const resealed = { nonce: 'bmV3bm9uY2U=', ciphertext: 'bmV3Y2lwaGVy' }
+    const deps = makeDeps({
+      getPreferences: vi.fn().mockResolvedValue({ preferencesBlob: current }),
+      signKeyRotation: vi.fn().mockResolvedValue({ ...SIGNED, preferencesBlob: resealed }),
+    })
+    const { result } = await run(deps)
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(deps.signKeyRotation).mock.calls[0]?.[0].preferencesBlob).toEqual(current)
+    expect(vi.mocked(deps.rotateKeys).mock.calls[0]?.[0].preferencesBlob).toEqual(resealed)
+  })
+
+  it('sends no preferences blob when the account has none', async () => {
+    const deps = makeDeps({})
+    await run(deps)
+    expect(vi.mocked(deps.signKeyRotation).mock.calls[0]?.[0]).not.toHaveProperty('preferencesBlob')
+    expect(vi.mocked(deps.rotateKeys).mock.calls[0]?.[0]).not.toHaveProperty('preferencesBlob')
+  })
+
   it('writes the handoffs, signs over the roster, commits, then switches the worker to the new keys', async () => {
     const sig = bytesToBase64(new Uint8Array(64).fill(7))
     const deps = makeDeps({

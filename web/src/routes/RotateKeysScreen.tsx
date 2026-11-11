@@ -12,6 +12,7 @@ import { ApiError, challenge, getAccountCredentials } from '@/lib/api/auth'
 import { getGroup, getKeychain, listGroups } from '@/lib/api/groups'
 import { sentInvites, revokeInvite } from '@/lib/api/invites'
 import { listHandoffs, putHandoff, rotateKeys } from '@/lib/api/keyRotation'
+import { getPreferences } from '@/lib/api/preferences'
 import { listAllPins } from '@/lib/api/pins'
 import { getUser } from '@/lib/api/users'
 import { listAllVerifications } from '@/lib/api/verifications'
@@ -89,6 +90,7 @@ const deps: KeyRotationDeps = {
   wrapHandoff,
   putHandoff,
   listHandoffs,
+  getPreferences,
   signKeyRotation,
   rotateKeys,
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
