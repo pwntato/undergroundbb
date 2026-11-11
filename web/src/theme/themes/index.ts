@@ -15,6 +15,8 @@ export interface BuiltInTheme {
   readonly name: string
   readonly mode: ThemeMode
   readonly tokens: Theme
+  /** Set on a theme the person imported (#74); never on a built-in. */
+  readonly custom?: true
 }
 
 /** Every built-in theme, in the order a picker lists them. The first is the default. */
@@ -26,6 +28,10 @@ export const BUILT_IN_THEMES: readonly BuiltInTheme[] = [
 
 export const DEFAULT_THEME: BuiltInTheme = BUILT_IN_THEMES[0] as BuiltInTheme
 
-export function findTheme(id: string | null | undefined): BuiltInTheme | undefined {
-  return BUILT_IN_THEMES.find((t) => t.id === id)
+/** A built-in theme by id, or one of `custom` (the validated imports kept in this browser, #74). */
+export function findTheme(
+  id: string | null | undefined,
+  custom: readonly BuiltInTheme[] = [],
+): BuiltInTheme | undefined {
+  return BUILT_IN_THEMES.find((t) => t.id === id) ?? custom.find((t) => t.id === id)
 }

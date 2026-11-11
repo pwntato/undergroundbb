@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { THEME_ID_ATTRIBUTE, THEME_STORAGE_KEY } from '@/theme/applyTheme'
+import type { AppearanceState } from './appearanceState'
 
 const setState = vi.fn()
 vi.mock('react', async (importOriginal) => {
@@ -51,28 +52,84 @@ afterEach(() => vi.unstubAllGlobals())
 type Props = { currentId: string; onSelect: (id: string) => void; onDone?: () => void }
 const propsOf = (el: unknown): Props => (el as { props: Props }).props
 
+type AppearanceProps = {
+  state: AppearanceState
+  onSelect: (id: string) => void
+}
+const appearanceProps = (el: unknown): AppearanceProps => (el as { props: AppearanceProps }).props
+/** The state the screen set through its updater, given the state it held. */
+const nextState = (before: AppearanceState): AppearanceState => {
+  const updater = setState.mock.calls[0]?.[0] as (s: AppearanceState) => AppearanceState
+  return updater(before)
+}
+
 describe('AppearanceScreen wiring', () => {
   it('starts from the theme on the page, not from storage', () => {
     standInPage('zine')
-    expect(propsOf(AppearanceScreen()).currentId).toBe('zine')
+    expect(appearanceProps(AppearanceScreen()).state.currentId).toBe('zine')
   })
 
   it('a card press switches the page, saves it, and updates the current id', () => {
     const page = standInPage(null)
-    const props = propsOf(AppearanceScreen())
-    expect(props.currentId).toBe('refined-terminal')
+    const props = appearanceProps(AppearanceScreen())
+    expect(props.state.currentId).toBe('refined-terminal')
     props.onSelect('zine')
+    expect(nextState(props.state).currentId).toBe('zine')
     expect(page.attrs.get('data-theme')).toBe('light')
     expect(page.attrs.get(THEME_ID_ATTRIBUTE)).toBe('zine')
     expect(page.stored.get(THEME_STORAGE_KEY)).toBe('zine')
-    expect(setState).toHaveBeenCalledExactlyOnceWith('zine')
   })
 
   it('an unknown id changes nothing and keeps the current id', () => {
     const page = standInPage('bbs-revival')
-    propsOf(AppearanceScreen()).onSelect('nope')
+    const props = appearanceProps(AppearanceScreen())
+    props.onSelect('nope')
+    expect(nextState(props.state).currentId).toBe('bbs-revival')
     expect(page.stored.size).toBe(0)
-    expect(setState).toHaveBeenCalledExactlyOnceWith('bbs-revival')
+  })
+
+  it('the import, remove and export handlers it hands down run the real actions', () => {
+    const page = standInPage(null)
+    const props = appearanceProps(AppearanceScreen()) as AppearanceProps & {
+      onImportText: (t: string) => void
+      onImport: () => void
+      onRemove: (id: string) => void
+      onExport: () => void
+    }
+    const apply = (call: number, before: AppearanceState) => {
+      const updater = setState.mock.calls[call]?.[0] as (s: AppearanceState) => AppearanceState
+      return updater(before)
+    }
+    props.onImportText('{"name":"Mine","mode":"dark","tokens":{}}')
+    const typed = apply(0, props.state)
+    expect(typed.importText).toContain('Mine')
+    props.onImport()
+    const imported = apply(1, typed)
+    expect(imported.customs.map((t) => t.name)).toEqual(['Mine'])
+    expect(page.attrs.get(THEME_ID_ATTRIBUTE)).toBe(imported.currentId)
+    props.onExport()
+    expect(apply(2, imported).exportText).toContain('"name": "Mine"')
+    props.onRemove(imported.currentId)
+    expect(apply(3, imported).customs).toEqual([])
+    expect(page.attrs.get(THEME_ID_ATTRIBUTE)).toBe('refined-terminal')
+  })
+})
+
+type StepProps = Props & { customThemes?: { id: string }[] }
+const stepProps = (el: unknown): StepProps => (el as { props: StepProps }).props
+
+describe('ThemePickerStep with a theme imported before signup', () => {
+  it('lists it and marks it selected when it is the one on the page', async () => {
+    const { customThemeId } = await import('@/theme/customTheme')
+    const id = customThemeId('Mine')
+    const page = standInPage(id)
+    page.stored.set(
+      'ubb.customThemes',
+      JSON.stringify([{ name: 'Mine', mode: 'dark', tokens: {} }]),
+    )
+    const props = stepProps(ThemePickerStep({ onDone: () => undefined }))
+    expect(props.currentId).toBe(id)
+    expect(props.customThemes?.map((t) => t.id)).toEqual([id])
   })
 })
 

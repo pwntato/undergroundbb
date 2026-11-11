@@ -1,3 +1,4 @@
+import { loadCustomThemes, removeCustomTheme } from './customThemes'
 import { DEFAULT_THEME, findTheme, type BuiltInTheme } from './themes'
 
 /** The two things a theme is applied to: the `<html>` element, or a stand-in for it in a test. */
@@ -37,8 +38,11 @@ export function applyTheme(theme: BuiltInTheme, target: ThemeTarget): void {
  * blocked a switch still works but is not remembered, and a picker must still mark what is showing.
  * Before anything has been applied (the markup alone) the page is the default theme.
  */
-export function appliedThemeId(root: { getAttribute(name: string): string | null }): string {
-  return findTheme(root.getAttribute(THEME_ID_ATTRIBUTE))?.id ?? DEFAULT_THEME.id
+export function appliedThemeId(
+  root: { getAttribute(name: string): string | null },
+  custom: readonly BuiltInTheme[] = [],
+): string {
+  return findTheme(root.getAttribute(THEME_ID_ATTRIBUTE), custom)?.id ?? DEFAULT_THEME.id
 }
 
 /**
@@ -57,7 +61,8 @@ export function pickTheme(
 /** The theme saved in this browser, or the default if there is none, it is unknown, or storage fails. */
 export function storedTheme(store: ThemeStore | null): BuiltInTheme {
   try {
-    return findTheme(store?.getItem(THEME_STORAGE_KEY)) ?? DEFAULT_THEME
+    const id = store?.getItem(THEME_STORAGE_KEY)
+    return findTheme(id, loadCustomThemes(store)) ?? DEFAULT_THEME
   } catch {
     return DEFAULT_THEME
   }
@@ -65,7 +70,7 @@ export function storedTheme(store: ThemeStore | null): BuiltInTheme {
 
 /** Remember a choice. Best effort: blocked storage must not stop the switch itself. */
 export function saveThemeId(id: string, store: ThemeStore | null): boolean {
-  if (findTheme(id) === undefined) return false
+  if (findTheme(id, loadCustomThemes(store)) === undefined) return false
   try {
     store?.setItem(THEME_STORAGE_KEY, id)
     return store !== null
@@ -76,7 +81,7 @@ export function saveThemeId(id: string, store: ThemeStore | null): boolean {
 
 /** Apply a built-in theme now and remember it. An unknown id changes nothing and returns false. */
 export function switchTheme(id: string, target: ThemeTarget, store: ThemeStore | null): boolean {
-  const theme = findTheme(id)
+  const theme = findTheme(id, loadCustomThemes(store))
   if (theme === undefined) return false
   applyTheme(theme, target)
   saveThemeId(id, store)
@@ -97,4 +102,20 @@ export function browserStore(): ThemeStore | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Forget a custom theme. If it is the one on the page, fall back to the default theme and return its
+ * id; otherwise the current id is returned unchanged.
+ */
+export function forgetCustomTheme(
+  id: string,
+  currentId: string,
+  target: ThemeTarget,
+  store: ThemeStore | null,
+): string {
+  removeCustomTheme(id, store)
+  if (currentId !== id) return currentId
+  switchTheme(DEFAULT_THEME.id, target, store)
+  return DEFAULT_THEME.id
 }

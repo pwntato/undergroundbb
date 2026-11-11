@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { MemoryRouter } from 'react-router'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { validateCustomTheme } from '@/theme/customTheme'
 import { pickTheme, THEME_STORAGE_KEY, type ThemeStore, type ThemeTarget } from '@/theme/applyTheme'
 import { AppearanceView } from './AppearanceScreen'
 import { ThemePickerStepView } from './ThemePickerStep'
@@ -45,6 +46,24 @@ const continueButton = (el: ReturnType<typeof ThemePickerStepView>) =>
     (n) => (n.type as { name?: string }).name === 'Button' && n.props['onClick'] !== undefined,
   )
 
+const blankState = {
+  currentId: 'refined-terminal',
+  customs: [],
+  invalid: [],
+  notice: null,
+  importText: '',
+  errors: [],
+  exportText: null,
+}
+const noop = {
+  onSelect: () => undefined,
+  onImportText: () => undefined,
+  onImport: () => undefined,
+  onRemove: () => undefined,
+  onDiscard: () => undefined,
+  onExport: () => undefined,
+}
+
 describe('ThemePickerStepView (the signup finish step)', () => {
   it('moves on when Continue is pressed, through its real onClick', () => {
     const onDone = vi.fn()
@@ -77,6 +96,22 @@ describe('ThemePickerStepView (the signup finish step)', () => {
     expect(h.data.get(THEME_STORAGE_KEY)).toBe('zine')
   })
 
+  it('hands the custom themes on to the picker, so one imported before signup is listed and marked', () => {
+    const r = validateCustomTheme(JSON.stringify({ name: 'Mine', mode: 'dark', tokens: {} }))
+    if (!r.ok) throw new Error('bad fixture')
+    const out = renderToStaticMarkup(
+      createElement(ThemePickerStepView, {
+        currentId: r.theme.id,
+        customThemes: [r.theme],
+        onSelect: () => undefined,
+        onDone: () => undefined,
+      }),
+    )
+    expect(out).toContain(`data-theme-id="${r.theme.id}"`)
+    expect(out).toContain('Mine')
+    expect(out.match(/>Selected</g)).toHaveLength(1)
+  })
+
   it('offers no way to skip that differs from Continue, and no "Coming soon"', () => {
     const out = renderToStaticMarkup(
       createElement(ThemePickerStepView, {
@@ -97,7 +132,10 @@ describe('AppearanceView', () => {
       createElement(
         MemoryRouter,
         null,
-        createElement(AppearanceView, { currentId: 'bbs-revival', onSelect: () => undefined }),
+        createElement(AppearanceView, {
+          ...noop,
+          state: { ...blankState, currentId: 'bbs-revival' },
+        }),
       ),
     )
     expect(out).toContain('Appearance')
@@ -107,7 +145,11 @@ describe('AppearanceView', () => {
 
   it('pressing a card switches the page and saves it', () => {
     const h = harness()
-    const el = AppearanceView({ currentId: h.current.id, onSelect: h.onSelect })
+    const el = AppearanceView({
+      ...noop,
+      state: { ...blankState, currentId: h.current.id },
+      onSelect: h.onSelect,
+    })
     press(card(el, 'bbs-revival'))
     expect(h.attrs.get('data-theme')).toBe('dark')
     expect(h.attrs.get('data-theme-id')).toBe('bbs-revival')
