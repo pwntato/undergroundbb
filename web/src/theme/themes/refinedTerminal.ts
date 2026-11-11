@@ -21,8 +21,9 @@ export const refinedTerminal: Theme = {
   'surface-foreground': 'oklch(0.93 0.008 255)',
   card: 'oklch(0.21 0.015 255)',
   'card-foreground': 'oklch(0.93 0.008 255)',
+  // `border` is the quiet divider; `input` is the edge of a form control, which has to show at 3:1 (WCAG 1.4.11).
   border: 'oklch(0.34 0.016 255)',
-  input: 'oklch(0.34 0.016 255)',
+  input: 'oklch(0.55 0.02 255)',
   // A touch lighter than primary: the focus halo is drawn at 50%, and needs 3:1 at that strength.
   ring: 'oklch(0.78 0.09 195)',
   primary: 'oklch(0.74 0.09 195)',

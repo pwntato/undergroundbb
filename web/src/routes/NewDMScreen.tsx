@@ -132,7 +132,7 @@ function NewDM({ recipientId }: { readonly recipientId: string | undefined }) {
       {recipientId !== undefined && (
         <Link
           to={`/users/${recipientId}`}
-          className="text-sm text-primary underline-offset-4 hover:underline"
+          className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
         >
           Back to their profile
         </Link>

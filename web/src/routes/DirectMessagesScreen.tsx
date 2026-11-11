@@ -161,7 +161,10 @@ export function DirectMessagesScreen() {
         To start a conversation, open someone&apos;s profile from a group&apos;s Members page and
         choose &quot;Send a message&quot;. Conversations you started are in your group list.
       </p>
-      <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </>

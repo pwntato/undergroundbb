@@ -3510,6 +3510,15 @@ whole page changes at once. It is at `/appearance` (linked from Home, no session
 signup finish step. The page itself says which theme is showing (`data-theme-id` beside `data-theme`), and
 the picker reads that, so the "Selected" mark is right even when storage is blocked.
 
+**Accessibility rules every theme and screen keep (#54).** `themeProblems` holds text on every panel fill at
+4.5:1 (not only the page), the edge of a form control (`input`) at 3:1 on the page and on a card
+(WCAG 1.4.11; the quiet `border` divider is exempt), and the focus ring at 3:1 solid and as its 50% halo.
+`prefers-reduced-motion: reduce` turns every transition and animation into an effectively instant one
+(0.01ms, so end events still fire). A standalone link or a checkbox or radio label is at least 24px tall
+(WCAG 2.5.8), through a `min-h-[1.5rem]` floor written in rem so a dense theme cannot shrink it;
+`linkTargets.test.ts` scans the screens for it. Threaded comments indent at most four steps, so a reply
+eight levels deep still has about two thirds of a 390px screen to read in.
+
 Users may write custom themes. A theme is a **JSON object of token values, never a stylesheet**.
 Every value is validated against an allowlist and applied through the CSSOM. No user-supplied string
 ever reaches the page as CSS syntax — see the threat model for why this matters more here than in an

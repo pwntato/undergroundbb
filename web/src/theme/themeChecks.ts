@@ -24,11 +24,25 @@ export const TEXT_PAIRS: ReadonlyArray<readonly [string, string, string]> = [
   ['destructive', 'background', 'error text'],
   ['destructive', 'card', 'error text on a card'],
   ['destructive-foreground', 'destructive', 'destructive label'],
+  // Text can land on any of the panel fills, not only the page: a hovered row, a muted block, a surface.
+  ['muted-foreground', 'accent', 'secondary text on a hovered item'],
+  ['muted-foreground', 'secondary', 'secondary text on a secondary block'],
+  ['muted-foreground', 'surface', 'secondary text on a surface'],
+  ['primary', 'muted', 'accent text on a muted block'],
+  ['primary', 'secondary', 'accent text on a secondary block'],
+  ['primary', 'surface', 'accent text on a surface'],
+  ['destructive', 'muted', 'error text on a muted block'],
+  ['destructive', 'surface', 'error text on a surface'],
+  ['destructive', 'accent', 'error text on a hovered item'],
+  ['foreground', 'muted', 'text on a muted block'],
+  ['foreground', 'accent', 'text on a hovered item'],
+  ['foreground', 'secondary', 'text on a secondary block'],
 ]
 
 /**
  * Everything a built-in theme has to satisfy, as a list of problems (empty when it is fine): a value
- * for every token and nothing else, a legal heading pair and border style, readable text pairs, and a
+ * for every token and nothing else, a legal heading pair and border style, readable text pairs, an input
+ * border that shows against the page and cards at 3:1, and a
  * focus ring that is visible at full strength and as the 50% halo the components draw.
  */
 export function themeProblems(theme: Theme): string[] {
@@ -50,6 +64,11 @@ export function themeProblems(theme: Theme): string[] {
   for (const [fg, bg, what] of TEXT_PAIRS) {
     const ratio = contrastRatio(theme[fg] ?? '', theme[bg] ?? '')
     if (ratio < 4.5) problems.push(`${fg} on ${bg} (${what}) is ${ratio.toFixed(2)}:1, needs 4.5`)
+  }
+  // WCAG 1.4.11: the edge of a form control has to be seen against what it sits on, at 3:1.
+  for (const ground of ['background', 'card']) {
+    const edge = contrastRatio(theme['input'] ?? '', theme[ground] ?? '')
+    if (edge < 3) problems.push(`input border on ${ground} is ${edge.toFixed(2)}:1, needs 3`)
   }
   const ring = theme['ring'] ?? ''
   for (const ground of ['background', 'card']) {

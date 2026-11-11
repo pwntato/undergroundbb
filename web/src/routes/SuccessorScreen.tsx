@@ -253,7 +253,7 @@ function Successor({ groupId }: { readonly groupId: string | undefined }) {
       )}
       <Link
         to={`/groups/${encodeURIComponent(groupId)}/members`}
-        className="text-sm text-primary underline-offset-4 hover:underline"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
       >
         Back to members
       </Link>

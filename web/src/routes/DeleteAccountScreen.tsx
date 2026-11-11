@@ -240,7 +240,7 @@ export function DeleteAccountScreen() {
           void handleConfirm()
         }}
       />
-      <Link className="text-sm underline" to="/">
+      <Link className="inline-flex min-h-[1.5rem] items-center text-sm underline" to="/">
         Back
       </Link>
     </div>

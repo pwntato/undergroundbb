@@ -24,7 +24,10 @@ export function AppearanceView({ currentId, onSelect }: AppearanceViewProps) {
         </p>
       </div>
       <ThemePicker currentId={currentId} onSelect={onSelect} />
-      <Link to="/" className="text-center text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center justify-center text-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </div>

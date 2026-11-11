@@ -200,11 +200,14 @@ export function GroupPostsPanel({
       )}
       <Link
         to={`/groups/${groupId}/posts/new`}
-        className="text-sm text-primary underline-offset-4 hover:underline"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
       >
         Write a post
       </Link>
-      <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </div>
@@ -281,7 +284,7 @@ function PostCommentsLink({
     <Link
       to={`/groups/${groupId}/posts/${encodeURIComponent(postId)}`}
       state={title !== undefined ? { postTitle: title } : undefined}
-      className="text-sm text-primary underline-offset-4 hover:underline"
+      className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
     >
       Comments
     </Link>

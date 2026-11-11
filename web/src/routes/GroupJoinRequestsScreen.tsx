@@ -181,7 +181,10 @@ function GroupJoinRequests({ groupId }: { readonly groupId: string | undefined }
       )}
       {message !== null && <NoticeAlert message={message} />}
       {error !== null && <NoticeAlert message={error} destructive />}
-      <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </>

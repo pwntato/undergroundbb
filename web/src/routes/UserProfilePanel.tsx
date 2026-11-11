@@ -67,7 +67,7 @@ export function UserProfilePanel({
         // #73: the new-message screen shows their fingerprint before anything is sent.
         <Link
           to={`/dms/new/${view.userId}`}
-          className="text-sm text-primary underline underline-offset-4"
+          className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline underline-offset-4"
         >
           Send a message
         </Link>
@@ -127,7 +127,10 @@ export function UserProfilePanel({
         </p>
       </div>
 
-      <Link to="/" className="text-sm underline underline-offset-4">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm underline underline-offset-4"
+      >
         Back to your groups
       </Link>
     </div>
