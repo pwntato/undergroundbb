@@ -25,7 +25,7 @@ import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
 import { installSessionLossWatcher } from './sessionLoss'
-import { startThemeSync, stopThemeSync } from './themeSyncSession'
+import { attachThemeSync, startThemeSync, stopThemeSync } from './themeSyncSession'
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionState['status']>('loading')
@@ -49,6 +49,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // same distinction the previous version of this file's own comment drew
     // between "believes it has a session" and re-checking the server.
   }, [])
+
+  // #366: whoever the session belongs to (restored on reload or set by login), theme changes are tied to
+  // them, so one made with cold keys is flagged for the next login instead of being lost to the blob.
+  useEffect(() => {
+    if (userId === null) stopThemeSync()
+    else attachThemeSync(userId)
+  }, [userId])
 
   // Always the latest logout, so the fetch watcher below (installed once) never
   // calls a stale closure over an old userId.

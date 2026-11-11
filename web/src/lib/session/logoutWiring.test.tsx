@@ -15,10 +15,11 @@ vi.mock('@/lib/crypto/worker-client', () => ({
   clearLiveKeys: () => clearLiveKeys(),
   getOwnSigningKey: () => Promise.reject(new Error('not used')),
 }))
-const startThemeSync = vi.fn(() => Promise.resolve('unchanged'))
+const startThemeSync = vi.fn((_id: string) => Promise.resolve('unchanged'))
 const stopThemeSync = vi.fn()
 vi.mock('./themeSyncSession', () => ({
   startThemeSync: (id: string) => startThemeSync(id),
+  attachThemeSync: () => undefined,
   stopThemeSync: () => stopThemeSync(),
 }))
 vi.mock('@/lib/api/auth', () => ({

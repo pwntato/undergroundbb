@@ -40,7 +40,9 @@ describe('preferences sealing (#366)', () => {
   })
 
   it('derives exactly this key (a known answer: changing it makes every sealed blob unreadable)', () => {
-    expect(bytesToHex(preferencesKey(new Uint8Array(32).fill(1)))).toBe('f2a0e1725a99b7d98feeb0e3222aac04122c09dbda6cff5718101b0f47f9162f')
+    expect(bytesToHex(preferencesKey(new Uint8Array(32).fill(1)))).toBe(
+      'f2a0e1725a99b7d98feeb0e3222aac04122c09dbda6cff5718101b0f47f9162f',
+    )
   })
 
   it('uses a fresh nonce every time', async () => {

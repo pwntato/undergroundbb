@@ -31,6 +31,14 @@ export function onThemeSynced(listener: () => void): () => void {
   }
 }
 
+/**
+ * A session restored without a login (a reload, a new tab): the keys are not live, so a change cannot be
+ * sealed, but it must still be flagged for the next login rather than silently left to lose to the blob.
+ */
+export function attachThemeSync(id: string): void {
+  userId = id
+}
+
 /** After login, with the worker's keys live: let the blob and this browser settle on one choice. */
 export async function startThemeSync(id: string): Promise<SyncOutcome> {
   userId = id

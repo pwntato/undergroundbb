@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { THEME_ID_ATTRIBUTE, THEME_STORAGE_KEY } from './applyTheme'
-import { CUSTOM_THEMES_KEY, addCustomTheme, loadCustomThemes, readSavedThemes } from './customThemes'
+import {
+  CUSTOM_THEMES_KEY,
+  addCustomTheme,
+  loadCustomThemes,
+  readSavedThemes,
+} from './customThemes'
 import { validateCustomTheme, type CustomTheme } from './customTheme'
 import { encodePreferences, type Preferences } from './preferences'
 import {
@@ -99,7 +104,7 @@ describe('syncAtLogin: the blob wins, this browser seeds it', () => {
     expect(JSON.parse(w.s.writes[0]!.text).customThemes).toHaveLength(2)
   })
 
-  it('keeps a saved theme that no longer validates, which is the person\'s to fix', async () => {
+  it("keeps a saved theme that no longer validates, which is the person's to fix", async () => {
     const stale = { name: 'Old', mode: 'dark', tokens: { primary: 'not a colour' } }
     const w = world({
       blob: doc({ themeId: 'zine', customs: [make('There')] }),

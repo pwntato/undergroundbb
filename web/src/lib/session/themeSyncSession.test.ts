@@ -11,7 +11,7 @@ vi.mock('@/lib/crypto/worker-client', () => ({
   openPreferencesBlob: open,
 }))
 
-const { notifyThemeChanged, onThemeSynced, startThemeSync, stopThemeSync } =
+const { attachThemeSync, notifyThemeChanged, onThemeSynced, startThemeSync, stopThemeSync } =
   await import('./themeSyncSession')
 
 const flush = async () => {
@@ -52,6 +52,15 @@ describe('theme sync for the session', () => {
     notifyThemeChanged()
     await flush()
     expect(putPreferences).not.toHaveBeenCalled()
+  })
+
+  it('a session restored with cold keys flags a change for the next login instead of dropping it', async () => {
+    attachThemeSync('user-1')
+    seal.mockRejectedValue(new Error('no live keys'))
+    notifyThemeChanged()
+    await flush()
+    expect(putPreferences).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem('ubb.prefsDirty')).toBe('1')
   })
 
   it('after login a change seals for the signed-in account and names the key epoch', async () => {
