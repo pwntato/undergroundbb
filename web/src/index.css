@@ -81,7 +81,7 @@
   --ubb-card: oklch(0.21 0.015 255);
   --ubb-card-foreground: oklch(0.93 0.008 255);
   --ubb-border: oklch(0.34 0.016 255);
-  --ubb-input: oklch(0.34 0.016 255);
+  --ubb-input: oklch(0.55 0.02 255);
   --ubb-ring: oklch(0.78 0.09 195);
   --ubb-primary: oklch(0.74 0.09 195);
   --ubb-primary-foreground: oklch(0.17 0.014 255);
@@ -155,5 +155,20 @@
     font-family: var(--font-heading);
     text-transform: var(--ubb-case-heading);
     letter-spacing: var(--ubb-tracking-heading);
+  }
+}
+
+/*
+ * Respect a request for less motion: the transitions on buttons, inputs and the progress bar become
+ * instant. 0.01ms and not 0, so `transitionend` and `animationend` still fire for anything waiting on them.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

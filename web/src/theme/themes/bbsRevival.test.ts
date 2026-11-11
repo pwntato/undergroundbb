@@ -39,7 +39,7 @@ describe('BBS Revival', () => {
     }
   })
 
-  it('keeps control borders at 3:1 against the ground, where Refined Terminal only reaches 1.6', () => {
+  it('keeps control borders at 3:1 against the ground', () => {
     expect(
       contrastRatio(bbsRevival['border'] ?? '', bbsRevival['background'] ?? ''),
     ).toBeGreaterThanOrEqual(3)
