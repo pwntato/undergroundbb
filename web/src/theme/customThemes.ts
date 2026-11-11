@@ -10,6 +10,7 @@
 
 import {
   MAX_CUSTOM_THEMES,
+  customThemeId,
   exportThemeJson,
   validateCustomTheme,
   type CustomTheme,
@@ -102,19 +103,24 @@ export type AddResult =
   | { readonly ok: false; readonly error: string }
 
 /**
- * Keep a theme. The same name replaces the saved one (`replaced` says so); a different one beyond
- * the limit is refused. Entries that no longer validate count toward the limit and are kept.
+ * Keep a theme. The same name replaces the saved one (`replaced` says so), and that includes a saved
+ * entry that no longer validates: importing the fixed version is how it is repaired, so the broken
+ * copy goes and does not count toward the limit. A different name beyond the limit is refused;
+ * other entries that do not validate stay and count.
  */
 export function addCustomTheme(theme: CustomTheme, store: CustomThemeStore | null): AddResult {
-  const { valid, invalid } = readSavedThemes(store)
-  const replaced = valid.some((t) => t.id === theme.id)
-  if (!replaced && valid.length + invalid.length >= MAX_CUSTOM_THEMES) {
+  const saved = readSavedThemes(store)
+  const valid = saved.valid
+  const invalid = saved.invalid.filter((i) => customThemeId(i.name.trim()) !== theme.id)
+  const replacedValid = valid.some((t) => t.id === theme.id)
+  const replaced = replacedValid || invalid.length < saved.invalid.length
+  if (!replacedValid && valid.length + invalid.length >= MAX_CUSTOM_THEMES) {
     return {
       ok: false,
       error: `You can keep ${MAX_CUSTOM_THEMES} custom themes. Remove one first.`,
     }
   }
-  const next = replaced ? valid.map((t) => (t.id === theme.id ? theme : t)) : [...valid, theme]
+  const next = replacedValid ? valid.map((t) => (t.id === theme.id ? theme : t)) : [...valid, theme]
   return write(next, invalid, store)
     ? { ok: true, themes: next, replaced }
     : { ok: false, error: 'This browser would not let the page save the theme.' }

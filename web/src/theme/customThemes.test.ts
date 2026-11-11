@@ -161,6 +161,50 @@ describe('entries that no longer pass are kept, not erased', () => {
     ])
   })
 
+  describe('importing the fixed version of a broken entry repairs it', () => {
+    const broken = { name: 'Moss', mode: 'dark', tokens: { 'border-width': '0' } }
+    const seed = (entries: unknown[]) =>
+      memoryStore({ [CUSTOM_THEMES_KEY]: JSON.stringify(entries) })
+
+    it('at the limit, it replaces the broken one instead of being refused', () => {
+      const { store } = seed(
+        [make('A'), make('B'), make('C'), make('D'), broken].map((e) =>
+          'tokens' in e && 'mode' in e ? { name: e.name, mode: e.mode, tokens: e.tokens } : e,
+        ),
+      )
+      const fixed = make('Moss', { 'border-width': '1px' })
+      const r = addCustomTheme(fixed, store)
+      expect(r.ok && r.replaced).toBe(true)
+      const saved = readSavedThemes(store)
+      expect(saved.invalid).toEqual([])
+      expect(saved.valid.map((t) => t.name).sort()).toEqual(['A', 'B', 'C', 'D', 'Moss'])
+    })
+
+    it('below the limit, it leaves no stale copy and says it replaced one', () => {
+      const { store } = seed([broken])
+      const r = addCustomTheme(make('moss', { 'border-width': '1px' }), store)
+      expect(r.ok && r.replaced).toBe(true)
+      const saved = readSavedThemes(store)
+      expect(saved.valid).toHaveLength(1)
+      expect(saved.invalid).toEqual([])
+    })
+
+    it('a different broken entry is still kept and still counts toward the limit', () => {
+      const other = { name: 'Other', mode: 'dark', tokens: { 'border-width': '0' } }
+      const { store } = seed(
+        [make('A'), make('B'), make('C'), other, broken].map((e) =>
+          'tokens' in e && 'mode' in e ? { name: e.name, mode: e.mode, tokens: e.tokens } : e,
+        ),
+      )
+      expect(addCustomTheme(make('Moss', { 'border-width': '1px' }), store).ok).toBe(true)
+      expect(readSavedThemes(store).invalid.map((i) => i.name)).toEqual(['Other'])
+      // Three valid, the fixed Moss and the other broken entry fill the five.
+      expect(addCustomTheme(make('E'), store).ok).toBe(false)
+      discardInvalidTheme(readSavedThemes(store).invalid[0]?.id ?? '', store)
+      expect(addCustomTheme(make('E'), store).ok).toBe(true)
+    })
+  })
+
   it('replacing says so; a new name does not', () => {
     const { store } = memoryStore()
     const first = addCustomTheme(make('Mine'), store)

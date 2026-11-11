@@ -3532,9 +3532,9 @@ the CSSOM is **rebuilt from those parts**, so what is applied is never the autho
 per-token range (radius 0..32px, border 1..4px and strong border 0..12px (the plain border draws every form control's edge, so it cannot be 0), spacing 0.15..0.375rem, letter-spacing 0..0.3em);
 shadows are up to three `x y blur [spread] color` terms in px with an `oklch()` (optionally with alpha) or
 `transparent`, no `inset`; fonts are up to ten names **from an allowlist** (common text and code families plus every family the
-built-ins use; each is quoted by the rebuild) or the generic families. Not "any installed font": a machine can
-have symbol fonts (Wingdings, Webdings, Zapf Dingbats) that turn every label into pictures, which no color
-check sees, plus the one fixed `var(--ubb-font-sans)` on the heading font only; keyword
+built-ins use; each is quoted by the rebuild) or the generic families, plus the one fixed
+`var(--ubb-font-sans)` on the heading font only. It is not "any installed font": a machine can have symbol
+fonts (Wingdings, Webdings, Zapf Dingbats) that turn every label into pictures, which no color check sees; keyword
 tokens take only the listed values. No `url()`, `calc()`, other `var()`, quote, `;`, brace or comment can
 survive the grammar. A token left out comes from the built-in of the same mode (Refined Terminal for `dark`,
 Zine for `light`), and the merged theme must pass the same `themeProblems` the built-ins pass: a theme that
