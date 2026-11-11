@@ -72,26 +72,26 @@ export function GroupList({
               <span className="flex flex-wrap items-center gap-2">
                 <Link
                   to={`/groups/${group.groupId}/posts`}
-                  className="text-xs text-primary underline-offset-4 hover:underline"
+                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                 >
                   Posts
                 </Link>
                 <Link
                   to={`/groups/${group.groupId}/posts/new`}
-                  className="text-xs text-primary underline-offset-4 hover:underline"
+                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                 >
                   Write a post
                 </Link>
                 <Link
                   to={`/groups/${group.groupId}/members`}
-                  className="text-xs text-primary underline-offset-4 hover:underline"
+                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                 >
                   Members
                 </Link>
                 {group.groupType !== 'dm' && (
                   <Link
                     to={`/groups/${group.groupId}/settings`}
-                    className="text-xs text-primary underline-offset-4 hover:underline"
+                    className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                   >
                     Settings
                   </Link>
@@ -103,7 +103,7 @@ export function GroupList({
                     // the link to a plain Member, who would only see it fail).
                     <Link
                       to={`/groups/${group.groupId}/invite`}
-                      className="text-xs text-primary underline-offset-4 hover:underline"
+                      className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                     >
                       Invite
                     </Link>
@@ -113,7 +113,7 @@ export function GroupList({
                     // #72: the queue of people asking to join this public group.
                     <Link
                       to={`/groups/${group.groupId}/requests`}
-                      className="text-xs text-primary underline-offset-4 hover:underline"
+                      className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                     >
                       Requests
                     </Link>

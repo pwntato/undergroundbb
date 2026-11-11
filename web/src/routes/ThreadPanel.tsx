@@ -459,7 +459,7 @@ export function ThreadPanel({
       )}
       <Link
         to={`/groups/${groupId}/posts`}
-        className="text-sm text-primary underline-offset-4 hover:underline"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
       >
         Back to posts
       </Link>

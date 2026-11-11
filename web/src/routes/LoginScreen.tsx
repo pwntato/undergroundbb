@@ -168,7 +168,10 @@ export function LoginScreen() {
       <Button type="submit" disabled={submitting}>
         {submitting ? 'Logging in…' : 'Log in'}
       </Button>
-      <Link to="/recovery" className="text-center text-sm text-muted-foreground underline">
+      <Link
+        to="/recovery"
+        className="inline-flex min-h-[1.5rem] items-center justify-center text-center text-sm text-muted-foreground underline"
+      >
         Forgot your password?
       </Link>
     </form>

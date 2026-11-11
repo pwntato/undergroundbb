@@ -1011,12 +1011,15 @@ function GroupMembers({ groupId }: { readonly groupId: string | undefined }) {
       {load.status === 'ready' && (
         <Link
           to={`/groups/${encodeURIComponent(load.view.groupId)}/successor`}
-          className="text-sm text-primary underline-offset-4 hover:underline"
+          className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
         >
           Successor for an inactive admin
         </Link>
       )}
-      <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </>

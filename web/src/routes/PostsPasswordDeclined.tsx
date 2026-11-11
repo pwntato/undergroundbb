@@ -23,7 +23,10 @@ export function PostsPasswordDeclined({
       <Button type="button" variant="outline" onClick={onAskAgain}>
         Enter password
       </Button>
-      <Link to="/" className="text-sm text-primary underline-offset-4 hover:underline">
+      <Link
+        to="/"
+        className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+      >
         Back to your groups
       </Link>
     </div>

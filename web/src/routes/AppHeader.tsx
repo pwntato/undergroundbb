@@ -19,7 +19,10 @@ import { unreadAriaLabel, unreadLabel } from './unreadLabel'
 export function AppHeaderLink({ total }: { readonly total?: UnreadTotal | null }) {
   const label = total ? unreadLabel(total.unread, total.unreadMore) : null
   return (
-    <Link to="/notifications" className="text-sm text-primary underline-offset-4 hover:underline">
+    <Link
+      to="/notifications"
+      className="inline-flex min-h-[1.5rem] items-center text-sm text-primary underline-offset-4 hover:underline"
+    >
       Notifications
       {label !== null && (
         <>
