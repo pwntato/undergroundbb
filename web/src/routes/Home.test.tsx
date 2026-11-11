@@ -55,19 +55,14 @@ describe('Home', () => {
     expect(html).not.toContain('Create a group')
   })
 
-  it('shows the create-group link and no signup/login prompt once logged in', () => {
-    // renderToStaticMarkup renders the FIRST pass before useEffect ever
-    // runs, so this is Home's initial 'loading' LoadState for an
-    // authenticated session -- proving the logged-in branch (group list +
-    // Create a group / Change password) renders at all, not the full fetch
-    // flow, which is runListGroups.test.ts's job.
+  it('shows the group pane, not the signup prompt, once logged in', () => {
+    // renderToStaticMarkup renders the FIRST pass before any effect, and the default GroupsContext
+    // is a loading list (the shell, which fetches it, is tested in ShellSidebar.test.tsx and
+    // HomePanel.test.tsx). Account links and Log out now live in the shell's sidebar, not here.
     const html = renderWithSession(sessionState({ status: 'ready', userId: 'user-1' }))
     expect(html).toContain('Loading your groups')
-    expect(html).toContain('Create a group')
-    expect(html).toContain('Change password')
-    expect(html).toContain('href="/account/rotate-keys"')
-    expect(html).toContain('href="/appearance"')
-    expect(html).toContain('Log out')
     expect(html).not.toContain('Frontend scaffold')
+    expect(html).not.toContain('Log out')
+    expect(html).not.toContain('Sign up')
   })
 })
