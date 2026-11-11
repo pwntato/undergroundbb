@@ -19,7 +19,10 @@ import type { Theme } from '../tokens'
  * No web fonts: the Content-Security-Policy has no `font-src`, so the stacks name fonts a system has.
  * Impact ships with macOS and Windows but not Android or most Linux; there the headings fall back to
  * Helvetica or Arial at the heading weight: still uppercase and tracked, but not heavy or condensed.
- * `destructive` is a deeper red than `primary` but close to it, by the "one riso red" rule.
+ * `destructive` is a deeper red than `primary` but close to it, by the "one riso red" rule. To keep a
+ * destructive action from looking like a primary one, the button that STARTS it is the outlined
+ * `destructive-outline` variant (red lettering, red edge, hard shadow, no fill); the solid red fill
+ * is only the confirm step.
  */
 const ink = 'oklch(0.16 0.006 80)'
 
