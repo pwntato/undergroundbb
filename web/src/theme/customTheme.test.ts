@@ -118,6 +118,8 @@ describe('lengths', () => {
     expect(tokenValue('radius-md', '0.5rem')).toBe('0.5rem')
     expect(tokenValue('radius-md', '0')).toBe('0')
     expect(tokenValue('border-width-strong', '3px')).toBe('3px')
+    expect(tokenValue('border-width-strong', '0')).toBe('0')
+    expect(tokenValue('border-width', '1px')).toBe('1px')
     expect(tokenValue('spacing', '0.2rem')).toBe('0.2rem')
     expect(tokenValue('tracking-heading', '0.08em')).toBe('0.08em')
   })
@@ -131,6 +133,9 @@ describe('lengths', () => {
     ['radius-md', '0.0000000000000000000001rem'],
     ['radius-md', 'var(--x)'],
     ['radius-md', '1px 2px'],
+    ['border-width', '0'],
+    ['border-width', '0px'],
+    ['border-width', '0.5px'],
     ['border-width', '5px'],
     ['border-width-strong', '13px'],
     ['spacing', '0.1rem'],
@@ -182,6 +187,7 @@ describe('fonts', () => {
     expect(tokenValue('font-sans', 'Helvetica Neue, Arial, sans-serif')).toBe(
       "'Helvetica Neue', 'Arial', sans-serif",
     )
+    expect(tokenValue('font-sans', 'arial, HELVETICA')).toBe("'Arial', 'Helvetica'")
     expect(tokenValue('font-mono', "'JetBrains Mono', ui-monospace")).toBe(
       "'JetBrains Mono', ui-monospace",
     )
@@ -190,6 +196,33 @@ describe('fonts', () => {
     expect(tokenValue('font-heading', 'var(--ubb-font-sans)')).toBe('var(--ubb-font-sans)')
     expect(tokenValue('font-sans', 'var(--ubb-font-sans)')).toBeNull()
     expect(tokenValue('font-heading', 'var(--ubb-font-mono)')).toBeNull()
+  })
+  it('only names a font from the list: symbol and dingbat fonts are refused', () => {
+    for (const name of [
+      'Wingdings',
+      'Wingdings 2',
+      'Webdings',
+      'Zapf Dingbats',
+      'Bodoni Ornaments',
+      'Hoefler Text Ornaments',
+      'LastResort',
+      'Some Font I Made Up',
+      'Arial, Wingdings',
+    ]) {
+      expect(tokenValue('font-sans', name)).toBeNull()
+      expect(tokenValue('font-heading', name)).toBeNull()
+      expect(tokenValue('font-mono', name)).toBeNull()
+    }
+    expect(
+      validateCustomTheme(theme({ 'font-sans': 'Wingdings', 'font-mono': 'Wingdings' })).ok,
+    ).toBe(false)
+  })
+  it('allows every family the built-in themes name', () => {
+    for (const t of BUILT_IN_THEMES) {
+      for (const token of ['font-sans', 'font-mono', 'font-heading']) {
+        expect(tokenValue(token, t.tokens[token])).not.toBeNull()
+      }
+    }
   })
   it.each([
     "Arial'; background: url(x); '",
@@ -244,7 +277,8 @@ describe('the accessibility floor the built-ins meet', () => {
 describe('ids', () => {
   it('one name is one id, different names differ, and the id is made of safe characters', () => {
     expect(customThemeId('Mine')).toBe(customThemeId('Mine'))
-    expect(customThemeId('Mine')).not.toBe(customThemeId('mine'))
+    expect(customThemeId('Mine')).toBe(customThemeId('mine'))
+    expect(customThemeId('Mine')).not.toBe(customThemeId('Mine 2'))
     expect(customThemeId('日本語')).toMatch(/^custom-theme-[a-z0-9]+$/)
     expect(customThemeId('A <b> & c')).toMatch(/^custom-[a-z0-9-]+$/)
   })

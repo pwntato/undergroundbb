@@ -48,6 +48,8 @@ const continueButton = (el: ReturnType<typeof ThemePickerStepView>) =>
 const blankState = {
   currentId: 'refined-terminal',
   customs: [],
+  invalid: [],
+  notice: null,
   importText: '',
   errors: [],
   exportText: null,
@@ -57,6 +59,7 @@ const noop = {
   onImportText: () => undefined,
   onImport: () => undefined,
   onRemove: () => undefined,
+  onDiscard: () => undefined,
   onExport: () => undefined,
 }
 

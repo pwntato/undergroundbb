@@ -9,6 +9,7 @@ import { Link } from 'react-router'
 import { browserStore } from '@/theme/applyTheme'
 import {
   initialAppearance,
+  runDiscard,
   runExport,
   runImport,
   runRemove,
@@ -26,6 +27,7 @@ export interface AppearanceViewProps {
   readonly onImportText: (text: string) => void
   readonly onImport: () => void
   readonly onRemove: (id: string) => void
+  readonly onDiscard: (id: string) => void
   readonly onExport: () => void
 }
 
@@ -43,6 +45,8 @@ export function AppearanceView({ state, onSelect, ...custom }: AppearanceViewPro
         customs={state.customs}
         importText={state.importText}
         errors={state.errors}
+        invalid={state.invalid}
+        notice={state.notice}
         exportText={state.exportText}
         {...custom}
       />
@@ -76,6 +80,9 @@ export function AppearanceScreen() {
       }}
       onRemove={(id) => {
         setState((s) => runRemove(s, id, pageEnv()))
+      }}
+      onDiscard={(id) => {
+        setState((s) => runDiscard(s, id, pageEnv()))
       }}
       onExport={() => {
         setState((s) => runExport(s))

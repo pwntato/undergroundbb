@@ -3,6 +3,7 @@ import { THEME_STORAGE_KEY } from '@/theme/applyTheme'
 import { CUSTOM_THEMES_KEY } from '@/theme/customThemes'
 import {
   initialAppearance,
+  runDiscard,
   runExport,
   runImport,
   runRemove,
@@ -127,5 +128,35 @@ describe('removing, selecting and exporting', () => {
     expect(typeImport(initialAppearance(e), 'x'.repeat(100000)).importText.length).toBeLessThan(
       10000,
     )
+  })
+})
+
+describe('saved themes that no longer pass, and replacing', () => {
+  it('starts with them listed, discard removes one, and nothing else on the page changes', () => {
+    const { e, attrs, data } = env()
+    data.set(
+      CUSTOM_THEMES_KEY,
+      JSON.stringify([{ name: 'Old', mode: 'dark', tokens: { 'border-width': '0' } }]),
+    )
+    const s = initialAppearance(e)
+    expect(s.customs).toEqual([])
+    expect(s.invalid.map((i) => i.name)).toEqual(['Old'])
+    const after = runDiscard(s, s.invalid[0]?.id ?? '', e)
+    expect(after.invalid).toEqual([])
+    expect(JSON.parse(data.get(CUSTOM_THEMES_KEY) ?? 'x')).toEqual([])
+    expect(attrs.size).toBe(0)
+  })
+
+  it('importing a name that is already saved, in any case, says it replaced it', () => {
+    const { e } = env()
+    const first = runImport(typeImport(initialAppearance(e), GOOD), e)
+    expect(first.notice).toBeNull()
+    const second = runImport(
+      typeImport(first, JSON.stringify({ name: 'MINE', mode: 'dark', tokens: {} })),
+      e,
+    )
+    expect(second.notice).toBe('Replaced your saved theme "MINE".')
+    expect(second.customs).toHaveLength(1)
+    expect(runRemove(second, second.currentId, e).notice).toBeNull()
   })
 })

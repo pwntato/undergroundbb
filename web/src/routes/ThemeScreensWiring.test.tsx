@@ -115,6 +115,24 @@ describe('AppearanceScreen wiring', () => {
   })
 })
 
+type StepProps = Props & { customThemes?: { id: string }[] }
+const stepProps = (el: unknown): StepProps => (el as { props: StepProps }).props
+
+describe('ThemePickerStep with a theme imported before signup', () => {
+  it('lists it and marks it selected when it is the one on the page', async () => {
+    const { customThemeId } = await import('@/theme/customTheme')
+    const id = customThemeId('Mine')
+    const page = standInPage(id)
+    page.stored.set(
+      'ubb.customThemes',
+      JSON.stringify([{ name: 'Mine', mode: 'dark', tokens: {} }]),
+    )
+    const props = stepProps(ThemePickerStep({ onDone: () => undefined }))
+    expect(props.currentId).toBe(id)
+    expect(props.customThemes?.map((t) => t.id)).toEqual([id])
+  })
+})
+
 describe('ThemePickerStep wiring', () => {
   it('a card press switches the page, saves it, and updates the current id', () => {
     const page = standInPage(null)

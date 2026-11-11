@@ -17,10 +17,13 @@ function props(o: Partial<CustomThemesPanelProps> = {}): CustomThemesPanelProps 
     customs: [],
     importText: '',
     errors: [],
+    invalid: [],
+    notice: null,
     exportText: null,
     onImportText: () => undefined,
     onImport: () => undefined,
     onRemove: () => undefined,
+    onDiscard: () => undefined,
     onExport: () => undefined,
     ...o,
   }
@@ -101,6 +104,40 @@ describe('CustomThemesPanel', () => {
     )
     expect(after).toContain('theme-json-export')
     expect(after).toContain('readOnly')
+  })
+})
+
+describe('saved themes that no longer pass, and the replaced notice', () => {
+  const invalid = {
+    id: 'invalid-abc',
+    name: 'Old',
+    errors: ['The value of "border-width" is not allowed.'],
+    json: '{"name":"Old"}',
+  }
+  it('shows each one with its reasons and its JSON, and Discard calls onDiscard with its id', () => {
+    const onDiscard = vi.fn()
+    const p = props({ invalid: [invalid], onDiscard })
+    const html = renderToStaticMarkup(createElement(CustomThemesPanel, p))
+    expect(html).toContain('No longer valid')
+    expect(html).toContain('The value of &quot;border-width&quot; is not allowed.')
+    expect(html).toContain('{&quot;name&quot;:&quot;Old&quot;}')
+    expect(html).toContain(' Old')
+    press(byText(p, 'Discard'))
+    expect(onDiscard).toHaveBeenCalledExactlyOnceWith('invalid-abc')
+    expect(renderToStaticMarkup(createElement(CustomThemesPanel, props()))).not.toContain(
+      'No longer valid',
+    )
+  })
+
+  it('says when an import replaced a saved theme, and says nothing otherwise', () => {
+    const html = renderToStaticMarkup(
+      createElement(CustomThemesPanel, props({ notice: 'Replaced your saved theme "Moss".' })),
+    )
+    expect(html).toContain('role="status"')
+    expect(html).toContain('Replaced your saved theme')
+    expect(renderToStaticMarkup(createElement(CustomThemesPanel, props()))).not.toContain(
+      'role="status"',
+    )
   })
 })
 

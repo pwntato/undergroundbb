@@ -44,7 +44,6 @@ const TOP_LEVEL = ['name', 'mode', 'tokens']
 const NUM = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`
 const COLOR = new RegExp(String.raw`^oklch\(\s*(${NUM})\s+(${NUM})\s+(${NUM})\s*\)$`)
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,39}$/u
-const FONT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,48}$/
 const GENERIC_FONTS = [
   'serif',
   'sans-serif',
@@ -55,7 +54,68 @@ const GENERIC_FONTS = [
   'ui-monospace',
   'ui-rounded',
 ]
-const CSS_WIDE = ['inherit', 'initial', 'unset', 'revert', 'revert-layer', 'default']
+/**
+ * The font families a theme may name: common text and code families, plus every family the built-in
+ * themes use. An allowlist and not "any installed font": a machine can have symbol or dingbat fonts
+ * (Wingdings, Webdings, Zapf Dingbats) that turn every label into pictures, and no check on colors
+ * would see it. A denylist of known symbol fonts would be a guess about each machine's fonts.
+ */
+const CURATED_FONTS = [
+  'Arial',
+  'Helvetica',
+  'Helvetica Neue',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Georgia',
+  'Times New Roman',
+  'Times',
+  'Palatino',
+  'Garamond',
+  'Courier New',
+  'Courier',
+  'Menlo',
+  'Monaco',
+  'Consolas',
+  'Segoe UI',
+  'Roboto',
+  'Ubuntu',
+  'Cantarell',
+  'Noto Sans',
+  'Noto Serif',
+  'DejaVu Sans',
+  'DejaVu Sans Mono',
+  'DejaVu Serif',
+  'Liberation Sans',
+  'Liberation Serif',
+  'Liberation Mono',
+  'Lucida Grande',
+  'Inter',
+  'Fira Sans',
+  'Fira Code',
+  'Source Sans 3',
+  'Source Code Pro',
+  'JetBrains Mono',
+  'SF Mono',
+  'Impact',
+]
+
+/** lowercase name to the casing it is written with. */
+const ALLOWED_FONTS: ReadonlyMap<string, string> = (() => {
+  const map = new Map<string, string>()
+  const add = (name: string) => map.set(name.toLowerCase(), name)
+  CURATED_FONTS.forEach(add)
+  for (const theme of BUILT_IN_THEMES) {
+    for (const token of ['font-sans', 'font-mono', 'font-heading']) {
+      for (const entry of (theme.tokens[token] ?? '').split(',')) {
+        const name = entry.trim().replace(/^'(.*)'$/, '$1')
+        if (name !== '' && !GENERIC_FONTS.includes(name) && !name.startsWith('var(')) add(name)
+      }
+    }
+  }
+  return map
+})()
+
 /** The one reference a value may hold: the heading font following the body font, as the built-ins do. */
 const SANS_REFERENCE = 'var(--ubb-font-sans)'
 
@@ -65,7 +125,9 @@ const LENGTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
   'radius-md': [0, 32],
   'radius-lg': [0, 32],
   'radius-xl': [0, 32],
-  'border-width': [0, 4],
+  // At least 1px: the plain `border` utility draws every form control's edge from this token, so 0
+  // would remove the edge the 3:1 `input` check assumes is there.
+  'border-width': [1, 4],
   'border-width-strong': [0, 12],
   spacing: [2.4, 6],
   'tracking-heading': [0, 4.8],
@@ -156,8 +218,8 @@ function fontValue(name: string, value: string): string | null {
     const unquoted = /^(['"])(.*)\1$/.exec(entry)?.[2] ?? entry
     if (GENERIC_FONTS.includes(unquoted.toLowerCase()) && unquoted === entry) {
       out.push(entry.toLowerCase())
-    } else if (FONT_NAME.test(unquoted) && !CSS_WIDE.includes(unquoted.toLowerCase())) {
-      out.push(`'${unquoted}'`)
+    } else if (ALLOWED_FONTS.has(unquoted.toLowerCase())) {
+      out.push(`'${ALLOWED_FONTS.get(unquoted.toLowerCase())}'`)
     } else {
       return null
     }
@@ -186,7 +248,7 @@ export function tokenValue(name: string, value: unknown): string | null {
   }
 }
 
-/** A short stable hash, so one name is always one id and a different name never collides by slug. */
+/** A short stable hash of the lowercased name, so one name is always one id ("Moss" and "moss" are the same theme) and a different name never collides by slug. */
 function hash(text: string): string {
   let h = 2166136261
   for (const ch of text) h = Math.imul(h ^ ch.codePointAt(0)!, 16777619) >>> 0
@@ -199,7 +261,7 @@ export function customThemeId(name: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 24)
-  return `custom-${slug === '' ? 'theme' : slug}-${hash(name)}`
+  return `custom-${slug === '' ? 'theme' : slug}-${hash(name.toLowerCase())}`
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

@@ -3529,18 +3529,23 @@ list), imported on the Appearance screen by pasting JSON. The document is `{ "na
 unknown fields and unknown tokens are refused. Each value is parsed into its parts and the string handed to
 the CSSOM is **rebuilt from those parts**, so what is applied is never the author's text: colors are
 `oklch(L C H)` with L 0..1, C 0..0.5, H 0..360; lengths are a number with `px`, `rem` or `em` inside a
-per-token range (radius 0..32px, borders 0..4px and 0..12px, spacing 0.15..0.375rem, letter-spacing 0..0.3em);
+per-token range (radius 0..32px, border 1..4px and strong border 0..12px (the plain border draws every form control's edge, so it cannot be 0), spacing 0.15..0.375rem, letter-spacing 0..0.3em);
 shadows are up to three `x y blur [spread] color` terms in px with an `oklch()` (optionally with alpha) or
-`transparent`, no `inset`; fonts are up to ten names of locally installed fonts (each is quoted by the
-rebuild) or the generic families, plus the one fixed `var(--ubb-font-sans)` on the heading font only; keyword
+`transparent`, no `inset`; fonts are up to ten names **from an allowlist** (common text and code families plus every family the
+built-ins use; each is quoted by the rebuild) or the generic families. Not "any installed font": a machine can
+have symbol fonts (Wingdings, Webdings, Zapf Dingbats) that turn every label into pictures, which no color
+check sees, plus the one fixed `var(--ubb-font-sans)` on the heading font only; keyword
 tokens take only the listed values. No `url()`, `calc()`, other `var()`, quote, `;`, brace or comment can
 survive the grammar. A token left out comes from the built-in of the same mode (Refined Terminal for `dark`,
 Zine for `light`), and the merged theme must pass the same `themeProblems` the built-ins pass: a theme that
 makes text, the input edge or the focus ring unreadable is refused, because unreadable text could also hide a
 warning or a key fingerprint. Up to five are kept, in `localStorage` under `ubb.customThemes`, and the list is
 **re-validated every time it is read**, so a damaged or hand-edited value cannot put anything on the page an
-import could not; an invalid entry is dropped and a missing one falls back to the default theme. The same
-name replaces the saved theme; the id is the name's slug plus a hash. "Show this theme as JSON" prints the
+import could not. An entry that stops validating (because a later release narrowed a range, renamed a token
+or added a contrast pair) is **kept, not erased**: Appearance lists it under "No longer valid" with the
+reasons and its JSON until the person discards it, and whoever tightens `tokens.ts`, `themeChecks.ts` or the
+validator should expect that. A missing or invalid active theme falls back to the default. The same name, in
+any case, replaces the saved theme and the screen says so; the id is the lowercased name's slug plus a hash. "Show this theme as JSON" prints the
 theme on the page (a built-in as a copy) to start from. Syncing custom themes across devices stays with #366.
 
 ## Infrastructure
