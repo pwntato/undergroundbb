@@ -19,6 +19,7 @@ export const TEXT_PAIRS: ReadonlyArray<readonly [string, string, string]> = [
   ['primary', 'background', 'accent text and links on the page'],
   ['primary', 'card', 'accent text on a card'],
   ['accent-foreground', 'accent', 'hovered item'],
+  ['primary', 'accent', 'accent text on a hovered item'],
   ['secondary-foreground', 'secondary', 'secondary button'],
   ['destructive', 'background', 'error text'],
   ['destructive', 'card', 'error text on a card'],
