@@ -1,0 +1,67 @@
+import { DEFAULT_THEME, findTheme, type BuiltInTheme } from './themes'
+
+/** The two things a theme is applied to: the `<html>` element, or a stand-in for it in a test. */
+export interface ThemeTarget {
+  readonly style: { setProperty(name: string, value: string): void }
+  setAttribute(name: string, value: string): void
+}
+
+/** The part of `localStorage` used here, so a test can pass a Map-backed one or one that throws. */
+export interface ThemeStore {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+/** Where the chosen theme is kept in this browser (before login there is no profile to read). */
+export const THEME_STORAGE_KEY = 'ubb.theme'
+
+/**
+ * Switch the page to a theme: every token as a custom property, and `data-theme` to the theme's mode.
+ * Both are set through the CSSOM (`style.setProperty`), never by writing CSS text, and nothing
+ * reloads, so the change shows at once. Every token is written, so switching away from a theme
+ * leaves nothing of it behind.
+ */
+export function applyTheme(theme: BuiltInTheme, target: ThemeTarget): void {
+  for (const [name, value] of Object.entries(theme.tokens)) {
+    target.style.setProperty(`--ubb-${name}`, value)
+  }
+  target.setAttribute('data-theme', theme.mode)
+}
+
+/** The theme saved in this browser, or the default if there is none, it is unknown, or storage fails. */
+export function storedTheme(store: ThemeStore | null): BuiltInTheme {
+  try {
+    return findTheme(store?.getItem(THEME_STORAGE_KEY)) ?? DEFAULT_THEME
+  } catch {
+    return DEFAULT_THEME
+  }
+}
+
+/** Remember a choice. Best effort: blocked storage must not stop the switch itself. */
+export function saveThemeId(id: string, store: ThemeStore | null): boolean {
+  if (findTheme(id) === undefined) return false
+  try {
+    store?.setItem(THEME_STORAGE_KEY, id)
+    return store !== null
+  } catch {
+    return false
+  }
+}
+
+/** Apply a built-in theme now and remember it. An unknown id changes nothing and returns false. */
+export function switchTheme(id: string, target: ThemeTarget, store: ThemeStore | null): boolean {
+  const theme = findTheme(id)
+  if (theme === undefined) return false
+  applyTheme(theme, target)
+  saveThemeId(id, store)
+  return true
+}
+
+/** The browser's `localStorage`, or null where even touching it throws (blocked site data). */
+export function browserStore(): ThemeStore | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
