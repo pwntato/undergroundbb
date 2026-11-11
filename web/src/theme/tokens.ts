@@ -3,7 +3,8 @@
  *
  * It was drawn up against Zine first because Zine is the hardest theme to express: hard offset
  * shadows, zero radius, thick borders, uppercase headings at display scale. A vocabulary that holds
- * Zine holds Refined Terminal and BBS Revival without needing anything extra.
+ * Zine holds Refined Terminal trivially. BBS Revival then needed one addition, `border-style`, for its
+ * box-drawing rules: a vocabulary drawn up against one theme is checked by the next, not finished by it.
  *
  * A theme is a JSON object of these values and never a stylesheet (see THREAT_MODEL.md, "Why custom
  * themes are JSON, not CSS"). This list is the allowlist the custom-theme validator (#74) checks
@@ -11,7 +12,8 @@
  * together).
  */
 
-export type TokenKind = 'color' | 'font' | 'length' | 'shadow' | 'case' | 'tracking'
+export type TokenKind =
+  'color' | 'font' | 'length' | 'shadow' | 'case' | 'tracking' | 'border-style'
 
 export interface TokenSpec {
   /** Key in a theme object, e.g. `radius-md`. */
@@ -62,6 +64,8 @@ export const TOKENS: readonly TokenSpec[] = [
   // The default border (Tailwind's `border`) and the heavy one (`border-2`-style emphasis).
   token('border-width', 'length'),
   token('border-width-strong', 'length'),
+  // solid, or double and dashed for box-drawing rules (double only shows at 3px and up).
+  token('border-style', 'border-style'),
 
   token('shadow-xs', 'shadow'),
   token('shadow-sm', 'shadow'),
@@ -84,6 +88,9 @@ export const TOKEN_NAMES: readonly string[] = TOKENS.map((t) => t.name)
 
 /** The values `--ubb-case-heading` may take. Anything else is refused by the validator. */
 export const CASE_VALUES = ['none', 'uppercase', 'lowercase', 'capitalize'] as const
+
+/** The values `--ubb-border-style` may take. Anything else is refused by the validator. */
+export const BORDER_STYLE_VALUES = ['solid', 'dashed', 'dotted', 'double'] as const
 
 /** A plain length: digits, an optional fraction, and a unit. No sign, calc(), percentage or keyword. */
 const PLAIN_LENGTH = /^(\d*\.)?\d+(em|rem|px)$/

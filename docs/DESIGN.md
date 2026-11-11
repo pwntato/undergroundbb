@@ -3478,13 +3478,21 @@ express it can express the others trivially.
 **The vocabulary (#48)** is listed in `web/src/theme/tokens.ts` and defaulted in `web/src/index.css`;
 `tokens.test.ts` fails if the two drift. It is 19 colors (including `card`), three fonts (`sans`,
 `mono`, `heading`), four radii, two border widths (`border-width` for every border, `border-width-strong`
-for cards and alerts), four shadows, one spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and
-three text values: `case-heading`, `tracking-heading` and `tracking-body`. Each is a `--ubb-*` property
+for cards and alerts), a `border-style` (`solid`, `dashed`, `dotted` or `double`), four shadows, one
+spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and three text values: `case-heading`, `tracking-heading` and `tracking-body`. Each is a `--ubb-*` property
 that Tailwind's theme reads, so components use ordinary utilities and a theme only changes values.
 `case-heading` and `tracking-heading` travel together: uppercase headings with no letter-spacing are
 hard to read, and `headingPairProblem` is the check the custom-theme validator will apply. The
 vendored components' `dark:` classes still key off `data-theme="dark"`, so a light theme has to
 account for them (#49 to #52).
+
+**Built-in themes are token objects too** (`web/src/theme/themes/`): Refined Terminal (#49) and BBS Revival
+(#50) so far. `themeProblems` (`themeChecks.ts`) is what each must pass: a value for every token and no
+others, a legal heading pair and border style, the text pairs at 4.5:1, and a focus ring that holds 3:1 as
+the 50% halo the components draw. BBS Revival expresses its box-drawing rules as `border-style: double` with
+a 3px strong border (a double rule only draws from 3px, so 1px input borders stay single lines), its dense rows
+as a smaller spacing unit, and its square, flat look as zero radii and the zero shadow `0 0 0 0 transparent`
+(never `none`: the focus ring shares one box-shadow list with the shadow tokens, and `none` voids the list).
 
 Users may write custom themes. A theme is a **JSON object of token values, never a stylesheet**.
 Every value is validated against an allowlist and applied through the CSSOM. No user-supplied string

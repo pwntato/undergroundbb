@@ -46,6 +46,7 @@ export const refinedTerminal: Theme = {
 
   'border-width': '1px',
   'border-width-strong': '1px',
+  'border-style': 'solid',
 
   'shadow-xs': '0 1px 2px 0 oklch(0 0 0 / 0.05)',
   'shadow-sm': '0 1px 2px 0 oklch(0 0 0 / 0.3)',

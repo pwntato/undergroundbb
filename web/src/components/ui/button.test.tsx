@@ -14,3 +14,17 @@ describe('the destructive button', () => {
     expect(cls).not.toContain('dark:bg-destructive')
   })
 })
+
+describe('the smallest buttons keep a 24px target at any spacing unit', () => {
+  // h-6 and size-6 scale with the theme's spacing unit (BBS Revival's 0.2rem gives 19.2px); a rem
+  // floor does not, so the target stays at least 24px (WCAG 2.2, 2.5.8) under every theme.
+  it('has a rem floor on xs', () => {
+    expect(buttonVariants({ size: 'xs' })).toContain('min-h-[1.5rem]')
+  })
+
+  it('has a rem floor on both sides of icon-xs', () => {
+    const cls = buttonVariants({ size: 'icon-xs' })
+    expect(cls).toContain('min-h-[1.5rem]')
+    expect(cls).toContain('min-w-[1.5rem]')
+  })
+})

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { contrastRatio, translucentContrast } from '../contrast'
+import { themeProblems } from '../themeChecks'
 import { TOKEN_NAMES, headingPairProblem } from '../tokens'
 import { refinedTerminal } from './refinedTerminal'
 
@@ -34,29 +35,8 @@ describe('Refined Terminal', () => {
     expect(css).not.toMatch(/@font-face|fonts\.googleapis/)
   })
 
-  describe('text is readable (WCAG AA, 4.5:1)', () => {
-    const t = refinedTerminal
-    const pairs: ReadonlyArray<readonly [string, string, string]> = [
-      ['foreground', 'background', 'body text'],
-      ['foreground', 'card', 'text on a card'],
-      ['foreground', 'surface', 'text on a surface'],
-      ['muted-foreground', 'background', 'secondary text'],
-      ['muted-foreground', 'card', 'secondary text on a card'],
-      ['muted-foreground', 'muted', 'secondary text on a muted block'],
-      ['primary-foreground', 'primary', 'button label'],
-      ['primary', 'background', 'teal text and links on the page'],
-      ['primary', 'card', 'teal text on a card'],
-      ['accent-foreground', 'accent', 'hovered item'],
-      ['secondary-foreground', 'secondary', 'secondary button'],
-      ['destructive', 'background', 'error text'],
-      ['destructive', 'card', 'error text on a card'],
-      ['destructive-foreground', 'destructive', 'destructive label'],
-    ]
-    for (const [fg, bg, what] of pairs) {
-      it(`${fg} on ${bg} (${what})`, () => {
-        expect(contrastRatio(t[fg] ?? '', t[bg] ?? '')).toBeGreaterThanOrEqual(4.5)
-      })
-    }
+  it('meets everything a built-in theme must: every token, legal pairs, readable text, visible ring', () => {
+    expect(themeProblems(refinedTerminal)).toEqual([])
   })
 
   it('keeps the focus ring visible at full strength and as the 50% halo components draw (3:1)', () => {
