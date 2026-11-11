@@ -17,6 +17,9 @@ import type { Theme } from '../tokens'
  *   stay readable at density. The costume is in the headings, borders and shadows, not the prose.
  *
  * No web fonts: the Content-Security-Policy has no `font-src`, so the stacks name fonts a system has.
+ * Impact ships with macOS and Windows but not Android or most Linux; there the headings fall back to
+ * Helvetica or Arial at the heading weight: still uppercase and tracked, but not heavy or condensed.
+ * `destructive` is a deeper red than `primary` but close to it, by the "one riso red" rule.
  */
 const ink = 'oklch(0.16 0.006 80)'
 
