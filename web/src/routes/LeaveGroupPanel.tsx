@@ -37,7 +37,13 @@ export function LeaveGroupPanel({
   if (!confirming) {
     return (
       <div className="flex w-full max-w-md flex-col gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onStart}>
+        <Button
+          type="button"
+          variant="destructive-outline"
+          size="sm"
+          disabled={busy}
+          onClick={onStart}
+        >
           Leave group
         </Button>
       </div>

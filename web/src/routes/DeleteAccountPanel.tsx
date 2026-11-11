@@ -123,7 +123,13 @@ export function DeleteAccountPanel({
       )}
 
       {blockers.length === 0 && !confirming && (
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onStart}>
+        <Button
+          type="button"
+          variant="destructive-outline"
+          size="sm"
+          disabled={busy}
+          onClick={onStart}
+        >
           Delete my account
         </Button>
       )}
