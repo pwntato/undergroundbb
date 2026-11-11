@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { THEME_ID_ATTRIBUTE, THEME_STORAGE_KEY } from './applyTheme'
-import { CUSTOM_THEMES_KEY, addCustomTheme, loadCustomThemes } from './customThemes'
+import { CUSTOM_THEMES_KEY, addCustomTheme, loadCustomThemes, readSavedThemes } from './customThemes'
 import { validateCustomTheme, type CustomTheme } from './customTheme'
 import { encodePreferences, type Preferences } from './preferences'
 import {
@@ -99,6 +99,17 @@ describe('syncAtLogin: the blob wins, this browser seeds it', () => {
     expect(JSON.parse(w.s.writes[0]!.text).customThemes).toHaveLength(2)
   })
 
+  it('keeps a saved theme that no longer validates, which is the person\'s to fix', async () => {
+    const stale = { name: 'Old', mode: 'dark', tokens: { primary: 'not a colour' } }
+    const w = world({
+      blob: doc({ themeId: 'zine', customs: [make('There')] }),
+      local: { [CUSTOM_THEMES_KEY]: JSON.stringify([stale]) },
+    })
+    await syncAtLogin(w.deps)
+    expect(readSavedThemes(w.deps.store).invalid.map((i) => i.name)).toEqual(['Old'])
+    expect(loadCustomThemes(w.deps.store).map((t) => t.name)).toEqual(['There'])
+  })
+
   it('seeds a missing blob from this browser, naming the key epoch it read', async () => {
     const w = world({ epoch: 3, local: { [THEME_STORAGE_KEY]: 'zine' } })
     expect(await syncAtLogin(w.deps)).toBe('pushed')
@@ -193,6 +204,13 @@ describe('changes while signed in', () => {
     expect(w.data.get(THEME_STORAGE_KEY)).toBe('zine')
     expect(JSON.parse(w.s.blob!)).toMatchObject({ theme: 'zine' })
     expect(w.data.get(PREFS_DIRTY_KEY)).toBe('0')
+  })
+
+  it('a change made while the server cannot be reached is flagged too', async () => {
+    const w = world({ local: { [THEME_STORAGE_KEY]: 'zine' } })
+    w.s.readFails = true
+    expect(await pushLocal(w.deps)).toBe('failed')
+    expect(w.data.get(PREFS_DIRTY_KEY)).toBe('1')
   })
 
   it('a send refused for a stale key epoch is flagged, not lost', async () => {

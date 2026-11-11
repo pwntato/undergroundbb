@@ -15,6 +15,12 @@ vi.mock('@/lib/crypto/worker-client', () => ({
   clearLiveKeys: () => clearLiveKeys(),
   getOwnSigningKey: () => Promise.reject(new Error('not used')),
 }))
+const startThemeSync = vi.fn(() => Promise.resolve('unchanged'))
+const stopThemeSync = vi.fn()
+vi.mock('./themeSyncSession', () => ({
+  startThemeSync: (id: string) => startThemeSync(id),
+  stopThemeSync: () => stopThemeSync(),
+}))
 vi.mock('@/lib/api/auth', () => ({
   getSession: () => new Promise(() => undefined),
 }))
@@ -24,6 +30,8 @@ import { RequireAuth } from './RequireAuth'
 
 beforeEach(() => {
   clearLiveKeys.mockClear()
+  startThemeSync.mockClear()
+  stopThemeSync.mockClear()
 })
 
 function captureSession(): SessionState {
@@ -48,6 +56,18 @@ describe('SessionProvider.logout', () => {
     const session = captureSession()
     session.logout()
     expect(clearLiveKeys).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('theme sync follows the session (#366)', () => {
+  it('login starts it for that account, once the keys are live', () => {
+    captureSession().login('user-1')
+    expect(startThemeSync).toHaveBeenCalledExactlyOnceWith('user-1')
+  })
+
+  it('logout stops it, so later changes stay in this browser', () => {
+    captureSession().logout()
+    expect(stopThemeSync).toHaveBeenCalledTimes(1)
   })
 })
 

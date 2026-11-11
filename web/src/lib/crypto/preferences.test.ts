@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { bytesToBase64 } from './base64'
+import { bytesToHex } from './hex'
 import {
   EMPTY_PREFERENCES_TEXT,
   MAX_PREFERENCES_BYTES,
@@ -36,6 +37,10 @@ describe('preferences sealing (#366)', () => {
     expect(preferencesKey(key(1))).not.toEqual(key(1))
     expect(preferencesKey(key(1))).not.toEqual(preferencesKey(key(2)))
     expect(preferencesKey(key(1))).toHaveLength(32)
+  })
+
+  it('derives exactly this key (a known answer: changing it makes every sealed blob unreadable)', () => {
+    expect(bytesToHex(preferencesKey(new Uint8Array(32).fill(1)))).toBe('f2a0e1725a99b7d98feeb0e3222aac04122c09dbda6cff5718101b0f47f9162f')
   })
 
   it('uses a fresh nonce every time', async () => {

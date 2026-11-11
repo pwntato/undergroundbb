@@ -142,3 +142,20 @@ func TestRotateKeysAcceptsPreferencesLargerThanTheGeneralBlobCap(t *testing.T) {
 		t.Fatalf("rotate with a 10 KiB blob: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPutPreferencesDeletedAccountAfterARotation(t *testing.T) {
+	// The epoch-named branch of the write's condition (an account that has rotated).
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	rotated := doRotateKeys(t, h, cookie, signedRotation(t, user, rotateOpts{}).req)
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rotated.Code, rotated.Body.String())
+	}
+	cookie = sessionCookieFrom(rotated)
+	if rec := doJSON(t, h, http.MethodDelete, "/api/account", cookie, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d", rec.Code)
+	}
+	if rec := putPrefs(t, h, cookie, 1, wrappedBlob{Nonce: b64(12), Ciphertext: b64(40)}); rec.Code != http.StatusNotFound {
+		t.Errorf("put on a deleted, rotated account = %d, want 404", rec.Code)
+	}
+}
