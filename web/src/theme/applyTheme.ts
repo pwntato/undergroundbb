@@ -57,6 +57,13 @@ export function switchTheme(id: string, target: ThemeTarget, store: ThemeStore |
   return true
 }
 
+/** Put the theme saved in this browser on the page (the default if none): what runs at startup. */
+export function applyStoredTheme(target: ThemeTarget, store: ThemeStore | null): BuiltInTheme {
+  const theme = storedTheme(store)
+  applyTheme(theme, target)
+  return theme
+}
+
 /** The browser's `localStorage`, or null where even touching it throws (blocked site data). */
 export function browserStore(): ThemeStore | null {
   try {

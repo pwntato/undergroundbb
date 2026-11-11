@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   THEME_STORAGE_KEY,
+  applyStoredTheme,
   applyTheme,
   saveThemeId,
   storedTheme,
@@ -145,5 +146,24 @@ describe('saveThemeId', () => {
     expect(saveThemeId('zine', throwing)).toBe(false)
     expect(saveThemeId('zine', null)).toBe(false)
     expect(store.data.get(THEME_STORAGE_KEY)).toBe('zine')
+  })
+})
+
+describe('applyStoredTheme (what runs at startup)', () => {
+  it('puts the saved theme on the page', () => {
+    const root = fakeRoot()
+    expect(applyStoredTheme(root, fakeStore({ [THEME_STORAGE_KEY]: 'zine' })).id).toBe('zine')
+    expect(root.attrs.get('data-theme')).toBe('light')
+    expect(root.props.get('--ubb-border-width-strong')).toBe(
+      findTheme('zine')!.tokens['border-width-strong'],
+    )
+  })
+
+  it('puts the default on the page when nothing usable is saved', () => {
+    for (const store of [fakeStore(), fakeStore({ [THEME_STORAGE_KEY]: 'nope' }), throwing, null]) {
+      const root = fakeRoot()
+      expect(applyStoredTheme(root, store).id).toBe(DEFAULT_THEME.id)
+      expect(root.props.get('--ubb-background')).toBe(DEFAULT_THEME.tokens['background'])
+    }
   })
 })
