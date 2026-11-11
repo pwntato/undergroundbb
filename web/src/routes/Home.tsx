@@ -204,6 +204,9 @@ export function Home() {
           <Link to="/join-requests">Join requests</Link>
         </Button>
         <Button asChild variant="outline">
+          <Link to="/appearance">Appearance</Link>
+        </Button>
+        <Button asChild variant="outline">
           <Link to="/account/password">Change password</Link>
         </Button>
         <Button asChild variant="outline">
