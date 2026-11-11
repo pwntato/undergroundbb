@@ -37,7 +37,13 @@ export function LeaveGroupPanel({
   if (!confirming) {
     return (
       <div className="flex w-full max-w-md flex-col gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onStart}>
+        <Button
+          type="button"
+          variant="destructive-outline"
+          size="sm"
+          disabled={busy}
+          onClick={onStart}
+        >
           Leave group
         </Button>
       </div>
@@ -73,6 +79,9 @@ export function LeaveGroupPanel({
                 <span className={`${unresolvedClass(id, usernames)} text-sm`} title={id}>
                   {memberLabel(id, usernames)}
                 </span>
+                {/* Deliberately `outline`, not the solid `destructive` of the other confirm: there is one
+                    of these per candidate, and a column of solid red buttons would be loud. It still
+                    leaves the group; the line above says so. */}
                 <Button
                   type="button"
                   variant="outline"

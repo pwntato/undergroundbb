@@ -12,6 +12,11 @@ const buttonVariants = cva(
         default: 'bg-primary text-primary-foreground hover:bg-primary/90',
         destructive:
           'bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40',
+        // The step BEFORE a destructive action (Leave group, Delete my account): red lettering and a
+        // red edge on the page color, never a red fill. The solid `destructive` fill is kept for the
+        // confirm step, so in a one-red theme (Zine) a trigger does not look like a primary button.
+        'destructive-outline':
+          'border border-destructive bg-background text-destructive shadow-xs hover:bg-destructive/10',
         outline:
           'border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',

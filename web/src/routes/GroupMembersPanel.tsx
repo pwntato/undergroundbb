@@ -318,7 +318,7 @@ export function GroupMembersPanel({
                   ))}
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="destructive-outline"
                     size="sm"
                     disabled={busyUserId !== null || locked}
                     onClick={() => {

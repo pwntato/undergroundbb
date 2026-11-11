@@ -166,7 +166,7 @@ export function GroupSettingsPanel({
               </p>
               <Button
                 type="button"
-                variant="outline"
+                variant="destructive-outline"
                 className="self-start"
                 onClick={() => {
                   setConfirmingConvert(true)
