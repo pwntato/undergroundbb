@@ -3483,16 +3483,25 @@ spacing unit that every `p-*`, `m-*` and `gap-*` multiplies, and three text valu
 that Tailwind's theme reads, so components use ordinary utilities and a theme only changes values.
 `case-heading` and `tracking-heading` travel together: uppercase headings with no letter-spacing are
 hard to read, and `headingPairProblem` is the check the custom-theme validator will apply. The
-vendored components' `dark:` classes still key off `data-theme="dark"`, so a light theme has to
-account for them (#49 to #52).
+vendored components' `dark:` classes key off `data-theme="dark"`, so each built-in theme declares a
+`mode` (`dark` or `light`) and switching sets `<html data-theme>` to it; a test checks the mode against
+the ground colour, and that `index.html` starts in the default theme's mode.
 
-**Built-in themes are token objects too** (`web/src/theme/themes/`): Refined Terminal (#49) and BBS Revival
-(#50) so far. `themeProblems` (`themeChecks.ts`) is what each must pass: a value for every token and no
+**Built-in themes are token objects too** (`web/src/theme/themes/`): Refined Terminal (#49), BBS Revival
+(#50) and Zine (#51). `themeProblems` (`themeChecks.ts`) is what each must pass: a value for every token and no
 others, a legal heading pair and border style, the text pairs at 4.5:1, and a focus ring that holds 3:1 as
 the 50% halo the components draw. BBS Revival expresses its box-drawing rules as `border-style: double` with
 a 3px strong border (a double rule only draws from 3px, so 1px input borders stay single lines), its dense rows
 as a smaller spacing unit, and its square, flat look as zero radii and the zero shadow `0 0 0 0 transparent`
 (never `none`: the focus ring shares one box-shadow list with the shadow tokens, and `none` voids the list).
+
+**Switching (#52)** is `web/src/theme/applyTheme.ts`: every token of the chosen theme is written to
+`<html>` with `style.setProperty` (the CSSOM, never CSS text) and `data-theme` is set to its mode, with no
+reload. The id of the choice is kept in `localStorage` under `ubb.theme`; an unknown, missing or
+unreadable value means the default theme, and blocked storage does not stop the switch. `main.tsx` applies
+the saved theme before the first render. The CSP forbids an inline script, so the page shows the default
+for the moments before the bundle runs. Not built yet: keeping the choice in the encrypted preferences blob
+so it follows the user across devices (#366), and the picker (#53).
 
 Users may write custom themes. A theme is a **JSON object of token values, never a stylesheet**.
 Every value is validated against an allowlist and applied through the CSSOM. No user-supplied string
