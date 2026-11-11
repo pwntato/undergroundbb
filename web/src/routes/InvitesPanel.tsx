@@ -59,7 +59,10 @@ export function InvitesPanel({
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-medium">Sent</h2>
         {view.sent.length === 0 ? (
-          <p className="text-sm text-muted-foreground">You have no outstanding invites.</p>
+          <p className="text-sm text-muted-foreground">
+            You have no outstanding invites. An invite you create waits here until the other person
+            accepts it.
+          </p>
         ) : (
           <ul className="flex flex-col gap-2">
             {view.sent.map((inv) => (

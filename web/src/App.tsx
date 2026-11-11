@@ -13,6 +13,7 @@ import { ThreadScreen } from '@/routes/ThreadScreen'
 import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { AppHeader } from '@/routes/AppHeader'
+import { AppShell } from '@/routes/AppShell'
 import { UserProfileScreen } from '@/routes/UserProfileScreen'
 import { InvitesScreen } from '@/routes/InvitesScreen'
 import { DirectoryScreen } from '@/routes/DirectoryScreen'
@@ -75,190 +76,192 @@ function App() {
     <SessionProvider>
       <BrowserRouter>
         <AppHeader />
-        <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route
-              path="/signup"
-              element={
-                <RedirectIfAuthenticated>
-                  <SignupScreen />
-                </RedirectIfAuthenticated>
-              }
-            />
-            <Route
-              path="/login"
-              element={
-                <RedirectIfAuthenticated>
-                  <LoginScreen />
-                </RedirectIfAuthenticated>
-              }
-            />
-            <Route path="/recovery" element={<RecoveryScreen />} />
-            <Route
-              path="/account/password"
-              element={
-                <RequireAuth>
-                  <ChangePasswordScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/account/rotate-keys"
-              element={
-                <RequireAuth>
-                  <RotateKeysScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/account/delete"
-              element={
-                <RequireAuth>
-                  <DeleteAccountScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/users/:userId"
-              element={
-                <RequireAuth>
-                  <UserProfileScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/new"
-              element={
-                <RequireAuth>
-                  <CreateGroupScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/join"
-              element={
-                <RequireAuth>
-                  <JoinGroupScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/requests"
-              element={
-                <RequireAuth>
-                  <GroupJoinRequestsScreen />
-                </RequireAuth>
-              }
-            />
-            <Route path="/appearance" element={<AppearanceScreen />} />
-            <Route
-              path="/directory"
-              element={
-                <RequireAuth>
-                  <DirectoryScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/join-requests"
-              element={
-                <RequireAuth>
-                  <MyJoinRequestsScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/invite"
-              element={
-                <RequireAuth>
-                  <CreateInviteScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/settings"
-              element={
-                <RequireAuth>
-                  <GroupSettingsScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/posts"
-              element={
-                <RequireAuth>
-                  <GroupPostsScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/posts/:postId"
-              element={
-                <RequireAuth>
-                  <ThreadScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/posts/new"
-              element={
-                <RequireAuth>
-                  <CreatePostScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/members"
-              element={
-                <RequireAuth>
-                  <GroupMembersScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/groups/:groupId/successor"
-              element={
-                <RequireAuth>
-                  <SuccessorScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/invites"
-              element={
-                <RequireAuth>
-                  <InvitesScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/dms"
-              element={
-                <RequireAuth>
-                  <DirectMessagesScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/dms/new/:userId"
-              element={
-                <RequireAuth>
-                  <NewDMScreen />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/notifications"
-              element={
-                <RequireAuth>
-                  <NotificationsScreen />
-                </RequireAuth>
-              }
-            />
-            <Route path="/invites/:inviteId" element={<AcceptInviteScreen />} />
-          </Routes>
-        </main>
+        <AppShell>
+          <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route
+                path="/signup"
+                element={
+                  <RedirectIfAuthenticated>
+                    <SignupScreen />
+                  </RedirectIfAuthenticated>
+                }
+              />
+              <Route
+                path="/login"
+                element={
+                  <RedirectIfAuthenticated>
+                    <LoginScreen />
+                  </RedirectIfAuthenticated>
+                }
+              />
+              <Route path="/recovery" element={<RecoveryScreen />} />
+              <Route
+                path="/account/password"
+                element={
+                  <RequireAuth>
+                    <ChangePasswordScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/account/rotate-keys"
+                element={
+                  <RequireAuth>
+                    <RotateKeysScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/account/delete"
+                element={
+                  <RequireAuth>
+                    <DeleteAccountScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/users/:userId"
+                element={
+                  <RequireAuth>
+                    <UserProfileScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/new"
+                element={
+                  <RequireAuth>
+                    <CreateGroupScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/join"
+                element={
+                  <RequireAuth>
+                    <JoinGroupScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/requests"
+                element={
+                  <RequireAuth>
+                    <GroupJoinRequestsScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route path="/appearance" element={<AppearanceScreen />} />
+              <Route
+                path="/directory"
+                element={
+                  <RequireAuth>
+                    <DirectoryScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/join-requests"
+                element={
+                  <RequireAuth>
+                    <MyJoinRequestsScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/invite"
+                element={
+                  <RequireAuth>
+                    <CreateInviteScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/settings"
+                element={
+                  <RequireAuth>
+                    <GroupSettingsScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/posts"
+                element={
+                  <RequireAuth>
+                    <GroupPostsScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/posts/:postId"
+                element={
+                  <RequireAuth>
+                    <ThreadScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/posts/new"
+                element={
+                  <RequireAuth>
+                    <CreatePostScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/members"
+                element={
+                  <RequireAuth>
+                    <GroupMembersScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/groups/:groupId/successor"
+                element={
+                  <RequireAuth>
+                    <SuccessorScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/invites"
+                element={
+                  <RequireAuth>
+                    <InvitesScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dms"
+                element={
+                  <RequireAuth>
+                    <DirectMessagesScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dms/new/:userId"
+                element={
+                  <RequireAuth>
+                    <NewDMScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/notifications"
+                element={
+                  <RequireAuth>
+                    <NotificationsScreen />
+                  </RequireAuth>
+                }
+              />
+              <Route path="/invites/:inviteId" element={<AcceptInviteScreen />} />
+            </Routes>
+          </main>
+        </AppShell>
       </BrowserRouter>
     </SessionProvider>
   )

@@ -96,7 +96,12 @@ export function IncomingDMsPanel({
   readonly onDecline: (groupId: string) => void
 }) {
   if (dms.length === 0) {
-    return <p className="text-sm text-muted-foreground">No one is waiting to message you.</p>
+    return (
+      <p className="text-sm text-muted-foreground">
+        No one is waiting to message you. When someone starts a conversation, it waits here until
+        you accept or decline it.
+      </p>
+    )
   }
   const busy = busyGroupId !== null
   return (

@@ -169,7 +169,9 @@ export function GroupPostsPanel({
         </Alert>
       )}
       {posts.length === 0 && !loading && error === null && !hasMore && (
-        <p className="text-sm text-muted-foreground">No posts yet.</p>
+        <p className="text-sm text-muted-foreground">
+          No posts yet. Be the first: use &quot;Write a post&quot; to start the conversation.
+        </p>
       )}
       {posts.length === 0 && !loading && error === null && hasMore && (
         <p className="text-sm text-muted-foreground">
