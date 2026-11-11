@@ -189,6 +189,13 @@ describe('entries that no longer pass are kept, not erased', () => {
       expect(saved.invalid).toEqual([])
     })
 
+    it('a broken entry saved with stray spaces around its name is still matched', () => {
+      const { store } = seed([{ ...broken, name: '  Moss ' }])
+      const r = addCustomTheme(make('Moss', { 'border-width': '1px' }), store)
+      expect(r.ok && r.replaced).toBe(true)
+      expect(readSavedThemes(store).invalid).toEqual([])
+    })
+
     it('a different broken entry is still kept and still counts toward the limit', () => {
       const other = { name: 'Other', mode: 'dark', tokens: { 'border-width': '0' } }
       const { store } = seed(
