@@ -5,8 +5,8 @@ import { BUILT_IN_THEMES } from '@/theme/themes'
 import { ThemePicker } from './ThemePicker'
 import { elementsOf } from './elementTree.testkit'
 
-const radios = (el: ReturnType<typeof ThemePicker>) =>
-  elementsOf(el).filter((n) => n.props['role'] === 'radio')
+const cards = (el: ReturnType<typeof ThemePicker>) =>
+  elementsOf(el).filter((n) => typeof n.props['data-theme-id'] === 'string')
 
 describe('ThemePicker', () => {
   it('lists every built-in theme by name, in order, with a sample of each', () => {
@@ -26,7 +26,7 @@ describe('ThemePicker', () => {
   it('marks exactly the current theme as checked, in words as well as colour', () => {
     for (const current of BUILT_IN_THEMES) {
       const el = ThemePicker({ currentId: current.id, onSelect: () => undefined })
-      const checked = radios(el).filter((n) => n.props['aria-checked'] === true)
+      const checked = cards(el).filter((n) => n.props['aria-pressed'] === true)
       expect(checked.map((n) => n.props['data-theme-id'])).toEqual([current.id])
     }
     const out = renderToStaticMarkup(
@@ -39,7 +39,7 @@ describe('ThemePicker', () => {
     for (const t of BUILT_IN_THEMES) {
       const onSelect = vi.fn()
       const el = ThemePicker({ currentId: 'nothing', onSelect })
-      const card = radios(el).find((n) => n.props['data-theme-id'] === t.id)
+      const card = cards(el).find((n) => n.props['data-theme-id'] === t.id)
       if (card === undefined) throw new Error('card not found')
       ;(card.props['onClick'] as () => void)()
       expect(onSelect).toHaveBeenCalledExactlyOnceWith(t.id)

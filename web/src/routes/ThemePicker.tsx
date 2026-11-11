@@ -14,7 +14,7 @@ export interface ThemePickerProps {
 
 export function ThemePicker({ currentId, onSelect }: ThemePickerProps) {
   return (
-    <div role="radiogroup" aria-label="Theme" className="flex w-full flex-col gap-3">
+    <div role="group" aria-label="Theme" className="flex w-full flex-col gap-3">
       {BUILT_IN_THEMES.map((theme) => {
         const selected = theme.id === currentId
         const sample = themePreviewStyles(theme)
@@ -22,8 +22,7 @@ export function ThemePicker({ currentId, onSelect }: ThemePickerProps) {
           <button
             key={theme.id}
             type="button"
-            role="radio"
-            aria-checked={selected}
+            aria-pressed={selected}
             data-theme-id={theme.id}
             onClick={() => {
               onSelect(theme.id)
