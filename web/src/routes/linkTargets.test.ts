@@ -50,14 +50,21 @@ describe('standalone link tap targets', () => {
     expect(bad).toEqual([])
   })
 
-  it('finds the checkbox and radio labels it is meant to check', () => {
-    let count = 0
-    for (const f of files)
-      for (const block of readFileSync(join(DIR, f), 'utf8').match(
-        /<label className="[^"]*">[\s\S]*?<\/label>/g,
-      ) ?? [])
-        if (/type="(checkbox|radio)"/.test(block)) count++
-    expect(count).toBeGreaterThanOrEqual(8)
+  it('every checkbox and radio in the screens sits in a floored label: the two counts must match', () => {
+    let controls = 0
+    let floored = 0
+    for (const f of files) {
+      const src = readFileSync(join(DIR, f), 'utf8')
+      controls += (src.match(/type="(checkbox|radio)"/g) ?? []).length
+      for (const block of src.match(/<label className="[^"]*">[\s\S]*?<\/label>/g) ?? []) {
+        const n = (block.match(/type="(checkbox|radio)"/g) ?? []).length
+        if (/min-h-\[1\.5rem\]/.test(/<label className="([^"]*)"/.exec(block)?.[1] ?? ''))
+          floored += n
+      }
+    }
+    expect(controls).toBeGreaterThanOrEqual(8)
+    // A control in a label written another way (htmlFor, cn(...)) would be counted above but not here.
+    expect(floored).toBe(controls)
   })
 
   it('keeps the directory and roster name links at 24px too', () => {
