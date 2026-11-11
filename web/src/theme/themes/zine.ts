@@ -34,7 +34,7 @@ export const zine: Theme = {
   ring: ink,
   primary: 'oklch(0.5 0.2 27)',
   'primary-foreground': 'oklch(0.97 0.015 90)',
-  accent: 'oklch(0.86 0.06 88)',
+  accent: 'oklch(0.88 0.05 88)',
   'accent-foreground': ink,
   secondary: 'oklch(0.9 0.03 86)',
   'secondary-foreground': ink,
