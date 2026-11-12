@@ -67,7 +67,7 @@ test('after a page load the keys are cold: it asks for the password, then create
   await expect(tab.getByRole('heading', { name: 'Create a group' })).toBeVisible()
   await tab.getByLabel('Name').fill(groupName)
   await tab.getByRole('button', { name: 'Create group' }).click()
-  await expect(tab.getByText(groupName)).toBeVisible()
+  await expect(tab.getByRole('main').getByText(groupName)).toBeVisible()
   await tab.close()
 })
 
@@ -108,7 +108,7 @@ test('the old password stops working and the new one logs in', async () => {
   await expect(page.getByText('Incorrect username or password.')).toBeVisible()
   await logIn(page, changed)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
-  await expect(page.getByText(groupName)).toBeVisible()
+  await expect(page.getByRole('main').getByText(groupName)).toBeVisible()
 })
 
 test('recovers the account with the recovery code and sets a new password', async () => {
@@ -123,7 +123,7 @@ test('recovers the account with the recovery code and sets a new password', asyn
   await expect(page).toHaveURL(/\/login\?recoveryComplete=1$/)
   await logIn(page, recovered)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
-  await expect(page.getByText(groupName)).toBeVisible()
+  await expect(page.getByRole('main').getByText(groupName)).toBeVisible()
 })
 
 test('deletes the account together with the group it alone owned', async () => {
