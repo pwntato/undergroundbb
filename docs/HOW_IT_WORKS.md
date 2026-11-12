@@ -19,9 +19,15 @@ This is the plain-language version of how UndergroundBB keeps your messages priv
 | That you are a member of a group, and your role in it | Your private keys, or the group's key |
 | The names and descriptions of **public** groups | A **private** group's name and description |
 | The day each post or comment was written, and who wrote it | The title and text of any post or comment |
+| Your profile bio, if you write one (every signed-in user can read it) | |
+| The day you last logged in | |
+| Invites and direct-message requests still waiting, and who they are for | |
+| Your notifications: who interacted with you, in which group, on what day | |
 | That a given person reacted to a given post (not when) | Which emoji the reaction was |
 | How many groups, members and posts there are, and how long each message is | The exact time of any message |
 | That a post was deleted, and on what day | What a deleted post said |
+
+This is the main list, not every detail: [What is not protected](THREAT_MODEL.md#what-is-not-protected) is the complete accounting.
 
 A copy of the whole database therefore shows the social graph (who is in which groups, and who messages whom) and day-level activity, but no message content. Direct messages are groups of two, so who talks to whom is visible in the same way. See [What is not protected](THREAT_MODEL.md#what-is-not-protected).
 
@@ -92,7 +98,7 @@ An invite has to get the group key to the new person **without the server being 
     |-- create invite -------------->|                                 |
     |   (signed by the inviter)      |                                 |
     |                                                                  |
-    |== link, with a secret after the "#" (never sent to any server) ==>|
+    |== link, with a secret after the "#" (never sent to any server) =>|
     |                                |                                 |
     |                                |<-- accept: signs their own keys,|
     |                                |    proves they hold the link ---|
@@ -101,7 +107,7 @@ An invite has to get the group key to the new person **without the server being 
     |<-- fetch the acceptance -------|                                 |
     |   check the proof, then lock the group key to the                |
     |   keys the new person signed                                     |
-    |-- locked group key ----------->|----- delivered --------------->|
+    |-- locked group key ----------->|----- delivered ---------------->|
 ```
 
 What makes this safe:
@@ -110,7 +116,7 @@ What makes this safe:
 - The inviter's browser only locks the group key to the keys the new person signed.
 - The page shows the inviter's **fingerprint**, a long number that identifies their keys. Comparing it over a call you trust catches a swapped link.
 
-The group key can only be handed over by the **inviter's** browser, so it arrives **the next time the inviter logs in**. That is why a new member sometimes waits. If the inviter changes their keys (see below) before that, the invite stops working and needs to be made again. See [Invites](DESIGN.md) ("the signed handshake").
+The group key can only be handed over by the **inviter's** browser, so it arrives **the next time the inviter logs in**. That is why a new member sometimes waits. If the inviter changes their keys (see below) before that, the invite stops working and needs to be made again. See [Invites: the signed handshake](DESIGN.md#invites--the-signed-handshake).
 
 ## Trusting keys
 
@@ -130,7 +136,7 @@ Because pins follow you between devices, a new device inherits what an old one v
 
 Every role change is **signed by the admin who made it**, and your browser can walk the chain of signatures back to the person who created the group. A server cannot invent an admin, because it cannot produce the signature.
 
-That protects against a **dishonest server**. It does not protect against a **dishonest member**: anyone holding the group key can write to the group, and an ambassador can invite anyone they like. Roles keep a group organised among people who already trust each other. They are not a wall. See [Roles and the chain of trust](DESIGN.md#roles-and-the-chain-of-trust) and [limitation 2](THREAT_MODEL.md#limitations).
+That protects against a **dishonest server**. It does not protect against a **dishonest member**: anyone holding the group key can write to the group, and an ambassador can invite anyone they like. Roles keep a group organised among people who already trust each other. They are not a wall. See [Roles and the chain of trust](DESIGN.md#roles-and-the-chain-of-trust) and [limitation 2](THREAT_MODEL.md#2-roles-are-not-a-cryptographic-boundary).
 
 ## Removing someone
 
@@ -141,7 +147,7 @@ A removed member **still has the group key they were given and everything they a
 
 Making a new key takes a moment, and new posts use the old key until it finishes. If the browser doing the work stops partway, that window stays open until someone resumes it. Removal is a boundary that closes shortly after, not instantly.
 
-Old keys are kept, each one locked inside the next newer key. That is why current members can still read history after a rotation, while a removed member, who holds nothing newer, cannot reach the new key. See [Revocation mode](DESIGN.md#revocation-mode), [Key generations](DESIGN.md#key-generations) and [limitation 3](THREAT_MODEL.md#limitations).
+Old keys are kept, each one locked inside the next newer key. That is why current members can still read history after a rotation, while a removed member, who holds nothing newer, cannot reach the new key. See [Revocation mode](DESIGN.md#revocation-mode), [Key generations](DESIGN.md#key-generations) and [limitation 3](THREAT_MODEL.md#3-removal-cannot-undo-access).
 
 ## Messages expire
 
@@ -151,7 +157,7 @@ Expiry is the most useful protection at any group size: a message that no longer
 
 ## What this does not protect against
 
-- **The person running the server can change the website's code.** The code that locks and unlocks your messages is delivered by the server. A dishonest or hacked operator could ship a version that sends them your password. Integrity checks make this harder to do quietly, but they cannot stop an operator who controls the site. If that is part of your threat model, you need an app installed from a binary you have checked yourself, and this is not that. See [limitation 1](THREAT_MODEL.md#limitations).
+- **The person running the server can change the website's code.** The code that locks and unlocks your messages is delivered by the server. A dishonest or hacked operator could ship a version that sends them your password. Integrity checks make this harder to do quietly, but they cannot stop an operator who controls the site. If that is part of your threat model, you need an app installed from a binary you have checked yourself, and this is not that. See [limitation 1](THREAT_MODEL.md#1-a-malicious-operator-can-serve-malicious-javascript).
 - **A stolen database shows who is in which groups.** Names, memberships and day-level activity are not hidden. Message content is.
 - **Removal does not un-see.** See above.
 - **A stolen device, or a weak or reused password, is still a stolen account.** The locked keys are only as strong as the password that locks them.
