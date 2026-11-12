@@ -329,6 +329,16 @@ describe("a shared browser: another account's state is never this account's (#36
     }
   })
 
+  it("this account's own stale flag does not outlive the wipe of the state it was about", async () => {
+    const w = world({
+      blob: doc({ themeId: 'zine', customs: [] }),
+      local: aliceState({ [DIRTY]: '1' }),
+    })
+    await syncAtLogin(w.deps)
+    expect(w.data.get(DIRTY)).toBe('0')
+    expect(w.s.writes).toHaveLength(0) // nothing left to send: the wiped state is not a change
+  })
+
   it("another account's dirty flag is not this account's", async () => {
     const w = world({
       blob: doc({ themeId: 'bbs-revival', customs: [] }),

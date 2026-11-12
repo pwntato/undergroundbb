@@ -108,7 +108,7 @@ function getOwner(store: ThemeStore | null): string | null {
 /** True when the theme state in this browser belongs to a different account. */
 function foreignOwner(deps: ThemeSyncDeps): boolean {
   const owner = getOwner(deps.store)
-  return owner !== null && owner !== '' && owner !== deps.userId
+  return owner !== null && owner !== deps.userId
 }
 
 /**

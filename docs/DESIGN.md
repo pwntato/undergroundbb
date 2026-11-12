@@ -3517,13 +3517,21 @@ sync is not thrown away; the cost is that a theme deleted on another device retu
 until it is removed there. No blob, a blob that does not open (a keypair change that was not re-sealed, damage) or a
 damaged document: this browser's choice seeds it, so the fallback is the local theme and not the default. A blob with
 a newer `v` is left alone. After login every change is sent as it is made, last writer wins, so a removal propagates.
-A change that could not be sent (no live keys after a reload, the network, a stale epoch) sets `ubb.prefsDirty`; at
-the next login that browser's choice wins and the flag clears. Everything read from the blob goes through
+A change that could not be sent (no live keys after a reload, the network, a stale epoch) sets that account's flag
+`ubb.prefsDirty.<userId>`; at the next login that browser's choice wins and the flag clears. A change made while the
+login sync is still running sets the flag at once and is sent after it, and the merge reads this browser's state after
+its network calls, so it keeps that change. A browser can be shared: `ubb.prefsOwner` names the account whose theme
+state the browser holds. Another account logging in finds a foreign owner and the state (saved themes, choice, its own
+stale flag) is wiped and the default theme put on the page before anything is read, so one account's custom themes
+(user-written names) are never joined into, seeded into or sent as another account's blob. An unset owner is a
+browser that never synced, which is the case the join and the seeding are for. Everything read from the blob goes through
 `validateCustomTheme` again before it reaches the page.
 
 *Rotation.* The server refuses a key rotation that leaves an existing blob behind, so the rotation opens the blob with
 the old key and seals the same text under the new one. A blob that no longer opens is replaced by an empty document
-rather than blocking the rotation. Logic: `theme/preferences.ts` (document, merge), `theme/themeSync.ts` (rules),
+rather than blocking the rotation. A rotation signed when the account had no blob carries none, and its commit
+requires that none has appeared since (a PUT at the old epoch passes the epoch condition); otherwise it is refused
+with 409 `preferences_changed` and the client signs again with the new blob. Logic: `theme/preferences.ts` (document, merge), `theme/themeSync.ts` (rules),
 `lib/session/themeSyncSession.ts` (queue, session binding).
 
 **The picker (#53)** is `routes/ThemePicker.tsx`: one card per built-in theme with a sample drawn from that
