@@ -4,7 +4,7 @@ This guide walks through UndergroundBB as a member: making an account, joining o
 
 Two people appear in the screenshots, Alice and Bob, on a local test copy of the app. Your screen will match, apart from the names and the theme you pick.
 
-For why the app works the way it does, see the "How it works" section of the [README](../README.md) and [DESIGN.md](DESIGN.md).
+For why the app works the way it does, see [How it works](HOW_IT_WORKS.md).
 
 ## The one thing to know first
 
