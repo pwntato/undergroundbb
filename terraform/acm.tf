@@ -17,7 +17,7 @@ data "aws_route53_zone" "main" {
 
 # us-east-1, via main.tf's aliased provider -- CloudFront requires its
 # certificate there regardless of var.aws_region (see that provider's own
-# comment, and the README's "Deploying" section).
+# comment, and docs/SELF_HOSTING.md).
 resource "aws_acm_certificate" "main" {
   provider          = aws.use1
   domain_name       = local.domain_name

@@ -3,8 +3,8 @@
 # bucket terraform/bootstrap/ creates (#4), locked with an S3-native lock
 # file (#94) — bucket and region are supplied at init time rather than
 # hardcoded here, since the bucket name includes the AWS account id and region
-# is derived from the bootstrap's own (overridable) output. See the README's "Deploying"
-# section for the init command.
+# is derived from the bootstrap's own (overridable) output. See docs/SELF_HOSTING.md
+# for the init command.
 
 terraform {
   required_version = ">= 1.15"

@@ -1,6 +1,6 @@
 # One-time bootstrap: creates the S3 bucket that holds
 # Terraform remote state for the rest of this project (terraform/, once
-# #5-#11 land). Run once per AWS account — see the README for the command.
+# #5-#11 land). Run once per AWS account — see docs/SELF_HOSTING.md for the command.
 #
 # This module's own state is local (no backend block below): it has to exist
 # before there's anywhere remote to put it. It's small and safe to keep local
@@ -56,7 +56,7 @@ data "aws_caller_identity" "current" {}
 # the very first bootstrap of an account has nothing to import, and needs
 # var.create_new_state=true to skip them and create fresh. Every run after
 # that first one, including later runs in that same account, leaves it at
-# the default. See the README's "Deploying" section.
+# the default. See docs/SELF_HOSTING.md.
 import {
   for_each = var.create_new_state ? toset([]) : toset(["x"])
   to       = aws_s3_bucket.tf_state
