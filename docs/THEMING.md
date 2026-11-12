@@ -43,7 +43,7 @@ Written as `oklch(L C H)`: lightness `L` from 0 to 1, chroma `C` from 0 to 0.5, 
 
 ### Fonts (3)
 
-`font-sans`, `font-mono`, `font-heading`. A comma-separated list of up to ten names, 300 characters at most. Each name must be a generic family (`serif`, `sans-serif`, `monospace`, `system-ui`, `ui-serif`, `ui-sans-serif`, `ui-monospace`, `ui-rounded`) or a family on the allowlist. The allowlist is the curated list in `web/src/theme/customTheme.ts` (`CURATED_FONTS`: Arial, Helvetica, Verdana, Georgia, Menlo, Consolas, Roboto, Inter, JetBrains Mono, Impact and others) plus every family the built-in themes use. Names are matched without regard to case and written back quoted.
+`font-sans`, `font-mono`, `font-heading`. A comma-separated list of up to ten names, 300 characters at most. Each name must be a generic family (`serif`, `sans-serif`, `monospace`, `system-ui`, `ui-serif`, `ui-sans-serif`, `ui-monospace`, `ui-rounded`) or a family on the allowlist. The allowlist is the curated list in `web/src/theme/customTheme.ts` (`CURATED_FONTS`: Arial, Helvetica, Verdana, Georgia, Menlo, Consolas, Roboto, Inter, JetBrains Mono, Impact and others) plus every family the built-in themes use. Names are matched without regard to case, and an allowlisted family is written back quoted. A generic family comes back lowercase and unquoted (`SERIF` becomes `serif`), and a quoted generic such as `'serif'` is refused, so do not quote them.
 
 It is an allowlist because an installed symbol font such as Wingdings would turn every label into pictures, and no color check can see that. No web fonts load: the Content-Security-Policy has no `font-src`, so a font only shows if the reader's system has it. List fallbacks.
 
@@ -58,7 +58,7 @@ Written as a number with `px`, `rem` or `em` (a bare `0` is allowed). No negativ
 | `radius-sm`, `radius-md`, `radius-lg`, `radius-xl` | 0 to 32px |
 | `border-width` | 1 to 4px (it draws every form control's edge, so it cannot be 0) |
 | `border-width-strong` | 0 to 12px (cards and alerts) |
-| `spacing` | 0.15 to 0.375rem (the unit every `p-*`, `m-*` and `gap-*` multiplies; the built-ins use 0.25rem) |
+| `spacing` | 0.15 to 0.375rem (the unit every `p-*`, `m-*` and `gap-*` multiplies; Refined Terminal and Zine use 0.25rem, BBS Revival 0.2rem) |
 | `tracking-heading`, `tracking-body` | 0 to 0.3em (letter-spacing) |
 
 ### Border style
@@ -76,7 +76,7 @@ Written as a number with `px`, `rem` or `em` (a bare `0` is allowed). No negativ
 - `color`: `oklch(L C H)`, `oklch(L C H / alpha)` with alpha 0 to 1, or `transparent`
 - no `inset`
 
-For "no shadow" write `0 0 0 0 transparent`, never `none`. The focus ring shares one box-shadow list with these tokens, and `none` voids the whole list.
+For "no shadow" write `0 0 0 0 transparent`, not `none`. A custom theme with `none` is refused, because the focus ring shares one box-shadow list with these tokens and `none` voids the whole list.
 
 ### Heading text (3)
 
@@ -106,7 +106,7 @@ A custom theme is `{ "name", "mode", "tokens" }`:
 - `tokens`: an object of token values. Unknown tokens, unknown top-level fields and anything outside the grammar above are refused.
 - The whole JSON is at most 8192 characters (a full theme is about 2 KB).
 
-The easiest start is to open `/appearance`, press "Show this theme as JSON" on a built-in, copy it, and edit. Then paste your JSON into the box and press "Import and use". A refused theme lists every reason, not just the first.
+The easiest start is to open `/appearance`, press "Show this theme as JSON" on a built-in, copy it, and edit. Then paste your JSON into the box and press "Import and use". A refused theme lists every reason it finds in that pass. Fix those and import again: readability is checked only once every value is allowed, so a second round of reasons can appear.
 
 Each value is parsed into parts and the string given to the page is rebuilt from those parts, so what is applied is never your text. No `url()`, `calc()`, other `var()`, quote, `;`, brace or comment can get through.
 
@@ -116,7 +116,7 @@ Up to five custom themes are kept per browser.
 
 The theme you import is merged with the base for its mode, and the merged result must pass the same check the built-ins pass (`themeProblems` in `web/src/theme/themeChecks.ts`). A failing theme is refused, because unreadable text could also hide a warning or a key fingerprint.
 
-- Text pairs hold WCAG AA at 4.5:1. The list is `TEXT_PAIRS` in `themeChecks.ts`: each foreground on every fill it can land on (page, card, surface, muted, accent, secondary, and `primary` and `destructive` text on those fills).
+- Text pairs hold WCAG AA at 4.5:1. The list is `TEXT_PAIRS` in `themeChecks.ts`: each foreground on every fill it can land on (page, card, surface, muted, accent, secondary, and `primary` text on those fills, and `destructive` text on the page, card, surface, muted and accent fills; there is no `destructive` on `secondary` pair).
 - The edge of a form control, `input`, holds 3:1 on the page and on a card. The quiet `border` divider is exempt.
 - The focus ring holds 3:1 on the page and on a card, both solid and at the 50% halo the components draw.
 - The heading pair rule above.
@@ -135,15 +135,16 @@ Before login the choice is a theme id in `localStorage` under `ubb.theme`. After
 - No blob, or one that does not open: this browser's choice seeds a new blob, so you keep your look and do not fall back to the default.
 - After login every change is sent as you make it, last writer wins.
 - A change that could not be sent (network, a stale key epoch after a rotation, no live keys after a reload) is flagged, and at the next login that browser's choice wins.
+- A blob written by a newer release (a higher `v`) is left alone, and this browser keeps its own choice.
 - A theme deleted on another device can come back from a browser that still holds it, until you remove it there too, because the saved lists are joined.
 - A shared browser is safe: when a different account logs in, the previous account's themes and choice are wiped first, so custom theme names never cross accounts.
-- At logout the saved custom themes are trimmed to the one in use, so user-written names do not stay in plaintext `localStorage`. They return from the blob at the next login.
+- At logout the saved custom themes are trimmed to the one in use, so user-written names do not stay in plaintext `localStorage`. They return from the blob at the next login. Two exceptions: the trim is skipped while a change is still unsent, and saved themes marked "No longer valid" always stay.
 
 ## Contributing a built-in theme
 
 A custom theme is personal. To propose one for everyone:
 
-1. Start from an existing file in `web/src/theme/themes/` (`zine.ts` is the fullest example). A built-in must give a value for every token, with no extras.
+1. Start from an existing file in `web/src/theme/themes/` (`zine.ts` is the most heavily commented example). A built-in must give a value for every token, with no extras.
 2. Register it in `web/src/theme/themes/index.ts` (`BUILT_IN_THEMES`: `id`, `name`, `mode`, `tokens`).
 3. Add a test like the neighbors (for example `zine.test.ts`) and run the web tests. `themeProblems` is the same check described above, and the neighbors' tests also pin their character (for example, Zine's light ground).
 4. Open a pull request. Screenshots of the picker card and a busy screen help review.
