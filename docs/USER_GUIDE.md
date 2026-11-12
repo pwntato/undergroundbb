@@ -163,7 +163,7 @@ The page summarises the group (its visibility, how removal works and when messag
 
 ### Leave a group
 
-**Leave group** is at the bottom of the Members page. It asks you to confirm. If you are the last admin and others remain, make someone else an admin first.
+**Leave group** is at the bottom of the Members page. It asks you to confirm. If you are the only admin and others remain, it asks you to choose who takes over: press **Make admin and leave** next to that person.
 
 ## Direct messages
 
