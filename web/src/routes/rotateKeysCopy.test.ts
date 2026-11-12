@@ -34,6 +34,7 @@ describe('failureMessage', () => {
     { kind: 'handoffPending', groups: ['a', 'b'] },
     { kind: 'groupBusy', groups: [] },
     { kind: 'changedElsewhere' },
+    { kind: 'preferencesChanged' },
     { kind: 'rejected', message: 'bad signature.' },
     { kind: 'expired' },
     { kind: 'unreachable' },

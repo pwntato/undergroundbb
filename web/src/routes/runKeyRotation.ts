@@ -145,6 +145,11 @@ export type KeyRotationFailure =
   | { readonly kind: 'groupBusy'; readonly groups: readonly string[] }
   /** The account's keys or credentials changed under this flow (another tab, a password change). */
   | { readonly kind: 'changedElsewhere' }
+  /**
+   * A preferences blob was written after this request was signed (#366), so its re-seal is stale.
+   * Nothing committed; choosing the password again signs with the current blob.
+   */
+  | { readonly kind: 'preferencesChanged' }
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
   /**
@@ -320,6 +325,7 @@ function classify(err: unknown): KeyRotationFailure {
     if (err.status === 429 && err.code === 'rotation_cooldown') return { kind: 'cooldown' }
     if (err.status === 409) {
       if (err.code === 'handoff_pending') return { kind: 'handoffPending', groups: [] }
+      if (err.code === 'preferences_changed') return { kind: 'preferencesChanged' }
       return { kind: 'changedElsewhere' }
     }
     if (err.status < 500) return { kind: 'rejected', message: err.message }

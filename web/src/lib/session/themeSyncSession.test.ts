@@ -60,7 +60,26 @@ describe('theme sync for the session', () => {
     notifyThemeChanged()
     await flush()
     expect(putPreferences).not.toHaveBeenCalled()
-    expect(window.localStorage.getItem('ubb.prefsDirty')).toBe('1')
+    expect(window.localStorage.getItem('ubb.prefsDirty.user-1')).toBe('1')
+  })
+
+  it('a change made while the login sync runs is flagged at once and sent only after it, never beside it', async () => {
+    let releaseRead: (v: { keyEpoch: number }) => void = () => undefined
+    getPreferences
+      .mockReset()
+      .mockImplementationOnce(() => new Promise((r) => (releaseRead = r as typeof releaseRead)))
+    getPreferences.mockResolvedValue({ keyEpoch: 4 })
+    const login = startThemeSync('user-1')
+    await flush()
+    notifyThemeChanged()
+    await flush()
+    expect(window.localStorage.getItem('ubb.prefsDirty.user-1')).toBe('1')
+    expect(putPreferences).not.toHaveBeenCalled() // the change waits for the login sync
+    releaseRead({ keyEpoch: 4 })
+    await login
+    await flush()
+    expect(putPreferences.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(window.localStorage.getItem('ubb.prefsDirty.user-1')).toBe('0')
   })
 
   it('after login a change seals for the signed-in account and names the key epoch', async () => {

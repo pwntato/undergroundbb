@@ -42,6 +42,8 @@ export function failureMessage(
       return `Another admin's key change is still under way in ${groupList(failure.groups, labelFor)}. Wait for it to finish, then try again.`
     case 'changedElsewhere':
       return 'Your account changed while this was in progress, for example in another tab or by a password change. Nothing was rotated. Reload this page and try again.'
+    case 'preferencesChanged':
+      return 'Your look was changed while this was in progress, so the attempt was stopped. Nothing was rotated. Choose your new password again.'
     case 'rejected':
       return `The server refused the rotation: ${failure.message} Nothing was rotated.`
     case 'expired':

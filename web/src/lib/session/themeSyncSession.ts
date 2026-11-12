@@ -5,15 +5,24 @@
 import { getPreferences, putPreferences } from '@/lib/api/preferences'
 import { openPreferencesBlob, sealPreferencesText } from '@/lib/crypto/worker-client'
 import { browserStore } from '@/theme/applyTheme'
-import { pushLocal, syncAtLogin, type SyncOutcome, type ThemeSyncDeps } from '@/theme/themeSync'
+import {
+  markPrefsDirty,
+  pushLocal,
+  syncAtLogin,
+  type SyncOutcome,
+  type ThemeSyncDeps,
+} from '@/theme/themeSync'
 
 let userId: string | null = null
+/** The login sync while it runs: a change made meanwhile must neither lose to it nor race its send. */
+let loginSync: Promise<unknown> | null = null
 let sending = false
 let again = false
 const listeners = new Set<() => void>()
 
 function depsFor(id: string): ThemeSyncDeps {
   return {
+    userId: id,
     target: document.documentElement,
     store: browserStore(),
     read: getPreferences,
@@ -42,7 +51,14 @@ export function attachThemeSync(id: string): void {
 /** After login, with the worker's keys live: let the blob and this browser settle on one choice. */
 export async function startThemeSync(id: string): Promise<SyncOutcome> {
   userId = id
-  const outcome = await syncAtLogin(depsFor(id))
+  const running = syncAtLogin(depsFor(id))
+  loginSync = running
+  let outcome: SyncOutcome
+  try {
+    outcome = await running
+  } finally {
+    if (loginSync === running) loginSync = null
+  }
   if (userId === id && (outcome === 'applied' || outcome === 'pushed')) {
     for (const l of listeners) l()
   }
@@ -57,6 +73,8 @@ export function stopThemeSync(): void {
 /** The page's theme or custom themes changed here: send the new state. Changes made in a burst are coalesced. */
 export function notifyThemeChanged(): void {
   if (userId === null) return
+  // Mid login sync: flag the change now so the merge keeps it; it is sent once the sync is done.
+  if (loginSync !== null) markPrefsDirty(browserStore(), userId)
   if (sending) {
     again = true
     return
@@ -66,6 +84,8 @@ export function notifyThemeChanged(): void {
     try {
       do {
         again = false
+        // Never race the login sync's own send: wait for it, then send what it left.
+        if (loginSync !== null) await loginSync.catch(() => undefined)
         const id = userId
         if (id === null) return
         await pushLocal(depsFor(id))

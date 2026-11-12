@@ -256,6 +256,27 @@ describe('runKeyRotation', () => {
     expect(vi.mocked(deps.rotateKeys).mock.calls[0]?.[0].preferencesBlob).toEqual(resealed)
   })
 
+  it('after a preferences_changed refusal the next try reads the blob again and signs again (#366)', async () => {
+    const written = { nonce: 'bmV3bm9uY2U=', ciphertext: 'bmV3Y2lwaGVy' }
+    const deps = makeDeps({
+      getPreferences: vi
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockResolvedValue({ preferencesBlob: written }),
+      rotateKeys: vi
+        .fn()
+        .mockRejectedValueOnce(new ApiError(409, 'prefs', 'preferences_changed'))
+        .mockResolvedValue({ keyEpoch: 3, credentialVersion: 5 }),
+    })
+    const attempt: KeyRotationAttempt = {}
+    const first = await run(deps, attempt)
+    expect(first.result).toMatchObject({ ok: false, failure: { kind: 'preferencesChanged' } })
+    const second = await run(deps, attempt)
+    expect(second.result.ok).toBe(true)
+    expect(deps.signKeyRotation).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(deps.signKeyRotation).mock.calls[1]?.[0].preferencesBlob).toEqual(written)
+  })
+
   it('sends no preferences blob when the account has none', async () => {
     const deps = makeDeps({})
     await run(deps)
@@ -491,6 +512,11 @@ describe('runKeyRotation', () => {
     ],
     ['stale keys', new ApiError(409, 'stale', 'key_epoch_stale'), { kind: 'changedElsewhere' }],
     ['changed credentials', new ApiError(409, 'changed'), { kind: 'changedElsewhere' }],
+    [
+      'a preferences blob written after signing',
+      new ApiError(409, 'prefs', 'preferences_changed'),
+      { kind: 'preferencesChanged' },
+    ],
     [
       'a refusal',
       new ApiError(400, 'bad signature'),
