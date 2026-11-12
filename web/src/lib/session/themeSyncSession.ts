@@ -9,6 +9,7 @@ import {
   markPrefsDirty,
   pushLocal,
   syncAtLogin,
+  trimThemeStateAtLogout,
   type SyncOutcome,
   type ThemeSyncDeps,
 } from '@/theme/themeSync'
@@ -67,7 +68,10 @@ export async function startThemeSync(id: string): Promise<SyncOutcome> {
 
 /** Logout (or a lost session): later changes stay in this browser only. */
 export function stopThemeSync(): void {
+  const was = userId
   userId = null
+  // Only a real logout (a session that was attached): the first render has no user and must not trim.
+  if (was !== null) trimThemeStateAtLogout(browserStore(), was)
 }
 
 /** The page's theme or custom themes changed here: send the new state. Changes made in a burst are coalesced. */

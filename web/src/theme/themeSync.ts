@@ -209,6 +209,25 @@ export async function syncAtLogin(deps: ThemeSyncDeps): Promise<SyncOutcome> {
   }
 }
 
+/**
+ * At logout: the saved custom themes were opened from the blob (user-written names) and the public
+ * /appearance page lists them, so keep only the one in use (the look survives logout; the choice is the
+ * pre-login source) and drop the rest. They are in the blob and come back at the next login. Skipped when
+ * the state is not this account's, or when it has a change the blob does not hold yet (those themes would
+ * be lost). Saved entries that no longer validate are the person's own work, never synced, and stay.
+ */
+export function trimThemeStateAtLogout(store: ThemeStore | null, userId: string): void {
+  try {
+    if (store === null || store.getItem(PREFS_OWNER_KEY) !== userId) return
+    if (getFlag(store, userId)) return
+    const keep = localPreferences(store)
+    const used = keep.customs.filter((t) => t.id === keep.themeId)
+    if (used.length !== keep.customs.length) replaceCustomThemes(used, store)
+  } catch {
+    // Best effort: blocked storage holds nothing to trim.
+  }
+}
+
 /** Send this browser's current choice after a change. Never throws; a failure flags it for next login. */
 export async function pushLocal(deps: ThemeSyncDeps): Promise<SyncOutcome> {
   // State that belongs to another account is never sent as this one's.

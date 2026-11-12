@@ -15,6 +15,7 @@ import {
   localPreferences,
   pushLocal,
   syncAtLogin,
+  trimThemeStateAtLogout,
   type ThemeSyncDeps,
   type WireBlob,
 } from './themeSync'
@@ -368,5 +369,78 @@ describe('a change made while the login sync is still running (#366 review)', ()
     await syncAtLogin(deps)
     expect(w.data.get(THEME_STORAGE_KEY)).toBe('refined-terminal')
     expect(JSON.parse(w.s.blob!)).toMatchObject({ theme: 'refined-terminal' })
+  })
+})
+
+describe('what stays in this browser after logout (#366 review round 2)', () => {
+  const mine = make('Mine')
+  const other = make('Other One')
+  const state = (extra: Record<string, string> = {}) => ({
+    [PREFS_OWNER_KEY]: ME,
+    [THEME_STORAGE_KEY]: mine.id,
+    [CUSTOM_THEMES_KEY]: JSON.stringify([mine, other].map((t) => JSON.parse(exportJson(t)))),
+    ...extra,
+  })
+  const names = (w: ReturnType<typeof world>) => loadCustomThemes(w.deps.store).map((t) => t.name)
+
+  it('keeps the theme in use and drops the other saved names', () => {
+    const w = world({ local: state() })
+    trimThemeStateAtLogout(w.deps.store, ME)
+    expect(names(w)).toEqual(['Mine'])
+    expect(w.data.get(THEME_STORAGE_KEY)).toBe(mine.id)
+  })
+
+  it('drops every saved theme when a built-in is the one in use', () => {
+    const w = world({ local: state({ [THEME_STORAGE_KEY]: 'zine' }) })
+    trimThemeStateAtLogout(w.deps.store, ME)
+    expect(names(w)).toEqual([])
+    expect(w.data.get(THEME_STORAGE_KEY)).toBe('zine')
+  })
+
+  it('keeps everything while a change has not reached the blob (they would be lost)', () => {
+    const w = world({ local: state({ [DIRTY]: '1' }) })
+    trimThemeStateAtLogout(w.deps.store, ME)
+    expect(names(w)).toEqual(['Mine', 'Other One'])
+  })
+
+  it("leaves state that is not this account's, and a browser that never synced, alone", () => {
+    for (const owner of [{ [PREFS_OWNER_KEY]: 'user-alice' }, { [PREFS_OWNER_KEY]: '' }]) {
+      const w = world({ local: state(owner) })
+      trimThemeStateAtLogout(w.deps.store, ME)
+      expect(names(w)).toEqual(['Mine', 'Other One'])
+    }
+    const w = world({ local: { [CUSTOM_THEMES_KEY]: state()[CUSTOM_THEMES_KEY] } })
+    trimThemeStateAtLogout(w.deps.store, ME)
+    expect(names(w)).toEqual(['Mine', 'Other One'])
+  })
+
+  it("keeps a saved entry that no longer validates: it was never synced and is the person's to fix", () => {
+    const stale = { name: 'Old', mode: 'dark', tokens: { primary: 'not a colour' } }
+    const w = world({
+      local: state({
+        [CUSTOM_THEMES_KEY]: JSON.stringify([
+          JSON.parse(exportJson(mine)),
+          stale,
+          JSON.parse(exportJson(other)),
+        ]),
+      }),
+    })
+    trimThemeStateAtLogout(w.deps.store, ME)
+    expect(names(w)).toEqual(['Mine'])
+    expect(readSavedThemes(w.deps.store).invalid.map((i) => i.name)).toEqual(['Old'])
+  })
+
+  it('does not throw when storage does', () => {
+    const w = world({ local: state() })
+    const broken = {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => {
+        throw new Error('blocked')
+      },
+    }
+    expect(() => trimThemeStateAtLogout(broken, ME)).not.toThrow()
+    expect(w.data.size).toBeGreaterThan(0)
   })
 })

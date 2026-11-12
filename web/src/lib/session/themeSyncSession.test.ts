@@ -1,3 +1,4 @@
+import { customThemeId } from '@/theme/customTheme'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getPreferences = vi.fn()
@@ -42,6 +43,20 @@ afterEach(() => {
 })
 
 describe('theme sync for the session', () => {
+  it('logout trims the saved themes to the one in use, and the first render (no user yet) trims nothing', async () => {
+    const store = window.localStorage
+    const mk = (name: string) => ({ name, mode: 'dark', tokens: {} })
+    store.setItem('ubb.customThemes', JSON.stringify([mk('Mine'), mk('Other One')]))
+    store.setItem('ubb.theme', customThemeId('Mine'))
+    stopThemeSync() // no one was signed in
+    expect(JSON.parse(store.getItem('ubb.customThemes')!)).toHaveLength(2)
+    await startThemeSync('user-1')
+    stopThemeSync() // a real logout
+    expect(
+      JSON.parse(store.getItem('ubb.customThemes')!).map((t: { name: string }) => t.name),
+    ).toEqual(['Mine'])
+  })
+
   it('sends nothing before login or after logout', async () => {
     notifyThemeChanged()
     await flush()
