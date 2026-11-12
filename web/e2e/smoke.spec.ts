@@ -44,14 +44,14 @@ test('the API rejects an unauthenticated user lookup', async ({ request }) => {
 test('signs up and lands signed in', async () => {
   await signUp(page, user)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Create a group' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('link', { name: 'Create a group' })).toBeVisible()
 })
 
 test('creates a group and lists it', async () => {
-  await page.getByRole('link', { name: 'Create a group' }).click()
+  await page.getByRole('main').getByRole('link', { name: 'Create a group' }).click()
   await page.getByLabel('Name').fill(groupName)
   await page.getByRole('button', { name: 'Create group' }).click()
-  await expect(page.getByText(groupName)).toBeVisible()
+  await expect(page.getByRole('main').getByText(groupName)).toBeVisible()
 })
 
 test('the members page asks users:batch for the roster and gets real usernames back', async () => {
@@ -96,7 +96,7 @@ test('the inviter logs in again and the new member is on the roster', async () =
   await logIn(page, user)
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible()
   // The session ended and login restored the group, with the admin role.
-  await expect(page.getByText(groupName)).toBeVisible()
+  await expect(page.getByRole('main').getByText(groupName)).toBeVisible()
   await expect(page.getByText('admin', { exact: true })).toBeVisible()
   // Login completes pending invites in the background, so the invitee can show up a moment after
   // Home does. Reopen the roster (in-app, so the keys stay warm) until they are on it.
@@ -115,6 +115,6 @@ test('the invitee sees the group after logging in', async () => {
   await logOut(inviteePage)
   await logIn(inviteePage, invitee)
   await expect(inviteePage.getByRole('button', { name: 'Log out' })).toBeVisible()
-  await expect(inviteePage.getByText(groupName)).toBeVisible()
+  await expect(inviteePage.getByRole('main').getByText(groupName)).toBeVisible()
   await expect(inviteePage.getByText('member', { exact: true })).toBeVisible()
 })

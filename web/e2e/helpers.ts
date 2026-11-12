@@ -32,7 +32,9 @@ export async function signUp(page: Page, user: TestUser): Promise<string> {
 
   await page.getByLabel("I've saved this recovery code somewhere safe.").check()
   await page.getByRole('button', { name: 'Continue' }).click()
-  await page.getByRole('button', { name: 'Skip for now' }).click()
+  // The last step is the theme picker (#53); Continue keeps the default look.
+  await expect(page.getByRole('heading', { name: 'Pick a look' })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue' }).click()
   return recoveryCode
 }
 
