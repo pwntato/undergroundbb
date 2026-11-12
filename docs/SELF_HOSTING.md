@@ -20,6 +20,8 @@ There is also a **cost guard** that switches the API off if spend spikes. Its mo
 
 ## Deploying, step by step
 
+Each command block starts by going to the right directory, so you can run them from anywhere inside your clone.
+
 ### 1. Fork, then change the four things that are hard-coded to this project
 
 Clone your fork. These values name the original project and have to be yours:
@@ -58,7 +60,7 @@ Skip this step if the provider is already there. Creating a second one fails.
 ### 3. Bootstrap the Terraform state bucket (once per account)
 
 ```sh
-cd terraform/bootstrap
+cd "$(git rev-parse --show-toplevel)/terraform/bootstrap"
 terraform init
 terraform apply -var create_new_state=true
 terraform output -raw state_bucket
@@ -69,6 +71,7 @@ This creates an encrypted, versioned, private S3 bucket named `undergroundbb-tfs
 ### 4. Build the Lambda zips
 
 ```sh
+cd "$(git rev-parse --show-toplevel)"
 ./scripts/build-lambda-zips.sh
 ```
 
@@ -79,7 +82,7 @@ Terraform reads `lambda.zip`, `purge.zip` and `costguard.zip` from the repositor
 The deploy role that CI uses is created by this same Terraform, so the first apply cannot come from CI.
 
 ```sh
-cd terraform
+cd "$(git rev-parse --show-toplevel)/terraform"
 STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket)
 STATE_REGION=$(terraform -chdir=bootstrap output -raw aws_region)
 terraform init \
@@ -101,7 +104,7 @@ When it finishes, `terraform output` gives you what step 6 needs (`deploy_role_a
 
 ### 6. Connect GitHub Actions
 
-In your fork, open Settings, Environments, and create an environment named **`production`**. The name is not cosmetic: the deploy role only accepts a token issued to a job running under an environment with exactly that name.
+In your fork, open Settings, Environments, and create an environment named **`production`** (or open it, if an earlier deploy run already created it: GitHub creates an environment on its own when a job names one that does not exist). The name is not cosmetic: the deploy role only accepts a token issued to a job running under an environment with exactly that name.
 
 | Kind | Name | Value |
 | --- | --- | --- |
@@ -113,11 +116,12 @@ In your fork, open Settings, Environments, and create an environment named **`pr
 
 ### 7. Put the site live
 
-The first apply made the infrastructure, but the web app itself is built and uploaded by the deploy workflow. Enable Actions on your fork first (GitHub leaves them off on a new fork: open the Actions tab and turn them on). Pushing to `main` starts the `deploy` workflow, so any push you made before step 6 ran a deploy that failed at the credentials step because `AWS_DEPLOY_ROLE_ARN` was still empty. That is expected. Now push any commit to `main`, or re-run the failed run from the Actions tab. The workflow builds the Lambdas, applies Terraform, builds the site, uploads it to S3 and invalidates CloudFront.
+The first apply made the infrastructure, but the web app itself is built and uploaded by the deploy workflow. GitHub leaves Actions off on a new fork, so open the Actions tab and turn them on first. Pushing to `main` starts the `deploy` workflow. If you had already enabled Actions, any push before step 6 ran a deploy that failed at the credentials step because `AWS_DEPLOY_ROLE_ARN` was still empty. That is expected. Now push any commit to `main`, or re-run the failed run from the Actions tab. The workflow builds the Lambdas, applies Terraform, builds the site, uploads it to S3 and invalidates CloudFront.
 
 If you would rather do it by hand, the same steps are:
 
 ```sh
+cd "$(git rev-parse --show-toplevel)"
 cd web && npm ci && npm run build && cd ..
 BUCKET=$(terraform -chdir=terraform output -raw frontend_bucket_name)
 DIST=$(terraform -chdir=terraform output -raw cloudfront_distribution_id)
