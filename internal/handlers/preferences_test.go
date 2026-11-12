@@ -159,3 +159,42 @@ func TestPutPreferencesDeletedAccountAfterARotation(t *testing.T) {
 		t.Errorf("put on a deleted, rotated account = %d, want 404", rec.Code)
 	}
 }
+
+func TestRotateKeysRefusesWhenABlobAppearsAfterItWasRead(t *testing.T) {
+	// The handler read an account with no blob, so the rotation carries none; a PUT at the old
+	// epoch lands before the commit. Committing would leave a blob sealed under the replaced key.
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	rot := signedRotation(t, user, rotateOpts{})
+	fired := false
+	h.db.SetBeforeRotateCommitHook(func() {
+		fired = true
+		if rec := putPrefs(t, h, cookie, 0, wrappedBlob{Nonce: b64(12), Ciphertext: b64(40)}); rec.Code != http.StatusNoContent {
+			t.Errorf("interleaved put = %d", rec.Code)
+		}
+	})
+	rec := doRotateKeys(t, h, cookie, rot.req)
+	if !fired {
+		t.Fatal("the hook never ran")
+	}
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "preferences_changed") {
+		t.Fatalf("rotate = %d %s, want 409 preferences_changed", rec.Code, rec.Body.String())
+	}
+	if got := getPrefs(t, h, cookie); got.KeyEpoch != 0 || got.PreferencesBlob == nil {
+		t.Errorf("after the refusal: %+v, want epoch 0 and the written blob", got)
+	}
+	// Signing again with the blob re-sealed goes through.
+	h.db.SetBeforeRotateCommitHook(nil)
+	blob := &wrappedBlob{Nonce: b64(12), Ciphertext: b64(40)}
+	if rec := doRotateKeys(t, h, cookie, signedRotation(t, user, rotateOpts{prefs: blob}).req); rec.Code != http.StatusOK {
+		t.Fatalf("second attempt = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRotateKeysWithNoBlobAtAllStillCommits(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user, cookie := loggedInUser(t, h)
+	if rec := doRotateKeys(t, h, cookie, signedRotation(t, user, rotateOpts{}).req); rec.Code != http.StatusOK {
+		t.Fatalf("rotate = %d %s", rec.Code, rec.Body.String())
+	}
+}

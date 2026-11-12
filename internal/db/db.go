@@ -21,7 +21,16 @@ import (
 type Client struct {
 	ddb   *dynamodb.Client
 	table string
+
+	// beforeRotateCommit, when set, runs just before RotateKeys sends its
+	// transaction: the gap a concurrent write can land in. Tests only.
+	beforeRotateCommit func()
 }
+
+// SetBeforeRotateCommitHook installs fn to run just before RotateKeys commits,
+// so a test can interleave a write between the handler's read and the
+// transaction. It exists for tests; production code never sets it.
+func (c *Client) SetBeforeRotateCommitHook(fn func()) { c.beforeRotateCommit = fn }
 
 // New builds a Client for the given table. endpoint overrides the AWS endpoint
 // for local development against DynamoDB Local; pass "" to use the real

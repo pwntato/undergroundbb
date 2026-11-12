@@ -58,6 +58,11 @@ var (
 	// ErrHandoffAccountChanged: the account's wrapping key is no longer the one
 	// the handler compared the row against (a rotation committed in between).
 	ErrHandoffAccountChanged = errors.New("db: the account's keys changed")
+	// ErrPreferencesChanged: the rotation carried no preferences blob because
+	// the handler saw none, but one was written before the commit. Committing
+	// would leave a blob sealed under the replaced key, so nothing was written;
+	// the client signs again with the new blob.
+	ErrPreferencesChanged = errors.New("db: the preferences blob changed during the rotation")
 )
 
 // GroupCurrentGeneration returns the generation a group's key is at now: one
@@ -546,6 +551,10 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 		}
 		extras.set += ", PreferencesBlob = :prefs"
 		extras.values[":prefs"] = prefs
+	} else {
+		// No blob was re-sealed because none was seen: refuse if one has been
+		// written since (a PUT at the old epoch passes the epoch condition).
+		extras.condition += " AND attribute_not_exists(PreferencesBlob)"
 	}
 
 	profileUpdate, recoveryUpdate, err := c.credentialUpdates(in.Credentials, extras)
@@ -609,6 +618,9 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 		},
 	}})
 
+	if c.beforeRotateCommit != nil {
+		c.beforeRotateCommit()
+	}
 	_, err = c.ddb.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
 		return nil
@@ -635,6 +647,8 @@ func (c *Client) RotateKeys(ctx context.Context, in RotateKeysInput) error {
 			!bytes.Equal(user.SigningPublicKey, in.OldSigningPublicKey),
 			!bytes.Equal(user.WrappingPublicKey, in.OldWrappingPublicKey):
 			return ErrKeyEpochStale
+		case in.PreferencesBlob == nil && user.PreferencesBlob != nil:
+			return ErrPreferencesChanged
 		}
 		return ErrCredentialVersionStale
 	}
