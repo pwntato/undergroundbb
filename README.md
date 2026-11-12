@@ -427,8 +427,7 @@ fail at signup with "Could not create your account"; wait for the window to clea
 ## Contributing
 
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one
-touches no application logic. A theming guide is tracked in
-[issue #80](https://github.com/pwntato/undergroundbb/issues/80).
+touches no application logic. The [theming guide](docs/THEMING.md) covers the tokens and how to write one.
 
 All changes go through a pull request with passing CI.
 
