@@ -157,7 +157,7 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	var prefs *models.WrappedBlob
 	if req.PreferencesBlob != nil {
-		blob, err := decodeWrappedBlob(*req.PreferencesBlob)
+		blob, err := decodePreferencesBlob(*req.PreferencesBlob)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, "preferencesBlob: "+err.Error())
 			return
@@ -302,6 +302,9 @@ func (h *Handler) rotateKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, db.ErrHandoffChanged):
 		WriteErrorWithCode(w, http.StatusConflict, "your handoffs changed while the rotation was being checked; try again", "handoff_changed")
+		return
+	case errors.Is(err, db.ErrPreferencesChanged):
+		WriteErrorWithCode(w, http.StatusConflict, "your preferences changed while the rotation was being checked; sign again", "preferences_changed")
 		return
 	case errors.Is(err, db.ErrUserNotFound):
 		WriteError(w, http.StatusNotFound, "account not found")

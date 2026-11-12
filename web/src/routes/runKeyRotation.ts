@@ -104,8 +104,18 @@ export interface KeyRotationDeps extends PendingHandoffDeps {
     generation: number
   }) => Promise<HandoffWrap>
   readonly putHandoff: (groupId: string, req: PutHandoffRequest) => Promise<void>
+  /** The account's sealed preferences, to re-seal under the new key (#366). */
+  readonly getPreferences: () => Promise<{
+    preferencesBlob?: { nonce: string; ciphertext: string }
+  }>
   readonly signKeyRotation: (
-    req: { userId: string; newPassword: string; expectedKeyEpoch: number; roster: string[] },
+    req: {
+      userId: string
+      newPassword: string
+      expectedKeyEpoch: number
+      roster: string[]
+      preferencesBlob?: { nonce: string; ciphertext: string }
+    },
     onProgress: (event: SignupProgressEvent) => void,
   ) => Promise<SignedKeyRotation>
   readonly rotateKeys: (req: RotateKeysRequest) => Promise<RotateKeysResponse>
@@ -135,6 +145,11 @@ export type KeyRotationFailure =
   | { readonly kind: 'groupBusy'; readonly groups: readonly string[] }
   /** The account's keys or credentials changed under this flow (another tab, a password change). */
   | { readonly kind: 'changedElsewhere' }
+  /**
+   * A preferences blob was written after this request was signed (#366), so its re-seal is stale.
+   * Nothing committed; choosing the password again signs with the current blob.
+   */
+  | { readonly kind: 'preferencesChanged' }
   /** The server refused the request. Nothing committed. */
   | { readonly kind: 'rejected'; readonly message: string }
   /**
@@ -310,6 +325,7 @@ function classify(err: unknown): KeyRotationFailure {
     if (err.status === 429 && err.code === 'rotation_cooldown') return { kind: 'cooldown' }
     if (err.status === 409) {
       if (err.code === 'handoff_pending') return { kind: 'handoffPending', groups: [] }
+      if (err.code === 'preferences_changed') return { kind: 'preferencesChanged' }
       return { kind: 'changedElsewhere' }
     }
     if (err.status < 500) return { kind: 'rejected', message: err.message }
@@ -507,13 +523,18 @@ async function prepare(
 
   // Sign, once per attempt.
   hooks.onStep({ name: 'signing' })
-  const [pins, verifications] = await Promise.all([deps.listAllPins(), deps.listAllVerifications()])
+  const [pins, verifications, prefs] = await Promise.all([
+    deps.listAllPins(),
+    deps.listAllVerifications(),
+    deps.getPreferences(),
+  ])
   const signed = await deps.signKeyRotation(
     {
       userId,
       newPassword,
       expectedKeyEpoch: pre.keyEpoch,
       roster: rosterOf(pins, verifications),
+      ...(prefs.preferencesBlob === undefined ? {} : { preferencesBlob: prefs.preferencesBlob }),
     },
     hooks.onProgress,
   )
@@ -527,6 +548,7 @@ async function prepare(
     roster: signed.roster,
     oldSignature: signed.oldSignature,
     newSignature: signed.newSignature,
+    ...(signed.preferencesBlob === undefined ? {} : { preferencesBlob: signed.preferencesBlob }),
     salt: signed.credentials.salt,
     argon2Params: signed.credentials.argon2Params,
     wrappedPrivateKeys: signed.credentials.wrappedPrivateKeys,

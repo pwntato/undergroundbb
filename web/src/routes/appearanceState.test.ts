@@ -160,3 +160,37 @@ describe('saved themes that no longer pass, and replacing', () => {
     expect(runRemove(second, second.currentId, e).notice).toBeNull()
   })
 })
+
+describe('telling the sync about a change (#366)', () => {
+  function counted() {
+    const { e, data } = env()
+    let calls = 0
+    const withHook: AppearanceEnv = {
+      ...e,
+      onChange: () => {
+        calls += 1
+      },
+    }
+    return { e: withHook, data, calls: () => calls }
+  }
+
+  it('a card press, an import and a removal each report one change', () => {
+    const { e, calls } = counted()
+    let s = runSelect(initialAppearance(e), 'zine', e)
+    expect(calls()).toBe(1)
+    s = runImport(typeImport(s, GOOD), e)
+    expect(calls()).toBe(2)
+    runRemove(s, s.customs[0]!.id, e)
+    expect(calls()).toBe(3)
+  })
+
+  it('a refused import, an unknown card and a discard report nothing', () => {
+    const { e, calls } = counted()
+    const s = initialAppearance(e)
+    runSelect(s, 'no-such-theme', e)
+    runImport(typeImport(s, '{"name":"x"}'), e)
+    runDiscard(s, 'invalid-0', e)
+    runExport(s)
+    expect(calls()).toBe(0)
+  })
+})

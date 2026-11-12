@@ -104,6 +104,8 @@ export interface RotateKeysRequest {
   readonly roster: readonly string[]
   readonly oldSignature: string
   readonly newSignature: string
+  /** The preferences blob re-sealed under the new key (#366); sent when the account has one. */
+  readonly preferencesBlob?: WireWrappedBlob
 
   readonly salt: string
   readonly argon2Params: WireArgon2Params

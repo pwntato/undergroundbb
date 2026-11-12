@@ -1161,12 +1161,46 @@ export interface SignKeyRotationRequest {
   readonly expectedKeyEpoch: number
   /** Base64 RosterEntryID of each PIN# and VERIFIED# row. */
   readonly roster: readonly string[]
+  /** The account's current preferences blob, if any; the result carries it re-sealed under the new key. */
+  readonly preferencesBlob?: { nonce: string; ciphertext: string }
 }
 
 export interface SignKeyRotationResponse {
   readonly kind: 'signKeyRotationDone'
   readonly id: string
   readonly result: SignedKeyRotation
+}
+
+/**
+ * Seals the preferences text (#366) under the key derived from the live X25519 private key, and the
+ * reverse. The text is the caller's JSON; the worker neither reads nor trusts it. Same userId/liveKeys
+ * guards as the other ops. An open that does not authenticate answers null, not an error.
+ */
+export interface SealPreferencesRequest {
+  readonly kind: 'sealPreferences'
+  readonly id: string
+  readonly userId: string
+  readonly text: string
+}
+
+export interface SealPreferencesResponse {
+  readonly kind: 'sealPreferencesDone'
+  readonly id: string
+  readonly blob: { nonce: string; ciphertext: string }
+}
+
+export interface OpenPreferencesRequest {
+  readonly kind: 'openPreferences'
+  readonly id: string
+  readonly userId: string
+  readonly blob: { nonce: string; ciphertext: string }
+}
+
+export interface OpenPreferencesResponse {
+  readonly kind: 'openPreferencesDone'
+  readonly id: string
+  /** The sealed text, or null if the blob does not open under this account's key. */
+  readonly text: string | null
 }
 
 /** The server accepted the rotation: the new keys become the live keys. */
@@ -1257,6 +1291,8 @@ export type WorkerRequest =
   | BeginKeyRotationRequest
   | WrapHandoffRequest
   | SignKeyRotationRequest
+  | SealPreferencesRequest
+  | OpenPreferencesRequest
   | CommitKeyRotationRequest
   | DiscardKeyRotationRequest
   | ClearLiveKeysRequest
@@ -1266,6 +1302,8 @@ export type WorkerResponse =
   | GenerateSignupMaterialResponse
   | CompleteLoginResponse
   | CompleteRecoveryResponse
+  | SealPreferencesResponse
+  | OpenPreferencesResponse
   | CompleteChangePasswordResponse
   | SignGroupCreationResponse
   | SignRoleGrantResponse

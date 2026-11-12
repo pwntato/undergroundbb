@@ -11,12 +11,20 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
   return {
     ...actual,
+    // The screen subscribes to login syncs in an effect (#366); there is no render here to run it.
+    useEffect: () => undefined,
     useState: (init: unknown) => [
       typeof init === 'function' ? (init as () => unknown)() : init,
       setState,
     ],
   }
 })
+
+const notifyThemeChanged = vi.fn()
+vi.mock('@/lib/session/themeSyncSession', () => ({
+  notifyThemeChanged: () => notifyThemeChanged(),
+  onThemeSynced: () => () => undefined,
+}))
 
 const { AppearanceScreen } = await import('./AppearanceScreen')
 const { ThemePickerStep } = await import('./ThemePickerStep')
@@ -46,7 +54,10 @@ function standInPage(initialId: string | null): Page {
   return { attrs, stored }
 }
 
-beforeEach(() => setState.mockClear())
+beforeEach(() => {
+  setState.mockClear()
+  notifyThemeChanged.mockClear()
+})
 afterEach(() => vi.unstubAllGlobals())
 
 type Props = { currentId: string; onSelect: (id: string) => void; onDone?: () => void }
@@ -78,6 +89,14 @@ describe('AppearanceScreen wiring', () => {
     expect(page.attrs.get('data-theme')).toBe('light')
     expect(page.attrs.get(THEME_ID_ATTRIBUTE)).toBe('zine')
     expect(page.stored.get(THEME_STORAGE_KEY)).toBe('zine')
+  })
+
+  it('a card press sends the change on to the encrypted preferences (#366)', () => {
+    standInPage(null)
+    const props = appearanceProps(AppearanceScreen())
+    props.onSelect('zine')
+    nextState(props.state)
+    expect(notifyThemeChanged).toHaveBeenCalled()
   })
 
   it('an unknown id changes nothing and keeps the current id', () => {
@@ -140,6 +159,15 @@ describe('ThemePickerStep wiring', () => {
     expect(page.attrs.get(THEME_ID_ATTRIBUTE)).toBe('bbs-revival')
     expect(page.stored.get(THEME_STORAGE_KEY)).toBe('bbs-revival')
     expect(setState).toHaveBeenCalledExactlyOnceWith('bbs-revival')
+  })
+
+  it('a card press sends the change on, and pressing the card already showing does not (#366)', () => {
+    standInPage('bbs-revival')
+    const props = propsOf(ThemePickerStep({ onDone: () => undefined }))
+    props.onSelect('bbs-revival')
+    expect(notifyThemeChanged).not.toHaveBeenCalled()
+    props.onSelect('zine')
+    expect(notifyThemeChanged).toHaveBeenCalledOnce()
   })
 
   it("hands the caller's onDone to the Continue button, so the signup step can finish", () => {

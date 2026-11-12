@@ -26,6 +26,7 @@ import * as ed25519 from './ed25519.js'
 import { encodeKeyBundle } from './keybundle.js'
 import { handoffWrapAAD, keyRotationPayload, rosterDigest } from './key-rotation.js'
 import type { RecoveryMaterial } from './worker-protocol.js'
+import { resealPreferences, type WirePreferencesBlob } from './preferences.js'
 import { generateWrappingKey, wrap, type Wrapped, type WrappingKey } from './x25519.js'
 
 /** The new keypairs of a rotation that has begun and not yet committed. */
@@ -101,6 +102,12 @@ export interface SignKeyRotationRequest {
   readonly expectedKeyEpoch: number
   /** Base64 RosterEntryID of every PIN# and VERIFIED# row the caller has. */
   readonly roster: readonly string[]
+  /**
+   * The account's current preferences blob, if it has one. The sealing key derives from the X25519
+   * private key, so it is re-sealed under the NEW one (the server refuses a rotation that leaves an
+   * existing blob behind).
+   */
+  readonly preferencesBlob?: WirePreferencesBlob
 }
 
 export interface SignedKeyRotation {
@@ -112,6 +119,8 @@ export interface SignedKeyRotation {
   readonly newSignature: string
   /** The new password's and new recovery code's wraps of the NEW keys. */
   readonly credentials: RecoveryMaterial
+  /** The request's preferences blob re-sealed under the new key; absent when there was none. */
+  readonly preferencesBlob?: WirePreferencesBlob
 }
 
 export class RosterTooLargeError extends Error {
@@ -164,6 +173,10 @@ export async function signKeyRotation(
     wrappingPrivateKey: pending.wrappingKey.privateKey,
   })
   const credentials = await wrapNewCredentials(keys.userId, req.newPassword, bundle, onProgress)
+  const preferencesBlob =
+    req.preferencesBlob === undefined
+      ? undefined
+      : await resealPreferences(keys, pending.wrappingKey.privateKey, req.preferencesBlob)
 
   return {
     signedDay,
@@ -173,6 +186,7 @@ export async function signKeyRotation(
     oldSignature: bytesToBase64(oldSignature),
     newSignature: bytesToBase64(newSignature),
     credentials,
+    ...(preferencesBlob === undefined ? {} : { preferencesBlob }),
   }
 }
 

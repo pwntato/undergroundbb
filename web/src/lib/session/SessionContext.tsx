@@ -25,6 +25,7 @@ import { clearGroupNameCache } from '@/lib/groups/groupNameCache'
 import { SessionContext, type SessionState } from './session-context'
 import { resolveBootstrapUserID } from './resolveBootstrapUserID'
 import { installSessionLossWatcher } from './sessionLoss'
+import { attachThemeSync, startThemeSync, stopThemeSync } from './themeSyncSession'
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SessionState['status']>('loading')
@@ -48,6 +49,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // same distinction the previous version of this file's own comment drew
     // between "believes it has a session" and re-checking the server.
   }, [])
+
+  // #366: whoever the session belongs to (restored on reload or set by login), theme changes are tied to
+  // them, so one made with cold keys is flagged for the next login instead of being lost to the blob.
+  useEffect(() => {
+    if (userId === null) stopThemeSync()
+    else attachThemeSync(userId)
+  }, [userId])
 
   // Always the latest logout, so the fetch watcher below (installed once) never
   // calls a stale closure over an old userId.
@@ -75,6 +83,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           (k) => cacheOwnSigningKey(id, k),
           () => undefined,
         )
+        // #366: settle the theme between the encrypted preferences blob and this browser. After
+        // the worker's keys are live (both callers), so it can open the blob; best effort.
+        void startThemeSync(id)
         setUserId(id)
       },
       logout: () => {
@@ -84,6 +95,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // for both the expired-session redirects and the user-initiated
         // logout (#222, runLogout.ts), for the same reason.
         clearLiveKeys()
+        stopThemeSync()
         // Issue #35: also clears this tab's cached decrypted group names --
         // same reasoning as clearLiveKeys, a reused worker instance/tab must
         // never show a previous account's group names, and userId is still

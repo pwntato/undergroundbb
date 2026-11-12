@@ -1,7 +1,7 @@
 // The custom themes kept in this browser (#74): a JSON list in localStorage. What is read back is
 // NEVER trusted as already valid: each entry goes through validateCustomTheme again before it can be
 // applied or listed, so a hand-edited or damaged value cannot put anything on the page that an
-// import could not. Syncing them across devices is #366.
+// import could not. They travel between devices in the encrypted preferences blob (preferences.ts, themeSync.ts, #366).
 //
 // An entry that no longer validates (a later release narrowed a range, renamed a token or added a
 // contrast check) is NOT thrown away: it stays in storage, is reported by readSavedThemes with its
@@ -124,6 +124,17 @@ export function addCustomTheme(theme: CustomTheme, store: CustomThemeStore | nul
   return write(next, invalid, store)
     ? { ok: true, themes: next, replaced }
     : { ok: false, error: 'This browser would not let the page save the theme.' }
+}
+
+/**
+ * Replace the valid saved themes with exactly `themes` (the result of a sync, #366), keeping the
+ * entries that do not validate, which are the person's to fix or discard. False if storage failed.
+ */
+export function replaceCustomThemes(
+  themes: readonly CustomTheme[],
+  store: CustomThemeStore | null,
+): boolean {
+  return write(themes.slice(0, MAX_CUSTOM_THEMES), readSavedThemes(store).invalid, store)
 }
 
 /** Forget a theme. Returns the themes that remain; entries that do not validate are kept. */

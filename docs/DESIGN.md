@@ -3500,8 +3500,44 @@ as a smaller spacing unit, and its square, flat look as zero radii and the zero 
 reload. The id of the choice is kept in `localStorage` under `ubb.theme`; an unknown, missing or
 unreadable value means the default theme, and blocked storage does not stop the switch. `main.tsx` applies
 the saved theme before the first render. The CSP forbids an inline script, so the page shows the default
-for the moments before the bundle runs. Not built yet: keeping the choice in the encrypted preferences blob
-so it follows the user across devices (#366).
+for the moments before the bundle runs.
+
+**The choice follows the user (#366)** in the encrypted preferences blob. `GET` and `PUT /api/account/preferences`
+store and serve the ciphertext (the server never opens it). The plaintext is versioned JSON,
+`{"v":1,"theme":"<id>","customThemes":[...]}`, sealed in the crypto worker (`sealPreferences`, `openPreferences`)
+with AES-256-GCM under `HKDF-SHA256(X25519 private key, info = "underground-bb:preferences:v1")` and the AAD
+`USER#<uuid>:PREFERENCES`. The info string and AAD are pinned by a known-answer test: changing either makes every
+sealed blob unreadable. A write names the `KeyEpoch` it sealed for and is refused with 409 `key_epoch_stale` if a
+rotation landed since. The ciphertext cap is 32 KiB (five custom themes do not fit the 4 KiB blob cap), also for the
+rotation's re-seal.
+
+*Precedence.* `ubb.theme` stays the pre-login source. At login a blob that opens wins: its choice goes on the page
+and into `localStorage`. Custom themes are joined (the blob's first, capped at five), so a theme made here before
+sync is not thrown away; the cost is that a theme deleted on another device returns from a browser that still has it
+until it is removed there. No blob, a blob that does not open (a keypair change that was not re-sealed, damage) or a
+damaged document: this browser's choice seeds it, so the fallback is the local theme and not the default. A blob with
+a newer `v` is left alone. After login every change is sent as it is made, last writer wins, so a removal propagates.
+A change that could not be sent (no live keys after a reload, the network, a stale epoch) sets that account's flag
+`ubb.prefsDirty.<userId>`; at the next login that browser's choice wins and the flag clears. A change made while the
+login sync is still running sets the flag at once and is sent after it, and the merge reads this browser's state after
+its network calls, so it keeps that change. A browser can be shared: `ubb.prefsOwner` names the account whose theme
+state the browser holds. Another account logging in finds a foreign owner and the state (saved themes, choice, its own
+stale flag) is wiped and the default theme put on the page before anything is read, so one account's custom themes
+(user-written names) are never joined into, seeded into or sent as another account's blob. An unset owner is a
+browser that never synced, which is the case the join and the seeding are for.
+At logout the saved custom themes (opened from the blob, user-written names, and listed by the public
+`/appearance` page) are trimmed to the one in use, so the pre-login look survives and the other names do not stay in
+plaintext `localStorage`; they come back from the blob at the next login. The trim is skipped when the state is not
+that account's or the account has a change the blob does not hold yet, and saved entries that no longer validate stay
+(never synced, the person's to fix). The page keeps the look in use. Everything read from the blob goes through
+`validateCustomTheme` again before it reaches the page.
+
+*Rotation.* The server refuses a key rotation that leaves an existing blob behind, so the rotation opens the blob with
+the old key and seals the same text under the new one. A blob that no longer opens is replaced by an empty document
+rather than blocking the rotation. A rotation signed when the account had no blob carries none, and its commit
+requires that none has appeared since (a PUT at the old epoch passes the epoch condition); otherwise it is refused
+with 409 `preferences_changed` and the client signs again with the new blob. Logic: `theme/preferences.ts` (document, merge), `theme/themeSync.ts` (rules),
+`lib/session/themeSyncSession.ts` (queue, session binding).
 
 **The picker (#53)** is `routes/ThemePicker.tsx`: one card per built-in theme with a sample drawn from that
 theme's own token values (`themePreview.ts`, inline styles: a wrapper that overrode `--ubb-*` would not
