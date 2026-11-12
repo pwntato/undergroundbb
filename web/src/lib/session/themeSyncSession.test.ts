@@ -48,6 +48,7 @@ describe('theme sync for the session', () => {
     const mk = (name: string) => ({ name, mode: 'dark', tokens: {} })
     store.setItem('ubb.customThemes', JSON.stringify([mk('Mine'), mk('Other One')]))
     store.setItem('ubb.theme', customThemeId('Mine'))
+    store.setItem('ubb.prefsOwner', 'user-1') // so only the "no one signed in" guard can stop a trim
     stopThemeSync() // no one was signed in
     expect(JSON.parse(store.getItem('ubb.customThemes')!)).toHaveLength(2)
     await startThemeSync('user-1')
