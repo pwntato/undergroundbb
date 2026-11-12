@@ -34,7 +34,7 @@ Clone your fork. These values name the original project and have to be yours:
    ```
 
    The environment name `production` is part of the subject and must match the GitHub environment you create in step 6.
-3. **Your region, if it is not `us-west-2`.** `.github/workflows/deploy.yml` names `us-west-2` twice (the AWS credentials step and `terraform init`). Change both, and pass `-var aws_region=...` wherever you run Terraform. The certificate always lives in `us-east-1`, whatever you choose, because CloudFront requires it.
+3. **Your region, if it is not `us-west-2`.** `.github/workflows/deploy.yml` names `us-west-2` twice (the AWS credentials step and `terraform init`). Change both, and pass `-var aws_region=...` wherever you run Terraform, including the bootstrap in step 3, whose region the state bucket and step 5's `init` then use. The workflow's `init` cannot read it from the bootstrap, which is why it is written out. The certificate always lives in `us-east-1`, whatever you choose, because CloudFront requires it.
 4. **The smoke tests' address.** `.github/workflows/smoke.yml` sets `E2E_BASE_URL` to `https://undergroundbb.com`. Point it at your domain, or delete the workflow if you do not want post-deploy tests.
 
 **Settings need to live in the repository, not on your laptop.** CI runs `terraform apply` on every push to `main`, and it only passes `state_bucket` and `alarm_email`. Any other setting you apply by hand (`site_name`, `registration_policy`, a limit) is **reverted by the next push**. Change the variable's default in `terraform/variables.tf`, or add a `TF_VAR_...` line to the `terraform plan` step in `deploy.yml`. See [Configuration](#configuration) for the settings.
@@ -81,9 +81,10 @@ The deploy role that CI uses is created by this same Terraform, so the first app
 ```sh
 cd terraform
 STATE_BUCKET=$(terraform -chdir=bootstrap output -raw state_bucket)
+STATE_REGION=$(terraform -chdir=bootstrap output -raw aws_region)
 terraform init \
   -backend-config="bucket=$STATE_BUCKET" \
-  -backend-config="region=us-west-2"
+  -backend-config="region=$STATE_REGION"
 terraform workspace new prod
 terraform plan -out=tfplan -var state_bucket="$STATE_BUCKET"
 ```
@@ -112,7 +113,7 @@ In your fork, open Settings, Environments, and create an environment named **`pr
 
 ### 7. Put the site live
 
-The first apply made the infrastructure, but the web app itself is built and uploaded by the deploy workflow. Push any commit to `main` (or run the `deploy` workflow from the Actions tab). It builds the Lambdas, applies Terraform, builds the site, uploads it to S3 and invalidates CloudFront.
+The first apply made the infrastructure, but the web app itself is built and uploaded by the deploy workflow. Enable Actions on your fork first (GitHub leaves them off on a new fork: open the Actions tab and turn them on). Pushing to `main` starts the `deploy` workflow, so any push you made before step 6 ran a deploy that failed at the credentials step because `AWS_DEPLOY_ROLE_ARN` was still empty. That is expected. Now push any commit to `main`, or re-run the failed run from the Actions tab. The workflow builds the Lambdas, applies Terraform, builds the site, uploads it to S3 and invalidates CloudFront.
 
 If you would rather do it by hand, the same steps are:
 
@@ -145,7 +146,7 @@ From now on every push to `main` deploys itself.
 - **Updating.** Merge to `main`. The deploy workflow builds and applies. The Lambda zips are reproducible, so a change that touches only `web/` or `docs/` plans no Lambda update.
 - **Backups.** The DynamoDB table has point-in-time recovery turned on, and deletion protection. The server only ever holds ciphertext, so a restore does not need any key from you.
 - **Alarms.** Two groups of alarms publish to SNS topics: the test-account purge and the cost guard. Set `ALARM_EMAIL` (step 6) to hear about them.
-- **Tearing down.** The table has deletion protection, so `terraform destroy` stops at it. Set `deletion_protection_enabled = false` in `terraform/dynamodb.tf`, apply, then destroy. The state bucket and the Route 53 zone are not managed by the main configuration, and the bootstrap is destroyed separately. This path has not been exercised, so read the plan.
+- **Tearing down.** `terraform destroy` stops at two things. The table has deletion protection: set `deletion_protection_enabled = false` in `terraform/dynamodb.tf` and apply. The frontend bucket is not empty and has no `force_destroy`, and it is versioned, so `aws s3 rm --recursive` is not enough: every object version and delete marker has to go (emptying the bucket in the S3 console does that), or set `force_destroy = true` on `aws_s3_bucket.frontend` in the same apply that turns off deletion protection. Then destroy. The state bucket and the Route 53 zone are not managed by the main configuration, and the bootstrap is destroyed separately. This path has not been exercised, so read the plan.
 - **Migrations you do not need.** The one-time `cmd/wipe-v1-keyrows` and `cmd/rekey-reaction-notifs` programs fix rows written by older versions of the code. A new deployment never has those rows, so it never runs them.
 
 ## Configuration
@@ -158,7 +159,7 @@ Everything below is runtime configuration: nothing about a deployment is compile
 | `DOMAIN` | `localhost:3000` | Public domain this deployment is served from. |
 | `ENVIRONMENT` | `dev` | Deployment environment (`dev` is the local-run label; `prod` when deployed, set by Terraform from the workspace). |
 | `TABLE_NAME` | `undergroundbb` | DynamoDB table backing every record. |
-| `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled, accounts provisioned out of band) — see [docs/DESIGN.md](docs/DESIGN.md). An invalid value fails closed. |
+| `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled, accounts provisioned out of band) — see [docs/DESIGN.md](DESIGN.md). An invalid value fails closed. |
 | `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
 | `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
 | `MAX_ROTATING_GROUP_MEMBERS` | `1000` | The most members a Rotating group may have (#60); Open groups have no cap. Values outside 2 to 10000 are clamped with a warning. Sized against the write burst of a key rotation, so check `docs/DESIGN.md` before raising it. Lowering it never removes existing members: it only refuses further joins. |
@@ -166,8 +167,8 @@ Everything below is runtime configuration: nothing about a deployment is compile
 | `MAX_POST_TITLE_BYTES` | `200` | The longest post title in UTF-8 bytes (#42). Values outside 1 to 2000 are clamped with a warning. Bytes, not characters, so a non-ASCII title fits fewer characters. The server sees only ciphertext, so it enforces the title and body caps together as a ciphertext size limit; the compose form enforces each exactly. Lowering it never touches existing posts. |
 | `MAX_POST_BODY_BYTES` | `10000` | The longest post body in UTF-8 bytes (#42). Values outside 1 to 100000 are clamped with a warning. 10,000 bytes is about 7.5 KB of binary whatever the alphabet, so the cap bounds what can be stored per post but cannot inspect it: posts are end-to-end encrypted. |
 | `MAX_COMMENT_BYTES` | `10000` | The longest comment in UTF-8 bytes (#44), its own setting separate from the post body's. Values outside 1 to 100000 are clamped with a warning. The server sees only ciphertext, so it enforces this as a ciphertext size limit; the reply form enforces it exactly. Lowering it never touches existing comments. |
-| `SESSION_SECRET` | *(required, no default)* | Hex-encoded HMAC key for login session cookies — see [`internal/session`](internal/session). There is no safe default; the process refuses to start without it. Generate one with `openssl rand -hex 32`. |
-| `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number, at most `168` (7 days): a longer value is lowered to 168 with a warning, because the inactivity rule for a pre-signed successor measures activity by login day ([`docs/DESIGN.md`](docs/DESIGN.md), "Inactivity"). |
+| `SESSION_SECRET` | *(required, no default)* | Hex-encoded HMAC key for login session cookies — see [`internal/session`](../internal/session). There is no safe default; the process refuses to start without it. Generate one with `openssl rand -hex 32`. |
+| `SESSION_TTL_HOURS` | `24` | How long an issued session cookie remains valid, in hours. Must be a positive whole number, at most `168` (7 days): a longer value is lowered to 168 with a warning, because the inactivity rule for a pre-signed successor measures activity by login day ([`docs/DESIGN.md`](DESIGN.md), "Inactivity"). |
 
 All of these are wired into the Lambda's
 Terraform config (`terraform/lambda.tf`) — `SITE_NAME`, `REGISTRATION_POLICY`,
