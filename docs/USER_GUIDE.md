@@ -61,7 +61,7 @@ Choose **Create a group**.
 
 - **Name** is required. **Description** is optional.
 - **Visibility**: *Private* groups are found only by invite. *Public* groups are listed in the directory, with their name and description visible to everyone. Posts and member lists stay private either way.
-- **Removing a member**: *Rotating* groups re-key the group when someone is removed, so the person removed cannot read anything new. They are capped at 1,000 members. *Open* groups have no member cap, but removing someone only stops their access and does not change the key. Pick Rotating unless you expect a very large group.
+- **Removing a member**: *Rotating* groups re-key the group when someone is removed, so the person removed cannot read anything new. They are capped at 1,000 members. *Open* groups have no member cap, but removing someone only stops their access and does not change the key. Pick Rotating unless you expect a very large group. A public group is always Open, so the choice is not offered for one.
 - **Message expiry**: messages expire after 30 days by default. Expiry is a safety feature: it limits what an attacker who gets hold of old data can read. The form also offers *Never expire messages*, if the site allows it. Think twice before choosing it.
 
 Press **Create group**. You are the group's admin, and it appears on Home.
@@ -163,7 +163,7 @@ The page summarises the group (its visibility, how removal works and when messag
 
 ### Leave a group
 
-**Leave group** is at the bottom of the Members page. It asks you to confirm.
+**Leave group** is at the bottom of the Members page. It asks you to confirm. If you are the last admin and others remain, make someone else an admin first.
 
 ## Direct messages
 
