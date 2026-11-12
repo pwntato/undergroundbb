@@ -3524,7 +3524,12 @@ its network calls, so it keeps that change. A browser can be shared: `ubb.prefsO
 state the browser holds. Another account logging in finds a foreign owner and the state (saved themes, choice, its own
 stale flag) is wiped and the default theme put on the page before anything is read, so one account's custom themes
 (user-written names) are never joined into, seeded into or sent as another account's blob. An unset owner is a
-browser that never synced, which is the case the join and the seeding are for. Everything read from the blob goes through
+browser that never synced, which is the case the join and the seeding are for.
+At logout the saved custom themes (opened from the blob, user-written names, and listed by the public
+`/appearance` page) are trimmed to the one in use, so the pre-login look survives and the other names do not stay in
+plaintext `localStorage`; they come back from the blob at the next login. The trim is skipped when the state is not
+that account's or the account has a change the blob does not hold yet, and saved entries that no longer validate stay
+(never synced, the person's to fix). The page keeps the look in use. Everything read from the blob goes through
 `validateCustomTheme` again before it reaches the page.
 
 *Rotation.* The server refuses a key rotation that leaves an existing blob behind, so the rotation opens the blob with
