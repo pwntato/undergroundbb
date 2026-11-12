@@ -6,8 +6,8 @@
 #
 # Name derives from terraform.workspace, not a free-form variable (#11) --
 # resolves to "undergroundbb-prod" for the one workspace in use; any other
-# workspace fails plan at locals.tf's domain lookup (see the README's
-# "Deploying" section for how to select one).
+# workspace fails plan at locals.tf's domain lookup (see
+# docs/SELF_HOSTING.md for how to select one).
 resource "aws_dynamodb_table" "main" {
   name         = "undergroundbb-${terraform.workspace}"
   billing_mode = "PAY_PER_REQUEST"
