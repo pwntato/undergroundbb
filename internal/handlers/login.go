@@ -30,6 +30,15 @@ const challengeNonceSize = 32
 // Argon2id derivation on a phone)."
 const challengeTTL = 2 * time.Minute
 
+// challengeMinUsable is the least life a nonce still has when /auth/challenge
+// hands it out (#390). A nonce with less than this left is not reissued: a
+// new one is written into the other slot instead, and the old one is left to
+// run out. It is what a slow client is guaranteed, whatever anyone else does
+// to the endpoint, so it must cover an Argon2id derivation on a phone with
+// room to spare, and challengeTTL must exceed twice it (db.IssueChallenge
+// refuses otherwise).
+const challengeMinUsable = 45 * time.Second
+
 // lockThreshold and lockDuration implement docs/DESIGN.md's
 // "five-attempts-in-five-minutes" lockout exactly as named -- not
 // configurable, since the design pins both numbers rather than leaving them
@@ -82,12 +91,22 @@ type challengeResponse struct {
 // on usernames being "confirmable one at a time through the signup
 // availability check." The nonce returned for an unknown username signs and
 // verifies against nothing real: no CHALLENGE item is ever written for a
-// lookup miss (PutChallenge's key requires a real userID), so a client that
+// lookup miss (IssueChallenge's key requires a real userID), so a client that
 // somehow reached this branch cannot complete a login with the result no
 // matter what it signs. The same reasoning applies to UserID (issue #125):
 // a freshly random decoy uuid, not a distinguishable zero value or omitted
 // field, so the unknown-username branch stays shaped exactly like the real
 // one.
+//
+// One more difference between a real name and a missing one comes with #390.
+// A real user asked twice within the nonce's window is handed the SAME nonce
+// both times (that is what stops a flood from replacing it), while a missing
+// name gets a fresh random nonce every time. That adds nothing to what the
+// response already gives away: the real account's uuid is stable across
+// requests and the decoy's is random, and docs/THREAT_MODEL.md ("Usernames")
+// already accepts that this endpoint confirms whether a name exists. Making
+// the decoy match would need a server-side secret and a nonce lifetime shaped
+// like the real one, for no change in what an attacker can learn.
 func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 	var req challengeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -100,7 +119,6 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, err, "could not generate challenge")
 		return
 	}
-	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
 
 	user, err := h.db.LookupUserByUsername(r.Context(), strings.ToLower(req.Username))
 	if err != nil {
@@ -127,7 +145,7 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		WriteJSON(w, http.StatusOK, challengeResponse{
-			Nonce:        nonceB64,
+			Nonce:        base64.StdEncoding.EncodeToString(nonce),
 			UserID:       decoyUserID,
 			Salt:         base64.StdEncoding.EncodeToString(fakeSalt),
 			Argon2Params: argon2Params{MemoryKiB: minArgon2MemoryKiB, Iterations: minArgon2Iterations, Parallelism: minArgon2Parallelism},
@@ -140,13 +158,16 @@ func (h *Handler) challenge(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := user.PK[len("USER#"):]
 
-	if err := h.db.PutChallenge(r.Context(), userID, nonce, challengeTTL); err != nil {
+	// The nonce to hand out is the one already waiting for this user if it has
+	// enough life left, else the fresh one generated above (#390).
+	issued, err := h.db.IssueChallenge(r.Context(), userID, nonce, challengeTTL, challengeMinUsable, time.Now())
+	if err != nil {
 		WriteInternalError(w, r, err, "could not issue challenge")
 		return
 	}
 
 	WriteJSON(w, http.StatusOK, challengeResponse{
-		Nonce:        nonceB64,
+		Nonce:        base64.StdEncoding.EncodeToString(issued),
 		UserID:       userID,
 		Salt:         base64.StdEncoding.EncodeToString(user.Salt),
 		Argon2Params: toWireParams(user.Argon2Params),

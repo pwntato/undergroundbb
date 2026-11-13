@@ -92,7 +92,7 @@ type User struct {
 	// step 3 and never reach the server. See docs/DESIGN.md, "This means the
 	// server cannot count wrong passwords." Incremented on a failed step 4,
 	// cleared on a successful one. A failed conditional delete on the
-	// CHALLENGE item (replay or a flooded/overwritten nonce) is explicitly
+	// CHALLENGE item (replay, an expired or already-spent nonce) is explicitly
 	// NOT a signature failure and must not touch this field -- see issue
 	// #27's round-24 review comment.
 	FailedVerifyCount int64 `dynamodbav:"FailedVerifyCount,omitempty"`
@@ -279,12 +279,12 @@ type Recovery struct {
 	LockUntil         string `dynamodbav:"LockUntil,omitempty"`
 }
 
-// Challenge is the USER#<uuid> / CHALLENGE item -- a single slot per user,
-// overwritten on every POST /api/auth/challenge rather than keyed by nonce.
-// See docs/DESIGN.md, "The challenge is a single slot per user," and issue
-// #27's round-22 comment: keying by nonce would let an unauthenticated
-// caller inflate a chosen user's partition without bound, since only a TTL
-// (eventual, not immediate) would ever remove the items.
+// Challenge is the USER#<uuid> / CHALLENGE and CHALLENGE#2 items -- one of two
+// slots per user, never keyed by nonce. See docs/DESIGN.md, "The challenge is a
+// bounded pair of slots per user," and issue #27's round-22 comment: keying by
+// nonce would let an unauthenticated caller inflate a chosen user's partition
+// without bound, since only a TTL (eventual, not immediate) would ever remove
+// the items. A slot is rewritten only after its nonce has expired (#390).
 //
 // Holds nothing but the nonce -- see docs/DESIGN.md, "The challenge item
 // holds a random number and nothing else: no key material, nothing derived

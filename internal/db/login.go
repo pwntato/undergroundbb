@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -71,32 +72,183 @@ func (c *Client) LookupUserByUsername(ctx context.Context, usernameLower string)
 	return &user, nil
 }
 
-// PutChallenge (over)writes the single CHALLENGE slot for userID with a
-// fresh nonce and TTL. Unconditional by design -- see models.Challenge and
-// issue #27's round-22 comment: the slot is single, keyed without the nonce,
-// specifically so this write never grows the partition regardless of how
-// often it's called.
-func (c *Client) PutChallenge(ctx context.Context, userID string, nonce []byte, ttl time.Duration) error {
-	item, err := attributevalue.MarshalMap(models.Challenge{
-		Record: models.Record{
-			PK:   "USER#" + userID,
-			SK:   "CHALLENGE",
-			Type: "Challenge",
+// The two challenge slots (#390). A user's outstanding login challenge lives in
+// one of exactly two items, so an unauthenticated caller can never grow the
+// partition (the bound docs/DESIGN.md's "The challenge is a bounded pair of
+// slots per user" paragraph exists to keep), and a flood of requests cannot
+// replace the nonce a real user is still deriving a signature for.
+const (
+	challengeSlotA = "CHALLENGE"
+	challengeSlotB = "CHALLENGE#2"
+)
+
+// challengeSlots lists both slots in the order IssueChallenge prefers to
+// write them.
+var challengeSlots = [...]string{challengeSlotA, challengeSlotB}
+
+// challengeIssueAttempts caps IssueChallenge's read-then-write loop. A lost
+// race re-reads and then finds the winner's fresh nonce, so a second pass
+// nearly always ends it; the cap only stops a pathological loop.
+const challengeIssueAttempts = 5
+
+// ErrNoChallengeSlot means neither slot was free to write and neither held a
+// nonce with enough life left to hand out. IssueChallenge's own
+// ttl > 2*minUsable check makes that impossible; it is returned rather than
+// panicked on so a future change to the arithmetic fails one request, not
+// the process.
+var ErrNoChallengeSlot = errors.New("db: no free login challenge slot")
+
+// challengeSlot is what IssueChallenge reads from one slot.
+type challengeSlot struct {
+	sk    string
+	nonce []byte
+	ttl   int64
+}
+
+// IssueChallenge returns the nonce to hand to a login attempt for userID. It
+// is the answer to #390: the challenge request is unauthenticated, so
+// anyone who knows a username can call it in a loop, and a plain overwrite
+// let that replace the nonce a real user was still deriving a signature for.
+//
+// The rule is that a nonce is only ever replaced after it has expired, and
+// is only handed out while it has at least minUsable of its life left:
+//
+//  1. If a slot holds a nonce expiring after now+minUsable, return that one.
+//     It is not a secret (the server sends it in plaintext and only a valid
+//     signature can spend it), so sharing it with whoever asks, the attacker
+//     included, gives them nothing they can use, and the real user's
+//     signature still lands.
+//  2. Otherwise write candidate into a slot that is absent or already
+//     expired, conditionally, so two concurrent requests cannot both
+//     overwrite it. A lost race re-reads and returns the winner's nonce.
+//
+// Why two slots, not one: with one slot, "write a fresh nonce once less than
+// minUsable is left" is itself an overwrite of a nonce that was handed out
+// moments earlier, so a user who asked just before the refresh would have
+// theirs replaced mid-derivation. With two, the nonce being retired keeps
+// its slot until it has really expired, and the new one goes in the other.
+// That needs ttl > 2*minUsable: a slot is rewritten only once expired, and
+// the other one was written no earlier than minUsable before the first
+// stopped being fresh, so one of the two is always expired or absent when
+// no fresh nonce exists. IssueChallenge refuses arguments that break it.
+//
+// TTL is the table's TTL attribute and is deliberately not rounded to a day
+// (see the note on CHALLENGE in db.go's TTL rounding comment). Items past their TTL can linger until
+// DynamoDB sweeps them, so expiry is judged here against now, never by
+// whether the item exists. now is a parameter so tests can run a flood
+// across minutes of simulated time.
+func (c *Client) IssueChallenge(ctx context.Context, userID string, candidate []byte, ttl, minUsable time.Duration, now time.Time) ([]byte, error) {
+	if minUsable <= 0 || ttl <= 2*minUsable {
+		return nil, fmt.Errorf("db: challenge ttl %s must exceed twice the minimum usable time %s", ttl, minUsable)
+	}
+	nowSec := now.Unix()
+	freshAfter := now.Add(minUsable).Unix()
+
+	for range challengeIssueAttempts {
+		slots, err := c.readChallengeSlots(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+
+		var fresh *challengeSlot
+		for i := range slots {
+			if slots[i].ttl > freshAfter && (fresh == nil || slots[i].ttl > fresh.ttl) {
+				fresh = &slots[i]
+			}
+		}
+		if fresh != nil {
+			return fresh.nonce, nil
+		}
+
+		target := ""
+		for _, sk := range challengeSlots {
+			if !slotLive(slots, sk, nowSec) {
+				target = sk
+				break
+			}
+		}
+		if target == "" {
+			return nil, ErrNoChallengeSlot
+		}
+
+		item, err := attributevalue.MarshalMap(models.Challenge{
+			Record: models.Record{PK: "USER#" + userID, SK: target, Type: "Challenge"},
+			Nonce:  candidate,
+			TTL:    now.Add(ttl).Unix(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("db: marshal challenge: %w", err)
+		}
+		_, err = c.ddb.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName:           aws.String(c.table),
+			Item:                item,
+			ConditionExpression: aws.String("attribute_not_exists(PK) OR #ttl <= :now"),
+			ExpressionAttributeNames: map[string]string{
+				"#ttl": "TTL",
+			},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":now": &types.AttributeValueMemberN{Value: strconv.FormatInt(nowSec, 10)},
+			},
+		})
+		if err == nil {
+			return candidate, nil
+		}
+		var condErr *types.ConditionalCheckFailedException
+		if !errors.As(err, &condErr) {
+			return nil, fmt.Errorf("db: put challenge: %w", err)
+		}
+		// Someone else wrote this slot between our read and our write. Read again:
+		// their nonce is now the fresh one.
+	}
+	return nil, ErrNoChallengeSlot
+}
+
+// slotLive reports whether sk holds a nonce that has not expired at nowSec.
+func slotLive(slots []challengeSlot, sk string, nowSec int64) bool {
+	for _, s := range slots {
+		if s.sk == sk {
+			return s.ttl > nowSec
+		}
+	}
+	return false
+}
+
+// readChallengeSlots reads the user's challenge slots with a strongly
+// consistent query: IssueChallenge decides what to hand out from this, and an
+// eventually consistent read could miss a nonce written a moment ago.
+func (c *Client) readChallengeSlots(ctx context.Context, userID string) ([]challengeSlot, error) {
+	out, err := c.ddb.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.table),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :c)"),
+		ProjectionExpression:   aws.String("SK, Nonce, #ttl"),
+		ExpressionAttributeNames: map[string]string{
+			"#ttl": "TTL",
 		},
-		Nonce: nonce,
-		TTL:   time.Now().Add(ttl).Unix(),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": &types.AttributeValueMemberS{Value: "USER#" + userID},
+			":c":  &types.AttributeValueMemberS{Value: challengeSlotA},
+		},
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
-		return fmt.Errorf("db: marshal challenge: %w", err)
+		return nil, fmt.Errorf("db: read challenge slots: %w", err)
 	}
-	_, err = c.ddb.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(c.table),
-		Item:      item,
-	})
-	if err != nil {
-		return fmt.Errorf("db: put challenge: %w", err)
+	var slots []challengeSlot
+	for _, it := range out.Items {
+		var row struct {
+			SK    string `dynamodbav:"SK"`
+			Nonce []byte `dynamodbav:"Nonce"`
+			TTL   int64  `dynamodbav:"TTL"`
+		}
+		if err := attributevalue.UnmarshalMap(it, &row); err != nil {
+			return nil, fmt.Errorf("db: unmarshal challenge slot: %w", err)
+		}
+		if row.SK != challengeSlotA && row.SK != challengeSlotB {
+			continue
+		}
+		slots = append(slots, challengeSlot{sk: row.SK, nonce: row.Nonce, ttl: row.TTL})
 	}
-	return nil
+	return slots, nil
 }
 
 // ErrChallengeMismatch is returned by ConsumeChallenge when there is no
@@ -106,46 +258,44 @@ func (c *Client) PutChallenge(ctx context.Context, userID string, nonce []byte, 
 // as one.
 var ErrChallengeMismatch = errors.New("db: no matching outstanding challenge")
 
-// ConsumeChallenge deletes the CHALLENGE item for userID, but only if it
-// still holds nonce -- a conditional delete keyed on the nonce VALUE, not
-// merely on the item's existence. This is what makes the single-slot design
-// (models.Challenge, PutChallenge) safe: because the slot is overwritten
-// rather than uniquely keyed, a second PutChallenge call can replace an
-// outstanding nonce before the first is used. Conditioning only on
-// existence would let a stale client, still holding the FIRST nonce, delete
-// (and thereby "spend") a challenge that was actually issued for a later,
-// unrelated request -- silently letting one login attempt consume another's
-// single-use guarantee. Conditioning on the value closes that: a stale
-// nonce's delete fails exactly like an already-consumed one.
+// ConsumeChallenge deletes the challenge item for userID that holds nonce --
+// a conditional delete keyed on the nonce VALUE, not merely on the item's
+// existence -- trying each of the two slots. Keying on the value is what
+// makes a bounded set of slots safe: conditioning only on existence would let
+// a stale client, still holding an old nonce, delete (and thereby "spend") a
+// challenge issued for a later, unrelated request. A stale nonce's delete
+// fails exactly like an already-consumed one.
 //
 // See docs/DESIGN.md, "Server deletes the challenge item with a conditional
 // write and, only if that delete succeeds, verifies the signature" -- the
 // delete is the spend, prior to and independent of signature verification.
-// A failed delete (ErrChallengeMismatch) covers replay, a flooded/
-// overwritten slot, and simple expiry alike; callers must NOT treat it as a
-// failed signature verification -- see issue #27's round-24 review comment:
-// "a failed conditional delete on the challenge is not a signature failure
-// and must not increment the lockout counter."
+// A failed delete (ErrChallengeMismatch) covers replay, a replaced nonce, and
+// simple expiry alike; callers must NOT treat it as a failed signature
+// verification -- see issue #27's round-24 review comment: "a failed
+// conditional delete on the challenge is not a signature failure and must not
+// increment the lockout counter."
 func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []byte) error {
-	_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(c.table),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
-			"SK": &types.AttributeValueMemberS{Value: "CHALLENGE"},
-		},
-		ConditionExpression: aws.String("Nonce = :nonce"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":nonce": &types.AttributeValueMemberB{Value: nonce},
-		},
-	})
-	if err != nil {
-		var condErr *types.ConditionalCheckFailedException
-		if errors.As(err, &condErr) {
-			return ErrChallengeMismatch
+	for _, sk := range challengeSlots {
+		_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(c.table),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
+				"SK": &types.AttributeValueMemberS{Value: sk},
+			},
+			ConditionExpression: aws.String("Nonce = :nonce"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":nonce": &types.AttributeValueMemberB{Value: nonce},
+			},
+		})
+		if err == nil {
+			return nil
 		}
-		return fmt.Errorf("db: consume challenge: %w", err)
+		var condErr *types.ConditionalCheckFailedException
+		if !errors.As(err, &condErr) {
+			return fmt.Errorf("db: consume challenge: %w", err)
+		}
 	}
-	return nil
+	return ErrChallengeMismatch
 }
 
 // RecordFailedVerify increments userID's FailedVerifyCount and, if this
