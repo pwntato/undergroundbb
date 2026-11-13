@@ -27,14 +27,14 @@ type usernameAvailableResponse struct {
 // Argon2id, not after).
 //
 // Gated on RegistrationPolicy the same way register is (403 when closed).
-// docs/DESIGN.md:1655 says a closed deployment should be read as having a
-// smaller enumeration surface than the threat model otherwise assumes --
+// docs/DESIGN.md ("Registration policy") says a closed deployment should be
+// read as having a smaller enumeration surface than the threat model otherwise assumes --
 // leaving this endpoint open on a closed deployment would move the
 // name-confirmation oracle DESIGN.md attributes to signup onto a second
 // endpoint rather than actually closing it, and a closed deployment has no
-// legitimate caller for this check (accounts are provisioned out of band,
-// per the same section; invites work by link and never look up a username
-// here, per the "an invite has no invitee until step 2" invite section).
+// legitimate caller for this check (no account can be created on a closed
+// deployment, see DESIGN.md "Registration policy" and #387; invites work by
+// link and never look up a username here, per the "an invite has no invitee until step 2" invite section).
 //
 // The result is advisory, not authoritative -- see db.UsernameAvailable's
 // own doc comment. Register's conditional write is what actually decides
