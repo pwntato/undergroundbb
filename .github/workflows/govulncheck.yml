@@ -1,0 +1,32 @@
+name: govulncheck
+
+# #391: the toolchain in go.mod went stale for weeks because the only check was a
+# step in test.yml, which runs when a PR is opened or main is pushed. Go publishes
+# standard library fixes on its own schedule, so this runs weekly as well and goes
+# red when our code reaches a known vulnerability, PR or no PR. The cure is to bump
+# the `go` line in go.mod to the newest patch; setup-go and the deploy then pick it up.
+# It also runs on a PR that edits this file, so a change here is proven before it merges.
+on:
+  schedule:
+    - cron: '17 14 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/govulncheck.yml
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Same pinned tool as the govulncheck step in test.yml.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
