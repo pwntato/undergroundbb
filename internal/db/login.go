@@ -260,7 +260,11 @@ var ErrChallengeMismatch = errors.New("db: no matching outstanding challenge")
 
 // ConsumeChallenge deletes the challenge item for userID that holds nonce --
 // a conditional delete keyed on the nonce VALUE, not merely on the item's
-// existence -- trying each of the two slots. Keying on the value is what
+// existence, and only while the nonce has not expired at now -- trying each
+// of the two slots. Expiry is checked here, as IssueChallenge checks it,
+// because DynamoDB can leave an expired row in place for up to 48 hours and
+// "valid for two minutes" has to be true at the moment the nonce is spent.
+// Keying on the value is what
 // makes a bounded set of slots safe: conditioning only on existence would let
 // a stale client, still holding an old nonce, delete (and thereby "spend") a
 // challenge issued for a later, unrelated request. A stale nonce's delete
@@ -274,7 +278,7 @@ var ErrChallengeMismatch = errors.New("db: no matching outstanding challenge")
 // verification -- see issue #27's round-24 review comment: "a failed
 // conditional delete on the challenge is not a signature failure and must not
 // increment the lockout counter."
-func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []byte) error {
+func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []byte, now time.Time) error {
 	for _, sk := range challengeSlots {
 		_, err := c.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 			TableName: aws.String(c.table),
@@ -282,9 +286,13 @@ func (c *Client) ConsumeChallenge(ctx context.Context, userID string, nonce []by
 				"PK": &types.AttributeValueMemberS{Value: "USER#" + userID},
 				"SK": &types.AttributeValueMemberS{Value: sk},
 			},
-			ConditionExpression: aws.String("Nonce = :nonce"),
+			ConditionExpression: aws.String("Nonce = :nonce AND #ttl > :now"),
+			ExpressionAttributeNames: map[string]string{
+				"#ttl": "TTL",
+			},
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":nonce": &types.AttributeValueMemberB{Value: nonce},
+				":now":   &types.AttributeValueMemberN{Value: strconv.FormatInt(now.Unix(), 10)},
 			},
 		})
 		if err == nil {

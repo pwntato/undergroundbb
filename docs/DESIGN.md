@@ -444,7 +444,8 @@ stayed at zero. The rules now are:
    reads again and returns the winner's nonce.
 
 Expiry is judged against the clock, never by whether the item exists, because DynamoDB can leave an
-expired item in place for up to 48 hours.
+expired item in place for up to 48 hours. That holds where a nonce is spent as well as where one is
+handed out: the conditional delete also requires that the nonce has not expired.
 
 Two things the obvious alternatives get wrong. **Refusing the write while a challenge is live** only
 reverses the problem: the attacker's nonce holds the slot, the user's request is refused, and the

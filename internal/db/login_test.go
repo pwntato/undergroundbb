@@ -96,12 +96,12 @@ func TestIssueAndConsumeChallenge(t *testing.T) {
 	nonce := []byte("a-test-nonce-value-32-bytes-longX")
 	seedChallenge(t, c, userID, nonce)
 
-	if err := c.ConsumeChallenge(ctx, userID, nonce); err != nil {
+	if err := c.ConsumeChallenge(ctx, userID, nonce, time.Now()); err != nil {
 		t.Fatalf("ConsumeChallenge: %v", err)
 	}
 
 	// Second consume of the same nonce must fail -- single-use.
-	if err := c.ConsumeChallenge(ctx, userID, nonce); !errors.Is(err, ErrChallengeMismatch) {
+	if err := c.ConsumeChallenge(ctx, userID, nonce, time.Now()); !errors.Is(err, ErrChallengeMismatch) {
 		t.Errorf("second ConsumeChallenge err = %v, want ErrChallengeMismatch", err)
 	}
 }
@@ -115,13 +115,13 @@ func TestConsumeChallengeWrongNonce(t *testing.T) {
 	wrongNonce := []byte("a-completely-different-nonce-here")
 	seedChallenge(t, c, userID, nonce)
 
-	if err := c.ConsumeChallenge(ctx, userID, wrongNonce); !errors.Is(err, ErrChallengeMismatch) {
+	if err := c.ConsumeChallenge(ctx, userID, wrongNonce, time.Now()); !errors.Is(err, ErrChallengeMismatch) {
 		t.Errorf("err = %v, want ErrChallengeMismatch", err)
 	}
 
 	// The real challenge must still be there and consumable -- a wrong-nonce
 	// attempt must not have deleted it.
-	if err := c.ConsumeChallenge(ctx, userID, nonce); err != nil {
+	if err := c.ConsumeChallenge(ctx, userID, nonce, time.Now()); err != nil {
 		t.Errorf("ConsumeChallenge with correct nonce after a wrong attempt: %v", err)
 	}
 }
@@ -177,10 +177,11 @@ func TestIssueChallengeRetiringNonceStaysSpendable(t *testing.T) {
 		t.Fatalf("%d rows, want both slots in use", len(rows))
 	}
 	// A user handed `first` at 79s is still inside its life and must be able to spend it.
-	if err := c.ConsumeChallenge(ctx, userID, first); err != nil {
+	spendAt := now.Add(85 * time.Second)
+	if err := c.ConsumeChallenge(ctx, userID, first, spendAt); err != nil {
 		t.Errorf("retiring nonce could not be spent: %v", err)
 	}
-	if err := c.ConsumeChallenge(ctx, userID, second); err != nil {
+	if err := c.ConsumeChallenge(ctx, userID, second, spendAt); err != nil {
 		t.Errorf("new nonce could not be spent: %v", err)
 	}
 }
@@ -203,7 +204,7 @@ func TestIssueChallengeReplacesExpired(t *testing.T) {
 		t.Fatalf("issue after expiry = %x, %v; want %x", got, err, fresh)
 	}
 	// The expired nonce no longer matches anything: its slot was rewritten.
-	if err := c.ConsumeChallenge(ctx, userID, old); !errors.Is(err, ErrChallengeMismatch) {
+	if err := c.ConsumeChallenge(ctx, userID, old, now.Add(testChallengeTTL+2*time.Second)); !errors.Is(err, ErrChallengeMismatch) {
 		t.Errorf("expired nonce consume err = %v, want ErrChallengeMismatch", err)
 	}
 }
@@ -227,7 +228,7 @@ func TestIssueChallengeSurvivesAFlood(t *testing.T) {
 
 		// The user's browser finishes deriving and sends its signature.
 		if userNonce != nil && at >= consumeAt {
-			if err := c.ConsumeChallenge(ctx, userID, userNonce); err != nil {
+			if err := c.ConsumeChallenge(ctx, userID, userNonce, now); err != nil {
 				t.Fatalf("login %d: the user's nonce, handed out %s ago, was no longer spendable: %v", logins+1, derive, err)
 			}
 			logins++
@@ -280,7 +281,7 @@ func TestIssueChallengeNonceHandedOutJustBeforeTheRefreshSurvives(t *testing.T) 
 		t.Fatalf("attacker issue: %v", err)
 	}
 	// 114s in: the user's signature arrives, 40s after they asked, 6s before the nonce expires.
-	if err := c.ConsumeChallenge(ctx, userID, userNonce); err != nil {
+	if err := c.ConsumeChallenge(ctx, userID, userNonce, start.Add(114*time.Second)); err != nil {
 		t.Fatalf("the user's nonce, handed out at 74s, was replaced by the next request: %v", err)
 	}
 }
@@ -383,11 +384,44 @@ func TestConsumeChallengeStaleNonceCannotSpendALaterOne(t *testing.T) {
 		t.Fatalf("issue second: %v", err)
 	}
 
-	if err := c.ConsumeChallenge(ctx, userID, first); !errors.Is(err, ErrChallengeMismatch) {
+	at := now.Add(testChallengeTTL + time.Second)
+	if err := c.ConsumeChallenge(ctx, userID, first, at); !errors.Is(err, ErrChallengeMismatch) {
 		t.Errorf("stale nonce consume err = %v, want ErrChallengeMismatch", err)
 	}
-	if err := c.ConsumeChallenge(ctx, userID, second); err != nil {
+	if err := c.ConsumeChallenge(ctx, userID, second, at); err != nil {
 		t.Errorf("ConsumeChallenge with current nonce: %v", err)
+	}
+}
+
+// An expired nonce cannot be spent even while its row is still in the table. DynamoDB can leave
+// an expired row for up to 48 hours, so "valid for two minutes" has to be checked where the nonce
+// is spent, as it is where one is handed out. The row here is real and unswept (the clock is
+// simulated, so DynamoDB has not touched it).
+func TestConsumeChallengeRefusesAnExpiredNonce(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	userID := "test-challenge-expired-spend-" + randomSuffix(t)
+	now := time.Now()
+	nonce := randNonce(t)
+	if _, err := c.IssueChallenge(ctx, userID, nonce, testChallengeTTL, testChallengeMinUsable, now); err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if rows := challengeRows(t, c, userID); len(rows) != 1 {
+		t.Fatalf("setup: %d rows, want 1", len(rows))
+	}
+
+	// At the instant it expires, and after: refused. The row is still there afterwards.
+	for _, after := range []time.Duration{testChallengeTTL, testChallengeTTL + time.Hour} {
+		if err := c.ConsumeChallenge(ctx, userID, nonce, now.Add(after)); !errors.Is(err, ErrChallengeMismatch) {
+			t.Errorf("consume %s in: err = %v, want ErrChallengeMismatch", after, err)
+		}
+	}
+	if rows := challengeRows(t, c, userID); len(rows) != 1 {
+		t.Errorf("a refused consume removed the row")
+	}
+	// One second before expiry it is still good.
+	if err := c.ConsumeChallenge(ctx, userID, nonce, now.Add(testChallengeTTL-time.Second)); err != nil {
+		t.Errorf("consume 1s before expiry: %v", err)
 	}
 }
 
@@ -395,7 +429,7 @@ func TestConsumeChallengeNoChallenge(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 
-	err := c.ConsumeChallenge(ctx, "test-no-challenge-"+randomSuffix(t), []byte("any-nonce-value-here-doesnt-matter"))
+	err := c.ConsumeChallenge(ctx, "test-no-challenge-"+randomSuffix(t), []byte("any-nonce-value-here-doesnt-matter"), time.Now())
 	if !errors.Is(err, ErrChallengeMismatch) {
 		t.Errorf("err = %v, want ErrChallengeMismatch", err)
 	}

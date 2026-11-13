@@ -195,7 +195,7 @@ type verifyRequest struct {
 
 // verifyErrorChallengeInvalid is returned when there is no outstanding
 // challenge matching what the client presented (missing, replayed, or
-// overwritten by a newer challenge/flood) -- distinguishable from a bad
+// expired) -- distinguishable from a bad
 // signature specifically so a client can back off rather than immediately
 // re-deriving Argon2id into the same losing race. See issue #27's round-24
 // comment: "The error returned to the client should be distinguishable from
@@ -250,7 +250,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := user.PK[len("USER#"):]
 
-	if err := h.db.ConsumeChallenge(r.Context(), userID, nonce); err != nil {
+	if err := h.db.ConsumeChallenge(r.Context(), userID, nonce, time.Now()); err != nil {
 		if errors.Is(err, db.ErrChallengeMismatch) {
 			// Not a signature failure -- see ConsumeChallenge's own doc
 			// comment and issue #27's round-24 review comment. No lockout
