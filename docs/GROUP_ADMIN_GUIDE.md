@@ -64,9 +64,9 @@ Send the link to the person through any channel you trust. A few things to know:
 - Anyone who opens the link can accept it once, so send it only to the person you mean. If you are worried it was swapped on the way, read your fingerprint (shown on this page) to them on a call. They see it when they open the link and can check it matches.
 - The person is not in the group the moment they accept. **The group key is handed over the next time you log in** (the person who created the invite), because your browser has to wrap the key for them. Tell them to expect that delay, and log in when you can. Until then they see the invite under *Waiting on the inviter*.
 - You must still be an admin or ambassador of the group when that happens. If you were demoted in the meantime, the invite cannot be completed, and someone else needs to invite them.
-- If the group is at its member limit, you cannot create invites. Someone has to leave or be removed first, or the group has to be converted to Open.
+- If the group is at its member limit, you cannot create invites. Someone has to leave or be removed first, or the group has to be converted to Open. An invite that was already accepted also cannot complete while the group is full.
 
-**Invites** in the sidebar lists the invites you created and where each one stands: not yet accepted, accepted and due to complete by a date, or overdue. An overdue one is finished by your next login, and if it keeps failing the person needs a new invite. You can revoke an invite there.
+**Invites** in the sidebar lists the invites you created and where each one stands: not yet accepted, accepted and due to complete by a date, or overdue. An overdue one is finished by your next login, and if it keeps failing the person needs a new invite. You can revoke an invite there until someone accepts it.
 
 ### Join requests (public groups)
 
@@ -108,7 +108,7 @@ Press **Remove** next to the person, then **Confirm remove**. What happens next 
 - **Rotating**: the group key is changed and everyone else is given the new one. This takes a little while in a large group. **Keep the page open until it finishes.** The page shows "Working on the group's key rotation" while it runs.
 - **Open**: the person loses access going forward, and nothing else changes.
 
-If a rotation is cut short (the tab was closed, or the browser went offline), a red banner says how long ago it started and that, until it finishes, a removed member can still read new posts. It says what to do: reopen the group, enter your password if asked, or ask another admin to open the group. Only an admin who already has the new key can finish it. Take this banner seriously: until it clears, the removal has not fully worked.
+If a rotation is cut short (the tab was closed, or the browser went offline), reopen the group's **Members** page as an admin and it picks up where it stopped. If a rotation has been stuck for more than an hour, admins see a red banner saying how long ago it started and that, until it finishes, a removed member can still read new posts. It says what to do: reopen the group, enter your password if asked, or ask another admin to open the group. Only an admin who already has the new key can finish it. Until the rotation finishes, the removal has not fully worked, whether or not the banner is showing yet.
 
 Anything the person has already read, they have read. Removing someone cannot take that back.
 
