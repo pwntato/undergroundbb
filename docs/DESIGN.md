@@ -3663,9 +3663,13 @@ particular deployment is baked into the bundle.
 threat-model claims.** `open` means anyone may create an account, which is what the threat model
 assumes throughout: usernames are confirmable one at a time through the signup availability check,
 the lockout and challenge-flood denial paths are available to anyone, and the anonymity-set argument
-depends on pseudonyms being freely mintable. `closed` means the signup endpoint is disabled and
-accounts are provisioned out of band; a deployment choosing it should read the enumeration and
-availability sections as describing a smaller attacker population than they assume.
+depends on pseudonyms being freely mintable. `closed` means the signup endpoint is disabled and no
+account can be created through the app (this repository has no tool to create one another way, so a
+`closed` deployment that has no accounts yet can never get its first; that is deliberate, see #387),
+while existing accounts keep working. In practice `closed` is a pause switch for signups, not a way
+to run a private deployment: switching back to `open` resumes them. A deployment choosing it should
+read the enumeration and availability sections as describing a smaller attacker population than they
+assume.
 
 **There is deliberately no `invite-only` value**, and it is worth saying why rather than leaving it
 as an obvious gap: invites in this design are **group**-scoped objects, and `GET /api/invites/:id`
