@@ -383,7 +383,9 @@ describe('GroupMembersPanel grant check marks', () => {
 })
 
 describe('GroupMembersPanel re-admit (#178)', () => {
-  const PRINT = '12345-67890-12345-67890-12345-67890-12345-67890-12345-67890-12345-67890'
+  const PRINT = '11111-22222-33333-44444-55555-66666-77777-88888-99999-00000-12121-34343'
+  // FingerprintBlock lays it out four groups to a row (#381), never as one breakable run.
+  const ROWS = ['11111-22222-33333-44444', '55555-66666-77777-88888', '99999-00000-12121-34343']
   const two = { members: [member(ME, 'admin'), member(BOB, 'member')] }
 
   it('shows Re-admit only on members named readmittable', () => {
@@ -412,7 +414,8 @@ describe('GroupMembersPanel re-admit (#178)', () => {
       readmittableIds: new Set([BOB]),
       readmitPrompt: { userId: BOB, fingerprint: PRINT },
     })
-    expect(html).toContain(PRINT)
+    for (const row of ROWS) expect(html).toContain(`<span>${row}</span>`)
+    expect(html).not.toContain('break-all')
     expect(html).toContain('It matches, re-admit')
     expect(html).toContain('Cancel')
     expect(html).toContain('in person or on a call')
@@ -421,7 +424,7 @@ describe('GroupMembersPanel re-admit (#178)', () => {
 
   it('ignores a prompt for someone who is not readmittable', () => {
     const html = render(two, { readmitPrompt: { userId: BOB, fingerprint: PRINT } })
-    expect(html).not.toContain(PRINT)
+    expect(html).not.toContain('11111-22222')
     expect(html).not.toContain('It matches')
   })
 

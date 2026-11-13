@@ -38,6 +38,7 @@ import {
 } from './runAcceptInvite'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { FingerprintBlock } from './FingerprintBlock'
 
 function verificationMessageFor(reason: InviteVerificationFailure): string {
   switch (reason) {
@@ -288,7 +289,7 @@ export function AcceptInviteScreen() {
       {state.fingerprint !== '' && (
         <div className="flex flex-col gap-1">
           <p className="text-xs text-muted-foreground">Inviter's fingerprint (matched):</p>
-          <p className="font-mono text-xs break-all">{state.fingerprint}</p>
+          <FingerprintBlock value={state.fingerprint} />
         </div>
       )}
       {acceptError !== null && (

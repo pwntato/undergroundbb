@@ -31,6 +31,7 @@ import type { GrantCheck } from './runGrantCheck'
 import { evidenceText, wrapEvidenceText } from './runAcceptKeyChange'
 import type { MembersView } from './runGroupMembers'
 import { describeAge, type RotationNotice } from './rotationStaleness'
+import { FingerprintBlock } from './FingerprintBlock'
 
 const ROLES: readonly MemberRole[] = ['admin', 'ambassador', 'member']
 
@@ -345,7 +346,7 @@ export function GroupMembersPanel({
                     <span className="text-xs">
                       {wrapEvidenceText(acceptPrompt.wrap, (id) => memberLabel(id, usernames))}
                     </span>
-                    <span className="font-mono text-xs break-all">{acceptPrompt.fingerprint}</span>
+                    <FingerprintBlock value={acceptPrompt.fingerprint} />
                     <span className="flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -399,7 +400,7 @@ export function GroupMembersPanel({
                       know is them. They can read theirs under &quot;Your key fingerprint&quot; on
                       this page. Do not take it from the group or from a message.
                     </span>
-                    <span className="font-mono text-xs break-all">{approvePrompt.fingerprint}</span>
+                    <FingerprintBlock value={approvePrompt.fingerprint} />
                     <span className="flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -449,7 +450,7 @@ export function GroupMembersPanel({
                       key fingerprint" on this page. Do not take it from the group or from a
                       message.
                     </span>
-                    <span className="font-mono text-xs break-all">{readmitPrompt.fingerprint}</span>
+                    <FingerprintBlock value={readmitPrompt.fingerprint} />
                     <span className="flex flex-wrap gap-2">
                       <Button
                         type="button"

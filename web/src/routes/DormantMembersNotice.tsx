@@ -6,6 +6,7 @@
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import type { Dormancy, DormantMember } from './dormancy'
 import { memberLabel } from './memberLabel'
+import { FingerprintBlock } from './FingerprintBlock'
 
 const ENTRY_NOTE: Record<DormantMember['entry'], string> = {
   behind:
@@ -69,7 +70,7 @@ export function DormantMembersNotice({
                     Their keys could not be read, so there is no fingerprint to check.
                   </span>
                 ) : (
-                  <span className="font-mono text-xs break-all">{d.fingerprint}</span>
+                  <FingerprintBlock value={d.fingerprint} />
                 )}
               </li>
             ))}
