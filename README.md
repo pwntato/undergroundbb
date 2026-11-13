@@ -3,8 +3,9 @@
 An end-to-end encrypted message board. Your posts are encrypted in your browser before they reach
 the server, and the server never has the keys to read them.
 
-> **Status: in development.** This is a ground-up rewrite of the
-> [original implementation](https://github.com/pwntato/undergroundbb-legacy). It is not yet usable.
+> **Status: early release.** It runs at [undergroundbb.com](https://undergroundbb.com) and is open for
+> signups, but it has not had an outside security review. This is a ground-up rewrite of the
+> [original implementation](https://github.com/pwntato/undergroundbb-legacy).
 
 ## What it does
 
@@ -31,8 +32,9 @@ keys, and the metadata it needs to route requests — nothing else.
 Your password derives a key via Argon2id. That key unwraps your Ed25519 signing key and X25519
 wrapping key, which live encrypted on the server and are useless without your password. Groups have
 a symmetric key wrapped to each member's public key; it encrypts everything posted in that group,
-and removing a member mints a new one. Inviting someone means unwrapping the group key and
-re-wrapping it to them — all in your browser.
+and in a Rotating group, removing a member mints a new one (an Open group, which a public group
+always is, does not: see [removing a member](docs/GROUP_ADMIN_GUIDE.md#remove-a-member)). Inviting
+someone means unwrapping the group key and re-wrapping it to them — all in your browser.
 
 Because the password is the only credential, you can log in from any device with no pairing step.
 For the same reason, **if you lose both your password and your recovery code, your data is gone.**
@@ -49,8 +51,10 @@ Worth stating up front, because "encrypted" gets used loosely:
   the server, you want a native app with a verified binary.
 - **A stolen database reveals who is in which groups.** Message content stays encrypted, but the
   social graph, usernames, and day-level activity timing do not.
-- **Removing someone does not un-see what they saw.** Rotation cuts off future access; nothing
-  recovers the past.
+- **Removing someone does not un-see what they saw.** In a Rotating group, removal changes the key and
+  so cuts off future access. In an Open group it only stops the server serving the group to them, so
+  someone who kept a copy of the data could still read later posts. Either way, nothing recovers the
+  past.
 - **Your recovery code is a second full password.** Anyone holding it can unwrap your keys and read
   everything you can — it is not a lesser factor, and its strength is entirely wherever you stored
   it. Guard it like the password, and know that changing your password issues a new one and
@@ -123,6 +127,9 @@ inviter logs out and back in (which completes the key handoff), and the invitee 
 A second spec file walks one more account through the lifecycle: a new tab with cold keys asks for the
 password before creating a group, a password change (the old password stops working), recovery with the
 code the change issued, and account deletion together with the group it alone owned.
+A third spec file checks what CloudFront adds in front of the app: the security headers on each route,
+that the Lambda Function URL refuses calls that skip CloudFront, and that every script and stylesheet
+carries a matching integrity hash. It skips itself against a local stack, which has no CloudFront.
 No credentials are stored anywhere.
 
 ```sh
@@ -144,7 +151,10 @@ fail at signup with "Could not create your account"; wait for the window to clea
 Themes are the easiest place to start: a theme is a JSON file of design tokens, and adding one
 touches no application logic. The [theming guide](docs/THEMING.md) covers the tokens and how to write one.
 
-All changes go through a pull request with passing CI.
+All changes go through a pull request with passing CI. CI includes a `govulncheck` step, and a weekly
+run of it, that fails when the Go toolchain or a module has a known vulnerability our code reaches. It
+can go red with no change of yours when Go publishes a fix; the cure is to raise the `go` line in
+`go.mod` to the newest patch.
 
 ## License
 
