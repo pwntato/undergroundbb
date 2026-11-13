@@ -31,6 +31,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { FingerprintBlock } from './FingerprintBlock'
 
 const UNREACHABLE_ERROR = "Couldn't reach the server. Try again."
 const AMBIGUOUS_ERROR =
@@ -275,7 +276,7 @@ function InviteCreatedStep({
       </div>
       <div className="flex flex-col gap-2">
         <Label>Your fingerprint</Label>
-        <p className="font-mono text-sm break-all">{inviterFingerprint}</p>
+        <FingerprintBlock value={inviterFingerprint} />
         <p className="text-xs text-muted-foreground">
           Anyone who opens the link can compare this against what their client shows to confirm
           they're really talking to you.
