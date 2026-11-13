@@ -36,8 +36,8 @@ type Config struct {
 	// RegistrationPolicy is RegistrationOpen or RegistrationClosed. Open means
 	// anyone may create an account, which is what THREAT_MODEL.md assumes
 	// throughout (see docs/DESIGN.md, "Registration policy takes one of two
-	// values"). Closed disables the signup endpoint; accounts are provisioned
-	// out of band.
+	// values"). Closed disables the signup endpoint and nothing else creates
+	// accounts, so it only pauses signups (#387).
 	RegistrationPolicy string
 	// AllowGroupExpirationOff is whether a group in this deployment may set
 	// "no expiration". Doing so switches off the only forward-secrecy

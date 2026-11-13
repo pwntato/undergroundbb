@@ -143,7 +143,7 @@ From now on every push to `main` deploys itself.
 
 ## Choosing registration
 
-`REGISTRATION_POLICY` is `open` (anyone may sign up) or `closed`. **`closed` turns signup off completely and there is no tool in this repository to create accounts afterwards**, so a `closed` deployment has no way to get its first user. There is also no "invite only" value: invites belong to groups, and a link works for someone with no account yet (see `docs/DESIGN.md`, "Registration policy"). Leave it `open` unless you have your own way to provision accounts.
+`REGISTRATION_POLICY` is `open` (anyone may sign up) or `closed`. **`closed` turns signup off completely and there is no tool in this repository to create accounts afterwards**, so a `closed` deployment has no way to get its first user. There is also no "invite only" value: invites belong to groups, and a link works for someone with no account yet (see `docs/DESIGN.md`, "Registration policy"). Existing accounts keep working while it is `closed`, and setting it back to `open` resumes signup, so treat `closed` as a pause switch for signups (for example while you are still setting the site up), not as a way to run a private deployment. The first account on a new deployment is made the normal way, with the policy left `open`. Signing up does not put anyone in a group: a private group is joined only by invite; a public one by invite or by a request an admin or ambassador approves.
 
 ## Running it day to day
 
@@ -163,7 +163,7 @@ Everything below is runtime configuration: nothing about a deployment is compile
 | `DOMAIN` | `localhost:3000` | Public domain this deployment is served from. |
 | `ENVIRONMENT` | `dev` | Deployment environment (`dev` is the local-run label; `prod` when deployed, set by Terraform from the workspace). |
 | `TABLE_NAME` | `undergroundbb` | DynamoDB table backing every record. |
-| `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled, accounts provisioned out of band) — see [docs/DESIGN.md](DESIGN.md). An invalid value fails closed. |
+| `REGISTRATION_POLICY` | `open` | `open` (anyone may sign up) or `closed` (signup disabled; existing accounts keep working, and there is no way to create one, so it is a pause switch) — see [docs/DESIGN.md](DESIGN.md). An invalid value fails closed. |
 | `ALLOW_GROUP_EXPIRATION_OFF` | `true` | Whether a group in this deployment may turn off message expiration entirely. |
 | `DEFAULT_EXPIRATION_DAYS` | `30` | Expiration policy assigned to a group that doesn't choose one explicitly. Must be positive. |
 | `MAX_ROTATING_GROUP_MEMBERS` | `1000` | The most members a Rotating group may have (#60); Open groups have no cap. Values outside 2 to 10000 are clamped with a warning. Sized against the write burst of a key rotation, so check `docs/DESIGN.md` before raising it. Lowering it never removes existing members: it only refuses further joins. |
