@@ -149,9 +149,7 @@ func TestPurgeRemovesTestAccountsAndTheirTestOnlyGroups(t *testing.T) {
 	if err := c.PutPin(ctx, a.UserID, newUserID(t), [][]byte{make([]byte, 32)}, make([]byte, 32), make([]byte, 32), make([]byte, 64), 0, "2026-10-21"); err != nil {
 		t.Fatalf("PutPin: %v", err)
 	}
-	if err := c.PutChallenge(ctx, a.UserID, []byte("nonce"), time.Minute); err != nil {
-		t.Fatalf("PutChallenge: %v", err)
-	}
+	seedChallenge(t, c, a.UserID, []byte("nonce"))
 	sentID := newUserID(t)
 	putRaw(t, c, map[string]types.AttributeValue{"PK": s("USER#" + a.UserID), "SK": s("SENT#" + sentID), "InviteID": s(sentID)})
 	putRaw(t, c, map[string]types.AttributeValue{"PK": s("INVITE#" + sentID), "SK": s("META")})
@@ -198,9 +196,7 @@ func TestPurgeLeavesAGroupWithRealMembersAndWaitsUntilItIsTestOnly(t *testing.T)
 	testUser, realUser, otherTest := registerAccount(t, c, true), registerAccount(t, c, false), registerAccount(t, c, true)
 	mixed := putGroup(t, c, testUser.UserID, realUser.UserID)
 	onlyTest := putGroup(t, c, testUser.UserID, otherTest.UserID)
-	if err := c.PutChallenge(ctx, testUser.UserID, []byte("nonce"), time.Minute); err != nil {
-		t.Fatal(err)
-	}
+	seedChallenge(t, c, testUser.UserID, []byte("nonce"))
 
 	rep, err := c.PurgeTestAccounts(ctx, purgeOnly(testUser.UserID))
 	if err != nil {
@@ -502,9 +498,7 @@ func TestPurgeDryRunReportMatchesARealRun(t *testing.T) {
 	a, b := registerAccount(t, c, true), registerAccount(t, c, true)
 	putGroup(t, c, a.UserID, b.UserID) // shared by both
 	putGroup(t, c, a.UserID)
-	if err := c.PutChallenge(ctx, b.UserID, []byte("n"), time.Minute); err != nil {
-		t.Fatal(err)
-	}
+	seedChallenge(t, c, b.UserID, []byte("n"))
 
 	dry := purgeOnly(a.UserID, b.UserID)
 	dry.DryRun = true

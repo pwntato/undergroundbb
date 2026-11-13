@@ -87,10 +87,10 @@ func utcDay(t time.Time) string {
 // timestamp sitting next to a sort key this schema deliberately built to
 // disclose only a day. Applies to every item that carries a TTL at all --
 // POST#, CMT#, RXN#, NOTIF#, and the invite pair (INVITE#/SENT#) -- except
-// CHALLENGE, whose short (~2 minute) TTL is deliberately NOT rounded: it is
-// not derived from a day-resolution sort key or signed payload the way the
-// others are, and rounding a 2-minute lifetime up to the end of the day
-// would defeat its entire purpose (see login.go's own challengeTTL).
+// CHALLENGE and CHALLENGE#2, whose short (~2 minute) TTL is deliberately NOT
+// rounded: it is not derived from a day-resolution sort key or signed payload
+// the way the others are, and rounding a 2-minute lifetime up to the end of the
+// day would defeat its entire purpose (see login.go's own challengeTTL).
 //
 // Exported from this package (not idgen) because rounding a TTL is a
 // storage-attribute concern specific to how this package persists items,

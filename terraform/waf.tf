@@ -50,17 +50,17 @@
 # recovery endpoint knows to decide their own rate limit rather than
 # silently inheriting the site default.
 #
-# Explicitly NOT a defense against the challenge-slot flood described in
-# docs/THREAT_MODEL.md ("Attacker floods /auth/challenge for one named
-# account") -- confirmed in #10's own issue comment (PR #1 review round 28).
-# WAF rate-based rules key on source IP over a five-minute window; that
-# attack keys on username, so no limit value closes it -- a single attacker
-# IP can still overwrite one victim's challenge slot as fast as this rule's
-# window allows, and rotating IPs defeats it for free regardless of how the
-# limit is tuned. That threat model entry already says nothing in this
-# design bounds it -- this file doesn't change that, and shouldn't be read
-# as though it does. What this rule *does* bound is per-IP bulk harvesting
-# of challenge material, which is the right granularity for that threat.
+# Explicitly NOT a defense against attacks keyed on a username. The one that
+# mattered here was the challenge flood (docs/THREAT_MODEL.md, "Attacker
+# floods /auth/challenge for one named account", confirmed in #10's own issue
+# comment, PR #1 review round 28): WAF rate-based rules key on source IP over
+# a five-minute window, so no limit value reaches an attack that keys on
+# username, and rotating IPs defeats any limit for free. That flood is now
+# closed by how the challenge is issued, not by this file (#390): a request for
+# a user who already has a fresh nonce is answered with that nonce and writes
+# nothing, so a flood cannot replace the nonce the user is signing. What this
+# rule *does* bound is per-IP bulk harvesting of challenge material, which is
+# the right granularity for that threat.
 resource "aws_wafv2_web_acl" "main" {
   provider    = aws.use1
   name        = "undergroundbb-${terraform.workspace}"
@@ -122,8 +122,9 @@ resource "aws_wafv2_web_acl" "main" {
   # challenge/recovery material and the hot-partition write rate against a
   # single named user's PROFILE/RECOVERY items. The reason it is 100 and
   # not 30 is the History paragraph below. See the header comment for
-  # why no value here closes the username-keyed challenge-flood threat --
-  # that's a property of WAF keying on IP, not of this number.
+  # why no value here can bound a username-keyed attack (the challenge flood
+  # was one, and is now closed in the challenge itself, #390) -- that's a
+  # property of WAF keying on IP, not of this number.
   #
   # History of the number: the rule shipped at 30. That proved too low in
   # practice. Every full page load calls GET /api/auth/session, which this
@@ -164,9 +165,9 @@ resource "aws_wafv2_web_acl" "main" {
   # falls through to rate-limit-default like any other authenticated route.
   #
   # PR #118 review: this rule is IP-keyed (aggregate_key_type = "IP" above),
-  # the same limitation this file's header already names for the
-  # challenge-slot flood -- 100 req/5min bounds one source, not one target
-  # account. A distributed guessing attempt against a single named account's
+  # the same limitation this file's header already names for username-keyed
+  # attacks such as the (now closed) challenge flood -- 100 req/5min bounds
+  # one source, not one target account. A distributed guessing attempt against a single named account's
   # recovery code, spread across many source IPs, is not bounded by this
   # rule. For a full-entropy 26-character code (docs/DESIGN.md: 128 bits of
   # CSPRNG output) that's not a practical attack; it stops being merely

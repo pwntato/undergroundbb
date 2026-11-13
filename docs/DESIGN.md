@@ -374,8 +374,11 @@ gone. Reactions are unsigned, so what they show is only as trustworthy as the se
 ### Login
 
 1. Client sends a username to `POST /api/auth/challenge`.
-2. Server generates a random nonce, **stores it** as the `USER#<uuid>` / `CHALLENGE` item with
-   a short TTL, and returns it along with the user's uuid, salt, and wrapped private keys. The uuid
+2. Server **stores a random nonce** in one of the user's two challenge items (`CHALLENGE` and
+   `CHALLENGE#2`) with a short TTL and returns it along with the user's uuid, salt, and wrapped
+   private keys. If a nonce with at least 45 seconds of life left is already waiting, the server
+   returns that one instead of writing a new one (see "The challenge is a bounded pair of slots per
+   user" below). The uuid
    is included because the client needs it to build `CredentialWrapAAD` before it can unwrap the
    keys (see the AAD table above) — for a fresh device with no prior session, this is the only
    response that hands it one. An unknown username gets a freshly random decoy uuid alongside the
@@ -411,48 +414,65 @@ terms, not merely on the harvesting terms discussed under Infrastructure below. 
 is short (a minute or two, enough for a slow Argon2id derivation on a phone) so abandoned challenges
 expire quickly rather than accumulating.
 
-**The challenge is a single slot per user — `CHALLENGE`, not `CHALLENGE#<nonce>` — and that is a
-bound, not a tidiness preference.** Putting the nonce in the sort key makes every request a distinct
-item, so an attacker who picks an enumerable username can inflate that user's partition without
-limit, and the only thing removing the items is a TTL. TTL deletion is eventual — typically within
-48 hours, as the cost section says — so a short TTL promises only that items become *eligible*, and
-the steady-state count for a targeted user can far exceed what the rate limit implies per window.
-It also lands in `USER#<uuid>`, the same partition as `PROFILE`, which is the hottest item that user
-has and the one every login must read, so this is contention against the legitimate login path and
-not merely storage. Every other unauthenticated write in the system is bounded this way already: the
-failure counter is an attribute update on one existing item, so hammering it costs contention but
-not cardinality. Overwriting one slot gives the challenge the same property, and a new challenge
-invalidates any outstanding one. Single use is unaffected — the conditional delete still spends the
-nonce and two racing requests still resolve to one winner.
+**The challenge is a bounded pair of slots per user, `CHALLENGE` and `CHALLENGE#2`, never
+`CHALLENGE#<nonce>`, and that is a bound, not a tidiness preference.** Putting the nonce in the sort
+key makes every request a distinct item, so an attacker who picks an enumerable username can inflate
+that user's partition without limit, and the only thing removing the items is a TTL. TTL deletion is
+eventual, typically within 48 hours, as the cost section says, so a short TTL promises only that items
+become *eligible*, and the steady-state count for a targeted user can far exceed what the rate limit
+implies per window. It also lands in `USER#<uuid>`, the same partition as `PROFILE`, which is the
+hottest item that user has and the one every login must read, so this is contention against the
+legitimate login path and not merely storage. Every other unauthenticated write in the system is
+bounded this way already: the failure counter is an attribute update on one existing item, so
+hammering it costs contention but not cardinality. Two fixed slots give the challenge the same
+property: at most two items per user, however often it is asked.
 
-**The trade this makes is a cardinality problem for a login-availability one, and that is the
-honest way to state it.** The benign cost is small: a user with two tabs mid-login has the first
-tab's challenge replaced, which fails closed — that tab retries, and nothing is racing to overwrite
-it again. The adversarial cost is not small, and it did not exist before this change. **The slot is
-one per user and any unauthenticated caller who knows the username can overwrite it**, so an
-attacker requesting challenges for a named account in a loop invalidates that user's outstanding
-nonce continuously: every time she finishes an Argon2id derivation — deliberately slow, and slowest
-on exactly the phone the TTL is sized for — and returns her signature, the conditional delete finds
-a different nonce and fails. **She cannot complete a login for as long as the flood continues, and
-retrying is what loses**, because each retry re-derives Argon2id and races again. The slower the
-client, the more reliably it loses.
+**A request is answered with the nonce already waiting, and a nonce is replaced only after it has
+expired.** The first version of this design had one slot that every request overwrote, and that
+turned a bound on cardinality into a denial of login (#390). Anyone who knew a username could request
+challenges for it in a loop, replacing the nonce while the user's browser was still running Argon2id,
+so that the user's signature came back matching a nonce that was gone. Retrying lost again, and the
+slower the device the more reliably. It left no trace: no signature failed, so the lockout counter
+stayed at zero. The rules now are:
 
-Two things make that worth stating rather than filing under "rate limits handle it". It **never
-touches the lockout**: no signature failure is recorded, so the counter stays at zero and the
-account is never locked — an operator checking the control the threat model names for account
-denial-of-service finds nothing wrong. And with the nonce in the sort key this attack was
-impossible: the flood cost unbounded storage but could not invalidate anyone's outstanding
-challenge. **Nothing in this design actually bounds it** — the lockout is not that control, and the
-WAF rate rules that would be are keyed on source IP while the attack is keyed on username. See the
-rate-limiting discussion under Infrastructure, which works the arithmetic.
+1. If a slot holds a nonce with at least **45 seconds** of its life left, return it. The nonce is not
+   a secret (the server sends it in plaintext, and only a valid signature can spend it), so giving it
+   to whoever asks, the attacker included, gives them nothing they can use, and the user's signature
+   still lands.
+2. Otherwise write the new nonce into a slot that is **empty or already expired**, with a condition
+   on exactly that, so two concurrent requests cannot both write it. A request that loses the race
+   reads again and returns the winner's nonce.
 
-**The mechanism can be closed rather than documented, and is deliberately not in v1.** Accepting the
-write only when the existing challenge is absent or already past its TTL — one conditional write —
-keeps the single-item cardinality bound and makes the flood fail against the attacker instead of
-against the user. It is deferred because it is not free: the slot then belongs to whoever asked
-first for the length of the TTL, so the two-tab case reverses (the second tab is the one that
-waits), and a user whose own abandoned challenge is still live is briefly blocked by it. Both are
-tolerable, and neither is a reason to leave the attack undocumented in the meantime.
+Expiry is judged against the clock, never by whether the item exists, because DynamoDB can leave an
+expired item in place for up to 48 hours. That holds where a nonce is spent as well as where one is
+handed out: the conditional delete also requires that the nonce has not expired.
+
+Two things the obvious alternatives get wrong. **Refusing the write while a challenge is live** only
+reverses the problem: the attacker's nonce holds the slot, the user's request is refused, and the
+attacker refreshes it every two minutes. **One slot with a refresh once under a minute is left**
+still replaces a nonce that was handed out moments earlier: a user who asked with 46 seconds left
+holds a nonce that the next request, 2 seconds on, overwrites, while the user is still deriving. With
+two slots the nonce being retired keeps its slot until it has really expired and the new one goes in
+the other. That needs a lifetime of more than twice the floor: a slot is rewritten only once expired,
+and the second was written no earlier than 45 seconds before the first stopped being fresh, so when
+no fresh nonce exists one of the two is always expired or empty. With a two minute lifetime and a 45
+second floor that holds, and the code refuses arguments that break it. The guarantee is that **a
+nonce handed out is spendable for at least 45 seconds, whatever anyone else does to the endpoint**,
+which is meant to cover an Argon2id derivation on a phone with room to spare. It also bounds the
+write rate per username without a per-username counter: a write happens only when no fresh nonce
+exists, so there is at most one per 75 seconds for a given user, however fast requests arrive.
+
+**What this does not change.** Everyone who asks gets the same nonce, so someone who is not the user
+can spend it by sending a bad signature before the user does. That is the lockout path, not a silent
+one: the bad signature is counted, five of them lock the account for five minutes, and a locked
+account says so. It is the denial the threat model already names ("The lockout is itself an
+availability weakness") and costs the attacker one challenge request and one verify request per
+attempt, the same as before; what is gone is the free, invisible one. Two tabs mid-login now share a
+nonce, so the first to finish wins and the other retries, as before. A real username asked twice gets
+the same nonce while an unknown one gets a fresh random nonce each time, one more way to tell them
+apart, which adds nothing to what the stable uuid already reveals (see THREAT_MODEL.md, Usernames).
+Each request now does one consistent read of the two items before any write, and a verify that
+presents an unknown nonce does up to two failed conditional deletes instead of one.
 
 **The session cookie authenticates; it decrypts nothing.** It is a short-lived signed token —
 there is no session store, so the server holds nothing to look up — carried in an `HttpOnly`,
@@ -517,7 +537,7 @@ harvesting either, since an attacker who wants blobs collects them before provok
 usernames they never attack.
 
 **Checking at step 2 would also make the two unauthenticated legs coordinate through the hottest
-item in the partition**, which is the interaction the single-slot challenge decision was reasoning
+item in the partition**, which is the interaction the bounded-slot challenge decision was reasoning
 about: the challenge leg would *read* lock state that the verify leg *writes*, both unauthenticated,
 both on `PROFILE`, adding contention on exactly the item every login must already read. And it would
 hand an attacker a third denial path — five bad signatures would suppress challenge issuance as well
@@ -1696,7 +1716,7 @@ name, unsolicited. That matters because of what the threat model says a dump rev
 is the pairwise case, the smallest anonymity set and the most to give away, and a dump cannot
 distinguish "these two corresponded" from "a stranger opened a DM at this person who never replied".
 Anyone reading it draws the first conclusion. It is also a caller-chosen write into another user's
-partition, which is the shape the single-slot challenge argument rejects one section earlier.
+partition, which is the shape the bounded-slot challenge argument rejects one section earlier.
 
 Deferring the row costs nothing structurally: the group and the sender's own row exist immediately,
 the message is stored, and delivery works — it is the same membership item written at a different
@@ -2668,7 +2688,7 @@ truncation has to re-encrypt whenever the chain floor advances past its generati
 |---|---|---|---|---|---|
 | User | `USER#<uuid>` | `PROFILE` | | | never |
 | Recovery blob | `USER#<uuid>` | `RECOVERY` | | | never |
-| Login challenge | `USER#<uuid>` | `CHALLENGE` | | | ~2 min |
+| Login challenge | `USER#<uuid>` | `CHALLENGE`, `CHALLENGE#2` | | | ~2 min |
 | Username claim | `USERNAME#<lower>` | `CLAIM` | | | never |
 | Group | `GROUP#<gid>` | `META` | `PUBLIC#<shard>` (public only) | `NAME#<name>#<gid>` | never |
 | Membership | `GROUP#<gid>` | `MEMBER#<uuid>` | `USER#<uuid>` | `GROUP#<gid>` | never |
@@ -2975,7 +2995,7 @@ The write is still **server-mediated and server-authorized** — the invitee sup
 nothing else, and the server composes the transaction after verifying the invite. A second party
 never names a row in the inviter's partition directly, which matters because `USER#<inviter>` also
 holds their `PROFILE`, `RECOVERY`, `CHALLENGE` and `PIN#` rows, and letting a caller choose what to
-write there is the shape the single-slot challenge argument rejects.
+write there is the shape the bounded-slot challenge argument rejects.
 
 The signed `expires_at` keeps its real job of
 bounding how long an *unaccepted* link stays usable, which is the property the signature protects
@@ -3595,22 +3615,19 @@ CloudFront  (+ AWS WAF)
 
 Same origin for app and API, so there is no CORS configuration. The Lambda holds no state in
 **memory** between requests and never possesses key material. The single piece of cross-request
-state it writes is the login challenge item, which lives in DynamoDB with a short TTL and is spent
-by a conditional delete.
+state it writes is the login challenge (one of two items per user), which lives in DynamoDB with a
+short TTL and is spent by a conditional delete.
 
 Rate limiting is enforced by WAF rate-based rules, which key on **source IP** over a five-minute
-window. **That granularity is the right one for harvesting and the wrong one for the challenge
-flood, and the difference is not cosmetic.** Harvesting is a per-source activity, so an IP-keyed
-bound reaches it. The challenge flood is keyed on a *username* — an attacker overwriting one named
-user's challenge slot — and nothing here counts challenge requests per username. This document
-already supplies the refutation, in the threat model's argument for keying the lockout on the
-account: a source-scoped counter is trivially defeated by rotating IPs.
-
-**So the honest statement is that the challenge flood is bounded by nothing in this design**, and
-the threat model says so rather than pointing at a rate limit that cannot reach it. A per-username
-counter is not a WAF feature — it is application state, which on an unauthenticated path means
-exactly the write the single-slot decision was trying not to add. That changes the calculus on the
-deferred conditional write above: it is deferred against an alternative control that does not exist.
+window. That granularity is the right one for harvesting, which is a per-source activity. It cannot
+reach an attack keyed on a *username*, and this document has already supplied the reason in the threat
+model's argument for keying the lockout on the account: a source-scoped counter is trivially defeated
+by rotating IPs. The challenge flood was that attack, and it is closed by the design of the challenge
+and not by a rate: a request for a user who already has a fresh nonce writes nothing and returns that
+nonce, so a flood from any number of addresses changes neither what the user holds nor how many items
+exist, and the write rate for one username is at most one per 75 seconds (see "The challenge is a
+bounded pair of slots per user"). What a flood still costs is one consistent read per request, paid
+on the IP-keyed budget like any other.
 
 Note what rate limiting is and is not protecting: Argon2id
 runs in the **client's** browser for login, so a login costs the server only a DynamoDB read and, on
@@ -3662,7 +3679,7 @@ particular deployment is baked into the bundle.
 **Registration policy takes one of two values, `open` or `closed`, and the choice retunes several
 threat-model claims.** `open` means anyone may create an account, which is what the threat model
 assumes throughout: usernames are confirmable one at a time through the signup availability check,
-the lockout and challenge-flood denial paths are available to anyone, and the anonymity-set argument
+the lockout denial path is available to anyone, and the anonymity-set argument
 depends on pseudonyms being freely mintable. `closed` means the signup endpoint is disabled and no
 account can be created through the app (this repository has no tool to create one another way, so a
 `closed` deployment that has no accounts yet cannot get its first while it stays `closed`; that is

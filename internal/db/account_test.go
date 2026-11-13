@@ -35,8 +35,11 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	if err := c.PutVerification(ctx, uid, "other-"+randomSuffix(t), "00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000", make([]byte, 32), make([]byte, 64), "2026-10-21"); err != nil {
 		t.Fatalf("PutVerification: %v", err)
 	}
-	if err := c.PutChallenge(ctx, uid, []byte("nonce"), time.Minute); err != nil {
-		t.Fatalf("PutChallenge: %v", err)
+	seedChallenge(t, c, uid, []byte("nonce"))
+	// Fill the second slot too: 80s on, the first nonce has under the floor left, so a new one
+	// goes into CHALLENGE#2.
+	if _, err := c.IssueChallenge(ctx, uid, []byte("second-nonce"), testChallengeTTL, testChallengeMinUsable, time.Now().Add(80*time.Second)); err != nil {
+		t.Fatalf("IssueChallenge (second slot): %v", err)
 	}
 
 	if err := c.RecordLogin(ctx, uid, "2026-10-05"); err != nil {
@@ -76,7 +79,7 @@ func TestDeleteAccountTombstonesProfileAndRemovesLoginRows(t *testing.T) {
 	if _, err := c.LookupUserByUsername(ctx, in.UsernameLower); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("login lookup of a deleted account = %v, want ErrUserNotFound", err)
 	}
-	for _, sk := range []string{"RECOVERY", "CHALLENGE"} {
+	for _, sk := range []string{"RECOVERY", challengeSlotA, challengeSlotB} {
 		if itemExists(t, c, "USER#"+uid, sk) {
 			t.Errorf("%s still exists", sk)
 		}

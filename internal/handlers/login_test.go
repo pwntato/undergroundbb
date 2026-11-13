@@ -386,27 +386,31 @@ func TestLockoutAfterFiveFailures(t *testing.T) {
 	}
 }
 
-// TestChallengeFloodDoesNotLockout covers issue #27's round-24 comment
-// directly: repeatedly requesting (and thereby invalidating) a challenge
-// must not increment the lockout counter, since a failed conditional
-// delete is not a signature failure.
-func TestChallengeFloodDoesNotLockout(t *testing.T) {
+// TestChallengeFloodDoesNotBlockLogin is #390 end to end. Somebody who knows the username asks
+// for challenges in a loop while the user is deriving their signature. The user's nonce must still
+// be good when the signature arrives, and the flood must not have touched the lockout counter
+// either (issue #27's round-24 comment: a failed conditional delete is not a signature failure).
+func TestChallengeFloodDoesNotBlockLogin(t *testing.T) {
 	h := New(config.FromEnv(), testDB(t))
 	user := registerTestUser(t, h)
 
-	// Issue a challenge, then immediately overwrite it several times --
-	// simulating a flood that invalidates the first nonce before it's used.
 	first := doChallenge(t, h, user.username)
 	var firstCh challengeResponse
 	if err := json.Unmarshal(first.Body.Bytes(), &firstCh); err != nil {
 		t.Fatalf("decoding challenge response: %v", err)
 	}
-	for range lockThreshold + 2 {
-		doChallenge(t, h, user.username)
+	for range lockThreshold + 20 {
+		rec := doChallenge(t, h, user.username)
+		var ch challengeResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &ch); err != nil {
+			t.Fatalf("decoding flood response: %v", err)
+		}
+		if ch.Nonce != firstCh.Nonce {
+			t.Fatalf("a request during the window was handed a different nonce: the user's would be replaced")
+		}
 	}
 
-	// Try to verify against the now-stale first nonce -- this must fail
-	// (challenge mismatch) but must NOT have moved the lockout counter.
+	// The user's signature over the FIRST nonce arrives after the flood and must land.
 	nonce, _ := base64.StdEncoding.DecodeString(firstCh.Nonce)
 	sig, err := crypto.Sign(user.signPriv, crypto.ContextLoginChallenge, nonce)
 	if err != nil {
@@ -417,15 +421,88 @@ func TestChallengeFloodDoesNotLockout(t *testing.T) {
 		Nonce:     firstCh.Nonce,
 		Signature: base64.StdEncoding.EncodeToString(sig),
 	})
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("stale-challenge verify status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login after a flood status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+// TestChallengeIssuedAgainAfterSpend: a spent nonce is gone, and the next request gets a new one.
+func TestChallengeIssuedAgainAfterSpend(t *testing.T) {
+	h := New(config.FromEnv(), testDB(t))
+	user := registerTestUser(t, h)
+
+	first := doChallenge(t, h, user.username)
+	var firstCh challengeResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstCh); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	nonce, _ := base64.StdEncoding.DecodeString(firstCh.Nonce)
+	sig, _ := crypto.Sign(user.signPriv, crypto.ContextLoginChallenge, nonce)
+	if rec := doVerify(t, h, verifyRequest{Username: user.username, Nonce: firstCh.Nonce, Signature: base64.StdEncoding.EncodeToString(sig)}); rec.Code != http.StatusOK {
+		t.Fatalf("first login status = %d", rec.Code)
 	}
 
-	// A real login (fresh challenge, correct signature) must still succeed
-	// -- confirming no lockout was triggered by the flood above.
-	final := completeLogin(t, h, user)
-	if final.Code != http.StatusOK {
-		t.Errorf("post-flood login status = %d, want %d, body: %s", final.Code, http.StatusOK, final.Body.String())
+	var next challengeResponse
+	if err := json.Unmarshal(doChallenge(t, h, user.username).Body.Bytes(), &next); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if next.Nonce == firstCh.Nonce {
+		t.Error("the nonce that was just spent was handed out again")
+	}
+}
+
+// TestSharedNonceCanBeSpentWithABadSignature documents what #390 leaves in place on purpose.
+// Everyone who asks gets the same nonce, so someone who is not the user can spend it by sending a
+// bad signature before the user does. That is the lockout path, not a silent one: the bad
+// signature is counted, and five of them lock the account (TestLockoutAfterFiveFailures). The
+// design accepts that denial because it shows (an account that is locked says so) and is bounded
+// (five minutes, rate limited), unlike the flood it replaces.
+func TestSharedNonceCanBeSpentWithABadSignature(t *testing.T) {
+	database := testDB(t)
+	h := New(config.FromEnv(), database)
+	user := registerTestUser(t, h)
+	_, otherPriv, err := crypto.GenerateSigningKey()
+	if err != nil {
+		t.Fatalf("GenerateSigningKey: %v", err)
+	}
+
+	userCh := doChallenge(t, h, user.username)
+	var ch challengeResponse
+	if err := json.Unmarshal(userCh.Body.Bytes(), &ch); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	// The other party asks, gets the same nonce, and spends it with a signature that is not the user's.
+	var theirs challengeResponse
+	if err := json.Unmarshal(doChallenge(t, h, user.username).Body.Bytes(), &theirs); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if theirs.Nonce != ch.Nonce {
+		t.Fatal("setup: the second request was not handed the same nonce")
+	}
+	nonce, _ := base64.StdEncoding.DecodeString(theirs.Nonce)
+	badSig, _ := crypto.Sign(otherPriv, crypto.ContextLoginChallenge, nonce)
+	rec := doVerify(t, h, verifyRequest{Username: user.username, Nonce: theirs.Nonce, Signature: base64.StdEncoding.EncodeToString(badSig)})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad-signature verify status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// The user's own signature now finds the nonce spent...
+	goodSig, _ := crypto.Sign(user.signPriv, crypto.ContextLoginChallenge, nonce)
+	rec = doVerify(t, h, verifyRequest{Username: user.username, Nonce: ch.Nonce, Signature: base64.StdEncoding.EncodeToString(goodSig)})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("user's verify after the nonce was spent status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	// ...and the attempt was counted, which is what makes this the visible lockout path.
+	got, err := database.GetUserByID(context.Background(), user.userID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if got.FailedVerifyCount != 1 {
+		t.Errorf("FailedVerifyCount = %d, want 1", got.FailedVerifyCount)
+	}
+	// The user can simply ask again and log in.
+	if rec := completeLogin(t, h, user); rec.Code != http.StatusOK {
+		t.Errorf("retry login status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
