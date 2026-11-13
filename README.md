@@ -38,7 +38,7 @@ Because the password is the only credential, you can log in from any device with
 For the same reason, **if you lose both your password and your recovery code, your data is gone.**
 That is a design property, not a bug: there is nothing on the server that could restore it.
 
-A plain-language walkthrough is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) and the full detail in [docs/DESIGN.md](docs/DESIGN.md). To use the app, see the [user guide](docs/USER_GUIDE.md).
+A plain-language walkthrough is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) and the full detail in [docs/DESIGN.md](docs/DESIGN.md). To use the app, see the [user guide](docs/USER_GUIDE.md); to run a group, see the [group admin guide](docs/GROUP_ADMIN_GUIDE.md).
 
 ## What this does not protect against
 

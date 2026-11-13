@@ -6,6 +6,8 @@ Two people appear in the screenshots, Alice and Bob, on a local test copy of the
 
 For why the app works the way it does, see [How it works](HOW_IT_WORKS.md).
 
+If you run a group, the [Group admin guide](GROUP_ADMIN_GUIDE.md) covers invites, join requests, roles and keeping a group alive.
+
 ## The one thing to know first
 
 Everything you write in a group is encrypted in your browser with a key only the group's members hold. The server never sees your password and cannot read your posts. That has a cost: **if you lose both your password and your recovery code, nobody can get your account back**, not even the person who runs the site. Save the recovery code when it is shown.
