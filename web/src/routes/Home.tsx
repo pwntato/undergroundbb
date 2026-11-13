@@ -25,8 +25,8 @@ export function Home() {
       <div className="flex flex-col items-center gap-4 text-center">
         <h1 className="text-2xl font-bold text-primary">UndergroundBB</h1>
         <p className="max-w-md text-sm text-muted-foreground">
-          A private message board for groups you trust. Everything you write is encrypted in your
-          browser, and the server never sees your password or can read your posts.
+          A private message board for groups you trust. Everything you write in a group is encrypted
+          in your browser, and the server never sees your password or can read your posts.
         </p>
         <div className="flex gap-2">
           <Button asChild>

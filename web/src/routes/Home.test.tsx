@@ -45,9 +45,10 @@ describe('Home', () => {
     expect(html).toBe('')
   })
 
-  it('shows the signup/login prompt for a logged-out session, unchanged from #33', () => {
+  it('shows what the site is and the signup/login prompt for a logged-out session', () => {
     const html = renderWithSession(sessionState({ status: 'ready', userId: null }))
     expect(html).toContain('A private message board')
+    expect(html).toContain('Everything you write in a group is encrypted')
     expect(html).not.toContain('Frontend scaffold')
     expect(html).toContain('Sign up')
     expect(html).toContain('Log in')
