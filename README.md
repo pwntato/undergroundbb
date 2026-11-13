@@ -127,9 +127,11 @@ inviter logs out and back in (which completes the key handoff), and the invitee 
 A second spec file walks one more account through the lifecycle: a new tab with cold keys asks for the
 password before creating a group, a password change (the old password stops working), recovery with the
 code the change issued, and account deletion together with the group it alone owned.
-A third spec file checks what CloudFront adds in front of the app: the security headers on each route,
-that the Lambda Function URL refuses calls that skip CloudFront, and that every script and stylesheet
-carries a matching integrity hash. It skips itself against a local stack, which has no CloudFront.
+A third spec file checks what CloudFront adds in front of the app: the security headers on each route
+and that every script and stylesheet carries a matching integrity hash, and, when `E2E_FUNCTION_URL`
+is set, that the Lambda Function URL refuses calls that skip CloudFront. It skips itself against a
+local stack, which has no CloudFront. The deploy workflow does not set `E2E_FUNCTION_URL` (the URL is
+not public), so that last check is the one test the post-deploy run reports as skipped.
 No credentials are stored anywhere.
 
 ```sh
@@ -154,7 +156,7 @@ touches no application logic. The [theming guide](docs/THEMING.md) covers the to
 All changes go through a pull request with passing CI. CI includes a `govulncheck` step, and a weekly
 run of it, that fails when the Go toolchain or a module has a known vulnerability our code reaches. It
 can go red with no change of yours when Go publishes a fix; the cure is to raise the `go` line in
-`go.mod` to the newest patch.
+`go.mod` to the newest patch or, for a module, to update that module to the fixed version.
 
 ## License
 
