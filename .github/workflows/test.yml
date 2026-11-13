@@ -103,15 +103,6 @@ jobs:
         if: needs.detect.outputs.go == 'true'
         run: go vet ./...
 
-      # #391: fails when the toolchain or a module has a known vulnerability that our code
-      # reaches. The vulnerability database is fetched live, so this goes red whenever Go
-      # publishes a standard library fix; the cure is to bump the `go` line in go.mod to the
-      # newest patch (setup-go installs exactly that version). The tool is pinned for a
-      # reproducible run; its version does not limit which advisories it knows.
-      - name: govulncheck
-        if: needs.detect.outputs.go == 'true'
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-
       # -race is not optional here: the design has five contested writes
       # (signup, username claim, comment ordinal, challenge delete, invite
       # acceptance, credential re-wrap) whose tests exercise concurrency.
@@ -127,6 +118,18 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.0
+
+      # #391: fails when the toolchain or a module has a known vulnerability that our code
+      # reaches. The vulnerability database is fetched live, so this goes red whenever Go
+      # publishes a standard library fix; the cure is to bump the `go` line in go.mod to the
+      # newest patch (setup-go installs exactly that version). Last in the job, so a red
+      # result here does not hide the test and lint results of an unrelated PR (a step's own
+      # `if:` gets an implicit success()). The weekly govulncheck.yml runs the same check
+      # between PRs. The tool is pinned for a reproducible run; its version does not limit
+      # which advisories it knows.
+      - name: govulncheck
+        if: needs.detect.outputs.go == 'true'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   web:
     needs: detect
