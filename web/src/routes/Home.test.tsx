@@ -47,7 +47,8 @@ describe('Home', () => {
 
   it('shows the signup/login prompt for a logged-out session, unchanged from #33', () => {
     const html = renderWithSession(sessionState({ status: 'ready', userId: null }))
-    expect(html).toContain('Frontend scaffold')
+    expect(html).toContain('A private message board')
+    expect(html).not.toContain('Frontend scaffold')
     expect(html).toContain('Sign up')
     expect(html).toContain('Log in')
     // Must not show any group-list chrome for a logged-out visitor.
@@ -61,7 +62,7 @@ describe('Home', () => {
     // HomePanel.test.tsx). Account links and Log out now live in the shell's sidebar, not here.
     const html = renderWithSession(sessionState({ status: 'ready', userId: 'user-1' }))
     expect(html).toContain('Loading your groups')
-    expect(html).not.toContain('Frontend scaffold')
+    expect(html).not.toContain('A private message board')
     expect(html).not.toContain('Log out')
     expect(html).not.toContain('Sign up')
   })
