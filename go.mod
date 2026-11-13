@@ -1,6 +1,6 @@
 module github.com/pwntato/undergroundbb
 
-go 1.26.2
+go 1.26.11
 
 require (
 	github.com/aws/aws-lambda-go v1.55.0
