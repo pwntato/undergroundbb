@@ -69,55 +69,59 @@ export function GroupList({
                 {groupLabel(group, usernames)}
                 <UnreadBadge group={group} />
               </span>
-              <span className="flex flex-wrap items-center gap-2">
-                <Link
-                  to={`/groups/${group.groupId}/posts`}
-                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
-                >
-                  Posts
-                </Link>
-                <Link
-                  to={`/groups/${group.groupId}/posts/new`}
-                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
-                >
-                  Write a post
-                </Link>
-                <Link
-                  to={`/groups/${group.groupId}/members`}
-                  className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
-                >
-                  Members
-                </Link>
-                {group.groupType !== 'dm' && (
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 [&>span:first-child:has(+span:not(:empty))]:border-r-1 [&>span:first-child:has(+span:not(:empty))]:border-muted-foreground/50 [&>span:first-child:has(+span:not(:empty))]:pr-2">
+                <span className="flex items-center gap-x-2 whitespace-nowrap empty:hidden [&>a+a]:border-l-1 [&>a+a]:border-muted-foreground/50 [&>a+a]:pl-2">
                   <Link
-                    to={`/groups/${group.groupId}/settings`}
+                    to={`/groups/${group.groupId}/posts`}
                     className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                   >
-                    Settings
+                    Posts
                   </Link>
-                )}
-                {group.groupType !== 'dm' &&
-                  (group.role === 'admin' || group.role === 'ambassador') && (
-                    // Issue #38: only an Admin or Ambassador may create an invite (the
-                    // server's own 403 is the real check -- this is just not offering
-                    // the link to a plain Member, who would only see it fail).
+                  <Link
+                    to={`/groups/${group.groupId}/posts/new`}
+                    className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
+                  >
+                    Write a post
+                  </Link>
+                  <Link
+                    to={`/groups/${group.groupId}/members`}
+                    className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
+                  >
+                    Members
+                  </Link>
+                </span>
+                <span className="flex items-center gap-x-2 whitespace-nowrap empty:hidden [&>a+a]:border-l-1 [&>a+a]:border-muted-foreground/50 [&>a+a]:pl-2">
+                  {group.groupType !== 'dm' && (
                     <Link
-                      to={`/groups/${group.groupId}/invite`}
+                      to={`/groups/${group.groupId}/settings`}
                       className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
                     >
-                      Invite
+                      Settings
                     </Link>
                   )}
-                {group.visibility === 'public' &&
-                  (group.role === 'admin' || group.role === 'ambassador') && (
-                    // #72: the queue of people asking to join this public group.
-                    <Link
-                      to={`/groups/${group.groupId}/requests`}
-                      className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
-                    >
-                      Requests
-                    </Link>
-                  )}
+                  {group.groupType !== 'dm' &&
+                    (group.role === 'admin' || group.role === 'ambassador') && (
+                      // Issue #38: only an Admin or Ambassador may create an invite (the
+                      // server's own 403 is the real check -- this is just not offering
+                      // the link to a plain Member, who would only see it fail).
+                      <Link
+                        to={`/groups/${group.groupId}/invite`}
+                        className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
+                      >
+                        Invite
+                      </Link>
+                    )}
+                  {group.visibility === 'public' &&
+                    (group.role === 'admin' || group.role === 'ambassador') && (
+                      // #72: the queue of people asking to join this public group.
+                      <Link
+                        to={`/groups/${group.groupId}/requests`}
+                        className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
+                      >
+                        Requests
+                      </Link>
+                    )}
+                </span>
                 <span className="text-xs text-muted-foreground">
                   {group.groupType === 'dm' ? 'direct message' : group.role}
                 </span>
