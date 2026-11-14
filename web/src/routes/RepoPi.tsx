@@ -10,11 +10,6 @@ export function RepoPi() {
   const session = useSession()
   const { pathname } = useLocation()
   if (!repoPiShown(pathname, session)) return null
-  return <RepoPiLink />
-}
-
-/** The link itself, with no hooks, so a test can render it on its own. */
-export function RepoPiLink() {
   return (
     <a
       href={REPO_URL}
