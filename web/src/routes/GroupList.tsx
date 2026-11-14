@@ -69,7 +69,7 @@ export function GroupList({
                 {groupLabel(group, usernames)}
                 <UnreadBadge group={group} />
               </span>
-              <span className="flex flex-wrap items-center gap-2">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 [&>a+a]:border-l [&>a+a]:border-muted-foreground/50 [&>a+a]:pl-2">
                 <Link
                   to={`/groups/${group.groupId}/posts`}
                   className="inline-flex min-h-[1.5rem] items-center text-xs text-primary underline-offset-4 hover:underline"
