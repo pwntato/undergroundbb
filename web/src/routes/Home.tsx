@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { useSession } from '@/lib/session/useSession'
 import { useGroups } from './groupsContext'
 import { HomePanel } from './HomePanel'
+import { REPO_LINK_REL, REPO_URL } from './repoLink'
 
 export function Home() {
   const session = useSession()
@@ -36,6 +37,14 @@ export function Home() {
             <Link to="/login">Log in</Link>
           </Button>
         </div>
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel={REPO_LINK_REL}
+          className="inline-flex min-h-[1.5rem] items-center text-sm text-muted-foreground underline underline-offset-4 hover:text-primary"
+        >
+          Source code on GitHub
+        </a>
       </div>
     )
   }

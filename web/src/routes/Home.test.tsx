@@ -52,6 +52,11 @@ describe('Home', () => {
     expect(html).not.toContain('Frontend scaffold')
     expect(html).toContain('Sign up')
     expect(html).toContain('Log in')
+    // #395: the worded link to the source repo, opening a new tab without a referrer.
+    expect(html).toContain(
+      '<a href="https://github.com/pwntato/undergroundbb" target="_blank" rel="noopener noreferrer"',
+    )
+    expect(html).toContain('Source code on GitHub</a>')
     // Must not show any group-list chrome for a logged-out visitor.
     expect(html).not.toContain('Loading your groups')
     expect(html).not.toContain('Create a group')
@@ -66,5 +71,6 @@ describe('Home', () => {
     expect(html).not.toContain('A private message board')
     expect(html).not.toContain('Log out')
     expect(html).not.toContain('Sign up')
+    expect(html).not.toContain('Source code on GitHub')
   })
 })

@@ -14,6 +14,7 @@ import { GroupSettingsScreen } from '@/routes/GroupSettingsScreen'
 import { Home } from '@/routes/Home'
 import { AppHeader } from '@/routes/AppHeader'
 import { AppShell } from '@/routes/AppShell'
+import { RepoPi } from '@/routes/RepoPi'
 import { UserProfileScreen } from '@/routes/UserProfileScreen'
 import { InvitesScreen } from '@/routes/InvitesScreen'
 import { DirectoryScreen } from '@/routes/DirectoryScreen'
@@ -262,6 +263,7 @@ function App() {
             </Routes>
           </main>
         </AppShell>
+        <RepoPi />
       </BrowserRouter>
     </SessionProvider>
   )
