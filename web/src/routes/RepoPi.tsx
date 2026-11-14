@@ -17,7 +17,7 @@ export function RepoPi() {
       rel={REPO_LINK_REL}
       aria-label="UndergroundBB source code on GitHub"
       title="Source code on GitHub"
-      className="fixed right-[calc(0.75rem+env(safe-area-inset-right))] bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-50 inline-flex size-8 items-center justify-center rounded-full font-serif text-lg leading-none text-muted-foreground/40 transition-colors outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="fixed right-[calc(0.75rem+env(safe-area-inset-right))] bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-50 inline-flex size-8 items-center justify-center rounded-full font-serif text-lg leading-none text-muted-foreground/80 transition-colors outline-none hover:text-primary focus-visible:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       π
     </a>
