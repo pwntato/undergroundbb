@@ -3619,7 +3619,8 @@ state it writes is the login challenge (one of two items per user), which lives 
 short TTL and is spent by a conditional delete.
 
 Rate limiting is enforced by WAF rate-based rules, which key on **source IP** over a five-minute
-window. That granularity is the right one for harvesting, which is a per-source activity. It cannot
+window. The WAF is on by default and an operator can turn it off (`enable_waf`, #399), which removes
+every per-IP bound this section describes. That granularity is the right one for harvesting, which is a per-source activity. It cannot
 reach an attack keyed on a *username*, and this document has already supplied the reason in the threat
 model's argument for keying the lockout on the account: a source-scoped counter is trivially defeated
 by rotating IPs. The challenge flood was that attack, and it is closed by the design of the challenge

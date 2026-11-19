@@ -422,8 +422,10 @@ resource "aws_cloudfront_distribution" "main" {
   # CLOUDFRONT-scope WebACL is associated exclusively by setting this
   # argument directly on the distribution, i.e. CloudFront's own
   # UpdateDistribution call, not a WAF API call). See waf.tf for the WebACL
-  # itself.
-  web_acl_id = aws_wafv2_web_acl.main.arn
+  # itself. null (var.enable_waf = false, #399) runs the distribution with
+  # no ACL; waf.tf's create_before_destroy makes Terraform detach it here
+  # before it deletes the ACL.
+  web_acl_id = one(aws_wafv2_web_acl.main[*].arn)
 
   restrictions {
     geo_restriction {
