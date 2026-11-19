@@ -3619,8 +3619,7 @@ state it writes is the login challenge (one of two items per user), which lives 
 short TTL and is spent by a conditional delete.
 
 Rate limiting is enforced by WAF rate-based rules, which key on **source IP** over a five-minute
-window. The WAF is on by default and an operator can turn it off (`enable_waf`, #399), which removes
-every per-IP bound this section describes. That granularity is the right one for harvesting, which is a per-source activity. It cannot
+window. That granularity is the right one for harvesting, which is a per-source activity. It cannot
 reach an attack keyed on a *username*, and this document has already supplied the reason in the threat
 model's argument for keying the lockout on the account: a source-scoped counter is trivially defeated
 by rotating IPs. The challenge flood was that attack, and it is closed by the design of the challenge
@@ -3628,7 +3627,8 @@ and not by a rate: a request for a user who already has a fresh nonce writes not
 nonce, so a flood from any number of addresses changes neither what the user holds nor how many items
 exist, and the write rate for one username is at most one per 75 seconds (see "The challenge is a
 bounded pair of slots per user"). What a flood still costs is one consistent read per request, paid
-on the IP-keyed budget like any other.
+on the IP-keyed budget like any other. The WAF is on by default, but an operator can turn it off
+(`enable_waf`, #399), and then that budget and every other per-IP bound this section describes are gone.
 
 Note what rate limiting is and is not protecting: Argon2id
 runs in the **client's** browser for login, so a login costs the server only a DynamoDB read and, on
