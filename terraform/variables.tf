@@ -188,3 +188,9 @@ variable "cost_guard_budget_usd" {
   default     = 20
   description = "Monthly actual spend in USD for the whole account at which the cost kill switch sets the API's concurrency to 0. AWS Budgets data lags by hours, so this is the backstop; the invocation alarm is the fast trip."
 }
+
+variable "enable_waf" {
+  type        = bool
+  default     = true
+  description = "Whether to put the AWS WAF web ACL (terraform/waf.tf) in front of CloudFront. It is most of the fixed monthly bill (about $5 for the ACL plus $1 per rule, so about $7). false drops it and its per-IP rate limits, including rate-limit-auth, the only per-IP bound on challenge harvesting and the server-side Argon2id recovery check. See docs/SELF_HOSTING.md, \"What it costs\"."
+}

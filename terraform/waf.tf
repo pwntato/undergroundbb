@@ -61,7 +61,30 @@
 # nothing, so a flood cannot replace the nonce the user is signing. What this
 # rule *does* bound is per-IP bulk harvesting of challenge material, which is
 # the right granularity for that threat.
+#
+# Optional (#399): var.enable_waf = false creates no ACL and CloudFront runs
+# without one, saving the ACL's fixed monthly price. What that gives up is
+# rate-limit-auth below, the only per-IP bound on challenge harvesting,
+# hot-partition writes and the server-side Argon2id recovery check; the
+# cost guard (costguard.tf) is then the only backstop, and it is all or
+# nothing. docs/SELF_HOSTING.md "What it costs" says the same for operators.
 resource "aws_wafv2_web_acl" "main" {
+  count = var.enable_waf ? 1 : 0
+
+  # Turning the ACL off must detach it from CloudFront before deleting it:
+  # AWS refuses to delete an ACL that is still associated. Without this,
+  # Terraform deletes the ACL first and updates the distribution after
+  # (checked in a scratch config with terraform_data). With it, the
+  # distribution update runs first. Terraform reads this flag from state,
+  # so it only protects a switch-off applied after one apply that already
+  # had it; docs/SELF_HOSTING.md tells operators to deploy once with the
+  # WAF on before turning it off. The cost: a change that forces a
+  # replacement would create the new ACL first and collide on the name,
+  # but the name only derives from the workspace, which never changes.
+  lifecycle {
+    create_before_destroy = true
+  }
+
   provider    = aws.use1
   name        = "undergroundbb-${terraform.workspace}"
   description = "WAF for the undergroundbb CloudFront distribution, issue 10."
@@ -305,7 +328,15 @@ resource "aws_wafv2_web_acl" "main" {
   }
 }
 
+# The ACL was a single resource before #399 made it optional. This keeps an
+# existing deployment's ACL in place under its new address instead of
+# destroying and recreating it.
+moved {
+  from = aws_wafv2_web_acl.main
+  to   = aws_wafv2_web_acl.main[0]
+}
+
 output "waf_web_acl_arn" {
-  value       = aws_wafv2_web_acl.main.arn
-  description = "The WebACL protecting the CloudFront distribution (#10)."
+  value       = one(aws_wafv2_web_acl.main[*].arn)
+  description = "The WebACL protecting the CloudFront distribution (#10), or null when var.enable_waf is false (#399)."
 }

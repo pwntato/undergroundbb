@@ -68,7 +68,7 @@ before you trust this with anything serious.
 | Layer | Choice |
 |---|---|
 | Frontend | React + TypeScript + Vite + Tailwind, static on S3 |
-| Edge | CloudFront + AWS WAF |
+| Edge | CloudFront + AWS WAF (optional, [about $7 a month](docs/SELF_HOSTING.md#what-it-costs)) |
 | Backend | Go on AWS Lambda (Function URL) |
 | Storage | DynamoDB, single table |
 | Crypto | Argon2id (WASM), AES-256-GCM, Ed25519, X25519 |
